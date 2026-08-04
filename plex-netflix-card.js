@@ -1,3 +1,5 @@
+import { wireLinearNav, registerNavHandler } from "./focus-nav.js";
+
 const STYLE = `
   :host {
     display: block;
@@ -1189,7 +1191,7 @@ class PlexNetflixCard extends HTMLElement {
       this._pinModal.classList.remove("shake");
       this._renderPinDots();
       this._pinOverlay.classList.add("open");
-      this._pinOverlay.focus();
+      this.shadowRoot.querySelector(".pin-key[data-digit]")?.focus();
     });
   }
 
@@ -1258,21 +1260,21 @@ class PlexNetflixCard extends HTMLElement {
       <div class="wrap">
         <nav class="sidenav">
           <div class="nav-top">
-            <div class="nav-item active" data-view="home">
+            <div class="nav-item active" data-view="home" tabindex="0">
               <span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M4 11 12 4l8 7" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M6 10v9h12v-9" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><rect x="10" y="14" width="4" height="5" fill="currentColor"/></svg></span>
               <span class="nav-label">Home</span>
             </div>
           </div>
           <div class="nav-bottom">
-            <div class="nav-item nav-profile" title="Switch Profile" hidden>
+            <div class="nav-item nav-profile" title="Switch Profile" hidden tabindex="0">
               <span class="nav-icon nav-profile-icon"></span>
               <span class="nav-label nav-profile-label">Profile</span>
             </div>
-            <div class="nav-item nav-kids-toggle" title="Kids Mode">
+            <div class="nav-item nav-kids-toggle" title="Kids Mode" tabindex="0">
               <span class="nav-icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="8.7" cy="10" r="1.15" fill="currentColor"/><circle cx="15.3" cy="10" r="1.15" fill="currentColor"/><path d="M8 14.5c1 1.3 2.5 2 4 2s3-0.7 4-2" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></span>
               <span class="nav-label">Kids Mode</span>
             </div>
-            <div class="nav-item nav-settings" title="Settings">
+            <div class="nav-item nav-settings" title="Settings" tabindex="0">
               <span class="nav-icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M12 3.5v2.4M12 18.1v2.4M4.5 12H6.9M17.1 12h2.4M6.3 6.3l1.7 1.7M16 16l1.7 1.7M17.7 6.3 16 8M8 16l-1.7 1.7" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></span>
               <span class="nav-label">Settings</span>
             </div>
@@ -1574,17 +1576,20 @@ class PlexNetflixCard extends HTMLElement {
     this._profileOverlay.addEventListener("click", (e) => {
       if (e.target === this._profileOverlay) this._closeProfileOverlay();
     });
-    this._profileOverlay.addEventListener("keydown", (e) => {
-      if (e.key === "Escape") this._closeProfileOverlay();
+    this._profileNav = wireLinearNav(this.shadowRoot, ".profile-switch-btn, .profile-cancel", {
+      orientation: "vertical",
+      onBack: () => this._closeProfileOverlay(),
     });
 
     this._titleInfoCloseBtn.addEventListener("click", () => this._closeTitleInfo());
     this._titleInfoOverlay.addEventListener("click", (e) => {
       if (e.target === this._titleInfoOverlay) this._closeTitleInfo();
     });
-    this._titleInfoOverlay.addEventListener("keydown", (e) => {
-      if (e.key === "Escape") this._closeTitleInfo();
-    });
+    wireLinearNav(
+      this.shadowRoot,
+      ".title-info-close, .title-info-play, .title-info-watchlist-btn, .title-info-quality-btn, .title-info-season-select, .title-info-episode, .title-info-similar-item",
+      { orientation: "vertical", onBack: () => this._closeTitleInfo() }
+    );
     this._titleInfoWatchlistBtn.addEventListener("click", (e) => {
       e.stopPropagation();
       const item = this._titleInfoItem;
@@ -1609,10 +1614,11 @@ class PlexNetflixCard extends HTMLElement {
     this._qualityPickerOverlay.addEventListener("click", (e) => {
       if (e.target === this._qualityPickerOverlay) this._closeQualityPicker();
     });
-    this._qualityPickerOverlay.addEventListener("keydown", (e) => {
-      if (e.key === "Escape") this._closeQualityPicker();
-    });
     this._qualityPickerDoneBtn.addEventListener("click", () => this._closeQualityPicker());
+    wireLinearNav(this.shadowRoot, ".quality-picker-option, .quality-picker-done", {
+      orientation: "vertical",
+      onBack: () => this._closeQualityPicker(),
+    });
 
     this._pinEntry = "";
     const pressPinDigit = (digit) => {
@@ -1640,6 +1646,60 @@ class PlexNetflixCard extends HTMLElement {
       else if (e.key === "Backspace") pressPinBackspace();
       else if (/^[0-9]$/.test(e.key)) pressPinDigit(e.key);
     });
+    /* Deliberately not wireLinearNav here - a gamepad has no digit keys, and the keypad's
+       3-column grid needs real Left/Right movement within a row, not a single vertical
+       list. Row/col math is derived from index against PIN_GRID_COLS rather than reading
+       actual pixel layout, since the grid is a fixed 3-column CSS grid. */
+    const PIN_GRID_COLS = 3;
+    const pinGridKeys = () => Array.from(this.shadowRoot.querySelectorAll(".pin-keypad .pin-key"));
+    registerNavHandler((command, e, active) => {
+      if (!this._pinOverlay.classList.contains("open")) return false;
+      const keys = pinGridKeys();
+      const idx = keys.indexOf(active);
+      if (idx === -1) {
+        if (active !== this._pinCancelBtn) return false;
+        if (command === "up") {
+          keys[keys.length - 1].focus();
+          return true;
+        }
+        if (command === "activate") {
+          active.click();
+          return true;
+        }
+        return false;
+      }
+      if (command === "activate") {
+        active.click();
+        return true;
+      }
+      if (command === "back") {
+        this._resolvePin(null);
+        return true;
+      }
+      const row = Math.floor(idx / PIN_GRID_COLS);
+      const col = idx % PIN_GRID_COLS;
+      let targetIdx;
+      if (command === "right") targetIdx = row * PIN_GRID_COLS + Math.min(col + 1, PIN_GRID_COLS - 1);
+      else if (command === "left") targetIdx = row * PIN_GRID_COLS + Math.max(col - 1, 0);
+      else if (command === "down") targetIdx = idx + PIN_GRID_COLS;
+      else if (command === "up") targetIdx = idx - PIN_GRID_COLS;
+      else return false;
+
+      if (targetIdx < 0) return true; // nothing above the top row - swallow, don't fall through
+      if (targetIdx >= keys.length) {
+        // Below the keypad's last row is Cancel, not a dead end.
+        this._pinCancelBtn.focus();
+        return true;
+      }
+      /* Grid cell (row 3, col 0) has no real button under it - .pin-key-empty is just a
+         layout spacer (tabindex="-1") so "0" (its row-neighbor) is the intended landing
+         spot whenever navigation would otherwise land on it. */
+      if (targetIdx === 9) targetIdx = 10;
+      keys[targetIdx]?.focus();
+      return true;
+    });
+
+    this._wireHomeNav();
 
     this._updateSearchToggleIcon();
     this._searchToggle.addEventListener("click", () => {
@@ -1700,7 +1760,7 @@ class PlexNetflixCard extends HTMLElement {
     const html = sections
       .map(
         (s) => `
-            <div class="nav-item nav-item-dynamic" data-view="section-${s.key}">
+            <div class="nav-item nav-item-dynamic" data-view="section-${s.key}" tabindex="0">
               <span class="nav-icon">${iconForLibraryLabel(s.label)}</span>
               <span class="nav-label">${this._escape(s.label)}</span>
             </div>`
@@ -2284,7 +2344,7 @@ class PlexNetflixCard extends HTMLElement {
   _openProfileOverlay() {
     this._renderProfileList();
     this._profileOverlay.classList.add("open");
-    this._profileOverlay.focus();
+    this._profileNav.focusFirst();
   }
 
   _closeProfileOverlay() {
@@ -2408,6 +2468,122 @@ class PlexNetflixCard extends HTMLElement {
   _closeTitleInfo() {
     this._titleInfoOverlay.classList.remove("open");
     this._titleInfoItem = null;
+  }
+
+  /* The home screen (sidenav + hero + a 2D grid of poster rows) isn't a single list -
+     wireLinearNav's 1D model doesn't cover "Left/Right moves within whichever row
+     currently has focus, Up/Down moves between rows while roughly preserving column
+     position." Scoped by checking active-element membership first, so it never fires
+     while a modal overlay (which registers its own handler elsewhere) currently owns
+     focus - only one handler ever actually acts on a given keypress since focus is a
+     singleton. */
+  _wireHomeNav() {
+    const sidenavItems = () =>
+      Array.from(this.shadowRoot.querySelectorAll(".nav-item")).filter((el) => el.offsetParent !== null);
+    const heroItems = () =>
+      Array.from(this.shadowRoot.querySelectorAll(".hero-info-btn, .hero-watchlist-btn, .hero-play-btn, .hero-mute-btn")).filter(
+        (el) => el.offsetParent !== null
+      );
+    const rowSections = () =>
+      Array.from(this.shadowRoot.querySelectorAll(".row-section")).filter((s) => s.offsetParent !== null);
+    const postersIn = (section) =>
+      section ? Array.from(section.querySelectorAll(".poster")).filter((el) => el.offsetParent !== null) : [];
+
+    registerNavHandler((command, e, active) => {
+      const inSidenav = sidenavItems().includes(active);
+      const inHero = !inSidenav && heroItems().includes(active);
+      const posterSection = !inSidenav && !inHero && active?.classList?.contains("poster") ? active.closest(".row-section") : null;
+
+      if (!inSidenav && !inHero && !posterSection) {
+        /* Every registered handler sees every keydown regardless of which one owns
+           focus - a handler returning false here must NOT assume that means "nothing is
+           focused," only "not focused in my scope" (a modal overlay's own handler may
+           legitimately own this keypress instead). Only the true fresh-load case (no
+           active element anywhere, or it's just document.body/the card host with
+           nothing focused inside) gets the lazy first-D-pad-press starting point;
+           anything else falls through untouched, letting the real owner act instead of
+           this handler stealing focus mid-interaction with some other overlay. */
+        const nothingFocusedYet = !active || active === document.body || active === this;
+        if (nothingFocusedYet && ["up", "down", "left", "right"].includes(command)) {
+          sidenavItems()[0]?.focus();
+          return true;
+        }
+        return false;
+      }
+
+      if (command === "activate") {
+        active.click();
+        return true;
+      }
+
+      if (inSidenav) {
+        const list = sidenavItems();
+        const idx = list.indexOf(active);
+        if (command === "down") {
+          list[Math.min(idx + 1, list.length - 1)].focus();
+          return true;
+        }
+        if (command === "up") {
+          list[Math.max(idx - 1, 0)].focus();
+          return true;
+        }
+        if (command === "right") {
+          const target = heroItems()[0] || postersIn(rowSections()[0])[0];
+          target?.focus();
+          return true;
+        }
+        return false;
+      }
+
+      if (inHero) {
+        const list = heroItems();
+        const idx = list.indexOf(active);
+        if (command === "right") {
+          list[Math.min(idx + 1, list.length - 1)].focus();
+          return true;
+        }
+        if (command === "left") {
+          if (idx <= 0) sidenavItems()[0]?.focus();
+          else list[idx - 1].focus();
+          return true;
+        }
+        if (command === "down") {
+          postersIn(rowSections()[0])[0]?.focus();
+          return true;
+        }
+        if (command === "up") return true; // nothing above the hero - swallow, don't fall through
+        return false;
+      }
+
+      // posterSection
+      const posters = postersIn(posterSection);
+      const idx = posters.indexOf(active);
+      if (command === "right") {
+        posters[Math.min(idx + 1, posters.length - 1)].focus();
+        return true;
+      }
+      if (command === "left") {
+        if (idx <= 0) sidenavItems()[0]?.focus();
+        else posters[idx - 1].focus();
+        return true;
+      }
+      if (command === "down" || command === "up") {
+        const sections = rowSections();
+        const sectionIdx = sections.indexOf(posterSection);
+        if (command === "up" && sectionIdx === 0) {
+          heroItems()[0]?.focus();
+          return true;
+        }
+        const targetSection = sections[sectionIdx + (command === "down" ? 1 : -1)];
+        if (!targetSection) return true; // no more rows that way - swallow
+        const targetPosters = postersIn(targetSection);
+        const target = targetPosters[Math.min(idx, targetPosters.length - 1)];
+        target?.focus();
+        target?.scrollIntoView({ block: "nearest", inline: "center" });
+        return true;
+      }
+      return false;
+    });
   }
 
   _openQualityPicker() {
@@ -3330,6 +3506,7 @@ class PlexNetflixCard extends HTMLElement {
   _buildPoster(item, source, { glow = true, landscape = false, itemIndex = null } = {}) {
     const el = document.createElement("div");
     el.className = landscape ? "poster landscape poster-anim-in" : "poster poster-anim-in";
+    el.tabIndex = 0;
     if (itemIndex != null) el.style.animationDelay = `${Math.min(itemIndex, 8) * 30}ms`;
     const src = landscape ? item.art || item.image : item.image;
     if (glow) el.style.setProperty("--img", `url('${src}')`);
