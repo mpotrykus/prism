@@ -43,7 +43,11 @@
     return data;
   }
 
-  async function requestPin() {
+  /* `strong: true` gets a long, cryptographically-strong code meant to be embedded in the
+     app.plex.tv/auth URL (buildAuthUrl) for the popup-based flow. `strong: false` gets the
+     short, human-typeable 4-character code plex.tv/link expects - pass that for the
+     remote/gamepad "type this code on another device" flow instead. */
+  async function requestPin({ strong = true } = {}) {
     const res = await fetch("https://plex.tv/api/v2/pins", {
       method: "POST",
       headers: {
@@ -52,7 +56,7 @@
         "X-Plex-Client-Identifier": getClientId(),
         "X-Plex-Product": PRODUCT,
       },
-      body: JSON.stringify({ strong: true }),
+      body: JSON.stringify({ strong }),
     });
     return parseJson(res, "Couldn't start Plex sign-in");
   }

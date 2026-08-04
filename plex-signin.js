@@ -1,10 +1,20 @@
 /* Plex sign-in, split out from <streaming-settings-modal> so it can gate the whole app
    at boot (see app.js) - blocking until a server is connected - while everything else
    configurable (libraries, trailers, AI rows, kids mode, display) lives in Settings. */
+import { wireLinearNav } from "./focus-nav.js";
+
 const SECTION_TYPE_MAP = { movie: 1, show: 2 };
 
 const SIGNIN_MODAL_STYLE = `
-  :host { all: initial; }
+  :host {
+    all: initial;
+    /* See plex-netflix-card.js's :host for why both env() and var() are needed -
+       env(safe-area-inset-*) is iOS/web only, Capacitor's Android SystemBars plugin
+       instead injects --safe-area-inset-* on <html>, which inherits down here since
+       this modal is a separate top-level element (not nested under the card's :host). */
+    --safe-top: max(env(safe-area-inset-top, 0px), var(--safe-area-inset-top, 0px));
+    --safe-bottom: max(env(safe-area-inset-bottom, 0px), var(--safe-area-inset-bottom, 0px));
+  }
   * { box-sizing: border-box; font-family: "Roboto", sans-serif; }
   .overlay {
     position: fixed; inset: 0; z-index: 1500;
@@ -12,7 +22,7 @@ const SIGNIN_MODAL_STYLE = `
     backdrop-filter: blur(6px);
     display: none;
     align-items: center; justify-content: center;
-    padding: 24px;
+    padding: calc(24px + var(--safe-top)) 24px calc(24px + var(--safe-bottom));
   }
   .overlay.open { display: flex; }
   .modal {
@@ -44,11 +54,24 @@ const SIGNIN_MODAL_STYLE = `
   .btn-secondary { background: rgba(255,255,255,0.1); color: #fff; }
   .btn-secondary:hover { background: rgba(255,255,255,0.18); }
   .btn:disabled { opacity: 0.5; cursor: default; }
+  .btn:focus-visible, .modal-close:focus-visible {
+    outline: 2px solid #e5a00d; outline-offset: 2px;
+  }
   .status { font-size: 12px; font-weight: 600; margin-top: 14px; min-height: 15px; }
   .status.ok { color: #4caf7d; }
   .status.err { color: #ff6b6b; }
   .server-picker { display: flex; flex-direction: column; gap: 8px; margin-top: 14px; }
   .server-choice { display: block; width: 100%; }
+  .link-code {
+    font-family: "Roboto Mono", monospace;
+    font-size: 40px; font-weight: 700; letter-spacing: 6px;
+    color: #e5a00d;
+    margin: 18px 0 4px;
+    padding: 14px 10px;
+    background: rgba(255,255,255,0.06);
+    border-radius: 10px;
+  }
+  .link-code[hidden] { display: none; }
 `;
 
 class StreamingPlexSigninModal extends HTMLElement {
@@ -64,6 +87,7 @@ class StreamingPlexSigninModal extends HTMLElement {
           <h2>Sign in to Plex</h2>
           <div class="subtitle">Connect your Plex account to load your library.</div>
           <button type="button" class="btn btn-primary btn-plex-signin">Sign in with Plex</button>
+          <div class="link-code" hidden></div>
           <div class="status signin-status"></div>
           <div class="server-picker"></div>
         </div>
@@ -83,6 +107,15 @@ class StreamingPlexSigninModal extends HTMLElement {
       if (e.target === this._overlay) this.close();
     });
     this._el(".btn-plex-signin").addEventListener("click", () => this._signInWithPlex());
+    /* This is the app's mandatory first screen and the current hard blocker on Xbox -
+       a gamepad/D-pad user has no mouse to fall back on, so this can't be an afterthought
+       the way keyboard nav might be elsewhere. Selector re-queries live on every move, so
+       the dynamically-added .server-choice buttons (see _renderServerPicker) are picked up
+       automatically without re-wiring. */
+    wireLinearNav(this.shadowRoot, ".modal-close, .btn-plex-signin, .server-choice", {
+      orientation: "vertical",
+      onBack: () => this.close(),
+    });
   }
 
   open({ blocking = false } = {}) {
@@ -91,7 +124,9 @@ class StreamingPlexSigninModal extends HTMLElement {
     this._el(".signin-status").textContent = "";
     this._el(".signin-status").className = "status signin-status";
     this._el(".server-picker").innerHTML = "";
+    this._el(".link-code").hidden = true;
     this._overlay.classList.add("open");
+    this._el(".btn-plex-signin").focus();
   }
 
   close() {
@@ -99,26 +134,57 @@ class StreamingPlexSigninModal extends HTMLElement {
     this._overlay.classList.remove("open");
   }
 
-  /* Opens the blank tab synchronously, before any await, so browsers don't treat it as
-     an unrequested pop-up - its location is set once the pin/auth URL is ready. */
+  /* Fire TV (Silk browser) and the Xbox WebView2 shell are remote/gamepad-only - there's no
+     pointer at all, so opening a second browser tab for Plex's full sign-in form means typing
+     a username/password with a D-pad, which is exactly the unintuitive flow this branches
+     around. Both are matched by UA (same convention as _isAndroid() in plex-netflix-card.js);
+     `pointer: none` is the CSS spec's own signal for "no pointing device" and catches any other
+     remote-driven browser that doesn't match either UA pattern. */
+  _isRemoteDrivenDevice() {
+    const ua = navigator.userAgent || "";
+    if (/Xbox/i.test(ua)) return true;
+    if (/AFT[A-Z0-9]|Fire TV/i.test(ua)) return true;
+    if (window.matchMedia && window.matchMedia("(pointer: none)").matches) return true;
+    return false;
+  }
+
+  /* Two branches share the same PIN (plex.tv/api/v2/pins) and the same pollPin() loop -
+     only how the code gets in front of the user differs. Touch/mouse devices get the
+     familiar browser-popup sign-in; remote/gamepad-only devices (see
+     _isRemoteDrivenDevice()) instead just display the raw code and point the user at
+     plex.tv/link on a device that actually has a keyboard. The popup, when used, is opened
+     synchronously here, before any await, so browsers don't treat it as an unrequested
+     pop-up - its location is set once the auth URL is ready. */
   async _signInWithPlex() {
     const btn = this._el(".btn-plex-signin");
     const statusEl = this._el(".signin-status");
+    const codeEl = this._el(".link-code");
     this._el(".server-picker").innerHTML = "";
+    codeEl.hidden = true;
+    codeEl.textContent = "";
     btn.disabled = true;
-    statusEl.textContent = "Opening Plex sign-in…";
     statusEl.className = "status signin-status";
-    const authWindow = window.open("about:blank", "_blank");
+
+    const remote = this._isRemoteDrivenDevice();
+    statusEl.textContent = remote ? "Requesting a sign-in code…" : "Opening Plex sign-in…";
+    const authWindow = remote ? null : window.open("about:blank", "_blank");
     try {
-      const pin = await window.StreamingPlexAuth.requestPin();
-      const authUrl = window.StreamingPlexAuth.buildAuthUrl(pin);
-      if (authWindow) {
-        authWindow.location.href = authUrl;
-        statusEl.textContent = "Waiting for you to approve access in the Plex tab that just opened…";
+      const pin = await window.StreamingPlexAuth.requestPin({ strong: !remote });
+      if (remote) {
+        codeEl.textContent = pin.code;
+        codeEl.hidden = false;
+        statusEl.textContent = "On your phone or computer, go to plex.tv/link and enter this code.";
       } else {
-        statusEl.innerHTML = `Pop-up blocked — <a href="${authUrl}" target="_blank" rel="noopener">click here to sign in</a>, then come back.`;
+        const authUrl = window.StreamingPlexAuth.buildAuthUrl(pin);
+        if (authWindow) {
+          authWindow.location.href = authUrl;
+          statusEl.textContent = "Waiting for you to approve access in the Plex tab that just opened…";
+        } else {
+          statusEl.innerHTML = `Pop-up blocked — <a href="${authUrl}" target="_blank" rel="noopener">click here to sign in</a>, then come back.`;
+        }
       }
       const authToken = await window.StreamingPlexAuth.pollPin(pin.id);
+      codeEl.hidden = true;
       this._plexAccountToken = authToken;
       statusEl.textContent = "Finding your servers…";
       statusEl.className = "status signin-status";
