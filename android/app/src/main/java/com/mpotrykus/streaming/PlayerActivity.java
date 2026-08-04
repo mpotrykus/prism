@@ -6,9 +6,12 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.view.Gravity;
+import android.view.MotionEvent;
+import android.view.ScaleGestureDetector;
 import android.view.View;
 import android.view.WindowManager;
 import android.widget.FrameLayout;
+import android.widget.PopupMenu;
 import android.widget.TextView;
 import androidx.annotation.OptIn;
 import androidx.appcompat.app.AppCompatActivity;
@@ -17,18 +20,22 @@ import androidx.core.view.WindowInsetsCompat;
 import androidx.core.view.WindowInsetsControllerCompat;
 import androidx.media3.common.MediaItem;
 import androidx.media3.common.PlaybackException;
+import androidx.media3.common.PlaybackParameters;
 import androidx.media3.common.Player;
 import androidx.media3.common.util.UnstableApi;
 import androidx.media3.datasource.DefaultHttpDataSource;
 import androidx.media3.exoplayer.ExoPlayer;
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory;
 import androidx.media3.ui.PlayerView;
+import java.util.ArrayList;
+import java.util.List;
 
 @OptIn(markerClass = UnstableApi.class)
 public class PlayerActivity extends AppCompatActivity {
 
     public static final String EXTRA_URL = "url";
     public static final String EXTRA_START_POSITION_MS = "startPositionMs";
+    public static final String EXTRA_CHAPTERS_JSON = "chaptersJson";
 
     private static final long PROGRESS_INTERVAL_MS = 1000L;
 
@@ -50,6 +57,43 @@ public class PlayerActivity extends AppCompatActivity {
     private final Handler progressHandler = new Handler(Looper.getMainLooper());
     private final Runnable progressRunnable = this::reportProgress;
     private boolean terminalStateReported = false;
+    private final List<View> fadingControls = new ArrayList<>();
+    private final Handler sleepTimerHandler = new Handler(Looper.getMainLooper());
+    private Runnable sleepTimerRunnable;
+    private static final float MAX_ZOOM_SCALE = 4f;
+    private float zoomScale = 1f;
+    private float panX = 0f;
+    private float panY = 0f;
+    private float dragStartRawX;
+    private float dragStartRawY;
+    private float panStartX;
+    private float panStartY;
+    private boolean isPanning = false;
+    private FrameLayout root;
+    private TextView skipButton;
+    private long skipButtonSeekToMs;
+
+    /* Native code only ever sees {title, startTimeOffsetMs} - Plex's own Chapter field
+       names are interpreted once, in plex-player.js, and never duplicated here. */
+    private static class ChapterEntry {
+        final String title;
+        final long startTimeOffsetMs;
+
+        ChapterEntry(String title, long startTimeOffsetMs) {
+            this.title = title;
+            this.startTimeOffsetMs = startTimeOffsetMs;
+        }
+    }
+
+    private final List<ChapterEntry> chapters = new ArrayList<>();
+    private String currentUrl;
+
+    /* Chrome that should fade in lockstep with ExoPlayer's own controller overlay
+       (see the visibility listener in onCreate) rather than each new button running
+       its own independent inactivity timer that could drift out of sync. */
+    private void registerFadingControl(View v) {
+        fadingControls.add(v);
+    }
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -61,6 +105,7 @@ public class PlayerActivity extends AppCompatActivity {
 
         String url = getIntent().getStringExtra(EXTRA_URL);
         long startPositionMs = getIntent().getLongExtra(EXTRA_START_POSITION_MS, 0L);
+        parseChapters(getIntent().getStringExtra(EXTRA_CHAPTERS_JSON));
 
         if (url == null || url.isEmpty()) {
             notifyErrorAndFinish("Missing required extra: url");
@@ -74,7 +119,7 @@ public class PlayerActivity extends AppCompatActivity {
            button - there's no browser chrome to fall back on once this ships to the
            Xbox WebView2 shell's own native bridge, and it's a more discoverable exit
            than back-button-only even here. */
-        FrameLayout root = new FrameLayout(this);
+        root = new FrameLayout(this);
         root.addView(playerView, new FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
 
@@ -93,17 +138,83 @@ public class PlayerActivity extends AppCompatActivity {
         closeButton.setLayoutParams(closeParams);
         closeButton.setOnClickListener(v -> onBackPressed());
         root.addView(closeButton);
+        registerFadingControl(closeButton);
 
-        /* Fades the close button in lockstep with ExoPlayer's own controller overlay
-           (PlayerView's built-in show-on-tap/hide-after-timeout behavior) rather than
-           running a second, independent inactivity timer that could drift out of sync
-           with the native controls it's sitting next to. */
+        TextView gearButton = new TextView(this);
+        gearButton.setText("⚙");
+        gearButton.setTextColor(Color.WHITE);
+        gearButton.setTextSize(18);
+        gearButton.setGravity(Gravity.CENTER);
+        gearButton.setBackgroundColor(Color.parseColor("#B3141414"));
+        FrameLayout.LayoutParams gearParams = new FrameLayout.LayoutParams(sizePx, sizePx);
+        gearParams.gravity = Gravity.TOP | Gravity.START;
+        gearParams.setMargins(marginPx, marginPx, 0, 0);
+        gearButton.setLayoutParams(gearParams);
+        gearButton.setOnClickListener(this::showPlayerMenu);
+        root.addView(gearButton);
+        registerFadingControl(gearButton);
+
+        /* Fades every registered control (close button, gear menu, ...) in lockstep with
+           ExoPlayer's own controller overlay (PlayerView's built-in show-on-tap/hide-after-
+           timeout behavior) rather than running a second, independent inactivity timer that
+           could drift out of sync with the native controls they sit next to. */
         playerView.setControllerVisibilityListener(
             (PlayerView.ControllerVisibilityListener)
-                visibility -> closeButton.animate().alpha(visibility == View.VISIBLE ? 1f : 0f).setDuration(200).start()
+                visibility -> {
+                    float alpha = visibility == View.VISIBLE ? 1f : 0f;
+                    for (View v : fadingControls) {
+                        v.animate().alpha(alpha).setDuration(200).start();
+                    }
+                }
         );
 
         setContentView(root);
+
+        /* Pinch-to-zoom + single-finger drag-to-pan directly on the PlayerView surface -
+           self-contained here rather than going through the plugin bridge, since it's a
+           pure View transform with no Plex-protocol or playback-state involvement. Only
+           consumes the touch stream once actually zoomed/panning; at 1x it returns false
+           so PlayerView's own tap-to-show-controls listener still receives the gesture -
+           unverified on a real device whether that split works cleanly at the exact
+           moment a pinch starts, see the phase's QA notes. */
+        ScaleGestureDetector scaleDetector = new ScaleGestureDetector(this, new ScaleGestureDetector.SimpleOnScaleGestureListener() {
+            @Override
+            public boolean onScale(ScaleGestureDetector detector) {
+                zoomScale = clamp(zoomScale * detector.getScaleFactor(), 1f, MAX_ZOOM_SCALE);
+                if (zoomScale <= 1f) {
+                    panX = 0f;
+                    panY = 0f;
+                }
+                applyZoomTransform(playerView);
+                return true;
+            }
+        });
+        playerView.setOnTouchListener((v, event) -> {
+            scaleDetector.onTouchEvent(event);
+            switch (event.getActionMasked()) {
+                case MotionEvent.ACTION_DOWN:
+                    dragStartRawX = event.getRawX();
+                    dragStartRawY = event.getRawY();
+                    panStartX = panX;
+                    panStartY = panY;
+                    isPanning = zoomScale > 1f;
+                    break;
+                case MotionEvent.ACTION_MOVE:
+                    if (isPanning && event.getPointerCount() == 1) {
+                        float maxPanX = (zoomScale - 1f) * v.getWidth() / 2f;
+                        float maxPanY = (zoomScale - 1f) * v.getHeight() / 2f;
+                        panX = clamp(panStartX + (event.getRawX() - dragStartRawX), -maxPanX, maxPanX);
+                        panY = clamp(panStartY + (event.getRawY() - dragStartRawY), -maxPanY, maxPanY);
+                        applyZoomTransform(v);
+                    }
+                    break;
+                case MotionEvent.ACTION_UP:
+                case MotionEvent.ACTION_CANCEL:
+                    isPanning = false;
+                    break;
+            }
+            return zoomScale > 1f || isPanning;
+        });
 
         DefaultHttpDataSource.Factory httpDataSourceFactory = new DefaultHttpDataSource.Factory();
         DefaultMediaSourceFactory mediaSourceFactory = new DefaultMediaSourceFactory(this).setDataSourceFactory(httpDataSourceFactory);
@@ -132,6 +243,7 @@ public class PlayerActivity extends AppCompatActivity {
             }
         );
 
+        currentUrl = url;
         MediaItem mediaItem = MediaItem.fromUri(Uri.parse(url));
         player.setMediaItem(mediaItem);
         if (startPositionMs > 0) {
@@ -141,6 +253,144 @@ public class PlayerActivity extends AppCompatActivity {
         player.prepare();
 
         startProgressLoop();
+    }
+
+    /* One menu instead of one bespoke picker View per feature - later phases (chapters,
+       quality) add entries here rather than building their own popup/dialog chrome. */
+    private void showPlayerMenu(View anchor) {
+        PopupMenu popup = new PopupMenu(this, anchor);
+
+        android.view.SubMenu speedMenu = popup.getMenu().addSubMenu("Playback Speed");
+        float[] rates = {0.25f, 0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f, 4f, 8f};
+        for (float rate : rates) {
+            String label = (rate == Math.floor(rate)) ? ((int) rate) + "x" : rate + "x";
+            speedMenu.add(label).setOnMenuItemClickListener(item -> {
+                setPlaybackSpeed(rate);
+                return true;
+            });
+        }
+
+        android.view.SubMenu sleepMenu = popup.getMenu().addSubMenu("Sleep Timer");
+        sleepMenu.add("Off").setOnMenuItemClickListener(item -> {
+            setSleepTimer(0);
+            return true;
+        });
+        int[] sleepMinutes = {15, 30, 45, 60};
+        for (int minutes : sleepMinutes) {
+            sleepMenu.add(minutes + " min").setOnMenuItemClickListener(item -> {
+                setSleepTimer(minutes * 60_000L);
+                return true;
+            });
+        }
+        sleepMenu.add("End of episode").setOnMenuItemClickListener(item -> {
+            setSleepTimer(0);
+            return true;
+        });
+
+        /* Hidden entirely rather than shown disabled when there are no chapters - an
+           empty popup with nothing explaining it is worse than not offering the entry. */
+        if (!chapters.isEmpty()) {
+            popup.getMenu().add("Chapters").setOnMenuItemClickListener(item -> {
+                showChapterDialog();
+                return true;
+            });
+        }
+
+        popup.show();
+    }
+
+    private void parseChapters(String json) {
+        chapters.clear();
+        if (json == null) return;
+        try {
+            org.json.JSONArray arr = new org.json.JSONArray(json);
+            for (int i = 0; i < arr.length(); i++) {
+                org.json.JSONObject obj = arr.getJSONObject(i);
+                chapters.add(new ChapterEntry(obj.optString("title", ""), obj.optLong("startTimeOffsetMs", 0)));
+            }
+        } catch (org.json.JSONException e) {
+            // malformed chapter data - show no chapters rather than crash
+        }
+    }
+
+    private void showChapterDialog() {
+        String[] labels = new String[chapters.size()];
+        for (int i = 0; i < chapters.size(); i++) {
+            ChapterEntry c = chapters.get(i);
+            labels[i] = c.title.isEmpty() ? formatTimestamp(c.startTimeOffsetMs) : formatTimestamp(c.startTimeOffsetMs) + "  " + c.title;
+        }
+        new androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle("Chapters")
+            .setItems(labels, (dialog, index) -> seek(chapters.get(index).startTimeOffsetMs))
+            .show();
+    }
+
+    private static String formatTimestamp(long ms) {
+        long totalSeconds = ms / 1000;
+        long h = totalSeconds / 3600;
+        long m = (totalSeconds % 3600) / 60;
+        long s = totalSeconds % 60;
+        return h > 0 ? String.format("%d:%02d:%02d", h, m, s) : String.format("%d:%02d", m, s);
+    }
+
+    /* Runs entirely on-device rather than round-tripping through the JS/Capacitor bridge -
+       pause() is already a static method here, so there's nothing a JS-side setTimeout
+       would add except an extra hop. ms=0 clears any pending timer (used by both "Off" and
+       "End of episode", which relies on the existing onPlaybackStateChanged(STATE_ENDED)
+       handling instead of a timer at all). */
+    private void setSleepTimer(long ms) {
+        if (sleepTimerRunnable != null) {
+            sleepTimerHandler.removeCallbacks(sleepTimerRunnable);
+            sleepTimerRunnable = null;
+        }
+        if (ms > 0) {
+            sleepTimerRunnable = PlayerActivity::pause;
+            sleepTimerHandler.postDelayed(sleepTimerRunnable, ms);
+        }
+    }
+
+    /* Lazily created on first marker hit, then just shown/hidden - kept out of
+       fadingControls deliberately: it's a contextual action available right now, not
+       ambient chrome that should fade on idle, so it doesn't join that shared loop. */
+    private void updateSkipButton(String label, long seekToMs) {
+        skipButtonSeekToMs = seekToMs;
+        if (skipButton == null) {
+            float density = getResources().getDisplayMetrics().density;
+            skipButton = new TextView(this);
+            skipButton.setTextColor(Color.WHITE);
+            skipButton.setTextSize(14);
+            skipButton.setTypeface(skipButton.getTypeface(), android.graphics.Typeface.BOLD);
+            skipButton.setBackgroundColor(Color.parseColor("#D9141414"));
+            int hPad = (int) (20 * density);
+            int vPad = (int) (10 * density);
+            skipButton.setPadding(hPad, vPad, hPad, vPad);
+            FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT);
+            params.gravity = Gravity.BOTTOM | Gravity.END;
+            params.setMargins(0, 0, (int) (40 * density), (int) (80 * density));
+            skipButton.setLayoutParams(params);
+            skipButton.setOnClickListener(v -> seek(skipButtonSeekToMs));
+            root.addView(skipButton);
+        }
+        skipButton.setText(label);
+        skipButton.setVisibility(View.VISIBLE);
+    }
+
+    private void hideSkipButtonInternal() {
+        if (skipButton != null) {
+            skipButton.setVisibility(View.GONE);
+        }
+    }
+
+    private void applyZoomTransform(View v) {
+        v.setScaleX(zoomScale);
+        v.setScaleY(zoomScale);
+        v.setTranslationX(panX);
+        v.setTranslationY(panY);
+    }
+
+    private static float clamp(float value, float min, float max) {
+        return Math.max(min, Math.min(max, value));
     }
 
     private void hideSystemBars() {
@@ -195,6 +445,53 @@ public class PlayerActivity extends AppCompatActivity {
         }
     }
 
+    public static void setPlaybackSpeed(float speed) {
+        if (activeInstance != null && activeInstance.player != null) {
+            activeInstance.player.setPlaybackParameters(new PlaybackParameters(speed));
+        }
+    }
+
+    /* View mutations, unlike the player-only static methods above, need to run on the
+       main thread since Capacitor plugin calls aren't guaranteed to arrive on it. */
+    public static void showSkipButton(String label, long seekToMs) {
+        if (activeInstance != null) {
+            activeInstance.runOnUiThread(() -> activeInstance.updateSkipButton(label, seekToMs));
+        }
+    }
+
+    public static void hideSkipButton() {
+        if (activeInstance != null) {
+            activeInstance.runOnUiThread(activeInstance::hideSkipButtonInternal);
+        }
+    }
+
+    /* Attaches a subtitle track by rebuilding the current MediaItem with the video URI
+       unchanged plus a new subtitle config - the transcode session itself (the URL) is
+       untouched, only the local MediaItem description changes. setMediaItem's resumeMs
+       argument re-prepares in place without restarting from zero - unverified whether
+       that's visibly seamless (no rebuffer/flash) on a real device against this specific
+       HLS transcode source, see this phase's open risks. */
+    public static void setSubtitleUrl(String url, String languageCode, String mimeType) {
+        if (activeInstance != null) {
+            activeInstance.applySubtitle(url, languageCode, mimeType);
+        }
+    }
+
+    private void applySubtitle(String url, String languageCode, String mimeType) {
+        if (player == null || currentUrl == null) return;
+        long resumeMs = player.getCurrentPosition();
+        MediaItem.SubtitleConfiguration subtitleConfig = new MediaItem.SubtitleConfiguration.Builder(Uri.parse(url))
+            .setMimeType(mimeType)
+            .setLanguage(languageCode)
+            .build();
+        MediaItem newItem = new MediaItem.Builder()
+            .setUri(Uri.parse(currentUrl))
+            .setSubtitleConfigurations(java.util.Collections.singletonList(subtitleConfig))
+            .build();
+        player.setMediaItem(newItem, resumeMs);
+        player.prepare();
+    }
+
     public static void stopPlayback() {
         if (activeInstance != null) {
             activeInstance.finish();
@@ -220,6 +517,7 @@ public class PlayerActivity extends AppCompatActivity {
     @Override
     protected void onDestroy() {
         stopProgressLoop();
+        sleepTimerHandler.removeCallbacksAndMessages(null);
         reportStoppedIfNeeded();
         if (player != null) {
             player.release();

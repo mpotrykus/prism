@@ -1,3 +1,5 @@
+import { wireLinearNav } from "./focus-nav.js";
+
 /* Only non-sensitive fields live here in plain localStorage. plex_token,
    youtube_api_key, openrouter_api_key, and plex_account_token go through vault.js
    instead - see there for why (encrypted at rest, not plaintext).
@@ -6,7 +8,15 @@
    card actually uses) so "refresh servers" can re-run discovery later without a
    full re-login. */
 const PLAIN_STORAGE_KEY = "prism.config";
-const SECRET_FIELDS = ["plex_token", "youtube_api_key", "openrouter_api_key", "plex_account_token"];
+const SECRET_FIELDS = [
+  "plex_token",
+  "youtube_api_key",
+  "openrouter_api_key",
+  "plex_account_token",
+  "opensubtitles_api_key",
+  "opensubtitles_username",
+  "opensubtitles_password",
+];
 
 const DEFAULT_PLAIN_CONFIG = {
   plex_url: "",
@@ -46,7 +56,15 @@ const StreamingSettings = {
 window.StreamingSettings = StreamingSettings;
 
 const MODAL_STYLE = `
-  :host { all: initial; }
+  :host {
+    all: initial;
+    /* See plex-netflix-card.js's :host for why both env() and var() are needed -
+       env(safe-area-inset-*) is iOS/web only, Capacitor's Android SystemBars plugin
+       instead injects --safe-area-inset-* on <html>, which inherits down here since
+       this modal is a separate top-level element (not nested under the card's :host). */
+    --safe-top: max(env(safe-area-inset-top, 0px), var(--safe-area-inset-top, 0px));
+    --safe-bottom: max(env(safe-area-inset-bottom, 0px), var(--safe-area-inset-bottom, 0px));
+  }
   * { box-sizing: border-box; font-family: "Roboto", sans-serif; }
   .overlay {
     position: fixed; inset: 0; z-index: 1000;
@@ -54,7 +72,7 @@ const MODAL_STYLE = `
     backdrop-filter: blur(6px);
     display: none;
     align-items: center; justify-content: center;
-    padding: 24px;
+    padding: calc(24px + var(--safe-top)) 24px calc(24px + var(--safe-bottom));
   }
   .overlay.open { display: flex; }
   .modal {
@@ -103,6 +121,9 @@ const MODAL_STYLE = `
   .btn-secondary { background: rgba(255,255,255,0.1); color: #fff; }
   .btn-secondary:hover { background: rgba(255,255,255,0.18); }
   .btn:disabled { opacity: 0.5; cursor: default; }
+  .btn:focus-visible, .modal-close:focus-visible, input:focus-visible, select:focus-visible {
+    outline: 2px solid #e5a00d; outline-offset: 2px;
+  }
   .status { font-size: 12px; font-weight: 600; margin-top: 6px; min-height: 15px; }
   .status.ok { color: #4caf7d; }
   .status.err { color: #ff6b6b; }
@@ -185,6 +206,24 @@ class StreamingSettingsModal extends HTMLElement {
             </section>
 
             <section class="group">
+              <div class="group-title">Subtitles (optional)</div>
+              <div class="field">
+                <label>OpenSubtitles API Key</label>
+                <input type="password" class="f-opensubtitles-key" placeholder="Used by the player's subtitle search" />
+              </div>
+              <div class="row-2col">
+                <div class="field">
+                  <label>OpenSubtitles Username</label>
+                  <input type="text" class="f-opensubtitles-username" placeholder="Needed to download, not just search" />
+                </div>
+                <div class="field">
+                  <label>OpenSubtitles Password</label>
+                  <input type="password" class="f-opensubtitles-password" />
+                </div>
+              </div>
+            </section>
+
+            <section class="group">
               <div class="group-title">Kids Mode</div>
               <div class="field">
                 <label>Exit PIN</label>
@@ -241,6 +280,21 @@ class StreamingSettingsModal extends HTMLElement {
     this._el(".btn-export").addEventListener("click", () => this._exportConfig());
     this._el(".btn-import").addEventListener("click", () => this._el(".f-import-file").click());
     this._el(".f-import-file").addEventListener("change", (e) => this._importConfig(e));
+    /* One long vertical list rather than per-row/per-section sub-navigation - simpler,
+       and good enough for a screen that isn't the primary Xbox-blocking flow the way
+       sign-in is. Native Left/Right cursor movement inside text/number inputs is left
+       alone (this only claims Up/Down/Enter/Escape - see focus-nav.js's orientation
+       handling), though that does mean Up/Down no longer increments/decrements a
+       number input via its native spinner behavior - an accepted trade-off since
+       moving between fields has to win for gamepad nav to work at all. */
+    wireLinearNav(
+      this.shadowRoot,
+      ".modal-close, .btn-reauth, .btn-fetch-libraries, .section-row .s-enabled, .section-row .s-label, " +
+        ".f-youtube-key, .f-openrouter-key, .f-opensubtitles-key, .f-opensubtitles-username, .f-opensubtitles-password, " +
+        ".f-ai-cadence, .f-kids-pin, .f-max-genre-rows, .f-row-size, " +
+        ".btn-export, .btn-import, .btn-cancel, .btn-save",
+      { orientation: "vertical", onBack: () => this.close() }
+    );
   }
 
   open() {
@@ -256,6 +310,16 @@ class StreamingSettingsModal extends HTMLElement {
       : "Used as a fallback when Plex has no trailer";
     this._el(".f-openrouter-key").value = "";
     this._el(".f-openrouter-key").placeholder = hasSecrets ? "•••••••• (leave blank to keep current)" : "";
+    this._el(".f-opensubtitles-key").value = "";
+    this._el(".f-opensubtitles-key").placeholder = hasSecrets
+      ? "•••••••• (leave blank to keep current)"
+      : "Used by the player's subtitle search";
+    this._el(".f-opensubtitles-username").value = "";
+    this._el(".f-opensubtitles-username").placeholder = hasSecrets
+      ? "•••••••• (leave blank to keep current)"
+      : "Needed to download, not just search";
+    this._el(".f-opensubtitles-password").value = "";
+    this._el(".f-opensubtitles-password").placeholder = hasSecrets ? "•••••••• (leave blank to keep current)" : "";
     this._plexUrl = config.plex_url || "";
     this._el(".plex-server-status").textContent = this._plexUrl ? `Connected — ${this._plexUrl}` : "Not connected.";
     this._el(".plex-server-status").className = this._plexUrl ? "status plex-server-status ok" : "status plex-server-status err";
@@ -275,6 +339,7 @@ class StreamingSettingsModal extends HTMLElement {
     this._el(".save-status").textContent = "";
     this._el(".save-status").className = "status save-status";
     this._overlay.classList.add("open");
+    this._el(".modal-close").focus();
   }
 
   /* Decrypts (once per open() - see above) whatever secrets are already stored, so
@@ -393,6 +458,9 @@ class StreamingSettingsModal extends HTMLElement {
       youtube_api_key: this._el(".f-youtube-key").value.trim() || existing.youtube_api_key || "",
       openrouter_api_key: this._el(".f-openrouter-key").value.trim() || existing.openrouter_api_key || "",
       plex_account_token: existing.plex_account_token || "",
+      opensubtitles_api_key: this._el(".f-opensubtitles-key").value.trim() || existing.opensubtitles_api_key || "",
+      opensubtitles_username: this._el(".f-opensubtitles-username").value.trim() || existing.opensubtitles_username || "",
+      opensubtitles_password: this._el(".f-opensubtitles-password").value.trim() || existing.opensubtitles_password || "",
     };
   }
 

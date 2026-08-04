@@ -851,6 +851,56 @@ const STYLE = `
   }
   .title-info-watchlist-btn:hover { background: rgba(255,255,255,0.1); }
   .title-info-watchlist-btn[hidden] { display: none; }
+  .title-info-quality-btn {
+    width: 40px; height: 40px; border-radius: 50%; flex: none;
+    border: 1px solid rgba(255,255,255,0.3); background: transparent; color: #fff;
+    font-size: 16px; cursor: pointer;
+  }
+  .title-info-quality-btn:hover { background: rgba(255,255,255,0.1); }
+  .title-info-quality-btn[hidden] { display: none; }
+  /* z-index above .title-info-overlay (200), same relationship .pin-overlay (110) has
+     to .profile-overlay (100) - this is launched from within the title-info modal. */
+  .quality-picker-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.72);
+    backdrop-filter: blur(6px);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    padding: calc(20px + var(--safe-top)) 20px calc(20px + var(--safe-bottom));
+    z-index: 210;
+    outline: none;
+  }
+  .quality-picker-overlay.open { display: flex; }
+  .quality-picker-modal {
+    width: 340px;
+    max-width: 88vw;
+    max-height: 80vh;
+    overflow-y: auto;
+    background: #161619;
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 16px;
+    padding: 24px;
+    box-shadow: 0 24px 70px rgba(0,0,0,0.6);
+  }
+  .quality-picker-title { font-size: 15px; font-weight: 700; margin-bottom: 16px; text-align: center; }
+  .quality-picker-section-title {
+    font-size: 12px; font-weight: 700; color: rgba(255,255,255,0.5);
+    text-transform: uppercase; letter-spacing: 0.5px; margin: 16px 0 8px;
+  }
+  .quality-picker-option {
+    display: block; width: 100%; background: rgba(255,255,255,0.05); border: none;
+    border-radius: 8px; padding: 10px 12px; color: #fff; font-size: 13px;
+    text-align: left; cursor: pointer; margin-bottom: 6px;
+  }
+  .quality-picker-option:hover { background: rgba(255,255,255,0.1); }
+  .quality-picker-option.selected { background: rgba(229,160,13,0.15); color: #e5a00d; }
+  .quality-picker-done {
+    width: 100%; padding: 10px; margin-top: 8px; border-radius: 8px; border: none;
+    background: #fff; color: #161619; font-size: 13px; font-weight: 700; cursor: pointer;
+  }
+  .quality-picker-done:hover { background: rgba(255,255,255,0.85); }
   .title-info-summary { font-size: 14px; line-height: 1.6; color: rgba(255,255,255,0.85); margin-bottom: 22px; max-width: 640px; }
   .title-info-section-title { font-size: 14px; font-weight: 700; margin: 22px 0 10px; }
   .title-info-cast-wrap[hidden], .title-info-similar-wrap[hidden] { display: none; }
@@ -906,6 +956,34 @@ const STYLE = `
   .title-info-similar-item { cursor: pointer; }
   .title-info-similar-item img { width: 100%; aspect-ratio: 2/3; object-fit: cover; border-radius: 6px; background: rgba(255,255,255,0.05); display: block; }
   .title-info-similar-item .t { font-size: 11.5px; margin-top: 6px; color: rgba(255,255,255,0.75); }
+  /* One shared focus ring for every element focus-nav.js makes navigable - this app was
+     mouse/hover-only until Xbox needed D-pad support, so unlike normal web focus styling
+     (a nice-to-have for keyboard users alongside a mouse), a visible focus indicator here
+     is the *only* signal a gamepad-only user has of where they are on screen at all. */
+  .nav-item:focus-visible,
+  .poster:focus-visible,
+  .hero-info-btn:focus-visible,
+  .hero-watchlist-btn:focus-visible,
+  .hero-mute-btn:focus-visible,
+  .hero-play-btn:focus-visible,
+  .scroll-arrow:focus-visible,
+  .pin-key:focus-visible,
+  .pin-cancel:focus-visible,
+  .profile-switch-btn:focus-visible,
+  .profile-cancel:focus-visible,
+  .title-info-close:focus-visible,
+  .title-info-play:focus-visible,
+  .title-info-watchlist-btn:focus-visible,
+  .title-info-quality-btn:focus-visible,
+  .title-info-episode:focus-visible,
+  .title-info-similar-item:focus-visible,
+  .title-info-season-select:focus-visible,
+  .quality-picker-option:focus-visible,
+  .quality-picker-done:focus-visible {
+    outline: 2px solid #e5a00d;
+    outline-offset: 2px;
+  }
+  .nav-item { outline-offset: -2px; }
   @media (max-width: 700px) {
     .hero-info { left: 20px; max-width: calc(100% - 40px); }
     .hero-title { font-size: 24px; }
@@ -995,6 +1073,15 @@ const WATCHED_ICON_SVG =
 /* Plex's /hubs/search `reason` field marks a match as coming from a specific
    person/entity rather than a plain title hit - only these two are confirmed
    to actually appear in practice, so only these get promoted to their own section. */
+/* kbps: null means "no cap" (Original) - matched against _titleInfoQualityCapKbps by
+   identity in _renderQualityPicker, so keep it null rather than 0 or a sentinel number. */
+const QUALITY_CAP_PRESETS = [
+  { label: "Original", kbps: null },
+  { label: "1080p (20 Mbps)", kbps: 20000 },
+  { label: "720p (10 Mbps)", kbps: 10000 },
+  { label: "480p (4 Mbps)", kbps: 4000 },
+  { label: "360p (2 Mbps)", kbps: 2000 },
+];
 const SEARCH_REASON_LABELS = { actor: "Actor", director: "Director" };
 const SEARCH_HUB_LIMIT = 24;
 /* "See All" section expansion - large enough that no single library section's
@@ -1264,6 +1351,7 @@ class PlexNetflixCard extends HTMLElement {
             <div class="title-info-actions">
               <button type="button" class="title-info-play">▶ Play</button>
               <button type="button" class="title-info-watchlist-btn" aria-label="Add to My List">+</button>
+              <button type="button" class="title-info-quality-btn" aria-label="Quality" hidden>⚙</button>
             </div>
             <div class="title-info-summary"></div>
             <div class="title-info-episodes"></div>
@@ -1276,6 +1364,16 @@ class PlexNetflixCard extends HTMLElement {
               <div class="title-info-similar"></div>
             </div>
           </div>
+        </div>
+      </div>
+      <div class="quality-picker-overlay" tabindex="-1">
+        <div class="quality-picker-modal">
+          <div class="quality-picker-title">Quality</div>
+          <div class="quality-picker-section-title">Version</div>
+          <div class="quality-picker-versions"></div>
+          <div class="quality-picker-section-title">Quality Cap</div>
+          <div class="quality-picker-caps"></div>
+          <button type="button" class="quality-picker-done">Done</button>
         </div>
       </div>
     `;
@@ -1308,6 +1406,11 @@ class PlexNetflixCard extends HTMLElement {
     this._titleInfoMetaEl = this.shadowRoot.querySelector(".title-info-meta");
     this._titleInfoPlayBtn = this.shadowRoot.querySelector(".title-info-play");
     this._titleInfoWatchlistBtn = this.shadowRoot.querySelector(".title-info-watchlist-btn");
+    this._titleInfoQualityBtn = this.shadowRoot.querySelector(".title-info-quality-btn");
+    this._qualityPickerOverlay = this.shadowRoot.querySelector(".quality-picker-overlay");
+    this._qualityPickerVersionsEl = this.shadowRoot.querySelector(".quality-picker-versions");
+    this._qualityPickerCapsEl = this.shadowRoot.querySelector(".quality-picker-caps");
+    this._qualityPickerDoneBtn = this.shadowRoot.querySelector(".quality-picker-done");
     this._titleInfoSummaryEl = this.shadowRoot.querySelector(".title-info-summary");
     this._titleInfoEpisodesEl = this.shadowRoot.querySelector(".title-info-episodes");
     this._titleInfoCastWrap = this.shadowRoot.querySelector(".title-info-cast-wrap");
@@ -1499,6 +1602,17 @@ class PlexNetflixCard extends HTMLElement {
       if (this._titleInfoWatchlistBtn.classList.contains("added")) this._titleInfoWatchlistBtn.textContent = "✓";
     });
     this._titleInfoPlayBtn.addEventListener("click", () => this._playTitleInfoItem());
+    this._titleInfoQualityBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      this._openQualityPicker();
+    });
+    this._qualityPickerOverlay.addEventListener("click", (e) => {
+      if (e.target === this._qualityPickerOverlay) this._closeQualityPicker();
+    });
+    this._qualityPickerOverlay.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") this._closeQualityPicker();
+    });
+    this._qualityPickerDoneBtn.addEventListener("click", () => this._closeQualityPicker());
 
     this._pinEntry = "";
     const pressPinDigit = (digit) => {
@@ -2241,6 +2355,12 @@ class PlexNetflixCard extends HTMLElement {
     this._titleInfoSource = source;
     this._titleInfoDuration = null;
     this._titleInfoViewOffset = 0;
+    this._titleInfoMarkers = [];
+    this._titleInfoChapters = [];
+    this._titleInfoMedia = [];
+    this._titleInfoSelectedMediaIndex = 0;
+    this._titleInfoQualityCapKbps = null;
+    this._titleInfoQualityBtn.hidden = true;
     this._titleInfoProgress.hidden = !(item.progress > 0);
     this._titleInfoProgressBar.style.width = `${Math.round((item.progress || 0) * 100)}%`;
     const art = item.art || item.image || "";
@@ -2290,9 +2410,62 @@ class PlexNetflixCard extends HTMLElement {
     this._titleInfoItem = null;
   }
 
+  _openQualityPicker() {
+    this._renderQualityPicker();
+    this._qualityPickerOverlay.classList.add("open");
+    this._qualityPickerDoneBtn.focus();
+  }
+
+  _closeQualityPicker() {
+    this._qualityPickerOverlay.classList.remove("open");
+  }
+
+  /* Version rows describe whatever Plex's Media[] actually reports (resolution/codec/
+     bitrate field names unverified against a real multi-version item - see this
+     phase's open risks); Quality Cap rows are the fixed QUALITY_CAP_PRESETS list.
+     Re-rendered on every selection so the "selected" highlight stays in sync without a
+     separate diffing step. */
+  _renderQualityPicker() {
+    const media = this._titleInfoMedia || [];
+    this._qualityPickerVersionsEl.innerHTML = media.length
+      ? media
+          .map((m, i) => {
+            const parts = [];
+            if (m.videoResolution) parts.push(String(m.videoResolution));
+            if (m.videoCodec) parts.push(m.videoCodec.toUpperCase());
+            if (m.bitrate) parts.push(`${(m.bitrate / 1000).toFixed(1)} Mbps`);
+            const label = parts.join(" · ") || `Version ${i + 1}`;
+            const selected = (this._titleInfoSelectedMediaIndex || 0) === i;
+            return `<button type="button" class="quality-picker-option${selected ? " selected" : ""}" data-media-index="${i}">${this._escape(label)}</button>`;
+          })
+          .join("")
+      : `<div class="title-info-loading">Only one version available</div>`;
+    this._qualityPickerVersionsEl.querySelectorAll(".quality-picker-option").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        this._titleInfoSelectedMediaIndex = Number(btn.dataset.mediaIndex);
+        this._renderQualityPicker();
+      });
+    });
+
+    this._qualityPickerCapsEl.innerHTML = QUALITY_CAP_PRESETS.map((preset) => {
+      const selected = (this._titleInfoQualityCapKbps ?? null) === preset.kbps;
+      return `<button type="button" class="quality-picker-option${selected ? " selected" : ""}" data-kbps="${preset.kbps ?? ""}">${this._escape(preset.label)}</button>`;
+    }).join("");
+    this._qualityPickerCapsEl.querySelectorAll(".quality-picker-option").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        this._titleInfoQualityCapKbps = btn.dataset.kbps ? Number(btn.dataset.kbps) : null;
+        this._renderQualityPicker();
+      });
+    });
+  }
+
   _renderTitleInfoDetail(meta) {
     this._titleInfoDuration = meta.duration || null;
     this._titleInfoViewOffset = meta.viewOffset || 0;
+    this._titleInfoMarkers = meta.Marker || [];
+    this._titleInfoChapters = meta.Chapter || [];
+    this._titleInfoMedia = meta.Media || [];
+    this._titleInfoQualityBtn.hidden = !this._titleInfoMedia.length;
     const progress = meta.duration ? Math.max(0, Math.min(1, this._titleInfoViewOffset / meta.duration)) : 0;
     this._titleInfoProgress.hidden = progress <= 0;
     this._titleInfoProgressBar.style.width = `${Math.round(progress * 100)}%`;
@@ -2384,6 +2557,8 @@ class PlexNetflixCard extends HTMLElement {
               durationMs: ep.duration || null,
               startOffsetMs: ep.viewOffset || 0,
               source: "local",
+              markers: ep.Marker || [],
+              chapters: ep.Chapter || [],
             });
           });
         });
@@ -2443,6 +2618,10 @@ class PlexNetflixCard extends HTMLElement {
       durationMs: this._titleInfoDuration,
       startOffsetMs: this._titleInfoViewOffset,
       source: this._titleInfoSource,
+      markers: this._titleInfoMarkers,
+      chapters: this._titleInfoChapters,
+      mediaIndex: this._titleInfoSelectedMediaIndex || 0,
+      qualityCapKbps: this._titleInfoQualityCapKbps,
     });
   }
 
@@ -2458,6 +2637,8 @@ class PlexNetflixCard extends HTMLElement {
         durationMs: meta.duration || null,
         startOffsetMs: meta.viewOffset || 0,
         source: "local",
+        markers: meta.Marker || [],
+        chapters: meta.Chapter || [],
       });
     } catch (e) {
       // best-effort - Play simply won't respond if this fails
@@ -2469,7 +2650,7 @@ class PlexNetflixCard extends HTMLElement {
      Plex web player) when that's unavailable or playback fails to start - e.g. a
      watchlist item with no local ratingKey, which StreamingPlayer.play rejects by design.
      Shared by the title-info modal's Play button and the episode list's direct-play rows. */
-  async _playItem(item, { durationMs = null, startOffsetMs = 0, source } = {}) {
+  async _playItem(item, { durationMs = null, startOffsetMs = 0, source, markers = [], chapters = [], mediaIndex = 0, qualityCapKbps = null } = {}) {
     if (window.StreamingPlayer) {
       try {
         await window.StreamingPlayer.play({
@@ -2480,6 +2661,17 @@ class PlexNetflixCard extends HTMLElement {
           plexToken: this._config.plex_token,
           durationMs,
           startOffsetMs,
+          markers,
+          chapters,
+          mediaIndex,
+          qualityCapKbps,
+          /* Already produced by _mapItem for every call site - title is the show's own
+             title (not the episode's) for episode items, which is what a subtitle search
+             query needs to key off, not the individual episode title. */
+          title: item.title,
+          year: item.year,
+          seasonNumber: item.seasonNumber,
+          episodeNumber: item.episodeNumber,
         });
         return;
       } catch (e) {
