@@ -89,6 +89,9 @@ const STYLE = `
   .sidenav:hover .nav-label {
     opacity: 1;
   }
+  /* Only ever shown at the mobile breakpoint below - the hover sidenav has room for
+     every item on desktop, so there's nothing to collapse there. */
+  .nav-more { display: none; }
   .main { position: relative; flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
   .hero {
     position: relative;
@@ -781,6 +784,75 @@ const STYLE = `
     cursor: pointer;
   }
   .profile-cancel:hover { color: #fff; }
+  /* Mobile-only overflow menu for the bottom nav bar (see .nav-more) - collects Profile/
+     Kids Mode/Settings plus any library tabs past the mobile visible cap. Below
+     .profile-overlay/.pin-overlay in z-index on purpose: rows in here delegate to those
+     same nav items via a real .click(), closing this sheet first, so it never needs to
+     paint above something it just handed off to. */
+  .more-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.6);
+    backdrop-filter: blur(4px);
+    display: none;
+    align-items: flex-end;
+    justify-content: center;
+    z-index: 90;
+    outline: none;
+  }
+  .more-overlay.open { display: flex; }
+  .more-sheet {
+    width: 100%;
+    max-height: 70vh;
+    overflow-y: auto;
+    background: #161619;
+    border: 1px solid rgba(255,255,255,0.08);
+    border-bottom: none;
+    border-radius: 16px 16px 0 0;
+    padding: 8px 8px calc(12px + var(--safe-bottom));
+    box-shadow: 0 -12px 40px rgba(0,0,0,0.5);
+  }
+  .more-sheet-title {
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: rgba(255,255,255,0.5);
+    padding: 14px 14px 6px;
+  }
+  .more-sheet-item {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 13px 14px;
+    border: none;
+    border-radius: 10px;
+    background: transparent;
+    color: #fff;
+    font-size: 15px;
+    font-weight: 600;
+    text-align: left;
+    cursor: pointer;
+  }
+  .more-sheet-item:hover, .more-sheet-item:active { background: rgba(255,255,255,0.08); }
+  .more-sheet-item.active { color: #e5a00d; }
+  .more-sheet-item-icon { width: 22px; height: 22px; flex: none; display: flex; align-items: center; justify-content: center; }
+  .more-sheet-item-icon svg { width: 20px; height: 20px; }
+  .more-sheet-item-icon img { width: 100%; height: 100%; border-radius: 50%; object-fit: cover; display: block; }
+  .more-sheet-cancel {
+    width: 100%;
+    padding: 13px;
+    margin-top: 4px;
+    border-radius: 10px;
+    border: none;
+    background: transparent;
+    color: rgba(255,255,255,0.55);
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .more-sheet-cancel:hover { color: #fff; }
   .title-info-overlay {
     position: fixed;
     inset: 0;
@@ -981,7 +1053,9 @@ const STYLE = `
   .title-info-similar-item:focus-visible,
   .title-info-season-select:focus-visible,
   .quality-picker-option:focus-visible,
-  .quality-picker-done:focus-visible {
+  .quality-picker-done:focus-visible,
+  .more-sheet-item:focus-visible,
+  .more-sheet-cancel:focus-visible {
     outline: 2px solid #e5a00d;
     outline-offset: 2px;
   }
@@ -998,7 +1072,7 @@ const STYLE = `
       left: 0;
       right: 0;
       width: 100%;
-      height: 56px;
+      height: calc(56px + var(--safe-bottom));
       flex-direction: row;
       align-items: center;
       justify-content: space-evenly;
@@ -1015,6 +1089,11 @@ const STYLE = `
     .nav-top, .nav-bottom { display: contents; }
     .nav-item { width: 30px; height: 30px; padding: 0; justify-content: center; gap: 0; }
     .nav-label { display: none; }
+    /* Profile/Kids Mode/Settings and any library tab past the mobile cap move into the
+       .more-sheet overflow menu instead - a phone-width row has no room for 6+ icons at
+       a real touch-target size. */
+    .nav-profile, .nav-kids-toggle, .nav-settings, .nav-item-overflow { display: none; }
+    .nav-more { display: flex; }
     .main { padding-bottom: calc(56px + var(--safe-bottom)); }
     .row-title { padding-left: 24px; }
     .row-scroller { padding-left: 24px; gap: 17px; }
@@ -1038,6 +1117,11 @@ const SECTION_TYPE_FILTERS = {
   1: { onDeck: "movie", other: "movie" },
   2: { onDeck: "episode", other: "show" },
 };
+
+/* How many library tabs stay directly on the mobile bottom nav bar before the rest
+   spill into the "More" overflow sheet alongside Profile/Kids Mode/Settings - desktop's
+   hover sidenav has room for all of them regardless, see .nav-item-overflow. */
+const MOBILE_VISIBLE_SECTION_CAP = 3;
 
 const MOVIE_NAV_ICON_SVG =
   '<svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2" fill="none" stroke="currentColor" stroke-width="1.6"/><rect x="3" y="8" width="4" height="1.6" fill="currentColor"/><rect x="3" y="13" width="4" height="1.6" fill="currentColor"/><rect x="17" y="8" width="4" height="1.6" fill="currentColor"/><rect x="17" y="13" width="4" height="1.6" fill="currentColor"/></svg>';
@@ -1064,6 +1148,8 @@ const CLEAR_ICON_SVG =
   '<svg viewBox="0 0 24 24"><line x1="6" y1="6" x2="18" y2="18" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><line x1="18" y1="6" x2="6" y2="18" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>';
 const PROFILE_ICON_SVG =
   '<svg viewBox="0 0 24 24"><circle cx="12" cy="8.4" r="3.6" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M5 20c1.2-4 4-6 7-6s5.8 2 7 6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>';
+const MORE_ICON_SVG =
+  '<svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.8" fill="currentColor"/><circle cx="12" cy="12" r="1.8" fill="currentColor"/><circle cx="19" cy="12" r="1.8" fill="currentColor"/></svg>';
 const POSTER_FALLBACK_ICON_SVG =
   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="2" fill="currentColor" stroke="none"/><circle cx="12" cy="5.8" r="1.3" fill="currentColor" stroke="none"/><circle cx="17.4" cy="9.3" r="1.3" fill="currentColor" stroke="none"/><circle cx="17.4" cy="14.7" r="1.3" fill="currentColor" stroke="none"/><circle cx="12" cy="18.2" r="1.3" fill="currentColor" stroke="none"/><circle cx="6.6" cy="14.7" r="1.3" fill="currentColor" stroke="none"/><circle cx="6.6" cy="9.3" r="1.3" fill="currentColor" stroke="none"/></svg>';
 
@@ -1278,8 +1364,19 @@ class PlexNetflixCard extends HTMLElement {
               <span class="nav-icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M12 3.5v2.4M12 18.1v2.4M4.5 12H6.9M17.1 12h2.4M6.3 6.3l1.7 1.7M16 16l1.7 1.7M17.7 6.3 16 8M8 16l-1.7 1.7" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></span>
               <span class="nav-label">Settings</span>
             </div>
+            <div class="nav-item nav-more" title="More" tabindex="0">
+              <span class="nav-icon">${MORE_ICON_SVG}</span>
+              <span class="nav-label">More</span>
+            </div>
           </div>
         </nav>
+        <div class="more-overlay" tabindex="-1">
+          <div class="more-sheet">
+            <div class="more-sheet-title">More</div>
+            <div class="more-sheet-list"></div>
+            <button type="button" class="more-sheet-cancel">Cancel</button>
+          </div>
+        </div>
         <div class="content">
           <div class="header">
             <img class="plex-logo" src="./assets/plex-logo.png" alt="Plex" />
@@ -1392,6 +1489,10 @@ class PlexNetflixCard extends HTMLElement {
     this._profileOverlay = this.shadowRoot.querySelector(".profile-overlay");
     this._profileListEl = this.shadowRoot.querySelector(".profile-list");
     this._profileCancelBtn = this.shadowRoot.querySelector(".profile-cancel");
+    this._moreBtn = this.shadowRoot.querySelector(".nav-more");
+    this._moreOverlay = this.shadowRoot.querySelector(".more-overlay");
+    this._moreListEl = this.shadowRoot.querySelector(".more-sheet-list");
+    this._moreCancelBtn = this.shadowRoot.querySelector(".more-sheet-cancel");
     this._pinOverlay = this.shadowRoot.querySelector(".pin-overlay");
     this._pinModal = this.shadowRoot.querySelector(".pin-modal");
     this._pinTitleEl = this.shadowRoot.querySelector(".pin-title");
@@ -1581,6 +1682,16 @@ class PlexNetflixCard extends HTMLElement {
       onBack: () => this._closeProfileOverlay(),
     });
 
+    this._moreBtn.addEventListener("click", () => this._openMoreSheet());
+    this._moreCancelBtn.addEventListener("click", () => this._closeMoreSheet());
+    this._moreOverlay.addEventListener("click", (e) => {
+      if (e.target === this._moreOverlay) this._closeMoreSheet();
+    });
+    this._moreNav = wireLinearNav(this.shadowRoot, ".more-sheet-item, .more-sheet-cancel", {
+      orientation: "vertical",
+      onBack: () => this._closeMoreSheet(),
+    });
+
     this._titleInfoCloseBtn.addEventListener("click", () => this._closeTitleInfo());
     this._titleInfoOverlay.addEventListener("click", (e) => {
       if (e.target === this._titleInfoOverlay) this._closeTitleInfo();
@@ -1759,8 +1870,8 @@ class PlexNetflixCard extends HTMLElement {
     const sections = this._config.sections || [];
     const html = sections
       .map(
-        (s) => `
-            <div class="nav-item nav-item-dynamic" data-view="section-${s.key}" tabindex="0">
+        (s, i) => `
+            <div class="nav-item nav-item-dynamic${i >= MOBILE_VISIBLE_SECTION_CAP ? " nav-item-overflow" : ""}" data-view="section-${s.key}" tabindex="0">
               <span class="nav-icon">${iconForLibraryLabel(s.label)}</span>
               <span class="nav-label">${this._escape(s.label)}</span>
             </div>`
@@ -2349,6 +2460,66 @@ class PlexNetflixCard extends HTMLElement {
 
   _closeProfileOverlay() {
     this._profileOverlay.classList.remove("open");
+  }
+
+  /* Mobile-only overflow menu (see .nav-more/.nav-item-overflow) - every row here just
+     delegates to the real nav item's own click handler instead of reimplementing Profile/
+     Kids Mode/Settings/library-switch behavior a second time. */
+  _renderMoreSheet() {
+    const rows = [];
+    this.shadowRoot.querySelectorAll(".nav-item-overflow").forEach((el) => {
+      rows.push({
+        label: el.querySelector(".nav-label").textContent,
+        iconHTML: el.querySelector(".nav-icon").innerHTML,
+        active: el.classList.contains("active"),
+        target: el,
+      });
+    });
+    if (!this._profileNavItem.hidden) {
+      rows.push({
+        label: this._profileNavLabel.textContent,
+        iconHTML: this._profileNavIcon.innerHTML,
+        active: false,
+        target: this._profileNavItem,
+      });
+    }
+    rows.push({
+      label: "Kids Mode",
+      iconHTML: this._kidsToggleBtn.querySelector(".nav-icon").innerHTML,
+      active: this._kidsMode,
+      target: this._kidsToggleBtn,
+    });
+    rows.push({
+      label: "Settings",
+      iconHTML: this._settingsBtn.querySelector(".nav-icon").innerHTML,
+      active: false,
+      target: this._settingsBtn,
+    });
+    this._moreListEl.innerHTML = rows
+      .map(
+        (r) => `
+          <button type="button" class="more-sheet-item${r.active ? " active" : ""}" tabindex="0">
+            <span class="more-sheet-item-icon">${r.iconHTML}</span>
+            <span>${this._escape(r.label)}</span>
+          </button>`
+      )
+      .join("");
+    this._moreListEl.querySelectorAll(".more-sheet-item").forEach((btn, i) => {
+      btn.addEventListener("click", () => {
+        this._closeMoreSheet();
+        rows[i].target.click();
+      });
+    });
+  }
+
+  _openMoreSheet() {
+    this._renderMoreSheet();
+    this._moreOverlay.classList.add("open");
+    this._moreNav.focusFirst();
+  }
+
+  _closeMoreSheet() {
+    this._moreOverlay.classList.remove("open");
   }
 
   _renderProfileList() {
