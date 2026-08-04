@@ -901,7 +901,7 @@ class PlexNetflixCard extends HTMLElement {
     this._lastSearchHubs = null;
     /* Purely local now (localStorage) - no HA entity backing this, so it's
        per-browser/per-device rather than shared across every screen. */
-    this._kidsMode = localStorage.getItem("streamingDashboard.kidsMode") === "1";
+    this._kidsMode = localStorage.getItem("prism.kidsMode") === "1";
     this.attachShadow({ mode: "open" });
     this.shadowRoot.innerHTML = `
       <style>${STYLE}</style>
@@ -1134,7 +1134,7 @@ class PlexNetflixCard extends HTMLElement {
         if (!ok) return;
       }
       this._kidsMode = !this._kidsMode;
-      localStorage.setItem("streamingDashboard.kidsMode", this._kidsMode ? "1" : "0");
+      localStorage.setItem("prism.kidsMode", this._kidsMode ? "1" : "0");
       this._onKidsModeChanged();
     });
 
@@ -1986,7 +1986,7 @@ class PlexNetflixCard extends HTMLElement {
   async _loadAiIdeas() {
     const key = this._config.openrouter_api_key;
     if (!key) return [];
-    const cacheKey = "streamingDashboard.aiIdeasCache";
+    const cacheKey = "prism.aiIdeasCache";
     const cadenceMs = this._config.ai_rows_cadence_ms;
     let cached = null;
     try {

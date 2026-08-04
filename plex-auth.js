@@ -3,8 +3,8 @@
    to plex.tv from the browser - verified empirically that plex.tv (unlike the local Plex
    Media Server) answers CORS preflight fine for custom headers, so no proxy is needed. */
 (function () {
-  const CLIENT_ID_KEY = "streamingDashboard.plexClientId";
-  const PRODUCT = "Streaming Dashboard";
+  const CLIENT_ID_KEY = "prism.plexClientId";
+  const PRODUCT = "Prism";
 
   /* crypto.randomUUID() is only exposed in secure contexts (HTTPS or localhost) - a
      plain http://<lan-ip> origin (e.g. testing from a phone browser against the dev

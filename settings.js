@@ -5,7 +5,7 @@
    (plex-auth.js) - kept separately from plex_token (the per-server access token the
    card actually uses) so "refresh servers" can re-run discovery later without a
    full re-login. */
-const PLAIN_STORAGE_KEY = "streamingDashboard.config";
+const PLAIN_STORAGE_KEY = "prism.config";
 const SECRET_FIELDS = ["plex_token", "youtube_api_key", "openrouter_api_key", "plex_account_token"];
 
 const DEFAULT_PLAIN_CONFIG = {
@@ -434,7 +434,7 @@ class StreamingSettingsModal extends HTMLElement {
     const blob = new Blob([JSON.stringify({ ...plain, ...secrets }, null, 2)], { type: "application/json" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
-    a.download = "streaming-dashboard-config.json";
+    a.download = "prism-config.json";
     a.click();
     URL.revokeObjectURL(a.href);
   }

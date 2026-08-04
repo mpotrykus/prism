@@ -1,4 +1,4 @@
-const CACHE_NAME = "streaming-dashboard-shell-v1";
+const CACHE_NAME = "prism-shell-v1";
 const SHELL_FILES = [
   "./",
   "./index.html",

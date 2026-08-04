@@ -5,9 +5,9 @@
    being hand-typed, so there's no local secret-entry step left that justifies prompting
    Windows Hello/Android biometrics on every save and load. */
 (function () {
-  const META_KEY = "streamingDashboard.vaultMeta";
-  const SECRETS_KEY = "streamingDashboard.secrets";
-  const DB_NAME = "streamingDashboardVault";
+  const META_KEY = "prism.vaultMeta";
+  const SECRETS_KEY = "prism.secrets";
+  const DB_NAME = "prismVault";
   const DB_STORE = "keys";
   const KEY_RECORD_ID = "vaultKey";
 

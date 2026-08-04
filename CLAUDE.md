@@ -1,4 +1,4 @@
-# Streaming Dashboard
+# Prism
 
 A standalone rewrite of a Netflix-style Plex browsing dashboard, targeting **web, Android, and Xbox**, with **remote (Amazon Fire TV/Fire Stick), touch, and controller (Xbox gamepad)** input support. No build step — plain HTML/CSS/JS, loaded as static files (a PWA).
 
