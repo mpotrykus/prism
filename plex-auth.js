@@ -118,6 +118,10 @@
         name: r.name,
         owned: truthy(r.owned),
         accessToken: r.accessToken || authToken,
+        /* Same GUID as /identity's machineIdentifier for a given server - lets callers
+           match "the server I already know about" across a re-discovery done under a
+           different token (see switchHomeUser below) without re-probing connections. */
+        clientIdentifier: r.clientIdentifier || "",
         connections: (r.connections || []).map((c) => ({ uri: c.uri, local: truthy(c.local) })),
       }));
   }
@@ -147,5 +151,91 @@
     return null;
   }
 
-  window.StreamingPlexAuth = { requestPin, buildAuthUrl, pollPin, discoverServers, resolveBestConnection };
+  /* Plex Home ("managed users"/profiles) - a family group sharing one Plex account and
+     server, each with their own watch history/watchlist/parental restrictions. Listing
+     and switching both work off whichever account-level token is currently active, not
+     specifically the admin's - this is how Plex's own clients let you hop between
+     profiles without re-entering the admin's credentials each time. */
+  async function getHomeUsers(accountToken) {
+    const res = await fetch("https://plex.tv/api/v2/home/users", {
+      headers: { Accept: "application/json", "X-Plex-Token": accountToken, "X-Plex-Client-Identifier": getClientId() },
+    });
+    const data = await parseJson(res, "Couldn't list Plex Home profiles");
+    return (data.users || data.Users || []).map((u) => ({
+      id: u.id,
+      uuid: u.uuid || "",
+      title: u.title || u.friendlyName || u.username || "Profile",
+      thumb: u.thumb || "",
+      admin: truthy(u.admin),
+      guest: truthy(u.guest),
+      restricted: truthy(u.restricted),
+      protected: truthy(u.protected),
+    }));
+  }
+
+  /* Identifies whichever profile the given token currently is, so the switcher UI can
+     mark one of the getHomeUsers() entries as "this one, right now". */
+  async function getCurrentUser(accountToken) {
+    const res = await fetch("https://plex.tv/api/v2/user", {
+      headers: { Accept: "application/json", "X-Plex-Token": accountToken, "X-Plex-Client-Identifier": getClientId() },
+    });
+    const data = await parseJson(res, "Couldn't look up the current Plex profile");
+    return { id: data.id, uuid: data.uuid || "" };
+  }
+
+  /* Exchanges the current account token for one scoped to a different Home profile -
+     mirrors requestPin/pollPin's role in the sign-in flow, just skipping the PIN/pairing
+     round-trip since the account is already authenticated. The returned token is then
+     used exactly like a fresh sign-in's authToken: re-run discoverServers() with it to
+     get that profile's own per-server access token (each profile gets a distinct one
+     even though they share the same physical server - that's what makes per-profile
+     history/watchlist/restrictions possible).
+     Confirmed empirically: unlike getHomeUsers/getCurrentUser above, this action lives
+     on the older non-"v2" endpoint - /api/v2/home/users/<id>/switch 404s, only
+     /api/home/users/<id>/switch works. Like /api/resources elsewhere in this file, it's
+     an old myplex endpoint that doesn't reliably honor Accept: application/json, so the
+     response is parsed as whichever content-type actually comes back rather than
+     assumed JSON. */
+  async function switchHomeUser(accountToken, userId, pin) {
+    const qs = pin ? `?${new URLSearchParams({ pin })}` : "";
+    const res = await fetch(`https://plex.tv/api/home/users/${userId}/switch${qs}`, {
+      method: "POST",
+      headers: { Accept: "application/json", "X-Plex-Token": accountToken, "X-Plex-Client-Identifier": getClientId() },
+    });
+    const text = await res.text();
+    const isJson = (res.headers.get("content-type") || "").includes("json");
+    let authToken = null;
+    let errorMessage = null;
+    if (isJson) {
+      let data;
+      try {
+        data = JSON.parse(text);
+      } catch (e) {
+        data = null;
+      }
+      authToken = data?.authToken || data?.authenticationToken || null;
+      errorMessage = data?.errors?.[0]?.message || data?.error || null;
+    } else {
+      /* This endpoint's XML error shape is <Response code="401" status="Invalid PIN"/> -
+         "status" here is Plex's message text, not an HTTP status. */
+      const doc = new DOMParser().parseFromString(text, "application/xml");
+      const root = doc.documentElement;
+      authToken = root?.getAttribute("authToken") || root?.getAttribute("authenticationToken") || null;
+      errorMessage = root?.getAttribute("status") || null;
+    }
+    if (!res.ok) throw new Error(errorMessage || `Couldn't switch Plex profile (HTTP ${res.status})`);
+    if (!authToken) throw new Error("Plex didn't return a token for that profile.");
+    return authToken;
+  }
+
+  window.StreamingPlexAuth = {
+    requestPin,
+    buildAuthUrl,
+    pollPin,
+    discoverServers,
+    resolveBestConnection,
+    getHomeUsers,
+    getCurrentUser,
+    switchHomeUser,
+  };
 })();

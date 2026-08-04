@@ -595,7 +595,7 @@ const STYLE = `
     pointer-events: none;
     z-index: 0;
   }
-  .kids-pin-overlay {
+  .pin-overlay {
     position: fixed;
     inset: 0;
     background: rgba(0,0,0,0.72);
@@ -603,11 +603,13 @@ const STYLE = `
     display: none;
     align-items: center;
     justify-content: center;
-    z-index: 100;
+    /* Higher than .profile-overlay (100) - the profile switcher stays open underneath
+       while this collects a protected profile's PIN, so this has to paint on top of it. */
+    z-index: 110;
     outline: none;
   }
-  .kids-pin-overlay.open { display: flex; }
-  .kids-pin-modal {
+  .pin-overlay.open { display: flex; }
+  .pin-modal {
     width: 300px;
     max-width: 88vw;
     background: #161619;
@@ -617,14 +619,14 @@ const STYLE = `
     text-align: center;
     box-shadow: 0 24px 70px rgba(0,0,0,0.6);
   }
-  .kids-pin-modal.shake { animation: kidsPinShake 0.4s ease; }
-  @keyframes kidsPinShake {
+  .pin-modal.shake { animation: pinShake 0.4s ease; }
+  @keyframes pinShake {
     10%, 90% { transform: translateX(-3px); }
     20%, 80% { transform: translateX(5px); }
     30%, 50%, 70% { transform: translateX(-7px); }
     40%, 60% { transform: translateX(7px); }
   }
-  .kids-pin-icon {
+  .pin-icon {
     width: 44px;
     height: 44px;
     margin: 0 auto 12px;
@@ -635,10 +637,10 @@ const STYLE = `
     align-items: center;
     justify-content: center;
   }
-  .kids-pin-icon svg { width: 22px; height: 22px; }
-  .kids-pin-title { font-size: 15px; font-weight: 700; margin-bottom: 18px; }
-  .kids-pin-dots { display: flex; justify-content: center; gap: 14px; margin-bottom: 10px; }
-  .kids-pin-dot {
+  .pin-icon svg { width: 22px; height: 22px; }
+  .pin-title { font-size: 15px; font-weight: 700; margin-bottom: 18px; }
+  .pin-dots { display: flex; justify-content: center; gap: 14px; margin-bottom: 10px; }
+  .pin-dot {
     width: 13px;
     height: 13px;
     border-radius: 50%;
@@ -646,8 +648,8 @@ const STYLE = `
     background: transparent;
     transition: background-color 0.15s ease, border-color 0.15s ease;
   }
-  .kids-pin-dot.filled { background: #e5a00d; border-color: #e5a00d; }
-  .kids-pin-error {
+  .pin-dot.filled { background: #e5a00d; border-color: #e5a00d; }
+  .pin-error {
     color: #ff6b6b;
     font-size: 12px;
     font-weight: 600;
@@ -655,14 +657,14 @@ const STYLE = `
     margin-bottom: 8px;
     visibility: hidden;
   }
-  .kids-pin-error.visible { visibility: visible; }
-  .kids-pin-keypad {
+  .pin-error.visible { visibility: visible; }
+  .pin-keypad {
     display: grid;
     grid-template-columns: repeat(3, 1fr);
     gap: 10px;
     margin-bottom: 14px;
   }
-  .kids-pin-key {
+  .pin-key {
     height: 50px;
     border-radius: 10px;
     border: 1px solid rgba(255,255,255,0.1);
@@ -672,10 +674,10 @@ const STYLE = `
     font-weight: 600;
     cursor: pointer;
   }
-  .kids-pin-key:hover { background: rgba(255,255,255,0.12); }
-  .kids-pin-key:active { background: rgba(229,160,13,0.25); }
-  .kids-pin-empty { visibility: hidden; cursor: default; }
-  .kids-pin-cancel {
+  .pin-key:hover { background: rgba(255,255,255,0.12); }
+  .pin-key:active { background: rgba(229,160,13,0.25); }
+  .pin-key-empty { visibility: hidden; cursor: default; }
+  .pin-cancel {
     width: 100%;
     padding: 10px;
     border-radius: 8px;
@@ -686,7 +688,71 @@ const STYLE = `
     font-weight: 600;
     cursor: pointer;
   }
-  .kids-pin-cancel:hover { color: #fff; }
+  .pin-cancel:hover { color: #fff; }
+  .nav-profile[hidden] { display: none; }
+  .nav-profile-avatar {
+    width: 22px; height: 22px; border-radius: 50%; overflow: hidden; flex: none;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .nav-profile-avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .profile-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.72);
+    backdrop-filter: blur(6px);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+    outline: none;
+  }
+  .profile-overlay.open { display: flex; }
+  .profile-modal {
+    width: 360px;
+    max-width: 88vw;
+    max-height: 80vh;
+    overflow-y: auto;
+    background: #161619;
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 16px;
+    padding: 24px;
+    box-shadow: 0 24px 70px rgba(0,0,0,0.6);
+  }
+  .profile-title { font-size: 15px; font-weight: 700; margin-bottom: 16px; text-align: center; }
+  .profile-list { display: flex; flex-direction: column; gap: 10px; margin-bottom: 16px; }
+  .profile-row {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    background: rgba(255,255,255,0.05); border-radius: 10px; padding: 10px 12px;
+  }
+  .profile-row.active { background: rgba(229,160,13,0.12); }
+  .profile-row.busy { opacity: 0.6; pointer-events: none; }
+  .profile-avatar {
+    width: 34px; height: 34px; border-radius: 50%; overflow: hidden; flex: none;
+    display: flex; align-items: center; justify-content: center; color: rgba(255,255,255,0.6);
+    background: rgba(255,255,255,0.08);
+  }
+  .profile-avatar svg { width: 20px; height: 20px; }
+  .profile-avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .profile-name { font-size: 14px; font-weight: 600; flex: 1 1 auto; min-width: 0; }
+  .profile-switch-btn {
+    border: none; border-radius: 8px; padding: 7px 14px; font-size: 12.5px; font-weight: 700;
+    cursor: pointer; background: rgba(255,255,255,0.1); color: #fff; white-space: nowrap;
+  }
+  .profile-switch-btn:hover { background: rgba(255,255,255,0.18); }
+  .profile-switch-btn:disabled { opacity: 0.5; cursor: default; }
+  .profile-row-status { flex: 1 0 100%; color: #ff6b6b; font-size: 11.5px; font-weight: 600; }
+  .profile-cancel {
+    width: 100%;
+    padding: 10px;
+    border-radius: 8px;
+    border: none;
+    background: transparent;
+    color: rgba(255,255,255,0.55);
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .profile-cancel:hover { color: #fff; }
   @media (max-width: 700px) {
     .hero-info { left: 20px; max-width: calc(100% - 40px); }
     .hero-title { font-size: 24px; }
@@ -742,6 +808,8 @@ const SEARCH_ICON_SVG =
   '<svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="1.6"/><line x1="16.2" y1="16.2" x2="21" y2="21" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>';
 const CLEAR_ICON_SVG =
   '<svg viewBox="0 0 24 24"><line x1="6" y1="6" x2="18" y2="18" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><line x1="18" y1="6" x2="6" y2="18" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>';
+const PROFILE_ICON_SVG =
+  '<svg viewBox="0 0 24 24"><circle cx="12" cy="8.4" r="3.6" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M5 20c1.2-4 4-6 7-6s5.8 2 7 6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>';
 const POSTER_FALLBACK_ICON_SVG =
   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="2" fill="currentColor" stroke="none"/><circle cx="12" cy="5.8" r="1.3" fill="currentColor" stroke="none"/><circle cx="17.4" cy="9.3" r="1.3" fill="currentColor" stroke="none"/><circle cx="17.4" cy="14.7" r="1.3" fill="currentColor" stroke="none"/><circle cx="12" cy="18.2" r="1.3" fill="currentColor" stroke="none"/><circle cx="6.6" cy="14.7" r="1.3" fill="currentColor" stroke="none"/><circle cx="6.6" cy="9.3" r="1.3" fill="currentColor" stroke="none"/></svg>';
 
@@ -837,15 +905,21 @@ class PlexNetflixCard extends HTMLElement {
     }
   }
 
-  /* Custom numeric-keypad modal replacing window.prompt/alert for the PIN gate - this
-     card has no native browser-dialog usage elsewhere, and a Netflix-style kiosk
-     dashboard (often touch/TV, no physical keyboard) needs a tappable keypad rather
-     than an OS text-input dialog. Returns a Promise<boolean> (true = correct PIN
-     entered, false = cancelled) so the caller can just `await` it like a confirm(). */
-  _promptForPin() {
+  /* Custom numeric-keypad modal replacing window.prompt/alert for PIN entry - this card
+     has no native browser-dialog usage elsewhere, and a Netflix-style kiosk dashboard
+     (often touch/TV, no physical keyboard) needs a tappable keypad rather than an OS
+     text-input dialog. Shared by Kids Mode's exit gate and the Plex profile switcher's
+     PIN prompt (see _verifyKidsPin/_switchToUser) rather than each owning its own copy.
+     Resolves with the entered digit string once `length` digits are typed, or null if
+     cancelled - checking those digits against anything is the caller's job, not this
+     modal's, since Kids Mode verifies locally but a Plex profile PIN can only be
+     verified by Plex itself. */
+  _promptForDigits(length, title) {
     return new Promise((resolve) => {
       this._pinResolve = resolve;
       this._pinEntry = "";
+      this._pinLength = length;
+      this._pinTitleEl.textContent = title;
       this._pinError.classList.remove("visible");
       this._pinModal.classList.remove("shake");
       this._renderPinDots();
@@ -862,26 +936,37 @@ class PlexNetflixCard extends HTMLElement {
   }
 
   _renderPinDots() {
-    const pinLength = String(this._config.kids_mode_pin || "").length || 4;
+    const pinLength = this._pinLength || 4;
     if (this._pinDots.children.length !== pinLength) {
-      this._pinDots.innerHTML = Array.from({ length: pinLength }, () => '<span class="kids-pin-dot"></span>').join(
-        ""
-      );
+      this._pinDots.innerHTML = Array.from({ length: pinLength }, () => '<span class="pin-dot"></span>').join("");
     }
     [...this._pinDots.children].forEach((dot, i) => dot.classList.toggle("filled", i < this._pinEntry.length));
   }
 
-  _checkPinEntry() {
-    if (this._pinEntry === String(this._config.kids_mode_pin || "")) {
-      this._resolvePin(true);
-      return;
-    }
+  /* Wrong-PIN feedback (shake + clear) without closing the modal - used by Kids Mode's
+     retry loop below. The profile switcher doesn't use this: a wrong Plex PIN is a
+     server round-trip away, not a local comparison, so it just reports the error and
+     lets the user press "Switch" again rather than auto-retrying. */
+  _shakePinEntry() {
     this._pinError.classList.add("visible");
     this._pinModal.classList.remove("shake");
     void this._pinModal.offsetWidth;
     this._pinModal.classList.add("shake");
     this._pinEntry = "";
     this._renderPinDots();
+  }
+
+  /* Loops the shared PIN prompt until the Kids Mode PIN matches or the user cancels -
+     this is where the "compare against kids_mode_pin" logic that used to live inside
+     the keypad modal itself now lives, since the modal is generic. */
+  async _verifyKidsPin() {
+    const expected = String(this._config.kids_mode_pin || "");
+    for (;;) {
+      const entry = await this._promptForDigits(expected.length || 4, "Enter PIN to Exit Kids Mode");
+      if (entry === null) return false;
+      if (entry === expected) return true;
+      this._shakePinEntry();
+    }
   }
 
   getCardSize() {
@@ -922,6 +1007,10 @@ class PlexNetflixCard extends HTMLElement {
             </div>
           </div>
           <div class="nav-bottom">
+            <div class="nav-item nav-profile" title="Switch Profile" hidden>
+              <span class="nav-icon nav-profile-icon"></span>
+              <span class="nav-label nav-profile-label">Profile</span>
+            </div>
             <div class="nav-item nav-kids-toggle" title="Kids Mode">
               <span class="nav-icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="8.7" cy="10" r="1.15" fill="currentColor"/><circle cx="15.3" cy="10" r="1.15" fill="currentColor"/><path d="M8 14.5c1 1.3 2.5 2 4 2s3-0.7 4-2" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></span>
               <span class="nav-label">Kids Mode</span>
@@ -961,29 +1050,36 @@ class PlexNetflixCard extends HTMLElement {
           </div>
         </div>
       </div>
-      <div class="kids-pin-overlay" tabindex="-1">
-        <div class="kids-pin-modal">
-          <div class="kids-pin-icon">
+      <div class="pin-overlay" tabindex="-1">
+        <div class="pin-modal">
+          <div class="pin-icon">
             <svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10" rx="2" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M8 11V7a4 4 0 0 1 8 0v4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
           </div>
-          <div class="kids-pin-title">Enter PIN to Exit Kids Mode</div>
-          <div class="kids-pin-dots"></div>
-          <div class="kids-pin-error">Incorrect PIN</div>
-          <div class="kids-pin-keypad">
-            <button type="button" class="kids-pin-key" data-digit="1">1</button>
-            <button type="button" class="kids-pin-key" data-digit="2">2</button>
-            <button type="button" class="kids-pin-key" data-digit="3">3</button>
-            <button type="button" class="kids-pin-key" data-digit="4">4</button>
-            <button type="button" class="kids-pin-key" data-digit="5">5</button>
-            <button type="button" class="kids-pin-key" data-digit="6">6</button>
-            <button type="button" class="kids-pin-key" data-digit="7">7</button>
-            <button type="button" class="kids-pin-key" data-digit="8">8</button>
-            <button type="button" class="kids-pin-key" data-digit="9">9</button>
-            <button type="button" class="kids-pin-key kids-pin-empty" tabindex="-1"></button>
-            <button type="button" class="kids-pin-key" data-digit="0">0</button>
-            <button type="button" class="kids-pin-key kids-pin-backspace" aria-label="Backspace">⌫</button>
+          <div class="pin-title">Enter PIN</div>
+          <div class="pin-dots"></div>
+          <div class="pin-error">Incorrect PIN</div>
+          <div class="pin-keypad">
+            <button type="button" class="pin-key" data-digit="1">1</button>
+            <button type="button" class="pin-key" data-digit="2">2</button>
+            <button type="button" class="pin-key" data-digit="3">3</button>
+            <button type="button" class="pin-key" data-digit="4">4</button>
+            <button type="button" class="pin-key" data-digit="5">5</button>
+            <button type="button" class="pin-key" data-digit="6">6</button>
+            <button type="button" class="pin-key" data-digit="7">7</button>
+            <button type="button" class="pin-key" data-digit="8">8</button>
+            <button type="button" class="pin-key" data-digit="9">9</button>
+            <button type="button" class="pin-key pin-key-empty" tabindex="-1"></button>
+            <button type="button" class="pin-key" data-digit="0">0</button>
+            <button type="button" class="pin-key pin-backspace" aria-label="Backspace">⌫</button>
           </div>
-          <button type="button" class="kids-pin-cancel">Cancel</button>
+          <button type="button" class="pin-cancel">Cancel</button>
+        </div>
+      </div>
+      <div class="profile-overlay" tabindex="-1">
+        <div class="profile-modal">
+          <div class="profile-title">Switch Profile</div>
+          <div class="profile-list"></div>
+          <button type="button" class="profile-cancel">Cancel</button>
         </div>
       </div>
     `;
@@ -994,11 +1090,18 @@ class PlexNetflixCard extends HTMLElement {
     this._navItems = [...this.shadowRoot.querySelectorAll(".nav-item[data-view]")];
     this._kidsToggleBtn = this.shadowRoot.querySelector(".nav-kids-toggle");
     this._settingsBtn = this.shadowRoot.querySelector(".nav-settings");
-    this._pinOverlay = this.shadowRoot.querySelector(".kids-pin-overlay");
-    this._pinModal = this.shadowRoot.querySelector(".kids-pin-modal");
-    this._pinDots = this.shadowRoot.querySelector(".kids-pin-dots");
-    this._pinError = this.shadowRoot.querySelector(".kids-pin-error");
-    this._pinCancelBtn = this.shadowRoot.querySelector(".kids-pin-cancel");
+    this._profileNavItem = this.shadowRoot.querySelector(".nav-profile");
+    this._profileNavIcon = this.shadowRoot.querySelector(".nav-profile-icon");
+    this._profileNavLabel = this.shadowRoot.querySelector(".nav-profile-label");
+    this._profileOverlay = this.shadowRoot.querySelector(".profile-overlay");
+    this._profileListEl = this.shadowRoot.querySelector(".profile-list");
+    this._profileCancelBtn = this.shadowRoot.querySelector(".profile-cancel");
+    this._pinOverlay = this.shadowRoot.querySelector(".pin-overlay");
+    this._pinModal = this.shadowRoot.querySelector(".pin-modal");
+    this._pinTitleEl = this.shadowRoot.querySelector(".pin-title");
+    this._pinDots = this.shadowRoot.querySelector(".pin-dots");
+    this._pinError = this.shadowRoot.querySelector(".pin-error");
+    this._pinCancelBtn = this.shadowRoot.querySelector(".pin-cancel");
     this._heroEl = this.shadowRoot.querySelector(".hero");
     this._heroMediaLayers = [
       this.shadowRoot.querySelector(".hero-media-a"),
@@ -1130,7 +1233,7 @@ class PlexNetflixCard extends HTMLElement {
     this._kidsToggleBtn.addEventListener("click", async () => {
       /* Only exiting Kids Mode is PIN-gated - turning it on is always allowed. */
       if (this._kidsMode && this._config.kids_mode_pin) {
-        const ok = await this._promptForPin();
+        const ok = await this._verifyKidsPin();
         if (!ok) return;
       }
       this._kidsMode = !this._kidsMode;
@@ -1142,29 +1245,38 @@ class PlexNetflixCard extends HTMLElement {
       this.dispatchEvent(new CustomEvent("open-settings", { bubbles: true, composed: true }));
     });
 
+    this._profileNavItem.addEventListener("click", () => this._openProfileOverlay());
+    this._profileCancelBtn.addEventListener("click", () => this._closeProfileOverlay());
+    this._profileOverlay.addEventListener("click", (e) => {
+      if (e.target === this._profileOverlay) this._closeProfileOverlay();
+    });
+    this._profileOverlay.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") this._closeProfileOverlay();
+    });
+
     this._pinEntry = "";
     const pressPinDigit = (digit) => {
-      const pin = String(this._config.kids_mode_pin || "");
-      if (this._pinEntry.length >= pin.length) return;
+      const length = this._pinLength || 4;
+      if (this._pinEntry.length >= length) return;
       this._pinEntry += digit;
       this._renderPinDots();
-      if (this._pinEntry.length === pin.length) this._checkPinEntry();
+      if (this._pinEntry.length === length) this._resolvePin(this._pinEntry);
     };
     const pressPinBackspace = () => {
       this._pinEntry = this._pinEntry.slice(0, -1);
       this._pinError.classList.remove("visible");
       this._renderPinDots();
     };
-    this.shadowRoot.querySelectorAll(".kids-pin-key[data-digit]").forEach((btn) => {
+    this.shadowRoot.querySelectorAll(".pin-key[data-digit]").forEach((btn) => {
       btn.addEventListener("click", () => pressPinDigit(btn.dataset.digit));
     });
-    this.shadowRoot.querySelector(".kids-pin-backspace").addEventListener("click", pressPinBackspace);
-    this._pinCancelBtn.addEventListener("click", () => this._resolvePin(false));
+    this.shadowRoot.querySelector(".pin-backspace").addEventListener("click", pressPinBackspace);
+    this._pinCancelBtn.addEventListener("click", () => this._resolvePin(null));
     this._pinOverlay.addEventListener("click", (e) => {
-      if (e.target === this._pinOverlay) this._resolvePin(false);
+      if (e.target === this._pinOverlay) this._resolvePin(null);
     });
     this._pinOverlay.addEventListener("keydown", (e) => {
-      if (e.key === "Escape") this._resolvePin(false);
+      if (e.key === "Escape") this._resolvePin(null);
       else if (e.key === "Backspace") pressPinBackspace();
       else if (/^[0-9]$/.test(e.key)) pressPinDigit(e.key);
     });
@@ -1245,6 +1357,7 @@ class PlexNetflixCard extends HTMLElement {
         historyRaw,
         collectionsRaw,
         playlistsRaw,
+        homeProfiles,
       ] = await Promise.all([
         this._fetchOnDeckRaw(),
         this._fetchWatchlistRaw(),
@@ -1254,6 +1367,7 @@ class PlexNetflixCard extends HTMLElement {
         this._fetchWatchHistoryRaw(),
         this._fetchCollectionsRaw(),
         this._fetchPlaylistsRaw(),
+        this._fetchHomeProfiles(),
       ]);
       this._onDeckRaw = onDeckRaw;
       this._watchlistRaw = watchlistRaw;
@@ -1265,6 +1379,9 @@ class PlexNetflixCard extends HTMLElement {
       this._collectionFacets = searchFacets.collections;
       this._collectionsRaw = collectionsRaw;
       this._playlistsRaw = playlistsRaw;
+      this._homeUsers = homeProfiles.users;
+      this._activeUserId = homeProfiles.activeId;
+      this._renderProfileNav();
       const rowCount = this._config.collection_row_count ?? 0;
       this._collectionRowPicks = this._shuffle(this._collectionsRaw).slice(0, rowCount);
       this._collectionRowsRaw = await this._fetchCollectionRowItems(this._collectionRowPicks);
@@ -1721,13 +1838,114 @@ class PlexNetflixCard extends HTMLElement {
   async _fetchWatchlistRaw() {
     try {
       const url = new URL("https://discover.provider.plex.tv/library/sections/watchlist/all");
-      url.searchParams.set("X-Plex-Token", this._config.plex_token);
+      /* discover.provider.plex.tv is plex.tv's account-level Discover service, not the
+         local server - it needs the account token (plex_account_token), not the
+         server-specific plex_token, so this scopes correctly per switched Home profile
+         instead of always reflecting whichever profile originally signed in. */
+      url.searchParams.set("X-Plex-Token", this._config.plex_account_token);
       const res = await fetch(url, { headers: { Accept: "application/json" } });
       if (!res.ok) return [];
       const data = await res.json();
       return data?.MediaContainer?.Metadata || [];
     } catch (e) {
       return [];
+    }
+  }
+
+  /* Plex Home profiles - only worth surfacing the switcher UI at all when there's more
+     than one (a solo account has nothing to switch to). Failures (no account token yet,
+     no Plex Home set up, network error) all collapse to "no switcher", same as an empty
+     list - none of them should ever block the rest of the dashboard from loading. */
+  async _fetchHomeProfiles() {
+    const accountToken = this._config.plex_account_token;
+    if (!accountToken) return { users: [], activeId: null };
+    try {
+      const [users, current] = await Promise.all([
+        window.StreamingPlexAuth.getHomeUsers(accountToken),
+        window.StreamingPlexAuth.getCurrentUser(accountToken),
+      ]);
+      const active = users.find((u) => u.uuid && u.uuid === current.uuid) || users.find((u) => u.id === current.id);
+      return { users, activeId: active ? active.id : null };
+    } catch (e) {
+      return { users: [], activeId: null };
+    }
+  }
+
+  _renderProfileNav() {
+    const users = this._homeUsers || [];
+    const showSwitcher = users.length > 1;
+    this._profileNavItem.hidden = !showSwitcher;
+    if (!showSwitcher) return;
+    const active = users.find((u) => u.id === this._activeUserId);
+    this._profileNavLabel.textContent = active ? active.title : "Profile";
+    this._profileNavIcon.innerHTML = active?.thumb
+      ? `<span class="nav-profile-avatar"><img src="${this._escape(active.thumb)}" alt="" /></span>`
+      : PROFILE_ICON_SVG;
+  }
+
+  _openProfileOverlay() {
+    this._renderProfileList();
+    this._profileOverlay.classList.add("open");
+    this._profileOverlay.focus();
+  }
+
+  _closeProfileOverlay() {
+    this._profileOverlay.classList.remove("open");
+  }
+
+  _renderProfileList() {
+    const users = this._homeUsers || [];
+    this._profileListEl.innerHTML = users
+      .map((u) => {
+        const isActive = u.id === this._activeUserId;
+        const avatar = u.thumb ? `<img src="${this._escape(u.thumb)}" alt="" />` : PROFILE_ICON_SVG;
+        return `
+        <div class="profile-row${isActive ? " active" : ""}" data-id="${u.id}">
+          <div class="profile-avatar">${avatar}</div>
+          <div class="profile-name">${this._escape(u.title)}</div>
+          <button type="button" class="profile-switch-btn" ${isActive ? "disabled" : ""}>${isActive ? "Current" : "Switch"}</button>
+          <div class="profile-row-status"></div>
+        </div>`;
+      })
+      .join("");
+    this._profileListEl.querySelectorAll(".profile-row").forEach((rowEl) => {
+      if (rowEl.classList.contains("active")) return;
+      const user = users.find((u) => u.id === Number(rowEl.dataset.id));
+      rowEl.querySelector(".profile-switch-btn").addEventListener("click", () => this._switchToUser(user, rowEl));
+    });
+  }
+
+  /* Protected profiles get prompted through the same numeric-keypad modal Kids Mode
+     uses to exit (see _promptForDigits/_verifyKidsPin above) instead of a plain text
+     input - one PIN-entry UI in the app, not two. Unlike Kids Mode, a wrong entry here
+     isn't retried automatically: only Plex can say whether it was right, so a rejected
+     PIN just reports the error and leaves the user to press "Switch" again. */
+  async _switchToUser(user, rowEl) {
+    let pin;
+    if (user.protected) {
+      pin = await this._promptForDigits(4, `Enter PIN for ${user.title}`);
+      if (pin === null) return;
+    }
+    rowEl.classList.add("busy");
+    const statusEl = rowEl.querySelector(".profile-row-status");
+    statusEl.textContent = "";
+    try {
+      const accountToken = this._config.plex_account_token;
+      const newAccountToken = await window.StreamingPlexAuth.switchHomeUser(accountToken, user.id, pin);
+      const servers = await window.StreamingPlexAuth.discoverServers(newAccountToken);
+      const server = servers.find((s) => s.clientIdentifier && s.clientIdentifier === this._config.machine_id) || servers[0];
+      if (!server) throw new Error("This profile can't reach the connected Plex server.");
+      const existingSecrets = window.StreamingVault.hasSecrets() ? await window.StreamingVault.loadSecrets() : {};
+      const secrets = { ...existingSecrets, plex_token: server.accessToken, plex_account_token: newAccountToken };
+      await window.StreamingVault.saveSecrets(secrets);
+      this._config.plex_token = server.accessToken;
+      this._config.plex_account_token = newAccountToken;
+      this._activeUserId = user.id;
+      this._closeProfileOverlay();
+      await this._loadAll();
+    } catch (e) {
+      rowEl.classList.remove("busy");
+      statusEl.textContent = e.message;
     }
   }
 
@@ -2433,7 +2651,7 @@ class PlexNetflixCard extends HTMLElement {
       url.searchParams.set("searchTypes", item.type === "show" ? "tv" : "movies");
       url.searchParams.set("searchProviders", "discover");
       url.searchParams.set("limit", "10");
-      url.searchParams.set("X-Plex-Token", this._config.plex_token);
+      url.searchParams.set("X-Plex-Token", this._config.plex_account_token);
       const res = await fetch(url, { headers: { Accept: "application/json" } });
       if (!res.ok) return null;
       const data = await res.json();
@@ -2460,7 +2678,7 @@ class PlexNetflixCard extends HTMLElement {
       if (!ratingKey) throw new Error("no discover match");
       const url = new URL("https://discover.provider.plex.tv/actions/addToWatchlist");
       url.searchParams.set("ratingKey", ratingKey);
-      url.searchParams.set("X-Plex-Token", this._config.plex_token);
+      url.searchParams.set("X-Plex-Token", this._config.plex_account_token);
       const res = await fetch(url, { method: "PUT", headers: { Accept: "application/json" } });
       if (!res.ok) throw new Error("add failed");
       btnEl.classList.remove("busy");
@@ -2487,7 +2705,7 @@ class PlexNetflixCard extends HTMLElement {
       if (!ratingKey) throw new Error("no discover match");
       const url = new URL("https://discover.provider.plex.tv/actions/removeFromWatchlist");
       url.searchParams.set("ratingKey", ratingKey);
-      url.searchParams.set("X-Plex-Token", this._config.plex_token);
+      url.searchParams.set("X-Plex-Token", this._config.plex_account_token);
       const res = await fetch(url, { method: "PUT", headers: { Accept: "application/json" } });
       if (!res.ok) throw new Error("remove failed");
       btnEl.classList.remove("busy", "added");
