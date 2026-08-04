@@ -1,0 +1,14 @@
+.DS_Store
+*.log
+
+node_modules/
+dist/
+
+# Capacitor / Android
+android/app/build/
+android/build/
+android/.gradle/
+android/local.properties
+android/captures/
+android/*.iml
+android/.idea/

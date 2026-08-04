@@ -1,0 +1,20 @@
+<!doctype html>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="theme-color" content="#0a0a0c" />
+<title>Streaming</title>
+<link rel="manifest" href="./manifest.webmanifest" />
+<style>
+  html, body { margin: 0; padding: 0; background: #0a0a0c; }
+  plex-netflix-card { display: block; }
+</style>
+
+<streaming-plex-signin-modal></streaming-plex-signin-modal>
+<streaming-settings-modal></streaming-settings-modal>
+
+<script type="module" src="./vault.js"></script>
+<script type="module" src="./plex-auth.js"></script>
+<script type="module" src="./plex-signin.js"></script>
+<script type="module" src="./settings.js"></script>
+<script type="module" src="./plex-netflix-card.js"></script>
+<script type="module" src="./app.js"></script>
