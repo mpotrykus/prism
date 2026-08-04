@@ -24,6 +24,14 @@
 
         </activity>
 
+        <activity
+            android:name=".PlayerActivity"
+            android:theme="@style/AppTheme.Player"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|screenLayout|uiMode|navigation|density"
+            android:screenOrientation="sensorLandscape"
+            android:launchMode="singleTop"
+            android:exported="false" />
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"

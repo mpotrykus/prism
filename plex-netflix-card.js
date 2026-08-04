@@ -13,6 +13,12 @@ const STYLE = `
     --hero-overlap: 110px;
     --row-title-clearance: 32px;
     --hero-overlap: 110px;
+    /* Android WebView doesn't support env(safe-area-inset-*) (iOS-only); Capacitor's
+       core SystemBars plugin instead injects --safe-area-inset-* custom properties on
+       <html>, which pierce the shadow boundary since custom properties inherit. Combine
+       both so this still works on iOS/web (env) and Android (var). */
+    --safe-top: max(env(safe-area-inset-top, 0px), var(--safe-area-inset-top, 0px));
+    --safe-bottom: max(env(safe-area-inset-bottom, 0px), var(--safe-area-inset-bottom, 0px));
   }
   * { box-sizing: border-box; }
   .wrap { display: flex; flex-direction: row; min-height: 100vh; }
@@ -239,7 +245,7 @@ const STYLE = `
     align-items: center;
     justify-content: space-between;
     gap: 16px;
-    padding: 28px 18px 50px;
+    padding: calc(28px + var(--safe-top)) 18px 50px;
     background: linear-gradient(180deg, rgba(10,10,12,0.95) 0%, rgba(10,10,12,0.7) 70%, rgba(10,10,12,0) 100%);
     backdrop-filter: blur(10px);
     -webkit-backdrop-filter: blur(10px);
@@ -361,6 +367,11 @@ const STYLE = `
        room than the glow's inset(-14px) box alone would suggest - confirmed empirically,
        24px/30px still hard-clipped the top/bottom of the glow. */
     padding: 45px 45px 45px;
+    /* Without this, overflow-x:auto computes overflow-y to auto too (see comment
+       above), and rank-number's absolute-positioned bleed past the padding gives
+       What's Popular real vertical scrollable overflow other rows don't have -
+       the mouse wheel was getting captured into that row instead of the page. */
+    overflow-y: hidden;
     scrollbar-width: none;
     -ms-overflow-style: none;
   }
@@ -509,6 +520,21 @@ const STYLE = `
     background: rgba(255,255,255,0.25);
   }
   .poster .progress .bar { height: 100%; background: #e5a00d; }
+  .poster .watched-badge {
+    position: absolute;
+    top: 6px;
+    left: 6px;
+    z-index: 3;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background: rgba(20,20,24,0.65);
+    color: #e5a00d;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .poster .watched-badge svg { width: 13px; height: 13px; }
   .poster .caption {
     position: absolute;
     left: 0;
@@ -753,6 +779,133 @@ const STYLE = `
     cursor: pointer;
   }
   .profile-cancel:hover { color: #fff; }
+  .title-info-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.8);
+    backdrop-filter: blur(6px);
+    display: none;
+    align-items: flex-start;
+    justify-content: center;
+    z-index: 200;
+    outline: none;
+    overflow-y: auto;
+    padding: 40px 20px;
+  }
+  .title-info-overlay.open { display: flex; }
+  .title-info-modal {
+    width: 780px;
+    max-width: 100%;
+    background: #161619;
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 16px;
+    box-shadow: 0 24px 70px rgba(0,0,0,0.6);
+    overflow: hidden;
+    position: relative;
+  }
+  .title-info-modal::before {
+    content: "";
+    position: absolute;
+    inset: -30px;
+    background-image: var(--title-info-bg, none);
+    background-size: cover;
+    background-position: center;
+    filter: blur(50px) brightness(0.35) saturate(1.1);
+    z-index: 0;
+  }
+  .title-info-close {
+    position: absolute; top: 14px; right: 14px; z-index: 2;
+    width: 34px; height: 34px; border-radius: 50%; border: none;
+    background: rgba(20,20,20,0.7); color: #fff; font-size: 15px; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .title-info-close:hover { background: rgba(20,20,20,0.9); }
+  .title-info-art {
+    width: 100%; height: 280px; background-size: cover; background-position: center;
+    position: relative; z-index: 1; background-color: #0d0d0f;
+  }
+  .title-info-art::after {
+    content: ""; position: absolute; inset: 0;
+    background: linear-gradient(180deg, rgba(22,22,25,0) 40%, #161619 100%);
+  }
+  .title-info-progress {
+    position: absolute; left: 0; right: 0; bottom: 0; height: 4px; z-index: 2;
+    background: rgba(255,255,255,0.25);
+  }
+  .title-info-progress[hidden] { display: none; }
+  .title-info-progress .bar { height: 100%; background: #e5a00d; }
+  .title-info-body { padding: 0 32px 32px; margin-top: -64px; position: relative; z-index: 1; }
+  .title-info-title { font-size: 26px; font-weight: 800; margin-bottom: 8px; }
+  .title-info-meta { font-size: 13px; color: rgba(255,255,255,0.65); margin-bottom: 18px; }
+  .title-info-meta span:not(:last-child)::after { content: "•"; margin-left: 10px; color: rgba(255,255,255,0.3); }
+  .title-info-actions { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; }
+  .title-info-play {
+    border: none; border-radius: 8px; padding: 11px 26px; font-size: 14px; font-weight: 700;
+    cursor: pointer; background: #fff; color: #161619;
+  }
+  .title-info-play:hover { background: rgba(255,255,255,0.85); }
+  .title-info-watchlist-btn {
+    width: 40px; height: 40px; border-radius: 50%; flex: none;
+    border: 1px solid rgba(255,255,255,0.3); background: transparent; color: #fff;
+    font-size: 17px; cursor: pointer;
+  }
+  .title-info-watchlist-btn:hover { background: rgba(255,255,255,0.1); }
+  .title-info-watchlist-btn[hidden] { display: none; }
+  .title-info-summary { font-size: 14px; line-height: 1.6; color: rgba(255,255,255,0.85); margin-bottom: 22px; max-width: 640px; }
+  .title-info-section-title { font-size: 14px; font-weight: 700; margin: 22px 0 10px; }
+  .title-info-cast-wrap[hidden], .title-info-similar-wrap[hidden] { display: none; }
+  .title-info-cast { display: flex; flex-wrap: wrap; gap: 14px; }
+  .title-info-cast-chip { display: flex; flex-direction: column; align-items: center; width: 76px; text-align: center; }
+  .title-info-cast-avatar {
+    position: relative; width: 56px; height: 56px; border-radius: 50%; overflow: hidden; margin-bottom: 6px;
+    background: rgba(255,255,255,0.08); display: flex; align-items: center; justify-content: center;
+  }
+  .title-info-cast-avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .title-info-cast-avatar-fallback { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; color: rgba(255,255,255,0.45); }
+  .title-info-cast-avatar-fallback svg { width: 28px; height: 28px; }
+  .title-info-cast-name { font-size: 12px; color: rgba(255,255,255,0.85); line-height: 1.3; }
+  .title-info-cast-role { font-size: 11px; color: rgba(255,255,255,0.5); line-height: 1.3; }
+  .title-info-season-select {
+    background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.12); color: #fff;
+    border-radius: 8px; padding: 8px 12px; font-size: 13px; margin-bottom: 12px;
+  }
+  .title-info-episode { display: flex; gap: 12px; padding: 10px 0; border-bottom: 1px solid rgba(255,255,255,0.06); cursor: pointer; }
+  .title-info-episode.current { background: rgba(229,160,13,0.08); border-radius: 8px; padding-left: 8px; margin-left: -8px; padding-right: 8px; margin-right: -8px; }
+  .title-info-episode-thumb {
+    position: relative; width: 140px; height: 79px; border-radius: 6px; flex: none;
+    background: rgba(255,255,255,0.05); overflow: hidden;
+  }
+  .title-info-episode-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .title-info-episode-progress {
+    position: absolute; left: 0; right: 0; bottom: 0; height: 3px; background: rgba(255,255,255,0.3);
+  }
+  .title-info-episode-progress .bar { height: 100%; background: #e5a00d; }
+  .title-info-episode-watched {
+    position: absolute; top: 4px; left: 4px; width: 18px; height: 18px; border-radius: 50%;
+    background: rgba(20,20,24,0.7); color: #e5a00d; display: flex; align-items: center; justify-content: center;
+  }
+  .title-info-episode-watched svg { width: 11px; height: 11px; }
+  .title-info-episode-play {
+    position: absolute; inset: 0; z-index: 2;
+    background: rgba(0,0,0,0.5);
+    display: flex; align-items: center; justify-content: center;
+    opacity: 0; transition: opacity 0.15s ease;
+  }
+  .title-info-episode:hover .title-info-episode-play,
+  .title-info-episode:focus-visible .title-info-episode-play { opacity: 1; }
+  .title-info-episode-play-icon {
+    width: 34px; height: 34px; border-radius: 50%;
+    background: rgba(255,255,255,0.9); color: #161619;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 13px;
+  }
+  .title-info-episode-title { font-size: 13.5px; font-weight: 700; margin-bottom: 4px; }
+  .title-info-episode-summary { font-size: 12.5px; color: rgba(255,255,255,0.6); line-height: 1.4; }
+  .title-info-loading { padding: 20px 0; color: rgba(255,255,255,0.5); font-size: 13px; }
+  .title-info-similar { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 12px; }
+  .title-info-similar-item { cursor: pointer; }
+  .title-info-similar-item img { width: 100%; aspect-ratio: 2/3; object-fit: cover; border-radius: 6px; background: rgba(255,255,255,0.05); display: block; }
+  .title-info-similar-item .t { font-size: 11.5px; margin-top: 6px; color: rgba(255,255,255,0.75); }
   @media (max-width: 700px) {
     .hero-info { left: 20px; max-width: calc(100% - 40px); }
     .hero-title { font-size: 24px; }
@@ -770,7 +923,7 @@ const STYLE = `
       align-items: center;
       justify-content: space-evenly;
       padding: 0;
-      padding-bottom: env(safe-area-inset-bottom, 0);
+      padding-bottom: var(--safe-bottom);
       gap: 0;
       border-right: none;
       border-top: 1px solid rgba(255,255,255,0.08);
@@ -782,7 +935,7 @@ const STYLE = `
     .nav-top, .nav-bottom { display: contents; }
     .nav-item { width: 30px; height: 30px; padding: 0; justify-content: center; gap: 0; }
     .nav-label { display: none; }
-    .main { padding-bottom: calc(56px + env(safe-area-inset-bottom, 0)); }
+    .main { padding-bottom: calc(56px + var(--safe-bottom)); }
     .row-title { padding-left: 24px; }
     .row-scroller { padding-left: 24px; gap: 17px; }
     .poster { flex-basis: 112px; }
@@ -799,10 +952,31 @@ const STYLE = `
   }
 `;
 
-const DEFAULT_SECTIONS = [
-  { key: 1, type: 1, label: "Movies" },
-  { key: 2, type: 2, label: "TV Shows" },
+/* type here matches settings.js's SECTION_TYPE_MAP (1 = movie, 2 = show) - the
+   numeric convention persisted in config.sections. */
+const SECTION_TYPE_FILTERS = {
+  1: { onDeck: "movie", other: "movie" },
+  2: { onDeck: "episode", other: "show" },
+};
+
+const MOVIE_NAV_ICON_SVG =
+  '<svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2" fill="none" stroke="currentColor" stroke-width="1.6"/><rect x="3" y="8" width="4" height="1.6" fill="currentColor"/><rect x="3" y="13" width="4" height="1.6" fill="currentColor"/><rect x="17" y="8" width="4" height="1.6" fill="currentColor"/><rect x="17" y="13" width="4" height="1.6" fill="currentColor"/></svg>';
+const TV_NAV_ICON_SVG =
+  '<svg viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="1.6"/><line x1="8" y1="21" x2="16" y2="21" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><line x1="12" y1="18" x2="12" y2="21" stroke="currentColor" stroke-width="1.6"/></svg>';
+const GENERIC_NAV_ICON_SVG =
+  '<svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="3.2" rx="1.2" fill="currentColor"/><rect x="3" y="10.4" width="18" height="3.2" rx="1.2" fill="currentColor"/><rect x="3" y="15.8" width="18" height="3.2" rx="1.2" fill="currentColor"/></svg>';
+/* Best-effort icon-by-name for a fetched library's own label (freely user-edited in
+   Settings) - falls back to a generic library icon rather than guessing from the
+   section's movie/show type, since a "Kids" or "Anime" library shouldn't just get
+   whichever of the two hand-drawn icons happens to match its underlying Plex type. */
+const NAV_ICON_NAME_RULES = [
+  { test: /movie|film|cinema/i, icon: MOVIE_NAV_ICON_SVG },
+  { test: /tv|show|series|anime/i, icon: TV_NAV_ICON_SVG },
 ];
+function iconForLibraryLabel(label) {
+  const rule = NAV_ICON_NAME_RULES.find((r) => r.test.test(label || ""));
+  return rule ? rule.icon : GENERIC_NAV_ICON_SVG;
+}
 
 const SEARCH_ICON_SVG =
   '<svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="1.6"/><line x1="16.2" y1="16.2" x2="21" y2="21" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>';
@@ -815,6 +989,8 @@ const POSTER_FALLBACK_ICON_SVG =
 
 const EMPTY_STATE_ICON_SVG =
   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="10.5" cy="10.5" r="7"/><path d="M20 20l-4.8-4.8" stroke-linecap="round"/></svg>';
+const WATCHED_ICON_SVG =
+  '<svg viewBox="0 0 24 24"><path d="M5 13l4 4 10-10" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 
 /* Plex's /hubs/search `reason` field marks a match as coming from a specific
    person/entity rather than a plain title hit - only these two are confirmed
@@ -834,7 +1010,7 @@ class PlexNetflixCard extends HTMLElement {
       max_genre_rows: 12,
       collection_row_count: 2,
       row_size: 20,
-      sections: DEFAULT_SECTIONS,
+      sections: [],
       title: "Streaming",
       landscape_every_nth: 4,
       /* Required to turn Kids Mode back OFF (turning it on is never gated). */
@@ -851,6 +1027,8 @@ class PlexNetflixCard extends HTMLElement {
     if (!this._built) {
       this._build();
       this._built = true;
+    } else {
+      this._renderNavSections();
     }
   }
 
@@ -997,14 +1175,6 @@ class PlexNetflixCard extends HTMLElement {
               <span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M4 11 12 4l8 7" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M6 10v9h12v-9" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><rect x="10" y="14" width="4" height="5" fill="currentColor"/></svg></span>
               <span class="nav-label">Home</span>
             </div>
-            <div class="nav-item" data-view="movies">
-              <span class="nav-icon"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2" fill="none" stroke="currentColor" stroke-width="1.6"/><rect x="3" y="8" width="4" height="1.6" fill="currentColor"/><rect x="3" y="13" width="4" height="1.6" fill="currentColor"/><rect x="17" y="8" width="4" height="1.6" fill="currentColor"/><rect x="17" y="13" width="4" height="1.6" fill="currentColor"/></svg></span>
-              <span class="nav-label">Movies</span>
-            </div>
-            <div class="nav-item" data-view="tv">
-              <span class="nav-icon"><svg viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="1.6"/><line x1="8" y1="21" x2="16" y2="21" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><line x1="12" y1="18" x2="12" y2="21" stroke="currentColor" stroke-width="1.6"/></svg></span>
-              <span class="nav-label">TV Shows</span>
-            </div>
           </div>
           <div class="nav-bottom">
             <div class="nav-item nav-profile" title="Switch Profile" hidden>
@@ -1082,12 +1252,38 @@ class PlexNetflixCard extends HTMLElement {
           <button type="button" class="profile-cancel">Cancel</button>
         </div>
       </div>
+      <div class="title-info-overlay" tabindex="-1">
+        <div class="title-info-modal">
+          <button type="button" class="title-info-close" aria-label="Close">✕</button>
+          <div class="title-info-art">
+            <div class="title-info-progress" hidden><div class="bar"></div></div>
+          </div>
+          <div class="title-info-body">
+            <div class="title-info-title"></div>
+            <div class="title-info-meta"></div>
+            <div class="title-info-actions">
+              <button type="button" class="title-info-play">▶ Play</button>
+              <button type="button" class="title-info-watchlist-btn" aria-label="Add to My List">+</button>
+            </div>
+            <div class="title-info-summary"></div>
+            <div class="title-info-episodes"></div>
+            <div class="title-info-cast-wrap" hidden>
+              <div class="title-info-section-title">Cast</div>
+              <div class="title-info-cast"></div>
+            </div>
+            <div class="title-info-similar-wrap" hidden>
+              <div class="title-info-section-title">More Like This</div>
+              <div class="title-info-similar"></div>
+            </div>
+          </div>
+        </div>
+      </div>
     `;
     this._rowsEl = this.shadowRoot.querySelector(".rows");
     this._searchWrap = this.shadowRoot.querySelector(".search-wrap");
     this._searchToggle = this.shadowRoot.querySelector(".search-toggle");
     this._searchInput = this.shadowRoot.querySelector(".search");
-    this._navItems = [...this.shadowRoot.querySelectorAll(".nav-item[data-view]")];
+    this._renderNavSections();
     this._kidsToggleBtn = this.shadowRoot.querySelector(".nav-kids-toggle");
     this._settingsBtn = this.shadowRoot.querySelector(".nav-settings");
     this._profileNavItem = this.shadowRoot.querySelector(".nav-profile");
@@ -1102,6 +1298,22 @@ class PlexNetflixCard extends HTMLElement {
     this._pinDots = this.shadowRoot.querySelector(".pin-dots");
     this._pinError = this.shadowRoot.querySelector(".pin-error");
     this._pinCancelBtn = this.shadowRoot.querySelector(".pin-cancel");
+    this._titleInfoOverlay = this.shadowRoot.querySelector(".title-info-overlay");
+    this._titleInfoModal = this.shadowRoot.querySelector(".title-info-modal");
+    this._titleInfoCloseBtn = this.shadowRoot.querySelector(".title-info-close");
+    this._titleInfoArt = this.shadowRoot.querySelector(".title-info-art");
+    this._titleInfoProgress = this.shadowRoot.querySelector(".title-info-progress");
+    this._titleInfoProgressBar = this._titleInfoProgress.querySelector(".bar");
+    this._titleInfoTitleEl = this.shadowRoot.querySelector(".title-info-title");
+    this._titleInfoMetaEl = this.shadowRoot.querySelector(".title-info-meta");
+    this._titleInfoPlayBtn = this.shadowRoot.querySelector(".title-info-play");
+    this._titleInfoWatchlistBtn = this.shadowRoot.querySelector(".title-info-watchlist-btn");
+    this._titleInfoSummaryEl = this.shadowRoot.querySelector(".title-info-summary");
+    this._titleInfoEpisodesEl = this.shadowRoot.querySelector(".title-info-episodes");
+    this._titleInfoCastWrap = this.shadowRoot.querySelector(".title-info-cast-wrap");
+    this._titleInfoCastEl = this.shadowRoot.querySelector(".title-info-cast");
+    this._titleInfoSimilarWrap = this.shadowRoot.querySelector(".title-info-similar-wrap");
+    this._titleInfoSimilarEl = this.shadowRoot.querySelector(".title-info-similar");
     this._heroEl = this.shadowRoot.querySelector(".hero");
     this._heroMediaLayers = [
       this.shadowRoot.querySelector(".hero-media-a"),
@@ -1144,7 +1356,7 @@ class PlexNetflixCard extends HTMLElement {
 
     this._heroInfoBtn.addEventListener("click", () => {
       if (!this._heroItem) return;
-      window.open(this._tapUrl(this._mapItem(this._heroItem, false), "local"), "_blank");
+      this._openTitleInfo(this._mapItem(this._heroItem, false), "local");
     });
     this._heroWatchlistBtn.addEventListener("click", (e) => {
       e.stopPropagation();
@@ -1199,6 +1411,25 @@ class PlexNetflixCard extends HTMLElement {
       this._heroPageVisible = document.visibilityState === "visible";
       this._updateHeroPlayback();
     });
+    /* The hero trailer has no idea a full-screen video started playing on top of it
+       (plex-player.js is a separate module, decoupled from the card - see
+       _openTitleInfo/_playTitleInfoItem) - without this it keeps playing, audio and
+       all, behind the player. Only restores playback on close if this is what paused
+       it - never overrides a pause the user set themselves via the hero's own button. */
+    window.addEventListener("streaming-player-open", () => {
+      if (!this._heroUserPaused) {
+        this._heroUserPaused = true;
+        this._heroPausedByPlayer = true;
+        this._updateHeroPlayback();
+      }
+    });
+    window.addEventListener("streaming-player-close", () => {
+      if (this._heroPausedByPlayer) {
+        this._heroPausedByPlayer = false;
+        this._heroUserPaused = false;
+        this._updateHeroPlayback();
+      }
+    });
     /* YouTube's embed only starts posting "infoDelivery" state updates (playerState 0 =
        ended) after it receives a "listening" handshake - sent once the iframe loads, see
        _showHero below. No official iframe_api script is loaded, so this raw postMessage
@@ -1216,19 +1447,9 @@ class PlexNetflixCard extends HTMLElement {
       }
     });
 
-    this._navItems.forEach((el) => {
-      el.addEventListener("click", () => {
-        const view = el.dataset.view;
-        this._clearSearchInput();
-        this._searchWrap.classList.remove("expanded");
-        if (view === this._currentView) return;
-        this._currentView = view;
-        this._navItems.forEach((n) => n.classList.toggle("active", n === el));
-        window.scrollTo({ top: 0, behavior: "instant" });
-        this._renderCurrentView();
-        this._advanceHero();
-      });
-    });
+    /* Dynamic (per-library) nav items are already wired inside _renderNavSections,
+       called above - only Home is static and needs wiring here. */
+    this._wireNavItem(this.shadowRoot.querySelector('.nav-item[data-view="home"]'));
 
     this._kidsToggleBtn.addEventListener("click", async () => {
       /* Only exiting Kids Mode is PIN-gated - turning it on is always allowed. */
@@ -1253,6 +1474,31 @@ class PlexNetflixCard extends HTMLElement {
     this._profileOverlay.addEventListener("keydown", (e) => {
       if (e.key === "Escape") this._closeProfileOverlay();
     });
+
+    this._titleInfoCloseBtn.addEventListener("click", () => this._closeTitleInfo());
+    this._titleInfoOverlay.addEventListener("click", (e) => {
+      if (e.target === this._titleInfoOverlay) this._closeTitleInfo();
+    });
+    this._titleInfoOverlay.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") this._closeTitleInfo();
+    });
+    this._titleInfoWatchlistBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const item = this._titleInfoItem;
+      if (!item) return;
+      if (this._titleInfoWatchlistBtn.classList.contains("added")) {
+        this._removeFromWatchlist(item, this._titleInfoWatchlistBtn);
+      } else {
+        this._addToWatchlist(item, this._titleInfoWatchlistBtn);
+      }
+    });
+    this._titleInfoWatchlistBtn.addEventListener("mouseenter", () => {
+      if (this._titleInfoWatchlistBtn.classList.contains("added")) this._titleInfoWatchlistBtn.textContent = "−";
+    });
+    this._titleInfoWatchlistBtn.addEventListener("mouseleave", () => {
+      if (this._titleInfoWatchlistBtn.classList.contains("added")) this._titleInfoWatchlistBtn.textContent = "✓";
+    });
+    this._titleInfoPlayBtn.addEventListener("click", () => this._playTitleInfoItem());
 
     this._pinEntry = "";
     const pressPinDigit = (digit) => {
@@ -1310,6 +1556,49 @@ class PlexNetflixCard extends HTMLElement {
         this._searchInput.blur();
       }
     });
+  }
+
+  _wireNavItem(el) {
+    el.addEventListener("click", () => {
+      const view = el.dataset.view;
+      this._clearSearchInput();
+      this._searchWrap.classList.remove("expanded");
+      if (view === this._currentView) return;
+      this._currentView = view;
+      this._navItems.forEach((n) => n.classList.toggle("active", n === el));
+      window.scrollTo({ top: 0, behavior: "instant" });
+      this._renderCurrentView();
+      this._advanceHero();
+    });
+  }
+
+  /* Renders one nav tab per fetched library (config.sections) instead of fixed
+     Movies/TV entries - lets Settings' "Fetch Libraries" list drive the tabs
+     directly, so it naturally covers however many/whatever-named libraries the
+     server actually has. Re-run on every setConfig() after the initial build (see
+     setConfig) so re-fetching/renaming/toggling libraries in Settings updates the
+     nav without a full rebuild. Home stays a separate static item since it's the
+     fixed "everything combined" view, not tied to any one section. */
+  _renderNavSections() {
+    const homeItem = this.shadowRoot.querySelector('.nav-item[data-view="home"]');
+    this.shadowRoot.querySelectorAll(".nav-item-dynamic").forEach((el) => el.remove());
+    const sections = this._config.sections || [];
+    const html = sections
+      .map(
+        (s) => `
+            <div class="nav-item nav-item-dynamic" data-view="section-${s.key}">
+              <span class="nav-icon">${iconForLibraryLabel(s.label)}</span>
+              <span class="nav-label">${this._escape(s.label)}</span>
+            </div>`
+      )
+      .join("");
+    if (html) homeItem.insertAdjacentHTML("afterend", html);
+    this._navItems = [...this.shadowRoot.querySelectorAll(".nav-item[data-view]")];
+    this.shadowRoot.querySelectorAll(".nav-item-dynamic").forEach((el) => this._wireNavItem(el));
+    if (this._currentView !== "home" && this._currentView !== "search" && !sections.some((s) => `section-${s.key}` === this._currentView)) {
+      this._currentView = "home";
+    }
+    this._navItems.forEach((n) => n.classList.toggle("active", n.dataset.view === this._currentView));
   }
 
   _clearSearchInput() {
@@ -1399,10 +1688,17 @@ class PlexNetflixCard extends HTMLElement {
     }
   }
 
+  /* "home"/"search" (or any unrecognized view) fall through to null, meaning "no
+     single section" - callers treat that as "all sections". */
+  _sectionForView(view) {
+    if (typeof view !== "string" || !view.startsWith("section-")) return null;
+    const key = Number(view.slice("section-".length));
+    return (this._config.sections || []).find((s) => s.key === key) || null;
+  }
+
   _sectionsForView(view) {
-    if (view === "movies") return this._config.sections.filter((s) => s.type === 1);
-    if (view === "tv") return this._config.sections.filter((s) => s.type === 2);
-    return this._config.sections;
+    const section = this._sectionForView(view);
+    return section ? [section] : this._config.sections;
   }
 
   _shuffle(array) {
@@ -1695,24 +1991,13 @@ class PlexNetflixCard extends HTMLElement {
     this._showHero();
     const sectionsForGenres = this._sectionsForView(view);
 
-    let onDeckFilter = () => true;
-    let watchlistFilter = () => true;
-    let recentlyAddedFilter = () => true;
-    let recommendedFilter = () => true;
-    let popularFilter = () => true;
-    if (view === "movies") {
-      onDeckFilter = (m) => m.type === "movie";
-      watchlistFilter = (m) => m.type === "movie";
-      recentlyAddedFilter = (m) => m.type === "movie";
-      recommendedFilter = (m) => m.type === "movie";
-      popularFilter = (m) => m.type === "movie";
-    } else if (view === "tv") {
-      onDeckFilter = (m) => m.type === "episode";
-      watchlistFilter = (m) => m.type === "show";
-      recentlyAddedFilter = (m) => m.type === "show";
-      recommendedFilter = (m) => m.type === "show";
-      popularFilter = (m) => m.type === "show";
-    }
+    const sectionFilters = SECTION_TYPE_FILTERS[this._sectionForView(view)?.type];
+    const onDeckFilter = sectionFilters ? (m) => m.type === sectionFilters.onDeck : () => true;
+    const otherFilter = sectionFilters ? (m) => m.type === sectionFilters.other : () => true;
+    const watchlistFilter = otherFilter;
+    const recentlyAddedFilter = otherFilter;
+    const recommendedFilter = otherFilter;
+    const popularFilter = otherFilter;
 
     const onDeck = (this._onDeckRaw || [])
       .filter(onDeckFilter)
@@ -1759,9 +2044,8 @@ class PlexNetflixCard extends HTMLElement {
      an unrelated poster's watchlist button elsewhere on the page. */
   _refreshWatchlistRow() {
     const view = this._currentView || "home";
-    let watchlistFilter = () => true;
-    if (view === "movies") watchlistFilter = (m) => m.type === "movie";
-    else if (view === "tv") watchlistFilter = (m) => m.type === "show";
+    const sectionFilters = SECTION_TYPE_FILTERS[this._sectionForView(view)?.type];
+    const watchlistFilter = sectionFilters ? (m) => m.type === sectionFilters.other : () => true;
     const watchlist = (this._watchlistRaw || [])
       .filter(watchlistFilter)
       .filter((m) => this._passesKidsMode(m))
@@ -1913,6 +2197,296 @@ class PlexNetflixCard extends HTMLElement {
       const user = users.find((u) => u.id === Number(rowEl.dataset.id));
       rowEl.querySelector(".profile-switch-btn").addEventListener("click", () => this._switchToUser(user, rowEl));
     });
+  }
+
+  /* Redirects an episode click to the parent show's info modal, landing on the season/
+     episode it came from (via _pendingEpisodeFocus, consumed in _loadTitleInfoSeasons)
+     instead of opening a dedicated single-episode modal. item.image/art already resolve
+     to the show's own thumb/art here (see _mapItem's grandparentThumb/grandparentArt
+     fallback for episodes), so the optimistic paint before the real fetch is accurate.
+     _titleInfoResumeEpisodeKey remembers which episode this show modal stands in for, so
+     the Play button resumes that episode instead of trying to "play" the show container
+     itself, which isn't a playable item (StreamingPlayer.play fails on it and falls back
+     to _tapUrl's web/details link - the "thrown to the Plex website" regression this
+     comment is here to prevent reintroducing). */
+  async _openTitleInfoForEpisode(item, source) {
+    this._pendingEpisodeFocus = { seasonRatingKey: item.seasonKey, episodeRatingKey: item.ratingKey };
+    const showItem = {
+      ratingKey: item.showKey,
+      type: "show",
+      title: item.title,
+      subtitle: "",
+      image: item.image,
+      art: item.art,
+    };
+    await this._openTitleInfo(showItem, source);
+    if (this._titleInfoItem === showItem) this._titleInfoResumeEpisodeKey = item.ratingKey;
+  }
+
+  /* Opens instantly from whatever's already known about the item (title/image, via the
+     existing _mapItem shape) so there's no blank-modal flash, then fills in the rest
+     from a full /library/metadata fetch. A watchlist item's own ratingKey is scoped to
+     discover.provider.plex.tv, not this server, so it's resolved to a local ratingKey
+     first via _resolveLocalRatingKey. A watchlist item that isn't in this server's
+     library at all is a legitimate case, not an error - it just skips the detail fetch
+     and leaves Play falling back to the Discover deep link in _tapUrl. An episode (e.g.
+     from Continue Watching) redirects to its show's info instead of a standalone episode
+     modal - see _openTitleInfoForEpisode. */
+  async _openTitleInfo(item, source) {
+    if (item.type === "episode" && item.showKey) {
+      return this._openTitleInfoForEpisode(item, source);
+    }
+    this._titleInfoResumeEpisodeKey = null;
+    this._titleInfoItem = item;
+    this._titleInfoSource = source;
+    this._titleInfoDuration = null;
+    this._titleInfoViewOffset = 0;
+    this._titleInfoProgress.hidden = !(item.progress > 0);
+    this._titleInfoProgressBar.style.width = `${Math.round((item.progress || 0) * 100)}%`;
+    const art = item.art || item.image || "";
+    this._titleInfoArt.style.backgroundImage = art ? `url('${art}')` : "none";
+    this._titleInfoModal.style.setProperty("--title-info-bg", art ? `url('${art}')` : "none");
+    this._titleInfoTitleEl.textContent = item.title || "";
+    this._titleInfoMetaEl.innerHTML = item.subtitle ? `<span>${this._escape(item.subtitle)}</span>` : "";
+    this._titleInfoSummaryEl.textContent = "";
+    this._titleInfoEpisodesEl.innerHTML = "";
+    this._titleInfoCastWrap.hidden = true;
+    this._titleInfoCastEl.innerHTML = "";
+    this._titleInfoSimilarWrap.hidden = true;
+    this._titleInfoSimilarEl.innerHTML = "";
+    const canWatchlist = item.type === "movie" || item.type === "show";
+    this._titleInfoWatchlistBtn.hidden = !canWatchlist;
+    if (canWatchlist) {
+      const added = this._isInWatchlist(item);
+      this._titleInfoWatchlistBtn.classList.toggle("added", added);
+      this._titleInfoWatchlistBtn.textContent = added ? "✓" : "+";
+      this._titleInfoWatchlistBtn.setAttribute("aria-label", added ? "Remove from My List" : "Add to My List");
+    }
+    this._titleInfoOverlay.classList.add("open");
+    this._titleInfoOverlay.focus();
+
+    let ratingKey = item.ratingKey;
+    if (source === "watchlist") {
+      ratingKey = await this._resolveLocalRatingKey(item);
+      if (this._titleInfoItem !== item) return;
+      /* Swap the item's Discover-scoped ratingKey for the resolved local one so
+         downstream staleness checks (_loadTitleInfoSimilar/_loadTitleInfoSeasons
+         compare against this._titleInfoItem.ratingKey) and Play's native playback
+         request both key off the ID that actually exists on this server. */
+      item.ratingKey = ratingKey;
+    }
+    if (!ratingKey) return;
+    try {
+      const data = await this._plexFetch(`/library/metadata/${ratingKey}`);
+      const meta = data?.MediaContainer?.Metadata?.[0];
+      if (meta && this._titleInfoItem === item) this._renderTitleInfoDetail(meta);
+    } catch (e) {
+      // detail is best-effort - the poster/title painted above stays usable on failure
+    }
+  }
+
+  _closeTitleInfo() {
+    this._titleInfoOverlay.classList.remove("open");
+    this._titleInfoItem = null;
+  }
+
+  _renderTitleInfoDetail(meta) {
+    this._titleInfoDuration = meta.duration || null;
+    this._titleInfoViewOffset = meta.viewOffset || 0;
+    const progress = meta.duration ? Math.max(0, Math.min(1, this._titleInfoViewOffset / meta.duration)) : 0;
+    this._titleInfoProgress.hidden = progress <= 0;
+    this._titleInfoProgressBar.style.width = `${Math.round(progress * 100)}%`;
+    this._titleInfoSummaryEl.textContent = meta.summary || "";
+
+    const metaParts = [];
+    if (meta.contentRating) metaParts.push(meta.contentRating);
+    if (meta.year) metaParts.push(String(meta.year));
+    if (meta.duration) metaParts.push(this._formatRuntime(meta.duration));
+    const rating = meta.audienceRating || meta.rating;
+    if (rating) metaParts.push(`★ ${Number(rating).toFixed(1)}`);
+    if (meta.Genre?.length) metaParts.push(meta.Genre.slice(0, 3).map((g) => g.tag).join(", "));
+    this._titleInfoMetaEl.innerHTML = metaParts.map((p) => `<span>${this._escape(p)}</span>`).join("");
+
+    const cast = (meta.Role || []).slice(0, 12);
+    this._titleInfoCastWrap.hidden = !cast.length;
+    this._titleInfoCastEl.innerHTML = cast
+      .map((r) => {
+        const fallback = `<div class="title-info-cast-avatar-fallback">${PROFILE_ICON_SVG}</div>`;
+        const avatar = r.thumb
+          ? `<img src="${this._escape(this._plexImageUrl(r.thumb))}" alt="" loading="lazy" onerror="this.style.display='none';this.nextElementSibling.style.display='flex';" />
+             <div class="title-info-cast-avatar-fallback" style="display:none">${PROFILE_ICON_SVG}</div>`
+          : fallback;
+        const role = r.role ? `<div class="title-info-cast-role">${this._escape(r.role)}</div>` : "";
+        return `<div class="title-info-cast-chip"><div class="title-info-cast-avatar">${avatar}</div><div class="title-info-cast-name">${this._escape(r.tag)}</div>${role}</div>`;
+      })
+      .join("");
+
+    if (meta.type === "show") this._loadTitleInfoSeasons(meta.ratingKey);
+    this._loadTitleInfoSimilar(meta.ratingKey);
+  }
+
+  _formatRuntime(ms) {
+    const mins = Math.round(ms / 60000);
+    const h = Math.floor(mins / 60);
+    const m = mins % 60;
+    return h ? `${h}h ${m}m` : `${m}m`;
+  }
+
+  async _loadTitleInfoSeasons(showRatingKey) {
+    try {
+      const data = await this._plexFetch(`/library/metadata/${showRatingKey}/children`);
+      const seasons = (data?.MediaContainer?.Metadata || []).filter((s) => s.index != null);
+      if (!seasons.length || this._titleInfoItem?.ratingKey !== showRatingKey) return;
+
+      this._titleInfoEpisodesEl.innerHTML = "";
+      const select = document.createElement("select");
+      select.className = "title-info-season-select";
+      select.innerHTML = seasons
+        .map((s) => `<option value="${s.ratingKey}">${this._escape(s.title || `Season ${s.index}`)}</option>`)
+        .join("");
+      const list = document.createElement("div");
+      this._titleInfoEpisodesEl.appendChild(select);
+      this._titleInfoEpisodesEl.appendChild(list);
+
+      const showSeason = async (seasonRatingKey, focusEpisodeRatingKey) => {
+        list.innerHTML = '<div class="title-info-loading">Loading episodes…</div>';
+        const epData = await this._plexFetch(`/library/metadata/${seasonRatingKey}/children`);
+        if (this._titleInfoItem?.ratingKey !== showRatingKey) return;
+        const episodes = epData?.MediaContainer?.Metadata || [];
+        list.innerHTML = episodes
+          .map((ep) => {
+            const progress = ep.duration ? Math.max(0, Math.min(1, (ep.viewOffset || 0) / ep.duration)) : 0;
+            const watched = !!ep.viewCount && progress <= 0;
+            return `
+          <div class="title-info-episode" data-rating-key="${ep.ratingKey}">
+            <div class="title-info-episode-thumb">
+              <img loading="lazy" src="${this._escape(this._plexImageUrl(ep.thumb))}" alt="" />
+              ${watched ? `<div class="title-info-episode-watched">${WATCHED_ICON_SVG}</div>` : ""}
+              ${
+                progress > 0
+                  ? `<div class="title-info-episode-progress"><div class="bar" style="width:${Math.round(progress * 100)}%"></div></div>`
+                  : ""
+              }
+              <div class="title-info-episode-play"><div class="title-info-episode-play-icon">▶</div></div>
+            </div>
+            <div>
+              <div class="title-info-episode-title">${ep.index}. ${this._escape(ep.title)}</div>
+              <div class="title-info-episode-summary">${this._escape(ep.summary || "")}</div>
+            </div>
+          </div>`;
+          })
+          .join("");
+        list.querySelectorAll(".title-info-episode").forEach((row) => {
+          row.addEventListener("click", () => {
+            const ep = episodes.find((e) => String(e.ratingKey) === row.dataset.ratingKey);
+            if (!ep) return;
+            this._playItem(this._mapItem(ep, true), {
+              durationMs: ep.duration || null,
+              startOffsetMs: ep.viewOffset || 0,
+              source: "local",
+            });
+          });
+        });
+        if (focusEpisodeRatingKey) {
+          const row = list.querySelector(`[data-rating-key="${focusEpisodeRatingKey}"]`);
+          if (row) {
+            row.classList.add("current");
+            row.scrollIntoView({ block: "center" });
+          }
+        }
+      };
+      select.addEventListener("change", () => showSeason(select.value));
+      /* Opening a show from an episode (e.g. Continue Watching) requests landing on that
+         episode's own season/row instead of always season 1 - see _openTitleInfoForEpisode. */
+      const focus = this._pendingEpisodeFocus;
+      this._pendingEpisodeFocus = null;
+      const focusSeason = focus && seasons.find((s) => String(s.ratingKey) === String(focus.seasonRatingKey));
+      const initialSeasonKey = focusSeason ? focusSeason.ratingKey : seasons[0].ratingKey;
+      select.value = initialSeasonKey;
+      showSeason(initialSeasonKey, focusSeason ? focus.episodeRatingKey : null);
+    } catch (e) {
+      // episode list is supplementary; leave the rest of the modal usable on failure
+    }
+  }
+
+  async _loadTitleInfoSimilar(ratingKey) {
+    try {
+      const data = await this._plexFetch(`/library/metadata/${ratingKey}/related`);
+      const items = (data?.MediaContainer?.Hub || []).flatMap((h) => h.Metadata || []).slice(0, 12);
+      if (!items.length || this._titleInfoItem?.ratingKey !== ratingKey) return;
+      this._titleInfoSimilarWrap.hidden = false;
+      this._titleInfoSimilarEl.innerHTML = items
+        .map((m) => {
+          const mapped = this._mapItem(m, false);
+          return `
+          <div class="title-info-similar-item" data-rating-key="${mapped.ratingKey}">
+            <img loading="lazy" src="${this._escape(mapped.image)}" alt="" />
+            <div class="t">${this._escape(mapped.title)}</div>
+          </div>`;
+        })
+        .join("");
+      this._titleInfoSimilarEl.querySelectorAll(".title-info-similar-item").forEach((el, i) => {
+        el.addEventListener("click", () => this._openTitleInfo(this._mapItem(items[i], false), "local"));
+      });
+    } catch (e) {
+      // similar titles are supplementary; leave the rest of the modal usable on failure
+    }
+  }
+
+  async _playTitleInfoItem() {
+    if (this._titleInfoResumeEpisodeKey) {
+      return this._playEpisodeByRatingKey(this._titleInfoResumeEpisodeKey);
+    }
+    const item = this._titleInfoItem;
+    if (!item) return;
+    await this._playItem(item, {
+      durationMs: this._titleInfoDuration,
+      startOffsetMs: this._titleInfoViewOffset,
+      source: this._titleInfoSource,
+    });
+  }
+
+  /* Fetches the episode's own fresh duration/viewOffset (the show-level modal's
+     _titleInfoDuration/_titleInfoViewOffset are always null/0 - shows don't carry those
+     fields) so resuming from the show modal's Play button seeks to the right spot. */
+  async _playEpisodeByRatingKey(ratingKey) {
+    try {
+      const data = await this._plexFetch(`/library/metadata/${ratingKey}`);
+      const meta = data?.MediaContainer?.Metadata?.[0];
+      if (!meta) return;
+      await this._playItem(this._mapItem(meta, true), {
+        durationMs: meta.duration || null,
+        startOffsetMs: meta.viewOffset || 0,
+        source: "local",
+      });
+    } catch (e) {
+      // best-effort - Play simply won't respond if this fails
+    }
+  }
+
+  /* Prefers window.StreamingPlayer (native on Android, <video>+hls.js everywhere else -
+     see plex-player.js) and only falls back to handing off via _tapUrl (native Plex app /
+     Plex web player) when that's unavailable or playback fails to start - e.g. a
+     watchlist item with no local ratingKey, which StreamingPlayer.play rejects by design.
+     Shared by the title-info modal's Play button and the episode list's direct-play rows. */
+  async _playItem(item, { durationMs = null, startOffsetMs = 0, source } = {}) {
+    if (window.StreamingPlayer) {
+      try {
+        await window.StreamingPlayer.play({
+          ratingKey: item.ratingKey,
+          key: item.key,
+          type: item.type,
+          plexUrl: this._config.plex_url,
+          plexToken: this._config.plex_token,
+          durationMs,
+          startOffsetMs,
+        });
+        return;
+      } catch (e) {
+        // fall through to the deep-link fallback below
+      }
+    }
+    window.open(this._tapUrl(item, source), "_blank");
   }
 
   /* Protected profiles get prompted through the same numeric-keypad modal Kids Mode
@@ -2132,9 +2706,8 @@ class PlexNetflixCard extends HTMLElement {
      floor here (unlike _mergeGenreRows) - collections are hand-curated and small ones
      (e.g. a 2-film franchise) are still worth showing as-is. */
   _buildCollectionRows(view) {
-    let typeFilter = () => true;
-    if (view === "movies") typeFilter = (m) => m.type === "movie";
-    else if (view === "tv") typeFilter = (m) => m.type === "show";
+    const sectionFilters = SECTION_TYPE_FILTERS[this._sectionForView(view)?.type];
+    const typeFilter = sectionFilters ? (m) => m.type === sectionFilters.other : () => true;
 
     const rowSize = this._config.row_size;
     return (this._collectionRowsRaw || [])
@@ -2149,9 +2722,8 @@ class PlexNetflixCard extends HTMLElement {
   }
 
   _buildAiRows(view) {
-    let typeFilter = () => true;
-    if (view === "movies") typeFilter = (m) => m.type === "movie";
-    else if (view === "tv") typeFilter = (m) => m.type === "show";
+    const sectionFilters = SECTION_TYPE_FILTERS[this._sectionForView(view)?.type];
+    const typeFilter = sectionFilters ? (m) => m.type === sectionFilters.other : () => true;
 
     const rowSize = this._config.row_size;
     return (this._aiRowsRaw || [])
@@ -2400,6 +2972,7 @@ class PlexNetflixCard extends HTMLElement {
       seasonKey: m.parentRatingKey,
       seasonNumber: m.parentIndex,
       episodeNumber: m.index,
+      viewCount: m.viewCount || 0,
     };
     if (withProgress && m.duration) {
       item.progress = Math.max(0, Math.min(1, (m.viewOffset || 0) / m.duration));
@@ -2581,6 +3154,11 @@ class PlexNetflixCard extends HTMLElement {
             : ""
         }
         ${
+          item.viewCount > 0 && !(item.progress > 0)
+            ? `<div class="watched-badge" title="Watched">${WATCHED_ICON_SVG}</div>`
+            : ""
+        }
+        ${
           canWatchlist
             ? `<button type="button" class="watchlist-btn" aria-label="Add to My List">+</button>`
             : ""
@@ -2625,7 +3203,7 @@ class PlexNetflixCard extends HTMLElement {
       });
     }
     el.addEventListener("click", () => {
-      window.open(this._tapUrl(item, source), "_blank");
+      this._openTitleInfo(item, source);
     });
     return el;
   }
@@ -2659,6 +3237,26 @@ class PlexNetflixCard extends HTMLElement {
         .flatMap((g) => g.SearchResult || [])
         .map((r) => r.Metadata)
         .filter(Boolean);
+      const norm = this._normalizeTitle(item.title);
+      const exact = results.find(
+        (m) => this._normalizeTitle(m.title) === norm && (!item.year || m.year === item.year)
+      );
+      return (exact || results[0])?.ratingKey || null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /* The reverse of _resolveDiscoverRatingKey: a "My List" item's ratingKey is scoped to
+     discover.provider.plex.tv, a different ID space than this server's /library/metadata -
+     using it directly there 404s. Resolve the local ratingKey (if the title is actually
+     in this server's library) via /hubs/search before fetching detail. */
+  async _resolveLocalRatingKey(item) {
+    try {
+      const data = await this._plexFetch("/hubs/search", { query: item.title, limit: 10 });
+      const results = (data?.MediaContainer?.Hub || [])
+        .filter((h) => h.type === item.type)
+        .flatMap((h) => h.Metadata || []);
       const norm = this._normalizeTitle(item.title);
       const exact = results.find(
         (m) => this._normalizeTitle(m.title) === norm && (!item.year || m.year === item.year)
