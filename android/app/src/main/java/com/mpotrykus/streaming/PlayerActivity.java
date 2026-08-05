@@ -11,7 +11,11 @@ import android.view.ScaleGestureDetector;
 import android.view.View;
 import android.view.WindowManager;
 import android.widget.FrameLayout;
+import android.widget.LinearLayout;
 import android.widget.PopupMenu;
+import android.widget.RadioButton;
+import android.widget.RadioGroup;
+import android.widget.SeekBar;
 import android.widget.TextView;
 import androidx.annotation.OptIn;
 import androidx.appcompat.app.AppCompatActivity;
@@ -23,11 +27,13 @@ import androidx.media3.common.PlaybackException;
 import androidx.media3.common.PlaybackParameters;
 import androidx.media3.common.Player;
 import androidx.media3.common.util.UnstableApi;
+import androidx.media3.common.Effect;
 import androidx.media3.datasource.DefaultHttpDataSource;
 import androidx.media3.exoplayer.ExoPlayer;
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory;
 import androidx.media3.ui.PlayerView;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 @OptIn(markerClass = UnstableApi.class)
@@ -72,6 +78,8 @@ public class PlayerActivity extends AppCompatActivity {
     private FrameLayout root;
     private TextView skipButton;
     private long skipButtonSeekToMs;
+    private ShaderType shaderType = ShaderType.OFF;
+    private float upscaleStrength = 0.5f;
 
     /* Native code only ever sees {title, startTimeOffsetMs} - Plex's own Chapter field
        names are interpreted once, in plex-player.js, and never duplicated here. */
@@ -221,6 +229,9 @@ public class PlayerActivity extends AppCompatActivity {
 
         player = new ExoPlayer.Builder(this).setMediaSourceFactory(mediaSourceFactory).build();
         playerView.setPlayer(player);
+        /* setVideoEffects() must be called at least once before prepare() even to apply an
+           empty (no-op) list - see ExoPlayer's javadoc on the method. */
+        applyVideoEffects();
 
         player.addListener(
             new Player.Listener() {
@@ -296,7 +307,95 @@ public class PlayerActivity extends AppCompatActivity {
             });
         }
 
+        /* Off by default - this spends an extra GPU pass on every frame, and the effect is
+           only worth the cost on already-low-resolution transcodes/direct-play sources (see
+           ShaderUpscaleEffect's isNoOp check, which skips it once the source already fills the
+           display). A dialog rather than another PopupMenu entry - a PopupMenu can't host a
+           SeekBar, and a continuous strength slider replaced the old fixed-tier preset list. */
+        popup.getMenu().add("Shader Upscaling...").setOnMenuItemClickListener(item -> {
+            showShaderUpscaleDialog();
+            return true;
+        });
+
         popup.show();
+    }
+
+    /* RadioGroup for the shader algorithm (Off/Anime4K/Live-Action) plus a SeekBar for strength,
+       applied live on every change - setVideoEffects() supports being called mid-playback (see
+       applyVideoEffects()'s own comment), so there's no need for an Apply/Cancel step here. */
+    private void showShaderUpscaleDialog() {
+        float density = getResources().getDisplayMetrics().density;
+        int pad = (int) (20 * density);
+
+        LinearLayout container = new LinearLayout(this);
+        container.setOrientation(LinearLayout.VERTICAL);
+        container.setPadding(pad, pad, pad, pad);
+
+        RadioGroup shaderGroup = new RadioGroup(this);
+        shaderGroup.setOrientation(RadioGroup.VERTICAL);
+        ShaderType[] shaderTypes = ShaderType.values();
+        RadioButton[] shaderButtons = new RadioButton[shaderTypes.length];
+        for (int i = 0; i < shaderTypes.length; i++) {
+            RadioButton button = new RadioButton(this);
+            button.setId(View.generateViewId());
+            button.setText(shaderTypes[i].label);
+            shaderGroup.addView(button);
+            shaderButtons[i] = button;
+            if (shaderTypes[i] == shaderType) {
+                shaderGroup.check(button.getId());
+            }
+        }
+        container.addView(shaderGroup);
+
+        TextView strengthLabel = new TextView(this);
+        int labelPad = (int) (8 * density);
+        strengthLabel.setPadding(0, labelPad * 3, 0, labelPad);
+        strengthLabel.setText("Strength: " + Math.round(upscaleStrength * 100) + "%");
+        container.addView(strengthLabel);
+
+        SeekBar strengthSeekBar = new SeekBar(this);
+        strengthSeekBar.setMax(100);
+        strengthSeekBar.setProgress(Math.round(upscaleStrength * 100));
+        strengthSeekBar.setEnabled(shaderType != ShaderType.OFF);
+        container.addView(strengthSeekBar);
+
+        shaderGroup.setOnCheckedChangeListener((group, checkedId) -> {
+            for (int i = 0; i < shaderButtons.length; i++) {
+                if (shaderButtons[i].getId() == checkedId) {
+                    shaderType = shaderTypes[i];
+                    break;
+                }
+            }
+            strengthSeekBar.setEnabled(shaderType != ShaderType.OFF);
+            applyVideoEffects();
+        });
+
+        strengthSeekBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override
+            public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+                /* Label only here - applyVideoEffects() recompiles/relinks a brand-new GL shader
+                   program and rebuilds ExoPlayer's whole video-effects pipeline on every call.
+                   Calling that at drag frequency (many times a second) was what got the renderer
+                   stuck (playback paused and wouldn't resume) - it's meant for occasional effect
+                   changes, not a continuous scrubber. Committed once on release instead. */
+                upscaleStrength = progress / 100f;
+                strengthLabel.setText("Strength: " + progress + "%");
+            }
+
+            @Override
+            public void onStartTrackingTouch(SeekBar seekBar) {}
+
+            @Override
+            public void onStopTrackingTouch(SeekBar seekBar) {
+                applyVideoEffects();
+            }
+        });
+
+        new androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle("Shader Upscaling")
+            .setView(container)
+            .setPositiveButton("Done", null)
+            .show();
     }
 
     private void parseChapters(String json) {
@@ -380,6 +479,18 @@ public class PlayerActivity extends AppCompatActivity {
         if (skipButton != null) {
             skipButton.setVisibility(View.GONE);
         }
+    }
+
+    /* Re-issued on every toggle rather than only once at startup - ExoPlayer's javadoc says
+       setVideoEffects() can be called again mid-playback to swap the active effect list. */
+    private void applyVideoEffects() {
+        if (player == null) {
+            return;
+        }
+        List<Effect> effects = shaderType == ShaderType.OFF
+            ? Collections.emptyList()
+            : Collections.singletonList(new ShaderUpscaleEffect(this, shaderType, upscaleStrength));
+        player.setVideoEffects(effects);
     }
 
     private void applyZoomTransform(View v) {

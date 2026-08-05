@@ -1,4 +1,5 @@
 import { wireLinearNav, registerNavHandler } from "./focus-nav.js";
+import { App } from "@capacitor/app";
 
 const STYLE = `
   :host {
@@ -978,8 +979,8 @@ const STYLE = `
   .title-info-summary { font-size: 14px; line-height: 1.6; color: rgba(255,255,255,0.85); margin-bottom: 22px; max-width: 640px; }
   .title-info-section-title { font-size: 14px; font-weight: 700; margin: 22px 0 10px; }
   .title-info-cast-wrap[hidden], .title-info-similar-wrap[hidden] { display: none; }
-  .title-info-cast { display: flex; flex-wrap: wrap; gap: 14px; }
-  .title-info-cast-chip { display: flex; flex-direction: column; align-items: center; width: 76px; text-align: center; }
+  .title-info-cast { display: grid; grid-template-columns: repeat(auto-fill, minmax(76px, 1fr)); gap: 14px; }
+  .title-info-cast-chip { display: flex; flex-direction: column; align-items: center; text-align: center; }
   .title-info-cast-avatar {
     position: relative; width: 56px; height: 56px; border-radius: 50%; overflow: hidden; margin-bottom: 6px;
     background: rgba(255,255,255,0.08); display: flex; align-items: center; justify-content: center;
@@ -1061,6 +1062,10 @@ const STYLE = `
   }
   .nav-item { outline-offset: -2px; }
   @media (max-width: 700px) {
+    .title-info-overlay { padding: 0; }
+    .title-info-modal { width: 100%; max-width: 100%; min-height: 100dvh; border-radius: 0; border: none; }
+    .title-info-close { display: none; }
+    .title-info-body { padding-bottom: calc(32px + var(--safe-bottom)); }
     .hero-info { left: 20px; max-width: calc(100% - 40px); }
     .hero-title { font-size: 24px; }
     .hero-subtitle { font-size: 13px; }
@@ -1729,6 +1734,21 @@ class PlexNetflixCard extends HTMLElement {
     wireLinearNav(this.shadowRoot, ".quality-picker-option, .quality-picker-done", {
       orientation: "vertical",
       onBack: () => this._closeQualityPicker(),
+    });
+
+    /* Registering a backButton listener at all switches off Capacitor's own default
+       Android hardware-back handling (goBack()-if-possible, else exit the app) - without
+       this, none of these overlays have a browser history entry to go back to, so every
+       one of them just fell straight through to exiting the app. Ordered by overlay
+       z-index (highest first) since more than one can theoretically be open at once
+       (e.g. quality-picker over title-info). */
+    App.addListener("backButton", () => {
+      if (this._qualityPickerOverlay.classList.contains("open")) this._closeQualityPicker();
+      else if (this._titleInfoOverlay.classList.contains("open")) this._closeTitleInfo();
+      else if (this._pinOverlay.classList.contains("open")) this._resolvePin(null);
+      else if (this._profileOverlay.classList.contains("open")) this._closeProfileOverlay();
+      else if (this._moreOverlay.classList.contains("open")) this._closeMoreSheet();
+      else App.exitApp();
     });
 
     this._pinEntry = "";
