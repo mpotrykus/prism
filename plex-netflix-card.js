@@ -32,7 +32,7 @@ const STYLE = `
     top: 0;
     align-self: flex-start;
     height: 100vh;
-    padding: 24px 0;
+    padding: calc(13px + var(--safe-top)) 0 calc(24px + var(--safe-bottom));
     display: flex;
     flex-direction: column;
     align-items: flex-start;

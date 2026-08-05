@@ -2,7 +2,9 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.Web.WebView2.Core;
 using System;
 using System.Diagnostics;
+using Windows.System;
 using Windows.UI;
+using Windows.UI.Core;
 using Windows.UI.ViewManagement;
 using Windows.UI.Xaml.Controls;
 using Windows.UI.Xaml.Media;
@@ -35,6 +37,11 @@ namespace PrismXbox
             // On Xbox, this disables the automatic TV-safe-area border so the app can use the
             // full frame. See https://learn.microsoft.com/windows/apps/design/devices/designing-for-tv#tv-safe-area
             ApplicationView.GetForCurrentView().SetDesiredBoundsMode(ApplicationViewBoundsMode.UseCoreWindow);
+
+            // CoreWindow.KeyDown fires window-wide regardless of which XAML control holds
+            // logical focus, which sidesteps the open "WebView2 gamepad focus trap" risk
+            // entirely for input *delivery* - see OnCoreWindowKeyDown below.
+            Windows.UI.Xaml.Window.Current.CoreWindow.KeyDown += OnCoreWindowKeyDown;
 
             InitializeWebViewAsync();
         }
@@ -93,6 +100,54 @@ namespace PrismXbox
         private void OnWebViewProcessFailed(CoreWebView2 sender, CoreWebView2ProcessFailedEventArgs args)
         {
             Debug.WriteLine($"WebView2 process failed: {args.ProcessFailedKind} / {args.Reason}");
+        }
+
+        // WebView2 is a separate Chromium process hosted as a visual island, not the old
+        // UWP Windows.UI.Xaml.Controls.WebView - it does not automatically receive Xbox
+        // gamepad D-pad/A/B presses as page-level KeyboardEvents or Gamepad API state the
+        // way Fire TV's Silk browser apparently does with its own remote. Confirmed on this
+        // machine's other Xbox UWP project (moonlight-xbox, unrelated stack) that these
+        // GamepadDPad*/A/B VirtualKeys DO arrive via CoreWindow.KeyDown on real Xbox
+        // hardware - they just never reached the WebView2 DOM. Forwarding them here as
+        // synthetic KeyboardEvents feeds the exact same pathway focus-nav.js already wires
+        // real keyboard input through, so nothing on the web-app side needs to change.
+        //
+        // Unlike moonlight-xbox's ListView, there is exactly one focusable XAML control in
+        // this whole app (webView) - there's nothing for XAML's native XY focus navigation
+        // to move focus to/away from, so there's no double-handling risk here the way there
+        // was for moonlight-xbox's DPad-vs-XY-nav case (see that project's memory).
+        private void OnCoreWindowKeyDown(CoreWindow sender, KeyEventArgs args)
+        {
+            string jsKey = MapGamepadKey(args.VirtualKey);
+            if (jsKey == null) return;
+            args.Handled = true;
+            _ = webView?.CoreWebView2?.ExecuteScriptAsync(
+                $"document.dispatchEvent(new KeyboardEvent('keydown', {{ key: '{jsKey}', bubbles: true, composed: true }}));");
+        }
+
+        private static string MapGamepadKey(VirtualKey key)
+        {
+            switch (key)
+            {
+                case VirtualKey.GamepadDPadUp:
+                case VirtualKey.GamepadLeftThumbstickUp:
+                    return "ArrowUp";
+                case VirtualKey.GamepadDPadDown:
+                case VirtualKey.GamepadLeftThumbstickDown:
+                    return "ArrowDown";
+                case VirtualKey.GamepadDPadLeft:
+                case VirtualKey.GamepadLeftThumbstickLeft:
+                    return "ArrowLeft";
+                case VirtualKey.GamepadDPadRight:
+                case VirtualKey.GamepadLeftThumbstickRight:
+                    return "ArrowRight";
+                case VirtualKey.GamepadA:
+                    return "Enter";
+                case VirtualKey.GamepadB:
+                    return "Escape";
+                default:
+                    return null;
+            }
         }
     }
 }

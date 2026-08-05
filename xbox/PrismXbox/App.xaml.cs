@@ -28,6 +28,18 @@ namespace PrismXbox
             // the app shell's background so that doesn't produce a flash.
             Environment.SetEnvironmentVariable("WEBVIEW2_DEFAULT_BACKGROUND_COLOR", "FF0A0A0C");
 
+            // Remote DevTools (Console/Elements/etc. from a PC's Edge/Chrome at
+            // http://<xbox-ip>:9222) - there's no keyboard/mouse on the console itself to
+            // drive WebView2's own F12 DevTools window, and this is the only way to see what
+            // the page's JS actually observes (console.log, document.activeElement,
+            // navigator.getGamepads()) on real hardware. The WinUI2 WebView2 XAML control
+            // bundled here (2.8.7) has no API to pass CoreWebView2EnvironmentOptions directly -
+            // this documented environment-variable override is WebView2's own fallback for
+            // exactly that gap, and must be set before EnsureCoreWebView2Async() runs (same
+            // requirement as WEBVIEW2_DEFAULT_BACKGROUND_COLOR above). Same "disable before
+            // Store submission" bucket as MainPage's AreDevToolsEnabled.
+            Environment.SetEnvironmentVariable("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", "--remote-debugging-port=9222");
+
             // By default, XAML apps are scaled up 2x on Xbox. This disables that so the WebView2
             // control (and the web app inside it) renders at the device's native resolution.
             if (!ApplicationViewScaling.TrySetDisableLayoutScaling(true))
