@@ -1,0 +1,66 @@
+:host {
+  all: initial;
+  /* See plex-netflix-card.js's :host for why both env() and var() are needed -
+     env(safe-area-inset-*) is iOS/web only, Capacitor's Android SystemBars plugin
+     instead injects --safe-area-inset-* on <html>, which inherits down here since
+     this modal is a separate top-level element (not nested under the card's :host). */
+  --safe-top: max(env(safe-area-inset-top, 0px), var(--safe-area-inset-top, 0px));
+  --safe-bottom: max(env(safe-area-inset-bottom, 0px), var(--safe-area-inset-bottom, 0px));
+}
+* { box-sizing: border-box; font-family: "Roboto", sans-serif; }
+.overlay {
+  position: fixed; inset: 0; z-index: 1500;
+  background: rgba(0,0,0,0.86);
+  backdrop-filter: blur(6px);
+  display: none;
+  align-items: center; justify-content: center;
+  padding: calc(24px + var(--safe-top)) 24px calc(24px + var(--safe-bottom));
+}
+.overlay.open { display: flex; }
+.modal {
+  width: 420px; max-width: 100%;
+  background: #161619;
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 16px;
+  color: #fff;
+  box-shadow: 0 24px 70px rgba(0,0,0,0.6);
+  padding: 30px 26px 26px;
+  text-align: center;
+  position: relative;
+}
+.modal-close {
+  position: absolute; top: 12px; right: 12px;
+  border: none; background: transparent; color: rgba(255,255,255,0.6);
+  font-size: 20px; cursor: pointer; line-height: 1; padding: 4px;
+}
+.modal-close:hover { color: #fff; }
+.modal-close[hidden] { display: none; }
+h2 { font-size: 18px; font-weight: 700; margin: 0 0 8px; }
+.subtitle { font-size: 13px; color: rgba(255,255,255,0.55); margin: 0 0 20px; }
+.btn {
+  border: none; border-radius: 8px; padding: 11px 20px; font-size: 14px; font-weight: 700;
+  cursor: pointer; white-space: nowrap;
+}
+.btn-primary { background: #e5a00d; color: #161619; }
+.btn-primary:hover { background: #f0ad1a; }
+.btn-secondary { background: rgba(255,255,255,0.1); color: #fff; }
+.btn-secondary:hover { background: rgba(255,255,255,0.18); }
+.btn:disabled { opacity: 0.5; cursor: default; }
+.btn:focus-visible, .modal-close:focus-visible {
+  outline: 2px solid #e5a00d; outline-offset: 2px;
+}
+.status { font-size: 12px; font-weight: 600; margin-top: 14px; min-height: 15px; }
+.status.ok { color: #4caf7d; }
+.status.err { color: #ff6b6b; }
+.server-picker { display: flex; flex-direction: column; gap: 8px; margin-top: 14px; }
+.server-choice { display: block; width: 100%; }
+.link-code {
+  font-family: "Roboto Mono", monospace;
+  font-size: 40px; font-weight: 700; letter-spacing: 6px;
+  color: #e5a00d;
+  margin: 18px 0 4px;
+  padding: 14px 10px;
+  background: rgba(255,255,255,0.06);
+  border-radius: 10px;
+}
+.link-code[hidden] { display: none; }

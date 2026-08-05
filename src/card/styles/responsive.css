@@ -1,0 +1,53 @@
+@media (max-width: 700px) {
+  .title-info-overlay { padding: 0; }
+  .title-info-modal { width: 100%; max-width: 100%; min-height: 100dvh; border-radius: 0; border: none; }
+  .title-info-close { display: none; }
+  .title-info-body { padding-bottom: calc(32px + var(--safe-bottom)); }
+  .hero-info { left: 20px; max-width: calc(100% - 40px); }
+  .hero-title { font-size: 24px; }
+  .hero-subtitle { font-size: 13px; }
+  .hero-summary { display: none; }
+  .sidenav {
+    position: fixed;
+    top: auto;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    width: 100%;
+    height: calc(56px + var(--safe-bottom));
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-evenly;
+    padding: 0;
+    padding-bottom: var(--safe-bottom);
+    gap: 0;
+    border-right: none;
+    border-top: 1px solid rgba(255,255,255,0.08);
+    background: rgba(10,10,12,0.97);
+    backdrop-filter: blur(10px);
+    z-index: 25;
+  }
+  .sidenav:hover { flex-basis: 100%; }
+  .nav-top, .nav-bottom { display: contents; }
+  .nav-item { width: 30px; height: 30px; padding: 0; justify-content: center; gap: 0; }
+  .nav-label { display: none; }
+  /* Profile/Kids Mode/Settings and any library tab past the mobile cap move into the
+     .more-sheet overflow menu instead - a phone-width row has no room for 6+ icons at
+     a real touch-target size. */
+  .nav-profile, .nav-kids-toggle, .nav-settings, .nav-item-overflow { display: none; }
+  .nav-more { display: flex; }
+  .main { padding-bottom: calc(56px + var(--safe-bottom)); }
+  .row-title { padding-left: 24px; }
+  .row-scroller { padding-left: 24px; gap: 17px; }
+  .poster { flex-basis: 112px; }
+  .poster .glow { inset: -10px; filter: blur(14px) saturate(1.2) brightness(0.7); border-radius: 15px; }
+  .poster .caption { padding: 88px 8px 8px; }
+  .poster.landscape { flex-basis: 224px; }
+  .poster.landscape .caption { padding: 42px 8px 8px; }
+  .rank-number { font-size: 182px; letter-spacing: -10px; left: -4px; }
+  .rank-item .poster { margin-left: 63px; }
+  .search-page-group { padding: 0 16px; }
+  .search-page-back { padding: 0 16px 20px; }
+  .search-page-grid { gap: 17px; }
+  .search-page-grid .poster { flex: 0 0 calc((100% - 34px) / 3); }
+}

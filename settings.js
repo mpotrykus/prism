@@ -1,4 +1,6 @@
 import { wireLinearNav, focusAfterPaint } from "./focus-nav.js";
+import { hasSecrets, loadSecrets, saveSecrets } from "./vault.js";
+import MODAL_STYLE from "./src/styles/settings-modal.css?inline";
 
 /* Only non-sensitive fields live here in plain localStorage. plex_token,
    youtube_api_key, openrouter_api_key, and plex_account_token go through vault.js
@@ -22,148 +24,27 @@ const DEFAULT_PLAIN_CONFIG = {
 
 const SECTION_TYPE_MAP = { movie: 1, show: 2 };
 
-const StreamingSettings = {
-  loadPlain() {
-    try {
-      const raw = JSON.parse(localStorage.getItem(PLAIN_STORAGE_KEY) || "null");
-      return { ...DEFAULT_PLAIN_CONFIG, ...(raw || {}) };
-    } catch (e) {
-      return { ...DEFAULT_PLAIN_CONFIG };
-    }
-  },
-  savePlain(config) {
-    localStorage.setItem(PLAIN_STORAGE_KEY, JSON.stringify(config));
-  },
-  /* Full config = plain fields + decrypted secrets, merged - what the card's
-     setConfig()/refreshConfig() actually expects. */
-  async loadFull() {
-    const plain = this.loadPlain();
-    const secrets = window.StreamingVault.hasSecrets() ? await window.StreamingVault.loadSecrets() : {};
-    return { ...plain, ...secrets };
-  },
-  isConfigured(fullConfig) {
-    return !!(fullConfig && fullConfig.plex_url && fullConfig.plex_token);
-  },
-};
-window.StreamingSettings = StreamingSettings;
-
-const MODAL_STYLE = `
-  :host {
-    all: initial;
-    /* See plex-netflix-card.js's :host for why both env() and var() are needed -
-       env(safe-area-inset-*) is iOS/web only, Capacitor's Android SystemBars plugin
-       instead injects --safe-area-inset-* on <html>, which inherits down here since
-       this modal is a separate top-level element (not nested under the card's :host). */
-    --safe-top: max(env(safe-area-inset-top, 0px), var(--safe-area-inset-top, 0px));
-    --safe-bottom: max(env(safe-area-inset-bottom, 0px), var(--safe-area-inset-bottom, 0px));
+export function loadPlain() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(PLAIN_STORAGE_KEY) || "null");
+    return { ...DEFAULT_PLAIN_CONFIG, ...(raw || {}) };
+  } catch (e) {
+    return { ...DEFAULT_PLAIN_CONFIG };
   }
-  * { box-sizing: border-box; font-family: "Roboto", sans-serif; }
-  .overlay {
-    position: fixed; inset: 0; z-index: 1000;
-    background: rgba(0,0,0,0.72);
-    backdrop-filter: blur(6px);
-    display: none;
-    align-items: center; justify-content: center;
-    padding: calc(56px + var(--safe-top)) 24px calc(56px + var(--safe-bottom));
-  }
-  .overlay.open { display: flex; }
-  .modal {
-    width: 560px; max-width: 100%;
-    height: min(640px, 88vh);
-    display: flex; flex-direction: column;
-    overflow: hidden;
-    background: #161619;
-    border: 1px solid rgba(255,255,255,0.08);
-    border-radius: 16px;
-    color: #fff;
-    box-shadow: 0 24px 70px rgba(0,0,0,0.6);
-  }
-  .modal-header {
-    flex: none;
-    display: flex; align-items: center; justify-content: space-between;
-    padding: 20px 24px; background: #161619;
-    border-bottom: 1px solid rgba(255,255,255,0.08);
-  }
-  .modal-header h2 { font-size: 17px; font-weight: 700; margin: 0; }
-  .modal-close {
-    border: none; background: transparent; color: rgba(255,255,255,0.6);
-    font-size: 20px; cursor: pointer; line-height: 1; padding: 4px;
-  }
-  .modal-close:hover { color: #fff; }
-  .modal-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 8px 24px 24px; }
-  section.group { margin-top: 22px; }
-  section.group:first-child { margin-top: 18px; }
-  .group-title {
-    font-size: 12px; font-weight: 700; text-transform: uppercase;
-    letter-spacing: 0.06em; color: rgba(255,255,255,0.45); margin-bottom: 10px;
-  }
-  label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 6px; color: rgba(255,255,255,0.85); }
-  .field { margin-bottom: 12px; }
-  .field-row { display: flex; gap: 10px; align-items: center; }
-  input[type="text"], input[type="password"], input[type="number"], select {
-    width: 100%; padding: 9px 12px; border-radius: 8px;
-    border: 1px solid rgba(255,255,255,0.15); background: rgba(255,255,255,0.06);
-    color: #fff; font-size: 13px; outline: none;
-  }
-  input:focus, select:focus { border-color: #e5a00d; }
-  .btn {
-    border: none; border-radius: 8px; padding: 9px 16px; font-size: 13px; font-weight: 700;
-    cursor: pointer; white-space: nowrap;
-  }
-  .btn-primary { background: #e5a00d; color: #161619; }
-  .btn-primary:hover { background: #f0ad1a; }
-  .btn-secondary { background: rgba(255,255,255,0.1); color: #fff; }
-  .btn-secondary:hover { background: rgba(255,255,255,0.18); }
-  .btn:disabled { opacity: 0.5; cursor: default; }
-  .btn:focus-visible, .modal-close:focus-visible, input:focus-visible, select:focus-visible {
-    outline: 2px solid #e5a00d; outline-offset: 2px;
-  }
-  .status { font-size: 12px; font-weight: 600; margin-top: 6px; min-height: 15px; }
-  .status.ok { color: #4caf7d; }
-  .status.err { color: #ff6b6b; }
-  .save-status { flex: none; padding: 0 24px; margin-top: -6px; }
-  .section-list { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
-  .section-row {
-    display: flex; align-items: center; gap: 10px;
-    background: rgba(255,255,255,0.05); border-radius: 8px; padding: 8px 10px;
-  }
-  .section-row input[type="checkbox"] { width: 16px; height: 16px; flex: none; }
-  .section-row input[type="text"] { flex: 1; padding: 6px 10px; }
-  .section-row .type-badge {
-    flex: none; font-size: 10.5px; font-weight: 700; text-transform: uppercase;
-    color: rgba(255,255,255,0.5); border: 1px solid rgba(255,255,255,0.15);
-    border-radius: 5px; padding: 2px 6px;
-  }
-  .row-2col { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-  .modal-footer {
-    flex: none;
-    display: flex; justify-content: flex-end; align-items: center; gap: 10px;
-    padding: 16px 24px 22px;
-  }
-  .tabs {
-    flex: none;
-    display: flex; gap: 18px;
-    padding: 0 24px; margin-bottom: 4px;
-    border-bottom: 1px solid rgba(255,255,255,0.08);
-  }
-  .tab-btn {
-    border: none; background: transparent; color: rgba(255,255,255,0.55);
-    font-size: 13px; font-weight: 700; padding: 12px 2px; white-space: nowrap;
-    cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px;
-  }
-  .tab-btn:hover { color: #fff; }
-  .tab-btn.active { color: #fff; border-bottom-color: #e5a00d; }
-  .tab-panel { display: none; }
-  .tab-panel.active { display: block; }
-  @media (max-width: 700px) {
-    .overlay { padding: 0; overflow-y: auto; align-items: flex-start; }
-    .modal { width: 100%; max-width: 100%; height: auto; min-height: 100dvh; overflow: visible; border-radius: 0; border: none; }
-    .modal-body { overflow-y: visible; }
-    .modal-close { display: none; }
-    .modal-header { padding: calc(20px + var(--safe-top)) 24px 20px; }
-    .modal-footer { padding: 16px 24px calc(22px + var(--safe-bottom)); }
-  }
-`;
+}
+export function savePlain(config) {
+  localStorage.setItem(PLAIN_STORAGE_KEY, JSON.stringify(config));
+}
+/* Full config = plain fields + decrypted secrets, merged - what the card's
+   setConfig()/refreshConfig() actually expects. */
+export async function loadFull() {
+  const plain = loadPlain();
+  const secrets = hasSecrets() ? await loadSecrets() : {};
+  return { ...plain, ...secrets };
+}
+export function isConfigured(fullConfig) {
+  return !!(fullConfig && fullConfig.plex_url && fullConfig.plex_token);
+}
 
 const TABS = [
   { key: "plex", label: "Plex" },
@@ -344,28 +225,28 @@ class StreamingSettingsModal extends HTMLElement {
   }
 
   open() {
-    const config = window.StreamingSettings.loadPlain();
+    const config = loadPlain();
     /* Secret fields are deliberately left blank rather than pre-filled - no reason to
        ever echo an already-stored API key back into a password input. Left blank +
        saved, they're treated as "keep whatever's already stored" (see
        _getEffectiveSecrets/_save below); only a typed value overrides. */
-    const hasSecrets = window.StreamingVault.hasSecrets();
+    const secretsPresent = hasSecrets();
     this._el(".f-youtube-key").value = "";
-    this._el(".f-youtube-key").placeholder = hasSecrets
+    this._el(".f-youtube-key").placeholder = secretsPresent
       ? "•••••••• (leave blank to keep current)"
       : "Used as a fallback when Plex has no trailer";
     this._el(".f-openrouter-key").value = "";
-    this._el(".f-openrouter-key").placeholder = hasSecrets ? "•••••••• (leave blank to keep current)" : "";
+    this._el(".f-openrouter-key").placeholder = secretsPresent ? "•••••••• (leave blank to keep current)" : "";
     this._el(".f-opensubtitles-key").value = "";
-    this._el(".f-opensubtitles-key").placeholder = hasSecrets
+    this._el(".f-opensubtitles-key").placeholder = secretsPresent
       ? "•••••••• (leave blank to keep current)"
       : "Used by the player's subtitle search";
     this._el(".f-opensubtitles-username").value = "";
-    this._el(".f-opensubtitles-username").placeholder = hasSecrets
+    this._el(".f-opensubtitles-username").placeholder = secretsPresent
       ? "•••••••• (leave blank to keep current)"
       : "Needed to download, not just search";
     this._el(".f-opensubtitles-password").value = "";
-    this._el(".f-opensubtitles-password").placeholder = hasSecrets ? "•••••••• (leave blank to keep current)" : "";
+    this._el(".f-opensubtitles-password").placeholder = secretsPresent ? "•••••••• (leave blank to keep current)" : "";
     this._plexUrl = config.plex_url || "";
     this._el(".plex-server-status").textContent = this._plexUrl ? `Connected — ${this._plexUrl}` : "Not connected.";
     this._el(".plex-server-status").className = this._plexUrl ? "status plex-server-status ok" : "status plex-server-status err";
@@ -395,7 +276,7 @@ class StreamingSettingsModal extends HTMLElement {
      without re-decrypting on every call within the same modal session. */
   async _getEffectiveSecrets() {
     if (this._unlockedSecrets) return this._unlockedSecrets;
-    this._unlockedSecrets = window.StreamingVault.hasSecrets() ? await window.StreamingVault.loadSecrets() : {};
+    this._unlockedSecrets = hasSecrets() ? await loadSecrets() : {};
     return this._unlockedSecrets;
   }
 
@@ -526,8 +407,8 @@ class StreamingSettingsModal extends HTMLElement {
     try {
       const plain = this._collectPlainConfig();
       const secrets = await this._collectSecrets();
-      await window.StreamingVault.saveSecrets(secrets);
-      window.StreamingSettings.savePlain(plain);
+      await saveSecrets(secrets);
+      savePlain(plain);
       const fullConfig = { ...plain, ...secrets };
       this.dispatchEvent(new CustomEvent("settings-saved", { bubbles: true, composed: true, detail: fullConfig }));
       this.close();

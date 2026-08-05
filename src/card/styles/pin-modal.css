@@ -1,0 +1,94 @@
+.pin-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.72);
+  backdrop-filter: blur(6px);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  /* Higher than .profile-overlay (100) - the profile switcher stays open underneath
+     while this collects a protected profile's PIN, so this has to paint on top of it. */
+  z-index: 110;
+  outline: none;
+}
+.pin-overlay.open { display: flex; }
+.pin-modal {
+  width: 300px;
+  max-width: 88vw;
+  background: #161619;
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 16px;
+  padding: 28px 28px 20px;
+  text-align: center;
+  box-shadow: 0 24px 70px rgba(0,0,0,0.6);
+}
+.pin-modal.shake { animation: pinShake 0.4s ease; }
+@keyframes pinShake {
+  10%, 90% { transform: translateX(-3px); }
+  20%, 80% { transform: translateX(5px); }
+  30%, 50%, 70% { transform: translateX(-7px); }
+  40%, 60% { transform: translateX(7px); }
+}
+.pin-icon {
+  width: 44px;
+  height: 44px;
+  margin: 0 auto 12px;
+  border-radius: 50%;
+  background: rgba(229,160,13,0.15);
+  color: #e5a00d;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.pin-icon svg { width: 22px; height: 22px; }
+.pin-title { font-size: 15px; font-weight: 700; margin-bottom: 18px; }
+.pin-dots { display: flex; justify-content: center; gap: 14px; margin-bottom: 10px; }
+.pin-dot {
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  border: 1.5px solid rgba(255,255,255,0.4);
+  background: transparent;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+.pin-dot.filled { background: #e5a00d; border-color: #e5a00d; }
+.pin-error {
+  color: #ff6b6b;
+  font-size: 12px;
+  font-weight: 600;
+  height: 16px;
+  margin-bottom: 8px;
+  visibility: hidden;
+}
+.pin-error.visible { visibility: visible; }
+.pin-keypad {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.pin-key {
+  height: 50px;
+  border-radius: 10px;
+  border: 1px solid rgba(255,255,255,0.1);
+  background: rgba(255,255,255,0.05);
+  color: #fff;
+  font-size: 17px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.pin-key:hover { background: rgba(255,255,255,0.12); }
+.pin-key:active { background: rgba(229,160,13,0.25); }
+.pin-key-empty { visibility: hidden; cursor: default; }
+.pin-cancel {
+  width: 100%;
+  padding: 10px;
+  border-radius: 8px;
+  border: none;
+  background: transparent;
+  color: rgba(255,255,255,0.55);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.pin-cancel:hover { color: #fff; }

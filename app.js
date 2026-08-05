@@ -1,3 +1,5 @@
+import { loadFull, isConfigured } from "./settings.js";
+
 (async function () {
   if ("serviceWorker" in navigator) {
     navigator.serviceWorker.register("./sw.js").catch((err) => console.warn("[app] SW registration failed:", err));
@@ -26,8 +28,8 @@
   function boot(fullConfig) {
     card.setConfig(fullConfig);
     document.body.appendChild(card);
-    if (!window.StreamingSettings.isConfigured(fullConfig)) signinModal.open({ blocking: true });
+    if (!isConfigured(fullConfig)) signinModal.open({ blocking: true });
   }
 
-  boot(await window.StreamingSettings.loadFull());
+  boot(await loadFull());
 })();

@@ -2,77 +2,12 @@
    at boot (see app.js) - blocking until a server is connected - while everything else
    configurable (libraries, trailers, AI rows, kids mode, display) lives in Settings. */
 import { wireLinearNav, focusAfterPaint } from "./focus-nav.js";
+import * as StreamingPlexAuth from "./plex-auth.js";
+import { loadPlain, savePlain } from "./settings.js";
+import { hasSecrets, loadSecrets, saveSecrets } from "./vault.js";
+import SIGNIN_MODAL_STYLE from "./src/styles/signin-modal.css?inline";
 
 const SECTION_TYPE_MAP = { movie: 1, show: 2 };
-
-const SIGNIN_MODAL_STYLE = `
-  :host {
-    all: initial;
-    /* See plex-netflix-card.js's :host for why both env() and var() are needed -
-       env(safe-area-inset-*) is iOS/web only, Capacitor's Android SystemBars plugin
-       instead injects --safe-area-inset-* on <html>, which inherits down here since
-       this modal is a separate top-level element (not nested under the card's :host). */
-    --safe-top: max(env(safe-area-inset-top, 0px), var(--safe-area-inset-top, 0px));
-    --safe-bottom: max(env(safe-area-inset-bottom, 0px), var(--safe-area-inset-bottom, 0px));
-  }
-  * { box-sizing: border-box; font-family: "Roboto", sans-serif; }
-  .overlay {
-    position: fixed; inset: 0; z-index: 1500;
-    background: rgba(0,0,0,0.86);
-    backdrop-filter: blur(6px);
-    display: none;
-    align-items: center; justify-content: center;
-    padding: calc(24px + var(--safe-top)) 24px calc(24px + var(--safe-bottom));
-  }
-  .overlay.open { display: flex; }
-  .modal {
-    width: 420px; max-width: 100%;
-    background: #161619;
-    border: 1px solid rgba(255,255,255,0.08);
-    border-radius: 16px;
-    color: #fff;
-    box-shadow: 0 24px 70px rgba(0,0,0,0.6);
-    padding: 30px 26px 26px;
-    text-align: center;
-    position: relative;
-  }
-  .modal-close {
-    position: absolute; top: 12px; right: 12px;
-    border: none; background: transparent; color: rgba(255,255,255,0.6);
-    font-size: 20px; cursor: pointer; line-height: 1; padding: 4px;
-  }
-  .modal-close:hover { color: #fff; }
-  .modal-close[hidden] { display: none; }
-  h2 { font-size: 18px; font-weight: 700; margin: 0 0 8px; }
-  .subtitle { font-size: 13px; color: rgba(255,255,255,0.55); margin: 0 0 20px; }
-  .btn {
-    border: none; border-radius: 8px; padding: 11px 20px; font-size: 14px; font-weight: 700;
-    cursor: pointer; white-space: nowrap;
-  }
-  .btn-primary { background: #e5a00d; color: #161619; }
-  .btn-primary:hover { background: #f0ad1a; }
-  .btn-secondary { background: rgba(255,255,255,0.1); color: #fff; }
-  .btn-secondary:hover { background: rgba(255,255,255,0.18); }
-  .btn:disabled { opacity: 0.5; cursor: default; }
-  .btn:focus-visible, .modal-close:focus-visible {
-    outline: 2px solid #e5a00d; outline-offset: 2px;
-  }
-  .status { font-size: 12px; font-weight: 600; margin-top: 14px; min-height: 15px; }
-  .status.ok { color: #4caf7d; }
-  .status.err { color: #ff6b6b; }
-  .server-picker { display: flex; flex-direction: column; gap: 8px; margin-top: 14px; }
-  .server-choice { display: block; width: 100%; }
-  .link-code {
-    font-family: "Roboto Mono", monospace;
-    font-size: 40px; font-weight: 700; letter-spacing: 6px;
-    color: #e5a00d;
-    margin: 18px 0 4px;
-    padding: 14px 10px;
-    background: rgba(255,255,255,0.06);
-    border-radius: 10px;
-  }
-  .link-code[hidden] { display: none; }
-`;
 
 class StreamingPlexSigninModal extends HTMLElement {
   connectedCallback() {
@@ -169,13 +104,13 @@ class StreamingPlexSigninModal extends HTMLElement {
     statusEl.textContent = remote ? "Requesting a sign-in code…" : "Opening Plex sign-in…";
     const authWindow = remote ? null : window.open("about:blank", "_blank");
     try {
-      const pin = await window.StreamingPlexAuth.requestPin({ strong: !remote });
+      const pin = await StreamingPlexAuth.requestPin({ strong: !remote });
       if (remote) {
         codeEl.textContent = pin.code;
         codeEl.hidden = false;
         statusEl.textContent = "On your phone or computer, go to plex.tv/link and enter this code.";
       } else {
-        const authUrl = window.StreamingPlexAuth.buildAuthUrl(pin);
+        const authUrl = StreamingPlexAuth.buildAuthUrl(pin);
         if (authWindow) {
           authWindow.location.href = authUrl;
           statusEl.textContent = "Waiting for you to approve access in the Plex tab that just opened…";
@@ -183,12 +118,12 @@ class StreamingPlexSigninModal extends HTMLElement {
           statusEl.innerHTML = `Pop-up blocked — <a href="${authUrl}" target="_blank" rel="noopener">click here to sign in</a>, then come back.`;
         }
       }
-      const authToken = await window.StreamingPlexAuth.pollPin(pin.id);
+      const authToken = await StreamingPlexAuth.pollPin(pin.id);
       codeEl.hidden = true;
       this._plexAccountToken = authToken;
       statusEl.textContent = "Finding your servers…";
       statusEl.className = "status signin-status";
-      const discovered = await window.StreamingPlexAuth.discoverServers(authToken);
+      const discovered = await StreamingPlexAuth.discoverServers(authToken);
       if (!discovered.length) {
         statusEl.textContent = "Signed in, but no Plex servers were found on this account.";
         statusEl.className = "status signin-status err";
@@ -230,7 +165,7 @@ class StreamingPlexSigninModal extends HTMLElement {
     this._el(".server-picker").innerHTML = "";
     statusEl.textContent = `Connecting to ${server.name}…`;
     statusEl.className = "status signin-status";
-    const uri = await window.StreamingPlexAuth.resolveBestConnection(server);
+    const uri = await StreamingPlexAuth.resolveBestConnection(server);
     if (!uri) {
       statusEl.textContent = `Couldn't reach ${server.name} - it may be offline or unreachable from this network.`;
       statusEl.className = "status signin-status err";
@@ -255,11 +190,11 @@ class StreamingPlexSigninModal extends HTMLElement {
       return;
     }
 
-    const plain = { ...window.StreamingSettings.loadPlain(), plex_url: uri, machine_id: machineId, sections };
-    const existingSecrets = window.StreamingVault.hasSecrets() ? await window.StreamingVault.loadSecrets() : {};
+    const plain = { ...loadPlain(), plex_url: uri, machine_id: machineId, sections };
+    const existingSecrets = hasSecrets() ? await loadSecrets() : {};
     const secrets = { ...existingSecrets, plex_token: server.accessToken, plex_account_token: this._plexAccountToken || existingSecrets.plex_account_token || "" };
-    window.StreamingSettings.savePlain(plain);
-    await window.StreamingVault.saveSecrets(secrets);
+    savePlain(plain);
+    await saveSecrets(secrets);
 
     statusEl.textContent = `Connected to ${server.name}.`;
     statusEl.className = "status signin-status ok";

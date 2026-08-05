@@ -1,4 +1,4 @@
-/* opensubtitles.js (window.StreamingSubtitles)
+/* opensubtitles.js
 
    Plain client-side calls to the OpenSubtitles REST API (api.opensubtitles.com/api/v1),
    same no-proxy pattern as the existing YouTube/OpenRouter integrations - credentials
@@ -10,6 +10,7 @@
    alongside the Api-Key header. Username/password are optional Settings fields; without
    them, download() will surface whatever 401 the API returns rather than pretending it
    can work anonymously. */
+import { loadFull } from "./settings.js";
 
 const OPENSUBTITLES_API_BASE = "https://api.opensubtitles.com/api/v1";
 
@@ -40,7 +41,7 @@ async function readErrorMessage(res) {
 }
 
 async function getCredentials() {
-    const full = await window.StreamingSettings.loadFull();
+    const full = await loadFull();
     return {
         apiKey: full.opensubtitles_api_key || "",
         username: full.opensubtitles_username || "",
@@ -79,7 +80,7 @@ async function authHeaders(creds) {
     return headers;
 }
 
-async function search({ title, year, seasonNumber, episodeNumber, languageCode = "en" }) {
+export async function search({ title, year, seasonNumber, episodeNumber, languageCode = "en" }) {
     const creds = await getCredentials();
     const headers = await authHeaders(creds);
 
@@ -108,7 +109,7 @@ async function search({ title, year, seasonNumber, episodeNumber, languageCode =
 
    Retries once on a 401 with a forced fresh login - covers a cached token that expired
    mid-session without needing to track OpenSubtitles' exact JWT lifetime precisely. */
-async function resolveDownloadLink(fileId, _retriedAfterRelogin = false) {
+export async function resolveDownloadLink(fileId, _retriedAfterRelogin = false) {
     const creds = await getCredentials();
     const res = await fetch(`${OPENSUBTITLES_API_BASE}/download`, {
         method: "POST",
@@ -129,11 +130,9 @@ async function resolveDownloadLink(fileId, _retriedAfterRelogin = false) {
    itself (plex-player.js's _srtToVtt). The Android native leg uses resolveDownloadLink
    above instead and never sees this text - Media3's SubripDecoder parses .srt directly,
    so converting it here would be work done for no reason. */
-async function download(fileId) {
+export async function download(fileId) {
     const link = await resolveDownloadLink(fileId);
     const fileRes = await fetch(link);
     if (!fileRes.ok) throw new Error(`Failed fetching subtitle file: HTTP ${fileRes.status}`);
     return fileRes.text();
 }
-
-window.StreamingSubtitles = { search, download, resolveDownloadLink };

@@ -1,0 +1,30 @@
+/* One shared focus ring for every element focus-nav.js makes navigable - this app was
+   mouse/hover-only until Xbox needed D-pad support, so unlike normal web focus styling
+   (a nice-to-have for keyboard users alongside a mouse), a visible focus indicator here
+   is the *only* signal a gamepad-only user has of where they are on screen at all. */
+.nav-item:focus-visible,
+.poster:focus-visible,
+.hero-info-btn:focus-visible,
+.hero-watchlist-btn:focus-visible,
+.hero-mute-btn:focus-visible,
+.hero-play-btn:focus-visible,
+.scroll-arrow:focus-visible,
+.pin-key:focus-visible,
+.pin-cancel:focus-visible,
+.profile-switch-btn:focus-visible,
+.profile-cancel:focus-visible,
+.title-info-close:focus-visible,
+.title-info-play:focus-visible,
+.title-info-watchlist-btn:focus-visible,
+.title-info-quality-btn:focus-visible,
+.title-info-episode:focus-visible,
+.title-info-similar-item:focus-visible,
+.title-info-season-select:focus-visible,
+.quality-picker-option:focus-visible,
+.quality-picker-done:focus-visible,
+.more-sheet-item:focus-visible,
+.more-sheet-cancel:focus-visible {
+  outline: 2px solid #e5a00d;
+  outline-offset: 2px;
+}
+.nav-item { outline-offset: -2px; }

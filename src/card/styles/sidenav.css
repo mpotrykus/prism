@@ -1,0 +1,68 @@
+.sidenav {
+  flex: 0 0 45px;
+  position: sticky;
+  top: 0;
+  align-self: flex-start;
+  height: 100vh;
+  padding: calc(13px + var(--safe-top)) 0 calc(24px + var(--safe-bottom));
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  background: rgba(255,255,255,0.03);
+  border-right: 1px solid rgba(255,255,255,0.06);
+  overflow: hidden;
+  transition: flex-basis 0.22s ease;
+  z-index: 30;
+}
+.sidenav:hover {
+  flex-basis: 130px;
+}
+.nav-top, .nav-bottom {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 14px;
+}
+.nav-item {
+  position: relative;
+  height: 30px;
+  padding: 0 7px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: rgba(255,255,255,0.7);
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+  transition: color 0.15s ease;
+}
+.nav-item:hover { color: #fff; }
+.nav-item.active { color: #e5a00d; }
+.nav-icon {
+  width: 30px;
+  height: 30px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  transition: background-color 0.15s ease;
+}
+.nav-item:hover .nav-icon { background: rgba(255,255,255,0.08); }
+.nav-item.active .nav-icon { background: rgba(229,160,13,0.18); }
+.nav-item svg { width: 20px; height: 20px; flex: none; }
+.nav-label {
+  font-size: 13px;
+  font-weight: 600;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+.sidenav:hover .nav-label {
+  opacity: 1;
+}
+/* Only ever shown at the mobile breakpoint below - the hover sidenav has room for
+   every item on desktop, so there's nothing to collapse there. */
+.nav-more { display: none; }
+.main { position: relative; flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
