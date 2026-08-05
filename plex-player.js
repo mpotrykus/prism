@@ -37,20 +37,32 @@ const SHADER_TYPES = {
     anime4k: {
         label: "Anime4K",
         useCas: false,
-        min: { scale: 1.8, sharpen: 1.8, kernel: 1.5, saturation: 1.15, contrast: 1.08 },
-        max: { scale: 2.4, sharpen: 3.8, kernel: 2.8, saturation: 1.5, contrast: 1.28 },
+        min: { scale: 1.8, sharpen: 1.8, kernel: 1.5, saturation: 1.1, contrast: 1.05 },
+        max: { scale: 2.4, sharpen: 3.8, kernel: 2.8, saturation: 1.35, contrast: 1.18 },
     },
     live_action: {
         label: "Live-Action (CAS)",
         useCas: true,
-        min: { scale: 1.3, sharpen: 0.6, kernel: 1, saturation: 1, contrast: 1 },
-        max: { scale: 1.6, sharpen: 1.1, kernel: 1.3, saturation: 1, contrast: 1 },
+        /* saturation/contrast are a small compensating boost, not the anime shader's
+           exaggeration - CAS's per-channel anti-ringing clamp (see SHADER_FRAGMENT_CAS)
+           pulls sharpened pixels back toward the local neighborhood's own min/max, which
+           has the side effect of slightly flattening contrast/saturation along with the
+           ringing it's actually guarding against. This nudges both back up rather than
+           leaving the picture looking duller than the source. */
+        min: { scale: 1.3, sharpen: 1.0, kernel: 1.2, saturation: 1, contrast: 1 },
+        max: { scale: 1.6, sharpen: 2.2, kernel: 1.8, saturation: 1.12, contrast: 1.06 },
+        /* CAS ramps to its max tuning by 15% strength instead of 100% - the old full
+           0-100% range made the slider's first ~2/3 barely perceptible (see the weight-gate
+           fix above), so the previous "100%" tuning now arrives at "Light" instead of only
+           at "Strong". Strength above 0.15 just stays at max, same as reaching 100% used to. */
+        rampToMaxAt: 0.15,
     },
 };
 
 function shaderTuningAt(shaderKey, strength) {
     const type = SHADER_TYPES[shaderKey];
-    const t = Math.max(0, Math.min(1, strength));
+    const rampToMaxAt = type.rampToMaxAt ?? 1;
+    const t = Math.max(0, Math.min(1, strength / rampToMaxAt));
     const lerp = (a, b) => a + (b - a) * t;
     return {
         scale: lerp(type.min.scale, type.max.scale),
@@ -59,6 +71,22 @@ function shaderTuningAt(shaderKey, strength) {
         saturation: lerp(type.min.saturation, type.max.saturation),
         contrast: lerp(type.min.contrast, type.max.contrast),
     };
+}
+
+/* Settings' global "Upscaling" strength preset (settings.js's upscale_strength field) -
+   "off" skips the shader entirely, the other three map to this session's initial
+   strength slider position. Medium (0.65) is the pre-existing default the slider used
+   to always start at. */
+const UPSCALE_STRENGTH_PRESETS = { off: 0, light: 0.15, medium: 0.65, strong: 0.9 };
+
+/* Picks which of the two SHADER_TYPES algorithms suits a title, from its Plex genre
+   tags - Anime4K's edge-gated line-art shader for anything animated (matches "Animation"
+   and "Anime" alike, Western or Japanese), CAS everywhere else. Both platforms (this
+   file and Android's PlayerActivity) get this same result computed once here rather
+   than duplicating the genre check in Java - see _playNative. */
+function detectShaderType(genres) {
+    const isAnimated = (genres || []).some((g) => (g || "").toLowerCase().includes("anim"));
+    return isAnimated ? "anime4k" : "live_action";
 }
 
 const SHADER_VERTEX_SRC = `
@@ -120,6 +148,8 @@ uniform sampler2D uTex;
 uniform vec2 uTexelSize;
 uniform float uKernelScale;
 uniform float uSharpenStrength;
+uniform float uSaturationBoost;
+uniform float uContrastBoost;
 varying vec2 vUv;
 float luma(vec3 c) { return dot(c, vec3(0.299, 0.587, 0.114)); }
 void main() {
@@ -134,11 +164,23 @@ void main() {
   float minL = min(lc, min(min(ln, ls), min(lw, le)));
   float maxL = max(lc, max(max(ln, ls), max(lw, le)));
   float contrastRange = max(maxL - minL, 0.0001);
-  float weight = clamp(contrastRange * 4.0, 0.0, 1.0) * uSharpenStrength;
-  vec3 sharpened = c + (4.0 * c - n - s - e - w) * weight * 0.25;
+  /* *10.0 (was *4.0) - the old threshold only ever hit full weight on very high-contrast
+     edges, so on already-compressed/softly-filtered streamed video almost the whole frame
+     saw near-zero sharpening. This reaches full weight on much subtler mid-detail contrast,
+     so the effect is actually visible instead of only kicking in at hard edges. */
+  float weight = clamp(contrastRange * 10.0, 0.0, 1.0) * uSharpenStrength;
+  /* *0.5 (was *0.25) - doubles how much of the Laplacian kernel gets added once weight is
+     triggered, for a visibly crisper result rather than a barely-there one. */
+  vec3 sharpened = c + (4.0 * c - n - s - e - w) * weight * 0.5;
   vec3 minRgb = min(c, min(min(n, s), min(w, e)));
   vec3 maxRgb = max(c, max(max(n, s), max(w, e)));
-  gl_FragColor = vec4(clamp(sharpened, minRgb, maxRgb), 1.0);
+  vec3 outColor = clamp(sharpened, minRgb, maxRgb);
+  /* Applied after the anti-ringing clamp above, not folded into it - this is compensating
+     for that clamp's own flattening side effect (see SHADER_TYPES.live_action's comment),
+     so it needs to run on the already-clamped result rather than change what gets clamped. */
+  outColor = (outColor - 0.5) * uContrastBoost + 0.5;
+  outColor = mix(vec3(luma(outColor)), outColor, uSaturationBoost);
+  gl_FragColor = vec4(clamp(outColor, 0.0, 1.0), 1.0);
 }
 `;
 
@@ -195,7 +237,8 @@ class StreamingPlayerController {
         this._inlineMenuEl = null;
         this._inlineMenuCleanup = null;
         this._shaderType = "off";
-        this._shaderStrength = 0.5;
+        this._shaderStrength = 0;
+        this._shaderAutoType = "live_action";
         this._shaderCanvas = null;
         this._shaderGl = null;
         this._shaderPrograms = null;
@@ -253,6 +296,15 @@ class StreamingPlayerController {
             audioStreamId: audioStreams.find((s) => s.selected)?.id ?? null,
         };
         this._activeSkipMarker = null;
+
+        /* Global default for this playback - the in-player Shader Upscaling menu can
+           still override the strength for this session (see _setShaderStrength), but
+           every video starts from Settings' upscale_strength and its own auto-detected
+           type rather than whatever the previous video's session left behind. */
+        const upscaleLevel = window.StreamingSettings?.loadPlain().upscale_strength || "off";
+        this._shaderAutoType = detectShaderType(item.genres);
+        this._shaderStrength = UPSCALE_STRENGTH_PRESETS[upscaleLevel] ?? 0;
+        this._shaderType = this._shaderStrength > 0 ? this._shaderAutoType : "off";
 
         this._pushedHistoryState = true;
         history.pushState({ prismPlayer: true }, "", location.href);
@@ -385,6 +437,13 @@ class StreamingPlayerController {
         await NativePlayer.play({
             url: streamUrl,
             startPositionMs: startOffsetMs,
+            /* PlayerActivity only ever sees the already-detected type (never "off" -
+               strength 0 is what turns the shader off there, same as the web path's
+               _shaderType collapsing to "off" below) and the resolved strength number -
+               it doesn't run its own genre detection, so there's one detection
+               implementation instead of one per platform. */
+            shaderType: this._shaderAutoType,
+            upscaleStrength: this._shaderStrength,
             /* Native code only ever sees {title, startTimeOffsetMs} - it doesn't need to
                know Plex's own Chapter field names, keeping that one Plex-protocol
                interpretation here instead of duplicated into Java. */
@@ -412,6 +471,11 @@ class StreamingPlayerController {
             inset: "0",
             width: "100%",
             height: "100%",
+            /* Same "replaced element defaults to object-fit:fill" issue as the shader
+               canvas above - without this, the video stretches to the window's own
+               aspect ratio instead of letterboxing/pillarboxing against its #000
+               background whenever the two don't match. */
+            objectFit: "contain",
             background: "#000",
             zIndex: "10000",
         });
@@ -467,11 +531,14 @@ class StreamingPlayerController {
         this._zoomPanX = 0;
         this._zoomPanY = 0;
         this._sleepMinutes = 0;
-        this._shaderType = "off";
-        this._shaderStrength = 0.5;
         this._wireZoomPan();
         this._buildCenterControls(video);
         this._buildTransportBar(video);
+        /* _shaderType/_shaderStrength were already resolved in play() (global setting +
+           this title's auto-detected type) before _playWeb was called - this just spins
+           up the WebGL pipeline for that starting state, same as any other change made
+           through the hamburger menu later in the session. */
+        this._updateShaderPipeline();
 
         /* Tapping the video itself toggles play/pause, matching every mainstream player -
            only when not zoomed in, since zoomed-in drag is already claimed by pan (see
@@ -1191,39 +1258,23 @@ class StreamingPlayerController {
         backBtn.addEventListener("click", () => this._openHamburgerMenu(anchor));
         panel.appendChild(backBtn);
 
-        ["off", "anime4k", "live_action"].forEach((key) => {
-            const row = document.createElement("button");
-            row.type = "button";
-            const label = key === "off" ? "Off" : SHADER_TYPES[key].label;
-            row.textContent = `${label}${this._shaderType === key ? "  ✓" : ""}`;
-            Object.assign(row.style, {
-                display: "block",
-                width: "100%",
-                textAlign: "left",
-                padding: "8px 10px",
-                background: "transparent",
-                color: "#fff",
-                border: "none",
-                borderRadius: "6px",
-                cursor: "pointer",
-                fontSize: "13px",
-            });
-            row.addEventListener("mouseenter", () => {
-                row.style.background = "rgba(255,255,255,0.12)";
-            });
-            row.addEventListener("mouseleave", () => {
-                row.style.background = "transparent";
-            });
-            row.addEventListener("click", () => {
-                this._setShaderType(key);
-                this._openShaderMenu(anchor);
-            });
-            panel.appendChild(row);
-        });
+        /* No more manual Off/Anime4K/Live-Action picker - _shaderAutoType is decided once
+           per video from its Plex genre tags (see detectShaderType) and shown here as
+           read-only info. The slider below is the only remaining control, and dragging it
+           to 0% is what "Off" used to be. */
+        const detectedLabel = document.createElement("div");
+        detectedLabel.textContent = `Detected: ${SHADER_TYPES[this._shaderAutoType].label}`;
+        Object.assign(detectedLabel.style, { color: "#fff", fontSize: "13px", fontWeight: "600", padding: "2px 0" });
+        panel.appendChild(detectedLabel);
+
+        const detectedHint = document.createElement("div");
+        detectedHint.textContent = "Auto-detected from this title's genre";
+        Object.assign(detectedHint.style, { color: "rgba(255,255,255,0.5)", fontSize: "11px", padding: "0 0 10px" });
+        panel.appendChild(detectedHint);
 
         const strengthLabel = document.createElement("div");
         strengthLabel.textContent = `Strength: ${Math.round(this._shaderStrength * 100)}%`;
-        Object.assign(strengthLabel.style, { color: "rgba(255,255,255,0.7)", fontSize: "12px", padding: "10px 0 4px" });
+        Object.assign(strengthLabel.style, { color: "rgba(255,255,255,0.7)", fontSize: "12px", padding: "0 0 4px" });
         panel.appendChild(strengthLabel);
 
         const strengthInput = document.createElement("input");
@@ -1231,11 +1282,10 @@ class StreamingPlayerController {
         strengthInput.min = "0";
         strengthInput.max = "100";
         strengthInput.value = String(Math.round(this._shaderStrength * 100));
-        strengthInput.disabled = this._shaderType === "off";
         Object.assign(strengthInput.style, {
             width: "100%",
             accentColor: "#e5a00d",
-            cursor: strengthInput.disabled ? "default" : "pointer",
+            cursor: "pointer",
             boxSizing: "border-box",
         });
         strengthInput.addEventListener("input", () => {
@@ -1255,21 +1305,22 @@ class StreamingPlayerController {
         this._inlineMenuCleanup = () => document.removeEventListener("click", onOutsideClick);
     }
 
-    _setShaderType(type) {
-        this._shaderType = type;
-        this._updateShaderPipeline();
-    }
-
+    /* 0% is this session's "Off" now that the menu no longer has a separate type picker -
+       _shaderType only ever tracks "off" vs. whichever type detectShaderType picked for
+       this video, never a user-chosen algorithm. */
     _setShaderStrength(strength) {
         this._shaderStrength = strength;
+        this._shaderType = strength > 0 ? this._shaderAutoType : "off";
+        this._updateShaderPipeline();
     }
 
     /* Off by default - same reasoning as the Android leg (ShaderUpscaleEffect): this
        spends an extra GPU pass every frame, only worth it on already-low-resolution
        sources. Unlike Android, there's no per-drag rebuild hazard here (see PlayerActivity's
-       showShaderUpscaleDialog gotcha) - both compiled programs stay resident and a strength
-       change is just a uniform update on the next frame, not a pipeline rebuild, so
-       _setShaderStrength above applies live with no debounce needed. */
+       showShaderUpscaleDialog gotcha) - both compiled programs stay resident, so re-running
+       this on every drag tick (_setShaderStrength above) is cheap: _ensureShaderPipeline
+       no-ops once already built, and start/stop only takes effect when the 0%/>0% boundary
+       is actually crossed. */
     _updateShaderPipeline() {
         if (this._shaderType === "off") {
             this._stopShaderLoop();
@@ -1303,6 +1354,12 @@ class StreamingPlayerController {
             inset: "0",
             width: "100%",
             height: "100%",
+            /* _renderShaderFrame sizes the canvas's backing buffer (outW/outH) to match
+               the video's own aspect ratio, but a canvas is a replaced element like <img> -
+               without this, the default object-fit:fill still stretches that correctly-
+               proportioned bitmap to fill the 100%/100% box above, undoing the aspect-ratio
+               math entirely whenever the window's own aspect ratio doesn't match the video's. */
+            objectFit: "contain",
             background: "#000",
             zIndex: "10000",
             pointerEvents: "none",
@@ -1317,8 +1374,8 @@ class StreamingPlayerController {
         let programs;
         try {
             programs = {
-                anime4k: this._compileShaderProgram(gl, SHADER_FRAGMENT_ANIME, true),
-                live_action: this._compileShaderProgram(gl, SHADER_FRAGMENT_CAS, false),
+                anime4k: this._compileShaderProgram(gl, SHADER_FRAGMENT_ANIME),
+                live_action: this._compileShaderProgram(gl, SHADER_FRAGMENT_CAS),
             };
         } catch (e) {
             console.error("StreamingPlayer: shader compile failed -", e.message);
@@ -1348,7 +1405,7 @@ class StreamingPlayerController {
         return true;
     }
 
-    _compileShaderProgram(gl, fragmentSrc, isAnime) {
+    _compileShaderProgram(gl, fragmentSrc) {
         const compile = (type, src) => {
             const shader = gl.createShader(type);
             gl.shaderSource(shader, src);
@@ -1379,8 +1436,8 @@ class StreamingPlayerController {
             uTexelSize: gl.getUniformLocation(program, "uTexelSize"),
             uKernelScale: gl.getUniformLocation(program, "uKernelScale"),
             uSharpenStrength: gl.getUniformLocation(program, "uSharpenStrength"),
-            uSaturationBoost: isAnime ? gl.getUniformLocation(program, "uSaturationBoost") : null,
-            uContrastBoost: isAnime ? gl.getUniformLocation(program, "uContrastBoost") : null,
+            uSaturationBoost: gl.getUniformLocation(program, "uSaturationBoost"),
+            uContrastBoost: gl.getUniformLocation(program, "uContrastBoost"),
         };
         const aPosition = gl.getAttribLocation(program, "aPosition");
         return { program, uniforms, aPosition };
@@ -1436,7 +1493,9 @@ class StreamingPlayerController {
                on didn't hold for this server. Fail by turning the shader back off instead of
                throwing on every animation frame. */
             console.error("StreamingPlayer: shader upscaling disabled - video frame is cross-origin tainted", e);
-            this._setShaderType("off");
+            this._shaderStrength = 0;
+            this._shaderType = "off";
+            this._updateShaderPipeline();
             return;
         }
 

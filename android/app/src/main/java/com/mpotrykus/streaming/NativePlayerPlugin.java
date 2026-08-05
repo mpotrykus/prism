@@ -29,10 +29,14 @@ public class NativePlayerPlugin extends Plugin implements PlayerActivity.Playbac
         long startPositionMs = call.getLong("startPositionMs", 0L);
         JSArray chapters = call.getArray("chapters");
         JSArray audioStreams = call.getArray("audioStreams");
+        float upscaleStrength = call.getFloat("upscaleStrength", 0f);
+        String shaderType = call.getString("shaderType", "live_action");
 
         Intent intent = new Intent(getContext(), PlayerActivity.class);
         intent.putExtra(PlayerActivity.EXTRA_URL, url);
         intent.putExtra(PlayerActivity.EXTRA_START_POSITION_MS, startPositionMs);
+        intent.putExtra(PlayerActivity.EXTRA_UPSCALE_STRENGTH, upscaleStrength);
+        intent.putExtra(PlayerActivity.EXTRA_SHADER_TYPE, shaderType);
         if (chapters != null) {
             intent.putExtra(PlayerActivity.EXTRA_CHAPTERS_JSON, chapters.toString());
         }

@@ -17,6 +17,7 @@ const DEFAULT_PLAIN_CONFIG = {
   kids_mode_pin: "1233",
   max_genre_rows: 12,
   row_size: 20,
+  upscale_strength: "off",
 };
 
 const SECTION_TYPE_MAP = { movie: 1, show: 2 };
@@ -272,6 +273,19 @@ class StreamingSettingsModal extends HTMLElement {
                   </div>
                 </div>
               </section>
+
+              <section class="group">
+                <div class="group-title">Video Upscaling</div>
+                <div class="field">
+                  <label>Strength</label>
+                  <select class="f-upscale-strength">
+                    <option value="off">Off</option>
+                    <option value="light">Light</option>
+                    <option value="medium">Medium</option>
+                    <option value="strong">Strong</option>
+                  </select>
+                </div>
+              </section>
             </div>
           </div>
           <div class="status save-status"></div>
@@ -318,7 +332,7 @@ class StreamingSettingsModal extends HTMLElement {
       this.shadowRoot,
       ".modal-close, .tab-btn, .btn-reauth, .btn-fetch-libraries, .section-row .s-enabled, .section-row .s-label, " +
         ".f-youtube-key, .f-openrouter-key, .f-opensubtitles-username, .f-opensubtitles-password, .f-opensubtitles-key, " +
-        ".f-ai-cadence, .f-kids-pin, .f-max-genre-rows, .f-row-size, " +
+        ".f-ai-cadence, .f-kids-pin, .f-max-genre-rows, .f-row-size, .f-upscale-strength, " +
         ".btn-cancel, .btn-save",
       { orientation: "vertical", onBack: () => this.close() }
     );
@@ -359,6 +373,7 @@ class StreamingSettingsModal extends HTMLElement {
     this._el(".f-kids-pin").value = config.kids_mode_pin || "";
     this._el(".f-max-genre-rows").value = config.max_genre_rows ?? 12;
     this._el(".f-row-size").value = config.row_size ?? 20;
+    this._el(".f-upscale-strength").value = config.upscale_strength || "off";
     this._machineId = config.machine_id || "";
     this._sections = config.sections || [];
     /* Reset per-open so a stale in-memory copy from a previous session never lingers -
@@ -482,6 +497,7 @@ class StreamingSettingsModal extends HTMLElement {
       kids_mode_pin: this._el(".f-kids-pin").value.trim() || "1233",
       max_genre_rows: Number(this._el(".f-max-genre-rows").value) || 12,
       row_size: Number(this._el(".f-row-size").value) || 20,
+      upscale_strength: this._el(".f-upscale-strength").value || "off",
     };
   }
 

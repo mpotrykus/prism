@@ -19,8 +19,6 @@ import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.PopupMenu;
 import android.widget.ProgressBar;
-import android.widget.RadioButton;
-import android.widget.RadioGroup;
 import android.widget.SeekBar;
 import android.widget.TextView;
 import androidx.annotation.OptIn;
@@ -49,6 +47,11 @@ public class PlayerActivity extends AppCompatActivity {
     public static final String EXTRA_START_POSITION_MS = "startPositionMs";
     public static final String EXTRA_CHAPTERS_JSON = "chaptersJson";
     public static final String EXTRA_AUDIO_STREAMS_JSON = "audioStreamsJson";
+    /* Both resolved once in plex-player.js (Settings' global upscale_strength preset +
+       detectShaderType's genre check) rather than re-implemented here - one Plex-genre
+       interpretation shared by both platforms instead of duplicated in Java. */
+    public static final String EXTRA_UPSCALE_STRENGTH = "upscaleStrength";
+    public static final String EXTRA_SHADER_TYPE = "shaderType";
 
     private static final long PROGRESS_INTERVAL_MS = 1000L;
     private static final long CONTROLS_HIDE_DELAY_MS = 4000L;
@@ -87,8 +90,13 @@ public class PlayerActivity extends AppCompatActivity {
     private FrameLayout root;
     private TextView skipButton;
     private long skipButtonSeekToMs;
+    /* detectedShaderType is never OFF - it's just the auto-detected algorithm for this
+       title's genre, shown as read-only info in showShaderUpscaleDialog. shaderType is
+       the one actually rendered with (OFF whenever upscaleStrength is 0), same "0% is
+       off" model as plex-player.js's web-side _setShaderStrength. */
+    private ShaderType detectedShaderType = ShaderType.LIVE_ACTION;
     private ShaderType shaderType = ShaderType.OFF;
-    private float upscaleStrength = 0.5f;
+    private float upscaleStrength = 0f;
     private final Handler controlsFadeHandler = new Handler(Looper.getMainLooper());
     private final Runnable controlsFadeRunnable = () -> setControlsVisible(false);
     private boolean controlsVisible = true;
@@ -237,6 +245,9 @@ public class PlayerActivity extends AppCompatActivity {
         long startPositionMs = getIntent().getLongExtra(EXTRA_START_POSITION_MS, 0L);
         parseChapters(getIntent().getStringExtra(EXTRA_CHAPTERS_JSON));
         parseAudioStreams(getIntent().getStringExtra(EXTRA_AUDIO_STREAMS_JSON));
+        detectedShaderType = parseShaderType(getIntent().getStringExtra(EXTRA_SHADER_TYPE));
+        upscaleStrength = getIntent().getFloatExtra(EXTRA_UPSCALE_STRENGTH, 0f);
+        shaderType = upscaleStrength > 0f ? detectedShaderType : ShaderType.OFF;
 
         if (url == null || url.isEmpty()) {
             notifyErrorAndFinish("Missing required extra: url");
@@ -701,55 +712,41 @@ public class PlayerActivity extends AppCompatActivity {
         popup.show();
     }
 
-    /* RadioGroup for the shader algorithm (Off/Anime4K/Live-Action) plus a SeekBar for strength,
-       applied live on every change - setVideoEffects() supports being called mid-playback (see
-       applyVideoEffects()'s own comment), so there's no need for an Apply/Cancel step here. */
+    /* No more manual Off/Anime4K/Live-Action RadioGroup - detectedShaderType came from
+       plex-player.js's genre-based detection before this Activity ever launched, shown
+       here as read-only info. The SeekBar is the only remaining control; dragging it to
+       0% is what "Off" used to be (see the shaderType assignment in onStopTrackingTouch
+       below). setVideoEffects() supports being called mid-playback (see
+       applyVideoEffects()'s own comment), so there's no need for an Apply/Cancel step. */
     private void showShaderUpscaleDialog() {
         float density = getResources().getDisplayMetrics().density;
         int pad = (int) (20 * density);
+        int labelPad = (int) (8 * density);
 
         LinearLayout container = new LinearLayout(this);
         container.setOrientation(LinearLayout.VERTICAL);
         container.setPadding(pad, pad, pad, pad);
 
-        RadioGroup shaderGroup = new RadioGroup(this);
-        shaderGroup.setOrientation(RadioGroup.VERTICAL);
-        ShaderType[] shaderTypes = ShaderType.values();
-        RadioButton[] shaderButtons = new RadioButton[shaderTypes.length];
-        for (int i = 0; i < shaderTypes.length; i++) {
-            RadioButton button = new RadioButton(this);
-            button.setId(View.generateViewId());
-            button.setText(shaderTypes[i].label);
-            shaderGroup.addView(button);
-            shaderButtons[i] = button;
-            if (shaderTypes[i] == shaderType) {
-                shaderGroup.check(button.getId());
-            }
-        }
-        container.addView(shaderGroup);
+        TextView detectedLabel = new TextView(this);
+        detectedLabel.setText("Detected: " + detectedShaderType.label);
+        container.addView(detectedLabel);
+
+        TextView detectedHint = new TextView(this);
+        detectedHint.setText("Auto-detected from this title's genre");
+        detectedHint.setTextColor(Color.GRAY);
+        detectedHint.setTextSize(12);
+        detectedHint.setPadding(0, 0, 0, labelPad);
+        container.addView(detectedHint);
 
         TextView strengthLabel = new TextView(this);
-        int labelPad = (int) (8 * density);
-        strengthLabel.setPadding(0, labelPad * 3, 0, labelPad);
+        strengthLabel.setPadding(0, labelPad * 2, 0, labelPad);
         strengthLabel.setText("Strength: " + Math.round(upscaleStrength * 100) + "%");
         container.addView(strengthLabel);
 
         SeekBar strengthSeekBar = new SeekBar(this);
         strengthSeekBar.setMax(100);
         strengthSeekBar.setProgress(Math.round(upscaleStrength * 100));
-        strengthSeekBar.setEnabled(shaderType != ShaderType.OFF);
         container.addView(strengthSeekBar);
-
-        shaderGroup.setOnCheckedChangeListener((group, checkedId) -> {
-            for (int i = 0; i < shaderButtons.length; i++) {
-                if (shaderButtons[i].getId() == checkedId) {
-                    shaderType = shaderTypes[i];
-                    break;
-                }
-            }
-            strengthSeekBar.setEnabled(shaderType != ShaderType.OFF);
-            applyVideoEffects();
-        });
 
         strengthSeekBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override
@@ -768,6 +765,7 @@ public class PlayerActivity extends AppCompatActivity {
 
             @Override
             public void onStopTrackingTouch(SeekBar seekBar) {
+                shaderType = upscaleStrength > 0f ? detectedShaderType : ShaderType.OFF;
                 applyVideoEffects();
             }
         });
@@ -777,6 +775,10 @@ public class PlayerActivity extends AppCompatActivity {
             .setView(container)
             .setPositiveButton("Done", null)
             .show();
+    }
+
+    private static ShaderType parseShaderType(String name) {
+        return "anime4k".equals(name) ? ShaderType.ANIME4K : ShaderType.LIVE_ACTION;
     }
 
     private void parseChapters(String json) {

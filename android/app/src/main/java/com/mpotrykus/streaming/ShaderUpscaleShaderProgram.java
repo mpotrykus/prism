@@ -20,10 +20,13 @@ import androidx.media3.effect.BaseGlShaderProgram;
      sharpen weight from local *contrast range* instead of a binary edge decision (gentle in flat or
      already-high-contrast regions, stronger in genuine mid-detail), then clamps the result to the
      local neighborhood's own min/max - the anti-ringing guard that's the real difference from the
-     Anime4K variant, and the reason CAS doesn't need a separate contrast/saturation boost the way
-     the anime shader does (see ShaderType - its live-action tuning leaves those at 1.0). This is our
-     own implementation of the published Contrast Adaptive Sharpening idea AMD ships with FSR, not a
-     port of AMD's actual shader source.
+     Anime4K variant. That clamp has its own side effect though: pulling sharpened pixels back
+     toward the neighborhood's min/max also slightly flattens contrast/saturation, which is why CAS
+     applies the same saturation/contrast boost the anime shader does, just at a much smaller
+     magnitude (see ShaderType.LIVE_ACTION's tuning) - compensating for the clamp rather than
+     exaggerating the picture the way the anime shader's boost does. This is our own implementation
+     of the published Contrast Adaptive Sharpening idea AMD ships with FSR, not a port of AMD's
+     actual shader source.
 
    Neither is a deep-CNN super-resolution model - see docs/plezy-player-comparison.md's "Deferred
    features" section for why that's out of scope on any of this app's platforms. Intensity is a
@@ -81,6 +84,8 @@ final class ShaderUpscaleShaderProgram extends BaseGlShaderProgram {
           + "uniform vec2 uTexelSize;\n"
           + "uniform float uKernelScale;\n"
           + "uniform float uSharpenStrength;\n"
+          + "uniform float uSaturationBoost;\n"
+          + "uniform float uContrastBoost;\n"
           + "varying vec2 vTexSamplingCoord;\n"
           + "float luma(vec3 c) { return dot(c, vec3(0.299, 0.587, 0.114)); }\n"
           + "void main() {\n"
@@ -95,11 +100,21 @@ final class ShaderUpscaleShaderProgram extends BaseGlShaderProgram {
           + "  float minL = min(lc, min(min(ln, ls), min(lw, le)));\n"
           + "  float maxL = max(lc, max(max(ln, ls), max(lw, le)));\n"
           + "  float contrastRange = max(maxL - minL, 0.0001);\n"
-          + "  float weight = clamp(contrastRange * 4.0, 0.0, 1.0) * uSharpenStrength;\n"
-          + "  vec3 sharpened = c + (4.0 * c - n - s - e - w) * weight * 0.25;\n"
+          // *10.0 (was *4.0)/*0.5 (was *0.25) - see plex-player.js's SHADER_FRAGMENT_CAS,
+          // same shared algorithm on both platforms: the old constants only ever reached
+          // full sharpen weight on very high-contrast edges, so most already-compressed
+          // streamed video saw almost no visible effect.
+          + "  float weight = clamp(contrastRange * 10.0, 0.0, 1.0) * uSharpenStrength;\n"
+          + "  vec3 sharpened = c + (4.0 * c - n - s - e - w) * weight * 0.5;\n"
           + "  vec3 minRgb = min(c, min(min(n, s), min(w, e)));\n"
           + "  vec3 maxRgb = max(c, max(max(n, s), max(w, e)));\n"
-          + "  gl_FragColor = vec4(clamp(sharpened, minRgb, maxRgb), 1.0);\n"
+          + "  vec3 outColor = clamp(sharpened, minRgb, maxRgb);\n"
+          // Applied after the anti-ringing clamp above, not folded into it - compensating
+          // for that clamp's own contrast/saturation-flattening side effect (see
+          // ShaderType.LIVE_ACTION's comment), so it runs on the already-clamped result.
+          + "  outColor = (outColor - 0.5) * uContrastBoost + 0.5;\n"
+          + "  outColor = mix(vec3(luma(outColor)), outColor, uSaturationBoost);\n"
+          + "  gl_FragColor = vec4(clamp(outColor, 0.0, 1.0), 1.0);\n"
           + "}\n";
 
   private final GlProgram glProgram;
@@ -121,10 +136,8 @@ final class ShaderUpscaleShaderProgram extends BaseGlShaderProgram {
     }
     glProgram.setFloatUniform("uKernelScale", tuning.kernelScale);
     glProgram.setFloatUniform("uSharpenStrength", tuning.sharpenStrength);
-    if (!shaderType.useCas) {
-      glProgram.setFloatUniform("uSaturationBoost", tuning.saturationBoost);
-      glProgram.setFloatUniform("uContrastBoost", tuning.contrastBoost);
-    }
+    glProgram.setFloatUniform("uSaturationBoost", tuning.saturationBoost);
+    glProgram.setFloatUniform("uContrastBoost", tuning.contrastBoost);
     glProgram.setBufferAttribute(
         "aFramePosition",
         GlUtil.getNormalizedCoordinateBounds(),

@@ -2845,6 +2845,13 @@ class PlexNetflixCard extends HTMLElement {
     this._titleInfoChapters = meta.Chapter || [];
     this._titleInfoMedia = meta.Media || [];
     this._titleInfoQualityBtn.hidden = !this._titleInfoMedia.length;
+    /* Refines the possibly-truncated Genre list _mapItem saw at row-click time (Plex list
+       endpoints cap it to ~2 tags - see the class header's Genre gotcha) with this
+       fetch's full, untruncated list, so shader auto-detection (plex-player.js's
+       detectShaderType) sees every genre tag, not just the first couple. */
+    if (this._titleInfoItem) {
+      this._titleInfoItem.genres = (meta.Genre || []).map((g) => (g.tag || "").trim()).filter(Boolean);
+    }
     const progress = meta.duration ? Math.max(0, Math.min(1, this._titleInfoViewOffset / meta.duration)) : 0;
     this._titleInfoProgress.hidden = progress <= 0;
     this._titleInfoProgressBar.style.width = `${Math.round(progress * 100)}%`;
@@ -3126,6 +3133,9 @@ class PlexNetflixCard extends HTMLElement {
           year: item.year,
           seasonNumber: item.seasonNumber,
           episodeNumber: item.episodeNumber,
+          /* Drives plex-player.js's shader auto-detection (anime vs. live-action) - see
+             _mapItem/_renderTitleInfoDetail for where this gets resolved. */
+          genres: item.genres || [],
         });
         return;
       } catch (e) {
@@ -3619,6 +3629,15 @@ class PlexNetflixCard extends HTMLElement {
       seasonNumber: m.parentIndex,
       episodeNumber: m.index,
       viewCount: m.viewCount || 0,
+      /* Plex episode metadata doesn't carry its own Genre - that lives on the show - so
+         an episode falls back to whatever show-level genres the open title-info modal
+         already resolved (see _renderTitleInfoDetail) rather than going undetected by
+         plex-player.js's shader auto-detection. */
+      genres: m.Genre?.length
+        ? m.Genre.map((g) => (g.tag || "").trim()).filter(Boolean)
+        : m.type === "episode"
+          ? this._titleInfoItem?.genres || []
+          : [],
     };
     if (withProgress && m.duration) {
       item.progress = Math.max(0, Math.min(1, (m.viewOffset || 0) / m.duration));
