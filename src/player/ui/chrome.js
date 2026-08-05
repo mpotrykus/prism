@@ -90,7 +90,7 @@ export function showControls(controller) {
    are meant to toggle play/pause or reshow the controls. */
 export function scheduleHideControls(controller) {
     clearTimeout(controller._controlsHideTimer);
-    if (controller._controlsHovering) return;
+    if (controller._controlsHovering || controller._inlineMenuEl) return;
     controller._controlsHideTimer = setTimeout(() => {
         controller._controlButtons.forEach((b) => {
             b.style.opacity = "0";
@@ -356,13 +356,45 @@ export function buildTransportBar(controller, video) {
             .streaming-player-seek::-webkit-slider-thumb { outline: none; box-shadow: none; }
             .streaming-player-seek::-moz-range-thumb { outline: none; box-shadow: none; }
             .streaming-player-seek::-moz-focus-outer { border: 0; }
-            /* Thin track + small thumb, matching a premium-streaming-app scrub bar
-               instead of the browser's default thick range control. Height alone is
-               enough here - every target this app ships to is Chromium-based (see
-               web-fallback.js), so the native track/thumb both shrink to fit it. */
+            /* The scrub bar's embossed rim isn't a focus ring - it's Chromium/Firefox's
+               native appearance:auto track theme (a light groove with a darker edge),
+               which outline/box-shadow resets above can't touch. appearance:none drops
+               that native theme entirely, so the track/thumb/fill all have to be drawn by
+               hand below instead of relying on accent-color. --seek-pct is written from
+               JS (see buildTransportBar) wherever seek.value changes, since a plain CSS
+               gradient can't otherwise express "amber up to the thumb, dim after it". */
             .streaming-player-seek.streaming-player-seek--scrub {
+                -webkit-appearance: none;
+                appearance: none;
+                background: transparent;
+                height: 3px;
+            }
+            .streaming-player-seek.streaming-player-seek--scrub::-webkit-slider-runnable-track {
                 height: 3px;
                 border-radius: 2px;
+                border: none;
+                background: linear-gradient(to right, #e5a00d var(--seek-pct, 0%), rgba(255,255,255,0.3) var(--seek-pct, 0%));
+            }
+            .streaming-player-seek.streaming-player-seek--scrub::-moz-range-track {
+                height: 3px;
+                border-radius: 2px;
+                border: none;
+                background: linear-gradient(to right, #e5a00d var(--seek-pct, 0%), rgba(255,255,255,0.3) var(--seek-pct, 0%));
+            }
+            .streaming-player-seek.streaming-player-seek--scrub::-webkit-slider-thumb {
+                -webkit-appearance: none;
+                width: 12px;
+                height: 12px;
+                border-radius: 50%;
+                background: #e5a00d;
+                margin-top: -4.5px;
+            }
+            .streaming-player-seek.streaming-player-seek--scrub::-moz-range-thumb {
+                width: 12px;
+                height: 12px;
+                border-radius: 50%;
+                border: none;
+                background: #e5a00d;
             }
         `;
         document.head.appendChild(style);
@@ -374,9 +406,11 @@ export function buildTransportBar(controller, video) {
     seek.min = "0";
     seek.max = "1000";
     seek.value = "0";
-    /* #e5a00d matches the app's existing amber accent (see plex-netflix-card.js's
-       poster/title-info progress bars) rather than the browser-default white fill. */
-    Object.assign(seek.style, { flex: "1 1 auto", accentColor: "#e5a00d", cursor: "pointer" });
+    Object.assign(seek.style, { flex: "1 1 auto", cursor: "pointer" });
+    const syncSeekFill = () => {
+        seek.style.setProperty("--seek-pct", `${Number(seek.value) / 10}%`);
+    };
+    syncSeekFill();
 
     /* Scrubbing is tracked so the timeupdate-driven sync below doesn't fight the user's
        own drag - without it, every timeupdate tick would snap the thumb back to the
@@ -395,6 +429,7 @@ export function buildTransportBar(controller, video) {
         remainingEl.textContent = `-${formatTime(video.duration - time)}`;
     };
     seek.addEventListener("input", () => {
+        syncSeekFill();
         if (!video.duration) return;
         const time = (Number(seek.value) / 1000) * video.duration;
         video.currentTime = time;
@@ -404,6 +439,7 @@ export function buildTransportBar(controller, video) {
     video.addEventListener("timeupdate", () => {
         if (scrubbing || !video.duration) return;
         seek.value = String(Math.round((video.currentTime / video.duration) * 1000));
+        syncSeekFill();
         syncRemaining(video.currentTime);
     });
     video.addEventListener("durationchange", () => syncRemaining(video.currentTime));
@@ -638,6 +674,8 @@ function mountMenuPanel(controller, panel, anchor) {
     document.body.appendChild(panel);
     controller._inlineMenuEl = panel;
     controller._inlineMenuAnchor = anchor;
+    clearTimeout(controller._controlsHideTimer);
+    showControls(controller);
     requestAnimationFrame(() => {
         panel.style.opacity = "1";
         panel.style.transform = "translateY(0) scale(1)";
@@ -1041,6 +1079,7 @@ export function closeInlineMenu(controller) {
         controller._inlineMenuEl = null;
     }
     controller._inlineMenuAnchor = null;
+    scheduleHideControls(controller);
 }
 
 /* Pan only engages once zoomed past 1x, and only within the padding introduced by that
