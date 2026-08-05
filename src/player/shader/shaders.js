@@ -45,10 +45,11 @@ export function shaderTuningAt(shaderKey, strength) {
 }
 
 /* Settings' global "Upscaling" strength preset (settings.js's upscale_strength field) -
-   "off" skips the shader entirely, the other three map to this session's initial
+   whether the shader runs at all is now the separate upscale_enabled flag (see
+   settings.js/plex-player.js's play()), so this only ever maps to this session's initial
    strength slider position. Medium (0.65) is the pre-existing default the slider used
    to always start at. */
-export const UPSCALE_STRENGTH_PRESETS = { off: 0, light: 0.15, medium: 0.65, strong: 0.9 };
+export const UPSCALE_STRENGTH_PRESETS = { light: 0.15, medium: 0.65, strong: 0.9 };
 
 /* Picks which of the two SHADER_TYPES algorithms suits a title, from its Plex genre
    tags - Anime4K's edge-gated line-art shader for anything animated (matches "Animation"

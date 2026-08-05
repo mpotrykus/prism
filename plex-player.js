@@ -28,7 +28,7 @@ import { detectShaderType, UPSCALE_STRENGTH_PRESETS } from "./src/player/shader/
 import { buildStreamUrl } from "./src/player/core/stream-url.js";
 import { playNative, stopNative, pauseNative, resumeNative } from "./src/player/native-bridge.js";
 import { playWeb, attachSource, reloadWebSource, teardownWeb } from "./src/player/web-fallback.js";
-import { setShaderStrength, updateShaderPipeline, ensureShaderPipeline, stopShaderLoop } from "./src/player/shader-pipeline.js";
+import { setShaderStrength, setShaderEnabled, updateShaderPipeline, ensureShaderPipeline, stopShaderLoop } from "./src/player/shader-pipeline.js";
 import {
     makeControlButton,
     registerControlButton,
@@ -79,6 +79,7 @@ class StreamingPlayerController {
         this._inlineMenuAnchor = null;
         this._inlineMenuCleanup = null;
         this._shaderType = "off";
+        this._shaderEnabled = false;
         this._shaderStrength = 0;
         this._shaderAutoType = "live_action";
         this._shaderCanvas = null;
@@ -140,13 +141,15 @@ class StreamingPlayerController {
         this._activeSkipMarker = null;
 
         /* Global default for this playback - the in-player Shader Upscaling menu can
-           still override the strength for this session (see _setShaderStrength), but
-           every video starts from Settings' upscale_strength and its own auto-detected
-           type rather than whatever the previous video's session left behind. */
-        const upscaleLevel = loadPlain().upscale_strength || "off";
+           still override the toggle/strength for this session (see _setShaderEnabled/
+           _setShaderStrength), but every video starts from Settings' upscale_enabled/
+           upscale_strength and its own auto-detected type rather than whatever the
+           previous video's session left behind. */
+        const settings = loadPlain();
         this._shaderAutoType = detectShaderType(item.genres);
-        this._shaderStrength = UPSCALE_STRENGTH_PRESETS[upscaleLevel] ?? 0;
-        this._shaderType = this._shaderStrength > 0 ? this._shaderAutoType : "off";
+        this._shaderEnabled = !!settings.upscale_enabled;
+        this._shaderStrength = UPSCALE_STRENGTH_PRESETS[settings.upscale_strength || "medium"] ?? 0;
+        this._shaderType = this._shaderEnabled && this._shaderStrength > 0 ? this._shaderAutoType : "off";
 
         this._pushedHistoryState = true;
         history.pushState({ prismPlayer: true }, "", location.href);
@@ -232,6 +235,10 @@ class StreamingPlayerController {
 
     _setShaderStrength(strength) {
         return setShaderStrength(this, strength);
+    }
+
+    _setShaderEnabled(enabled) {
+        return setShaderEnabled(this, enabled);
     }
 
     _updateShaderPipeline() {

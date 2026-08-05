@@ -7,12 +7,23 @@ import { shaderTuningAt, SHADER_VERTEX_SRC, SHADER_FRAGMENT_ANIME, SHADER_FRAGME
    copy of the video/canvas state - the pipeline's GL resources genuinely are part of
    one playback session's state, not a separable subsystem with its own lifecycle. */
 
-/* 0% is this session's "Off" now that the menu no longer has a separate type picker -
-   controller._shaderType only ever tracks "off" vs. whichever type detectShaderType
-   picked for this video, never a user-chosen algorithm. */
+/* controller._shaderType only ever tracks "off" vs. whichever type detectShaderType
+   picked for this video, never a user-chosen algorithm. Gated on _shaderEnabled as well
+   as strength>0 now that on/off is its own toggle (see setShaderEnabled below) rather
+   than dragging the strength slider to 0 being the only way to turn this off - the
+   slider's position is remembered independently of whether the toggle is currently on. */
 export function setShaderStrength(controller, strength) {
     controller._shaderStrength = strength;
-    controller._shaderType = strength > 0 ? controller._shaderAutoType : "off";
+    controller._shaderType = controller._shaderEnabled && strength > 0 ? controller._shaderAutoType : "off";
+    updateShaderPipeline(controller);
+}
+
+/* The "more" menu's inline toggle (see chrome.js's openHamburgerMenu) - flips whether the
+   shader runs at all without touching _shaderStrength, so switching back on restores
+   whatever strength the slider was already at instead of resetting it. */
+export function setShaderEnabled(controller, enabled) {
+    controller._shaderEnabled = enabled;
+    controller._shaderType = enabled && controller._shaderStrength > 0 ? controller._shaderAutoType : "off";
     updateShaderPipeline(controller);
 }
 
@@ -196,7 +207,7 @@ export function renderShaderFrame(controller) {
            on didn't hold for this server. Fail by turning the shader back off instead of
            throwing on every animation frame. */
         console.error("StreamingPlayer: shader upscaling disabled - video frame is cross-origin tainted", e);
-        controller._shaderStrength = 0;
+        controller._shaderEnabled = false;
         controller._shaderType = "off";
         updateShaderPipeline(controller);
         return;

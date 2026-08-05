@@ -44,9 +44,13 @@ export async function playNative(controller, streamUrl, startOffsetMs) {
            0 is what turns the shader off there, same as the web path's _shaderType
            collapsing to "off" below) and the resolved strength number - it doesn't run
            its own genre detection, so there's one detection implementation instead of
-           one per platform. */
+           one per platform. Gated on _shaderEnabled here rather than passing
+           _shaderStrength as-is - that field now holds the slider's position independent
+           of on/off (see setShaderEnabled), so an initial-launch session with upscaling
+           disabled but a remembered non-zero strength must still start native playback
+           with 0, not silently re-enable it on a platform with no toggle of its own. */
         shaderType: controller._shaderAutoType,
-        upscaleStrength: controller._shaderStrength,
+        upscaleStrength: controller._shaderEnabled ? controller._shaderStrength : 0,
         /* Native code only ever sees {title, startTimeOffsetMs} - it doesn't need to know
            Plex's own Chapter field names, keeping that one Plex-protocol interpretation
            here instead of duplicated into Java. */

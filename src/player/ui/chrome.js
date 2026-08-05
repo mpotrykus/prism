@@ -694,8 +694,18 @@ export function openHamburgerMenu(controller, anchor) {
         { label: "Zoom", value: `${zoomLevel}x`, trailing: "›", onSelect: () => openZoomMenu(controller, anchor) },
         {
             label: "Shader Upscaling",
-            value: controller._shaderType !== "off" ? SHADER_TYPES[controller._shaderType].label : null,
+            value: controller._shaderEnabled ? SHADER_TYPES[controller._shaderAutoType].label : null,
             trailing: "›",
+            /* The toggle flips on/off in place without leaving this menu - onSelect (tap
+               anywhere else on the row) still drills into the strength slider, same as
+               every other row here; they're independent gestures on the same row. */
+            toggle: {
+                checked: controller._shaderEnabled,
+                onChange: (checked) => {
+                    controller._setShaderEnabled(checked);
+                    return checked ? SHADER_TYPES[controller._shaderAutoType].label : null;
+                },
+            },
             onSelect: () => openShaderMenu(controller, anchor),
         },
     ];
@@ -874,6 +884,49 @@ function chapterLabel(chapter) {
     return title ? `${time}  ${title}` : time;
 }
 
+/* A small on/off pill, e.g. Shader Upscaling's row in openHamburgerMenu - plain divs
+   rather than a native <input type="checkbox">/<label> pair, since this nests inside a
+   row that's itself a <button> and interactive controls can't nest inside one per the
+   HTML content model. stopPropagation on click keeps a tap on the switch from also
+   bubbling up into the row's own onSelect (which opens a submenu). */
+function makeToggleSwitch(checked, onChange) {
+    let isOn = checked;
+    const el = document.createElement("div");
+    el.setAttribute("role", "switch");
+    el.setAttribute("aria-checked", String(isOn));
+    Object.assign(el.style, {
+        position: "relative",
+        width: "34px",
+        height: "20px",
+        flex: "0 0 auto",
+        borderRadius: "10px",
+        background: isOn ? "#e5a00d" : "rgba(255,255,255,0.25)",
+        transition: "background 0.15s ease",
+        cursor: "pointer",
+    });
+    const thumb = document.createElement("div");
+    Object.assign(thumb.style, {
+        position: "absolute",
+        top: "2px",
+        left: isOn ? "16px" : "2px",
+        width: "16px",
+        height: "16px",
+        borderRadius: "50%",
+        background: "#fff",
+        transition: "left 0.15s ease",
+    });
+    el.appendChild(thumb);
+    el.addEventListener("click", (e) => {
+        e.stopPropagation();
+        isOn = !isOn;
+        el.setAttribute("aria-checked", String(isOn));
+        el.style.background = isOn ? "#e5a00d" : "rgba(255,255,255,0.25)";
+        thumb.style.left = isOn ? "16px" : "2px";
+        onChange(isOn);
+    });
+    return el;
+}
+
 /* Shared by every control button that needs a small tap-to-pick list (speed presets,
    sleep timer presets, and future picker buttons) instead of each building its own
    floating menu. Only one menu is ever open at a time. `onBack`, when given, renders one
@@ -916,19 +969,40 @@ export function openInlineMenu(controller, { anchor, items, onBack }) {
         const label = document.createElement("span");
         label.textContent = item.label;
         labelStack.appendChild(label);
-        if (item.value) {
-            const value = document.createElement("span");
-            value.textContent = item.value;
-            Object.assign(value.style, { fontSize: "11px", fontWeight: "400", color: "rgba(255,255,255,0.4)" });
-            labelStack.appendChild(value);
-        }
+        let valueEl = null;
+        const setValue = (text) => {
+            if (text) {
+                if (!valueEl) {
+                    valueEl = document.createElement("span");
+                    Object.assign(valueEl.style, { fontSize: "11px", fontWeight: "400", color: "rgba(255,255,255,0.4)" });
+                    labelStack.appendChild(valueEl);
+                }
+                valueEl.textContent = text;
+            } else if (valueEl) {
+                valueEl.remove();
+                valueEl = null;
+            }
+        };
+        setValue(item.value);
         row.appendChild(labelStack);
+
+        /* toggle and trailing are independent gestures on the same row - the toggle
+           flips item.toggle.onChange in place (stopping propagation so it doesn't also
+           trigger the row's own onSelect below), while trailing's chevron just marks that
+           tapping the rest of the row still drills into a submenu, toggle or not. */
+        const rightSide = document.createElement("span");
+        Object.assign(rightSide.style, { display: "flex", alignItems: "center", gap: "10px", flex: "0 0 auto" });
+        if (item.toggle) {
+            const switchEl = makeToggleSwitch(item.toggle.checked, (checked) => setValue(item.toggle.onChange(checked)));
+            rightSide.appendChild(switchEl);
+        }
         if (item.trailing) {
             const trailing = document.createElement("span");
             trailing.textContent = item.trailing;
             trailing.style.color = "rgba(255,255,255,0.35)";
-            row.appendChild(trailing);
+            rightSide.appendChild(trailing);
         }
+        if (rightSide.children.length) row.appendChild(rightSide);
         row.addEventListener("mouseenter", () => {
             row.style.background = "rgba(255,255,255,0.1)";
         });
