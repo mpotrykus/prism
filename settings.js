@@ -67,8 +67,10 @@ const MODAL_STYLE = `
   }
   .overlay.open { display: flex; }
   .modal {
-    width: 560px; max-width: 100%; max-height: 88vh;
-    overflow-y: auto;
+    width: 560px; max-width: 100%;
+    height: min(640px, 88vh);
+    display: flex; flex-direction: column;
+    overflow: hidden;
     background: #161619;
     border: 1px solid rgba(255,255,255,0.08);
     border-radius: 16px;
@@ -76,7 +78,7 @@ const MODAL_STYLE = `
     box-shadow: 0 24px 70px rgba(0,0,0,0.6);
   }
   .modal-header {
-    position: sticky; top: 0;
+    flex: none;
     display: flex; align-items: center; justify-content: space-between;
     padding: 20px 24px; background: #161619;
     border-bottom: 1px solid rgba(255,255,255,0.08);
@@ -87,7 +89,7 @@ const MODAL_STYLE = `
     font-size: 20px; cursor: pointer; line-height: 1; padding: 4px;
   }
   .modal-close:hover { color: #fff; }
-  .modal-body { padding: 8px 24px 24px; }
+  .modal-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 8px 24px 24px; }
   section.group { margin-top: 22px; }
   section.group:first-child { margin-top: 18px; }
   .group-title {
@@ -118,7 +120,7 @@ const MODAL_STYLE = `
   .status { font-size: 12px; font-weight: 600; margin-top: 6px; min-height: 15px; }
   .status.ok { color: #4caf7d; }
   .status.err { color: #ff6b6b; }
-  .save-status { padding: 0 24px; margin-top: -6px; }
+  .save-status { flex: none; padding: 0 24px; margin-top: -6px; }
   .section-list { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
   .section-row {
     display: flex; align-items: center; gap: 10px;
@@ -133,17 +135,40 @@ const MODAL_STYLE = `
   }
   .row-2col { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
   .modal-footer {
+    flex: none;
     display: flex; justify-content: flex-end; align-items: center; gap: 10px;
     padding: 16px 24px 22px;
   }
+  .tabs {
+    flex: none;
+    display: flex; gap: 18px;
+    padding: 0 24px; margin-bottom: 4px;
+    border-bottom: 1px solid rgba(255,255,255,0.08);
+  }
+  .tab-btn {
+    border: none; background: transparent; color: rgba(255,255,255,0.55);
+    font-size: 13px; font-weight: 700; padding: 12px 2px; white-space: nowrap;
+    cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px;
+  }
+  .tab-btn:hover { color: #fff; }
+  .tab-btn.active { color: #fff; border-bottom-color: #e5a00d; }
+  .tab-panel { display: none; }
+  .tab-panel.active { display: block; }
   @media (max-width: 700px) {
     .overlay { padding: 0; overflow-y: auto; align-items: flex-start; }
-    .modal { width: 100%; max-width: 100%; min-height: 100dvh; max-height: none; overflow-y: visible; border-radius: 0; border: none; }
+    .modal { width: 100%; max-width: 100%; height: auto; min-height: 100dvh; overflow: visible; border-radius: 0; border: none; }
+    .modal-body { overflow-y: visible; }
     .modal-close { display: none; }
     .modal-header { padding: calc(20px + var(--safe-top)) 24px 20px; }
     .modal-footer { padding: 16px 24px calc(22px + var(--safe-bottom)); }
   }
 `;
+
+const TABS = [
+  { key: "plex", label: "Plex" },
+  { key: "integrations", label: "Integrations" },
+  { key: "preferences", label: "Preferences" },
+];
 
 class StreamingSettingsModal extends HTMLElement {
   connectedCallback() {
@@ -159,86 +184,95 @@ class StreamingSettingsModal extends HTMLElement {
             <h2>Settings</h2>
             <button type="button" class="modal-close" aria-label="Close">✕</button>
           </div>
+          <div class="tabs">
+            ${TABS.map((t) => `<button type="button" class="tab-btn" data-tab="${t.key}">${t.label}</button>`).join("")}
+          </div>
           <div class="modal-body">
-            <section class="group">
-              <div class="group-title">Plex Server</div>
-              <div class="status plex-server-status"></div>
-              <div class="field-row">
-                <button type="button" class="btn btn-secondary btn-reauth">Reauthenticate</button>
-              </div>
-            </section>
+            <div class="tab-panel" data-tab="plex">
+              <section class="group">
+                <div class="group-title">Plex Server</div>
+                <div class="status plex-server-status"></div>
+                <div class="field-row">
+                  <button type="button" class="btn btn-secondary btn-reauth">Reauthenticate</button>
+                </div>
+              </section>
 
-            <section class="group">
-              <div class="group-title">Libraries</div>
-              <button type="button" class="btn btn-secondary btn-fetch-libraries">Fetch Libraries</button>
-              <div class="status fetch-status"></div>
-              <div class="section-list"></div>
-            </section>
+              <section class="group">
+                <div class="group-title">Libraries</div>
+                <button type="button" class="btn btn-secondary btn-fetch-libraries">Fetch Libraries</button>
+                <div class="status fetch-status"></div>
+                <div class="section-list"></div>
+              </section>
+            </div>
 
-            <section class="group">
-              <div class="group-title">Trailers (optional)</div>
-              <div class="field">
-                <label>YouTube Data API Key</label>
-                <input type="password" class="f-youtube-key" placeholder="Used as a fallback when Plex has no trailer" />
-              </div>
-            </section>
-
-            <section class="group">
-              <div class="group-title">AI Rows (optional)</div>
-              <div class="row-2col">
+            <div class="tab-panel" data-tab="integrations">
+              <section class="group">
+                <div class="group-title">Trailers (optional)</div>
                 <div class="field">
-                  <label>OpenRouter API Key</label>
-                  <input type="password" class="f-openrouter-key" />
+                  <label>YouTube Data API Key</label>
+                  <input type="password" class="f-youtube-key" placeholder="Used as a fallback when Plex has no trailer" />
+                </div>
+              </section>
+
+              <section class="group">
+                <div class="group-title">AI Rows (optional)</div>
+                <div class="row-2col">
+                  <div class="field">
+                    <label>OpenRouter API Key</label>
+                    <input type="password" class="f-openrouter-key" />
+                  </div>
+                  <div class="field">
+                    <label>Refresh Cadence</label>
+                    <select class="f-ai-cadence">
+                      <option value="86400000">Daily</option>
+                      <option value="604800000">Weekly</option>
+                    </select>
+                  </div>
+                </div>
+              </section>
+
+              <section class="group">
+                <div class="group-title">OpenSubtitles (optional)</div>
+                <div class="row-2col">
+                  <div class="field">
+                    <label>Username</label>
+                    <input type="text" class="f-opensubtitles-username" placeholder="Needed to download, not just search" />
+                  </div>
+                  <div class="field">
+                    <label>Password</label>
+                    <input type="password" class="f-opensubtitles-password" />
+                  </div>
                 </div>
                 <div class="field">
-                  <label>Refresh Cadence</label>
-                  <select class="f-ai-cadence">
-                    <option value="86400000">Daily</option>
-                    <option value="604800000">Weekly</option>
-                  </select>
+                  <label>API Key</label>
+                  <input type="password" class="f-opensubtitles-key" placeholder="Used by the player's subtitle search" />
                 </div>
-              </div>
-            </section>
+              </section>
+            </div>
 
-            <section class="group">
-              <div class="group-title">OpenSubtitles (optional)</div>
-              <div class="row-2col">
+            <div class="tab-panel" data-tab="preferences">
+              <section class="group">
+                <div class="group-title">Kids Mode</div>
                 <div class="field">
-                  <label>Username</label>
-                  <input type="text" class="f-opensubtitles-username" placeholder="Needed to download, not just search" />
+                  <label>Exit PIN</label>
+                  <input type="text" class="f-kids-pin" inputmode="numeric" maxlength="8" placeholder="1233" />
                 </div>
-                <div class="field">
-                  <label>Password</label>
-                  <input type="password" class="f-opensubtitles-password" />
-                </div>
-              </div>
-              <div class="field">
-                <label>API Key</label>
-                <input type="password" class="f-opensubtitles-key" placeholder="Used by the player's subtitle search" />
-              </div>
-            </section>
+              </section>
 
-            <section class="group">
-              <div class="group-title">Kids Mode</div>
-              <div class="field">
-                <label>Exit PIN</label>
-                <input type="text" class="f-kids-pin" inputmode="numeric" maxlength="8" placeholder="1233" />
-              </div>
-            </section>
-
-            <section class="group">
-              <div class="group-title">Display</div>
-              <div class="row-2col">
-                <div class="field">
-                  <label>Max Genre Rows</label>
-                  <input type="number" class="f-max-genre-rows" min="0" max="40" />
+              <section class="group">
+                <div class="group-title">Display</div>
+                <div class="row-2col">
+                  <div class="field">
+                    <label>Max Genre Rows</label>
+                    <input type="number" class="f-max-genre-rows" min="0" max="40" />
+                  </div>
+                  <div class="field">
+                    <label>Row Size</label>
+                    <input type="number" class="f-row-size" min="5" max="60" />
+                  </div>
                 </div>
-                <div class="field">
-                  <label>Row Size</label>
-                  <input type="number" class="f-row-size" min="5" max="60" />
-                </div>
-              </div>
-            </section>
+              </section>
+            </div>
           </div>
           <div class="status save-status"></div>
           <div class="modal-footer">
@@ -265,21 +299,34 @@ class StreamingSettingsModal extends HTMLElement {
     this._el(".btn-reauth").addEventListener("click", () => this._reauthenticate());
     this._el(".btn-fetch-libraries").addEventListener("click", () => this._fetchLibraries());
     this._el(".btn-save").addEventListener("click", () => this._save());
+    this.shadowRoot.querySelectorAll(".tab-btn").forEach((btn) => {
+      btn.addEventListener("click", () => this._switchTab(btn.dataset.tab));
+    });
     /* One long vertical list rather than per-row/per-section sub-navigation - simpler,
        and good enough for a screen that isn't the primary Xbox-blocking flow the way
-       sign-in is. Native Left/Right cursor movement inside text/number inputs is left
-       alone (this only claims Up/Down/Enter/Escape - see focus-nav.js's orientation
-       handling), though that does mean Up/Down no longer increments/decrements a
-       number input via its native spinner behavior - an accepted trade-off since
-       moving between fields has to win for gamepad nav to work at all. */
+       sign-in is. Tab buttons are included in this same vertical list (Down/Up walks
+       through them like any other item, Enter clicks one via wireLinearNav's default
+       onActivate) rather than getting their own horizontal sub-nav - a hidden tab
+       panel's fields are automatically excluded already, since items() filters on
+       offsetParent !== null and inactive .tab-panels are display:none. Native
+       Left/Right cursor movement inside text/number inputs is left alone (this only
+       claims Up/Down/Enter/Escape - see focus-nav.js's orientation handling), though
+       that does mean Up/Down no longer increments/decrements a number input via its
+       native spinner behavior - an accepted trade-off since moving between fields has
+       to win for gamepad nav to work at all. */
     wireLinearNav(
       this.shadowRoot,
-      ".modal-close, .btn-reauth, .btn-fetch-libraries, .section-row .s-enabled, .section-row .s-label, " +
+      ".modal-close, .tab-btn, .btn-reauth, .btn-fetch-libraries, .section-row .s-enabled, .section-row .s-label, " +
         ".f-youtube-key, .f-openrouter-key, .f-opensubtitles-username, .f-opensubtitles-password, .f-opensubtitles-key, " +
         ".f-ai-cadence, .f-kids-pin, .f-max-genre-rows, .f-row-size, " +
         ".btn-cancel, .btn-save",
       { orientation: "vertical", onBack: () => this.close() }
     );
+  }
+
+  _switchTab(key) {
+    this.shadowRoot.querySelectorAll(".tab-btn").forEach((btn) => btn.classList.toggle("active", btn.dataset.tab === key));
+    this.shadowRoot.querySelectorAll(".tab-panel").forEach((panel) => panel.classList.toggle("active", panel.dataset.tab === key));
   }
 
   open() {
@@ -318,6 +365,7 @@ class StreamingSettingsModal extends HTMLElement {
        any field left blank this time re-reads from the vault rather than silently
        reusing whatever was decrypted last time this modal was open. */
     this._unlockedSecrets = null;
+    this._switchTab(TABS[0].key);
     this._renderSectionList();
     this._el(".fetch-status").textContent = "";
     this._el(".fetch-status").className = "status fetch-status";

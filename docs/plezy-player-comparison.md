@@ -40,7 +40,7 @@ API, no backend — so it's a fair feature benchmark, just not something we can 
 | External player handoff with progress sync | Yes | No |
 | Watch-together / real-time sync | Yes | No |
 | Audio passthrough / downmix + boost | Yes | No |
-| Shader-based AI-style upscaling (Anime4K/RAVU-style) | Yes (mpv GLSL shaders) | Yes on Android — `ShaderUpscaleEffect`/`ShaderUpscaleShaderProgram` via Media3's Effect API, "Shader Upscaling..." dialog on the gear menu: Anime4K (line-art) or Live-Action/CAS (photographic content) with a continuous strength slider |
+| Shader-based AI-style upscaling (Anime4K/RAVU-style) | Yes (mpv GLSL shaders) | Yes on Android — `ShaderUpscaleEffect`/`ShaderUpscaleShaderProgram` via Media3's Effect API, "Shader Upscaling..." dialog on the gear menu: Anime4K (line-art) or Live-Action/CAS (photographic content) with a continuous strength slider. Also shipped on web/Xbox — same two shaders as a WebGL pass sampling the `<video>` element, "Shader Upscaling" entry in `plex-player.js`'s hamburger menu |
 
 ## Per-platform feasibility
 
@@ -65,7 +65,7 @@ API, no backend — so it's a fair feature benchmark, just not something we can 
 | External player handoff with progress sync | ⛔ no clean handoff from a browser tab | 🟡 Android `ACTION_VIEW` intent, existing `/:/timeline` reporting covers progress sync | ⛔ UWP process/app model doesn't support this |
 | Watch-together / real-time sync | ⛔ needs a signaling backend | ⛔ needs a signaling backend | ⛔ needs a signaling backend |
 | Audio passthrough / downmix + boost | ⛔ no passthrough from `<video>` | 🟡 Media3 audio processing | ⛔ still `<video>`, same limit as web |
-| Shader-based AI-style upscaling | 🟡 WebGL canvas sampling `<video>` frames, same mechanism as ambient lighting — still a stretch goal | ✅ `ExoPlayer.setVideoEffects()` + a custom `GlShaderProgram` running inside ExoPlayer's own native pipeline, sidestepping the wall that blocks ambient lighting on this platform | 🟡 same WebGL approach as web; GPU/perf on real hardware unverified |
+| Shader-based AI-style upscaling | ✅ WebGL canvas sampling `<video>` frames, same mechanism ambient lighting would use | ✅ `ExoPlayer.setVideoEffects()` + a custom `GlShaderProgram` running inside ExoPlayer's own native pipeline, sidestepping the wall that blocks ambient lighting on this platform | ✅ same WebGL approach as web (still `<video>`+hls.js on Xbox); GPU/perf on real Xbox hardware unverified |
 
 **Not achievable on any platform today:** watch-together / real-time sync — needs a signaling layer
 between clients, which breaks Prism's "no backend" architecture invariant unless it can piggyback
@@ -193,8 +193,32 @@ to fill the screen instead of upscaling in place. Fixed by computing a single sc
 by both axes (`Math.min(SCALE_FACTOR, min(maxW/inputW, maxH/inputH))`, floored at `1f`) and applying
 it uniformly to both dimensions.
 
-Web/Xbox remain a stretch goal, using the same WebGL-canvas-sampling mechanism as ambient lighting
-above, with the same GPU-risk caveats — not attempted yet.
+**Shipped on web/Xbox**, using the WebGL-canvas-sampling mechanism sketched above for ambient
+lighting: both `ShaderUpscaleShaderProgram` fragment shaders ported near-verbatim (WebGL1's
+`attribute`/`varying`/`texture2D` GLSL happens to be source-compatible with the Android originals)
+into `plex-player.js`, running as a per-frame WebGL pass over the `<video>` element rather than
+inside ExoPlayer's native pipeline. `ShaderType`/`ShaderTuning`'s min/max tuning tables and the
+"Shader Upscaling" hamburger-menu entry (shader-type choice + continuous strength slider) carry over
+directly. Two differences from the Android leg, both improvements rather than parity gaps:
+
+- **No per-drag rebuild hazard.** Android's `setVideoEffects()` recompiles/relinks a whole GL
+  program on every call, which is why its SeekBar only commits `applyVideoEffects()` on
+  `onStopTrackingTouch` (see that gotcha above). The web port compiles both shader-type programs
+  once and keeps them resident; switching type just swaps which compiled program renders with, and
+  a strength change is only a uniform update on the next frame — so the strength slider applies live
+  on every `input` event with no debounce needed.
+- **Cross-origin video frames.** `texImage2D` from a `<video>` taints the canvas unless the frames
+  are CORS-clean. The hls.js/MediaSource path (the common desktop case: `hls.attachMedia(video)`
+  against a `blob:` URL) doesn't need any change — MSE-backed video is same-origin for canvas-tainting
+  purposes regardless of where hls.js fetched the segments from. Only the native-HLS fallback branch
+  (Safari, or any browser without hls.js support) sets `video.crossOrigin = "anonymous"`, relying on
+  this repo's documented CORS invariant (Plex answers CORS-clean once the token is a query param,
+  which `_buildStreamUrl` already uses). If that invariant doesn't hold on some server/browser
+  combination, `_renderShaderFrame`'s `texImage2D` throws a `SecurityError`, which is caught and
+  turns the shader back off rather than spamming the console every animation frame.
+
+GPU/perf on real Xbox WebView2 hardware is still unverified, same caveat as the rest of this
+platform's shader/ambient-lighting story.
 
 **Frame-rate / motion interpolation** (raised alongside shader upscaling, since both get pitched as
 "AI-shader" video enhancement) — ruled out, not just deferred. `BaseGlShaderProgram`/`GlEffect`
@@ -217,7 +241,7 @@ building given how much worse it looks than what "interpolation" implies.
 Most of Plezy's UX-layer features — skip intro/credits, chapters, quality picker, multi-version
 switching, playback speed, sleep timer, zoom, subtitle search — have now shipped as ordinary
 additions to `plex-player.js`: more Plex API calls plus UI, not blocked by Prism's architecture.
-Shader-based AI-style upscaling has also shipped, on Android. The remaining gaps are tied to native
-decoder/OS capabilities (HDR/Dolby Vision, PiP, audio passthrough, refresh-rate matching, ambient
-lighting, libass rendering, web/Xbox shader upscaling) — see "Deferred features" above for the
+Shader-based AI-style upscaling has also shipped, on Android and now web/Xbox too. The remaining
+gaps are tied to native decoder/OS capabilities (HDR/Dolby Vision, PiP, audio passthrough,
+refresh-rate matching, ambient lighting, libass rendering) — see "Deferred features" above for the
 detailed per-item breakdown.

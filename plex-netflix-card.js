@@ -2326,7 +2326,7 @@ class PlexNetflixCard extends HTMLElement {
     const popular = (this._popularRaw || [])
       .filter(popularFilter)
       .filter((m) => this._passesKidsMode(m))
-      .slice(0, this._config.row_size)
+      .slice(0, Math.min(8, this._config.row_size))
       .map((m) => this._mapItem(m, false));
     const genreRows = this._getGenreRowsForView(view, sectionsForGenres);
     const collectionsRow = this._getCollectionsRowForView(sectionsForGenres);

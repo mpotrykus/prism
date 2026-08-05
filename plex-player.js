@@ -26,6 +26,121 @@ const PLAYBACK_RATES = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 4, 8];
 const SLEEP_TIMER_PRESETS_MIN = [15, 30, 45, 60];
 const ZOOM_LEVELS = [1, 1.25, 1.5, 2];
 
+/* Web port of the Android shader-upscaling feature (ShaderType/ShaderTuning/
+   ShaderUpscaleShaderProgram in android/.../PlayerActivity's Java sources) - same two
+   GLSL algorithms and the same min/max tuning endpoints a 0-100% strength slider
+   interpolates between, just running as a WebGL pass over the <video> element instead
+   of inside ExoPlayer's native pipeline. See _ensureShaderPipeline for how frames get
+   from <video> to this shader. */
+const SHADER_TYPES = {
+    anime4k: {
+        label: "Anime4K",
+        useCas: false,
+        min: { scale: 1.8, sharpen: 1.8, kernel: 1.5, saturation: 1.15, contrast: 1.08 },
+        max: { scale: 2.4, sharpen: 3.8, kernel: 2.8, saturation: 1.5, contrast: 1.28 },
+    },
+    live_action: {
+        label: "Live-Action (CAS)",
+        useCas: true,
+        min: { scale: 1.3, sharpen: 0.6, kernel: 1, saturation: 1, contrast: 1 },
+        max: { scale: 1.6, sharpen: 1.1, kernel: 1.3, saturation: 1, contrast: 1 },
+    },
+};
+
+function shaderTuningAt(shaderKey, strength) {
+    const type = SHADER_TYPES[shaderKey];
+    const t = Math.max(0, Math.min(1, strength));
+    const lerp = (a, b) => a + (b - a) * t;
+    return {
+        scale: lerp(type.min.scale, type.max.scale),
+        sharpen: lerp(type.min.sharpen, type.max.sharpen),
+        kernel: lerp(type.min.kernel, type.max.kernel),
+        saturation: lerp(type.min.saturation, type.max.saturation),
+        contrast: lerp(type.min.contrast, type.max.contrast),
+    };
+}
+
+const SHADER_VERTEX_SRC = `
+attribute vec2 aPosition;
+varying vec2 vUv;
+void main() {
+    gl_Position = vec4(aPosition, 0.0, 1.0);
+    vUv = aPosition * 0.5 + 0.5;
+}
+`;
+
+/* Anime4K/RAVU-lite-inspired variant - Sobel-edge-gated unsharp mask, so only real
+   line-art contours pick up the crispness boost. Ports ShaderUpscaleShaderProgram's
+   FRAGMENT_SHADER_ANIME almost verbatim - see that Java file for why this makes a hard
+   edge/no-edge decision rather than CAS's contrast-range weighting below. */
+const SHADER_FRAGMENT_ANIME = `
+precision mediump float;
+uniform sampler2D uTex;
+uniform vec2 uTexelSize;
+uniform float uKernelScale;
+uniform float uSharpenStrength;
+uniform float uSaturationBoost;
+uniform float uContrastBoost;
+varying vec2 vUv;
+float luma(vec3 c) { return dot(c, vec3(0.299, 0.587, 0.114)); }
+void main() {
+  vec2 uv = vUv;
+  vec2 off = uTexelSize * uKernelScale;
+  vec3 center = texture2D(uTex, uv).rgb;
+  vec3 n  = texture2D(uTex, uv + vec2(0.0, -off.y)).rgb;
+  vec3 s  = texture2D(uTex, uv + vec2(0.0,  off.y)).rgb;
+  vec3 w  = texture2D(uTex, uv + vec2(-off.x, 0.0)).rgb;
+  vec3 e  = texture2D(uTex, uv + vec2( off.x, 0.0)).rgb;
+  vec3 nw = texture2D(uTex, uv + vec2(-off.x, -off.y)).rgb;
+  vec3 ne = texture2D(uTex, uv + vec2( off.x, -off.y)).rgb;
+  vec3 sw = texture2D(uTex, uv + vec2(-off.x,  off.y)).rgb;
+  vec3 se = texture2D(uTex, uv + vec2( off.x,  off.y)).rgb;
+  float lN = luma(n); float lS = luma(s); float lW = luma(w); float lE = luma(e);
+  float lNW = luma(nw); float lNE = luma(ne); float lSW = luma(sw); float lSE = luma(se);
+  float gx = (lNE + 2.0 * lE + lSE) - (lNW + 2.0 * lW + lSW);
+  float gy = (lSW + 2.0 * lS + lSE) - (lNW + 2.0 * lN + lNE);
+  float edge = clamp(sqrt(gx * gx + gy * gy), 0.0, 1.0);
+  vec3 blurredNeighborhood = (n + s + w + e) * 0.25;
+  vec3 outColor = center + (center - blurredNeighborhood) * uSharpenStrength * edge;
+  outColor = clamp(outColor, 0.0, 1.0);
+  outColor = (outColor - 0.5) * uContrastBoost + 0.5;
+  outColor = mix(vec3(luma(outColor)), outColor, uSaturationBoost);
+  gl_FragColor = vec4(clamp(outColor, 0.0, 1.0), 1.0);
+}
+`;
+
+/* Contrast Adaptive Sharpening-inspired variant, better suited to live-action footage -
+   sharpen weight comes from local contrast range rather than a binary edge decision, and
+   the result is clamped to the neighborhood's own min/max as an anti-ringing guard. Ports
+   ShaderUpscaleShaderProgram's FRAGMENT_SHADER_CAS. */
+const SHADER_FRAGMENT_CAS = `
+precision mediump float;
+uniform sampler2D uTex;
+uniform vec2 uTexelSize;
+uniform float uKernelScale;
+uniform float uSharpenStrength;
+varying vec2 vUv;
+float luma(vec3 c) { return dot(c, vec3(0.299, 0.587, 0.114)); }
+void main() {
+  vec2 uv = vUv;
+  vec2 off = uTexelSize * uKernelScale;
+  vec3 c = texture2D(uTex, uv).rgb;
+  vec3 n = texture2D(uTex, uv + vec2(0.0, -off.y)).rgb;
+  vec3 s = texture2D(uTex, uv + vec2(0.0,  off.y)).rgb;
+  vec3 w = texture2D(uTex, uv + vec2(-off.x, 0.0)).rgb;
+  vec3 e = texture2D(uTex, uv + vec2( off.x, 0.0)).rgb;
+  float lc = luma(c); float ln = luma(n); float ls = luma(s); float lw = luma(w); float le = luma(e);
+  float minL = min(lc, min(min(ln, ls), min(lw, le)));
+  float maxL = max(lc, max(max(ln, ls), max(lw, le)));
+  float contrastRange = max(maxL - minL, 0.0001);
+  float weight = clamp(contrastRange * 4.0, 0.0, 1.0) * uSharpenStrength;
+  vec3 sharpened = c + (4.0 * c - n - s - e - w) * weight * 0.25;
+  vec3 minRgb = min(c, min(min(n, s), min(w, e)));
+  vec3 maxRgb = max(c, max(max(n, s), max(w, e)));
+  gl_FragColor = vec4(clamp(sharpened, minRgb, maxRgb), 1.0);
+}
+`;
+
 function clientIdentifier() {
     let id = localStorage.getItem(CLIENT_ID_KEY);
     if (!id) {
@@ -54,6 +169,14 @@ class StreamingPlayerController {
         this._controlsHideTimer = null;
         this._inlineMenuEl = null;
         this._inlineMenuCleanup = null;
+        this._shaderType = "off";
+        this._shaderStrength = 0.5;
+        this._shaderCanvas = null;
+        this._shaderGl = null;
+        this._shaderPrograms = null;
+        this._shaderQuadBuffer = null;
+        this._shaderTexture = null;
+        this._shaderRafId = null;
         this._onPopState = this._onPopState.bind(this);
         /* A player has no sidenav/rows to navigate - the only D-pad/gamepad action it
            needs is an exit, same effect as the visible close button. Registered once,
@@ -280,6 +403,16 @@ class StreamingPlayerController {
             hls.attachMedia(video);
             this._hls = hls;
         } else {
+            /* Only this branch needs crossOrigin, not the hls.js branch above - hls.js
+               attaches media via a same-origin blob: URL and feeds it segments through
+               MediaSource.appendBuffer(), so the video element's own origin (as far as
+               canvas/WebGL tainting cares) is the blob URL, never the actual cross-origin
+               Plex URL. This branch assigns the real cross-origin URL directly, so
+               texImage2D (see _renderShaderFrame) would taint the canvas without this -
+               relies on the CORS invariant noted in this repo's CLAUDE.md (Plex answers
+               CORS-clean as long as the token is a query param, which _buildStreamUrl
+               already does). */
+            video.crossOrigin = "anonymous";
             video.src = streamUrl;
         }
         video.currentTime = startOffsetMs / 1000;
@@ -312,6 +445,8 @@ class StreamingPlayerController {
         this._zoomPanX = 0;
         this._zoomPanY = 0;
         this._sleepMinutes = 0;
+        this._shaderType = "off";
+        this._shaderStrength = 0.5;
         this._wireZoomPan();
         this._buildCenterControls(video);
         this._buildTransportBar(video);
@@ -686,6 +821,10 @@ class StreamingPlayerController {
                 onSelect: () => this._openSleepMenu(anchor),
             },
             { label: `Zoom  (${zoomLevel}x)`, onSelect: () => this._openZoomMenu(anchor) },
+            {
+                label: `Shader Upscaling${this._shaderType !== "off" ? `  (${SHADER_TYPES[this._shaderType].label})` : ""}`,
+                onSelect: () => this._openShaderMenu(anchor),
+            },
         ];
         if (this._session?.chapters?.length) {
             items.push({ label: "Chapters", onSelect: () => this._openChapterMenu(anchor) });
@@ -762,7 +901,310 @@ class StreamingPlayerController {
     _applyZoomTransform() {
         if (!this._videoEl) return;
         const scale = ZOOM_LEVELS[this._zoomIndex];
-        this._videoEl.style.transform = `translate(${this._zoomPanX}px, ${this._zoomPanY}px) scale(${scale})`;
+        const transform = `translate(${this._zoomPanX}px, ${this._zoomPanY}px) scale(${scale})`;
+        this._videoEl.style.transform = transform;
+        /* The shader canvas sits exactly on top of the (now-invisible) video at the same
+           position/size, so it needs the same transform to stay aligned with it - pan/zoom
+           itself is still driven entirely off the video's own pointer events, since the
+           canvas is pointer-events:none and lets clicks/drags fall through to it. */
+        if (this._shaderCanvas) this._shaderCanvas.style.transform = transform;
+    }
+
+    /* Reuses _openSubtitleSearch's custom-panel pattern rather than _openInlineMenu's plain
+       item list - a continuous strength slider can't be expressed as tappable menu rows. */
+    _openShaderMenu(anchor) {
+        this._closeInlineMenu();
+        const rect = anchor.getBoundingClientRect();
+        const panel = document.createElement("div");
+        Object.assign(panel.style, {
+            position: "fixed",
+            top: `${rect.bottom + 8}px`,
+            ...(anchor.dataset.anchorSide === "left" ? { left: `${rect.left}px` } : { right: `${window.innerWidth - rect.right}px` }),
+            zIndex: "10002",
+            background: "rgba(20,20,20,0.95)",
+            borderRadius: "8px",
+            padding: "12px",
+            width: "240px",
+            boxShadow: "0 12px 32px rgba(0,0,0,0.5)",
+            boxSizing: "border-box",
+        });
+
+        const backBtn = document.createElement("button");
+        backBtn.type = "button";
+        backBtn.textContent = "← Back";
+        Object.assign(backBtn.style, {
+            display: "block",
+            background: "transparent",
+            border: "none",
+            color: "rgba(255,255,255,0.7)",
+            fontSize: "12px",
+            cursor: "pointer",
+            padding: "0 0 8px",
+        });
+        backBtn.addEventListener("click", () => this._openHamburgerMenu(anchor));
+        panel.appendChild(backBtn);
+
+        ["off", "anime4k", "live_action"].forEach((key) => {
+            const row = document.createElement("button");
+            row.type = "button";
+            const label = key === "off" ? "Off" : SHADER_TYPES[key].label;
+            row.textContent = `${label}${this._shaderType === key ? "  ✓" : ""}`;
+            Object.assign(row.style, {
+                display: "block",
+                width: "100%",
+                textAlign: "left",
+                padding: "8px 10px",
+                background: "transparent",
+                color: "#fff",
+                border: "none",
+                borderRadius: "6px",
+                cursor: "pointer",
+                fontSize: "13px",
+            });
+            row.addEventListener("mouseenter", () => {
+                row.style.background = "rgba(255,255,255,0.12)";
+            });
+            row.addEventListener("mouseleave", () => {
+                row.style.background = "transparent";
+            });
+            row.addEventListener("click", () => {
+                this._setShaderType(key);
+                this._openShaderMenu(anchor);
+            });
+            panel.appendChild(row);
+        });
+
+        const strengthLabel = document.createElement("div");
+        strengthLabel.textContent = `Strength: ${Math.round(this._shaderStrength * 100)}%`;
+        Object.assign(strengthLabel.style, { color: "rgba(255,255,255,0.7)", fontSize: "12px", padding: "10px 0 4px" });
+        panel.appendChild(strengthLabel);
+
+        const strengthInput = document.createElement("input");
+        strengthInput.type = "range";
+        strengthInput.min = "0";
+        strengthInput.max = "100";
+        strengthInput.value = String(Math.round(this._shaderStrength * 100));
+        strengthInput.disabled = this._shaderType === "off";
+        Object.assign(strengthInput.style, {
+            width: "100%",
+            accentColor: "#e5a00d",
+            cursor: strengthInput.disabled ? "default" : "pointer",
+            boxSizing: "border-box",
+        });
+        strengthInput.addEventListener("input", () => {
+            strengthLabel.textContent = `Strength: ${strengthInput.value}%`;
+            this._setShaderStrength(Number(strengthInput.value) / 100);
+        });
+        panel.appendChild(strengthInput);
+
+        document.body.appendChild(panel);
+        this._inlineMenuEl = panel;
+
+        const onOutsideClick = (e) => {
+            if (panel.contains(e.target) || anchor.contains(e.target)) return;
+            this._closeInlineMenu();
+        };
+        setTimeout(() => document.addEventListener("click", onOutsideClick), 0);
+        this._inlineMenuCleanup = () => document.removeEventListener("click", onOutsideClick);
+    }
+
+    _setShaderType(type) {
+        this._shaderType = type;
+        this._updateShaderPipeline();
+    }
+
+    _setShaderStrength(strength) {
+        this._shaderStrength = strength;
+    }
+
+    /* Off by default - same reasoning as the Android leg (ShaderUpscaleEffect): this
+       spends an extra GPU pass every frame, only worth it on already-low-resolution
+       sources. Unlike Android, there's no per-drag rebuild hazard here (see PlayerActivity's
+       showShaderUpscaleDialog gotcha) - both compiled programs stay resident and a strength
+       change is just a uniform update on the next frame, not a pipeline rebuild, so
+       _setShaderStrength above applies live with no debounce needed. */
+    _updateShaderPipeline() {
+        if (this._shaderType === "off") {
+            this._stopShaderLoop();
+            if (this._shaderCanvas) this._shaderCanvas.style.display = "none";
+            if (this._videoEl) this._videoEl.style.opacity = "1";
+            return;
+        }
+        if (!this._ensureShaderPipeline()) {
+            this._shaderType = "off";
+            return;
+        }
+        this._shaderCanvas.style.display = "block";
+        this._videoEl.style.opacity = "0";
+        this._applyZoomTransform();
+        this._startShaderLoop();
+    }
+
+    /* Lazily builds the WebGL pipeline on first use rather than in _playWeb - most
+       sessions never touch this menu, and compiling two shader programs upfront on every
+       playback would be wasted work. Both ShaderType programs are compiled once here and
+       kept resident; switching type is just swapping which compiled program renders with,
+       not a recompile (see _updateShaderPipeline's comment for why that matters). */
+    _ensureShaderPipeline() {
+        if (this._shaderGl) return true;
+        const video = this._videoEl;
+        if (!video) return false;
+        const canvas = document.createElement("canvas");
+        canvas.className = "streaming-player-shader-canvas";
+        Object.assign(canvas.style, {
+            position: "fixed",
+            inset: "0",
+            width: "100%",
+            height: "100%",
+            background: "#000",
+            zIndex: "10000",
+            pointerEvents: "none",
+        });
+        const gl = canvas.getContext("webgl", { antialias: false, preserveDrawingBuffer: false })
+            || canvas.getContext("experimental-webgl");
+        if (!gl) {
+            console.error("StreamingPlayer: WebGL unavailable, shader upscaling disabled");
+            return false;
+        }
+
+        let programs;
+        try {
+            programs = {
+                anime4k: this._compileShaderProgram(gl, SHADER_FRAGMENT_ANIME, true),
+                live_action: this._compileShaderProgram(gl, SHADER_FRAGMENT_CAS, false),
+            };
+        } catch (e) {
+            console.error("StreamingPlayer: shader compile failed -", e.message);
+            return false;
+        }
+
+        const quadBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, quadBuffer);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
+
+        const texture = gl.createTexture();
+        gl.bindTexture(gl.TEXTURE_2D, texture);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        /* Flips the video's top-left-origin rows to WebGL's bottom-left-origin texture
+           space - without this the upscaled output renders upside down. */
+        gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+
+        this._shaderCanvas = canvas;
+        this._shaderGl = gl;
+        this._shaderPrograms = programs;
+        this._shaderQuadBuffer = quadBuffer;
+        this._shaderTexture = texture;
+        document.body.appendChild(canvas);
+        return true;
+    }
+
+    _compileShaderProgram(gl, fragmentSrc, isAnime) {
+        const compile = (type, src) => {
+            const shader = gl.createShader(type);
+            gl.shaderSource(shader, src);
+            gl.compileShader(shader);
+            if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+                const info = gl.getShaderInfoLog(shader);
+                gl.deleteShader(shader);
+                throw new Error(info);
+            }
+            return shader;
+        };
+        const vertexShader = compile(gl.VERTEX_SHADER, SHADER_VERTEX_SRC);
+        const fragmentShader = compile(gl.FRAGMENT_SHADER, fragmentSrc);
+        const program = gl.createProgram();
+        gl.attachShader(program, vertexShader);
+        gl.attachShader(program, fragmentShader);
+        gl.linkProgram(program);
+        if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+            const info = gl.getProgramInfoLog(program);
+            gl.deleteProgram(program);
+            throw new Error(info);
+        }
+        gl.deleteShader(vertexShader);
+        gl.deleteShader(fragmentShader);
+
+        const uniforms = {
+            uTex: gl.getUniformLocation(program, "uTex"),
+            uTexelSize: gl.getUniformLocation(program, "uTexelSize"),
+            uKernelScale: gl.getUniformLocation(program, "uKernelScale"),
+            uSharpenStrength: gl.getUniformLocation(program, "uSharpenStrength"),
+            uSaturationBoost: isAnime ? gl.getUniformLocation(program, "uSaturationBoost") : null,
+            uContrastBoost: isAnime ? gl.getUniformLocation(program, "uContrastBoost") : null,
+        };
+        const aPosition = gl.getAttribLocation(program, "aPosition");
+        return { program, uniforms, aPosition };
+    }
+
+    _startShaderLoop() {
+        if (this._shaderRafId) return;
+        const step = () => {
+            this._renderShaderFrame();
+            this._shaderRafId = requestAnimationFrame(step);
+        };
+        this._shaderRafId = requestAnimationFrame(step);
+    }
+
+    _stopShaderLoop() {
+        if (this._shaderRafId) {
+            cancelAnimationFrame(this._shaderRafId);
+            this._shaderRafId = null;
+        }
+    }
+
+    /* Mirrors ShaderUpscaleShaderProgram.configure()'s single-scale-factor-bounded-by-
+       both-axes approach - scaling width/height independently would distort the aspect
+       ratio whenever the screen and video don't match (the common case). Recomputed every
+       frame (cheap - a handful of multiplications) rather than cached, since the window
+       can resize mid-playback. */
+    _renderShaderFrame() {
+        const gl = this._shaderGl;
+        const video = this._videoEl;
+        if (!gl || !video || !video.videoWidth || video.readyState < video.HAVE_CURRENT_DATA) return;
+
+        const dpr = window.devicePixelRatio || 1;
+        const displayW = Math.round((window.innerWidth || document.documentElement.clientWidth) * dpr);
+        const displayH = Math.round((window.innerHeight || document.documentElement.clientHeight) * dpr);
+        const tuning = shaderTuningAt(this._shaderType, this._shaderStrength);
+        const scale = Math.max(1, Math.min(tuning.scale, Math.min(displayW / video.videoWidth, displayH / video.videoHeight)));
+        const outW = Math.round(video.videoWidth * scale);
+        const outH = Math.round(video.videoHeight * scale);
+        const canvas = this._shaderCanvas;
+        if (canvas.width !== outW || canvas.height !== outH) {
+            canvas.width = outW;
+            canvas.height = outH;
+        }
+        gl.viewport(0, 0, outW, outH);
+
+        const { program, uniforms, aPosition } = this._shaderPrograms[this._shaderType];
+        gl.useProgram(program);
+        gl.bindTexture(gl.TEXTURE_2D, this._shaderTexture);
+        try {
+            gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, video);
+        } catch (e) {
+            /* Tainted-canvas SecurityError - the crossOrigin/CORS invariant _playWeb relies
+               on didn't hold for this server. Fail by turning the shader back off instead of
+               throwing on every animation frame. */
+            console.error("StreamingPlayer: shader upscaling disabled - video frame is cross-origin tainted", e);
+            this._setShaderType("off");
+            return;
+        }
+
+        gl.bindBuffer(gl.ARRAY_BUFFER, this._shaderQuadBuffer);
+        gl.enableVertexAttribArray(aPosition);
+        gl.vertexAttribPointer(aPosition, 2, gl.FLOAT, false, 0, 0);
+        gl.uniform1i(uniforms.uTex, 0);
+        gl.uniform2f(uniforms.uTexelSize, 1 / video.videoWidth, 1 / video.videoHeight);
+        gl.uniform1f(uniforms.uKernelScale, tuning.kernel);
+        gl.uniform1f(uniforms.uSharpenStrength, tuning.sharpen);
+        if (uniforms.uSaturationBoost) {
+            gl.uniform1f(uniforms.uSaturationBoost, tuning.saturation);
+            gl.uniform1f(uniforms.uContrastBoost, tuning.contrast);
+        }
+        gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     }
 
     /* Pan only engages once zoomed past 1x, and only within the padding introduced by
@@ -838,7 +1280,9 @@ class StreamingPlayerController {
         Object.assign(panel.style, {
             position: "fixed",
             top: `${rect.bottom + 8}px`,
-            right: `${window.innerWidth - rect.right}px`,
+            ...(anchor.dataset.anchorSide === "left"
+                ? { left: `${rect.left}px` }
+                : { right: `${window.innerWidth - rect.right}px` }),
             zIndex: "10002",
             background: "rgba(20,20,20,0.95)",
             borderRadius: "8px",
@@ -1104,7 +1548,9 @@ class StreamingPlayerController {
         Object.assign(menu.style, {
             position: "fixed",
             top: `${rect.bottom + 8}px`,
-            right: `${window.innerWidth - rect.right}px`,
+            ...(anchor.dataset.anchorSide === "left"
+                ? { left: `${rect.left}px` }
+                : { right: `${window.innerWidth - rect.right}px` }),
             zIndex: "10002",
             background: "rgba(20,20,20,0.92)",
             borderRadius: "8px",
@@ -1138,7 +1584,11 @@ class StreamingPlayerController {
             });
             row.addEventListener("click", () => {
                 item.onSelect();
-                this._closeInlineMenu();
+                /* Only auto-close if onSelect() didn't already replace the open menu with a
+                   submenu/panel of its own (Zoom, Speed, Sleep, Chapters, Subtitles, Shader
+                   Upscaling, and every "← Back" row all do this) - otherwise this would
+                   immediately tear down whatever onSelect just opened, before it ever paints. */
+                if (this._inlineMenuEl === menu) this._closeInlineMenu();
             });
             menu.appendChild(row);
         });
@@ -1171,6 +1621,15 @@ class StreamingPlayerController {
             this._hls.destroy();
             this._hls = null;
         }
+        this._stopShaderLoop();
+        if (this._shaderCanvas) {
+            this._shaderCanvas.remove();
+            this._shaderCanvas = null;
+        }
+        this._shaderGl = null;
+        this._shaderPrograms = null;
+        this._shaderQuadBuffer = null;
+        this._shaderTexture = null;
         this._closeInlineMenu();
         clearTimeout(this._controlsHideTimer);
         this._controlsHideTimer = null;
