@@ -11,6 +11,34 @@ export const EMPTY_STATE_ICON_SVG =
 export const WATCHED_ICON_SVG =
   '<svg viewBox="0 0 24 24"><path d="M5 13l4 4 10-10" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 
+/* Row rebuilds (kids-mode toggle, search exit, profile switch, ...) wipe and recreate every
+   poster via innerHTML. Reusing the same <img> node (rather than a fresh one with the same
+   src) guarantees the browser can't issue a second network request for a poster already on
+   screen - a new element with an identical src is only a *likely* cache hit, not a guaranteed
+   one. Keyed by src, unbounded for app lifetime - library-sized, not worth evicting.
+
+   The same title can legitimately appear in more than one row at once (Continue Watching,
+   a genre row, Watchlist, ...) - a DOM node only exists in one place, so handing out the
+   literal cached node to a second concurrent poster would rip it out of the first one,
+   leaving it blank. Only reuse the cached node when it's actually free (detached, e.g. after
+   a full-row wipe); otherwise clone it - cloning an already-loaded <img> is a browser
+   memory-cache hit, not a real fetch, so it doesn't defeat the point of the cache. */
+const posterImgCache = new Map();
+
+function getPosterImg(src, alt) {
+  let img = posterImgCache.get(src);
+  if (!img) {
+    img = document.createElement("img");
+    img.loading = "lazy";
+    img.src = src;
+    posterImgCache.set(src, img);
+  } else if (img.isConnected) {
+    img = img.cloneNode();
+  }
+  img.alt = alt;
+  return img;
+}
+
 export function emptyStateHtml(msg, escape) {
   return `${EMPTY_STATE_ICON_SVG}<div>${escape(msg)}</div>`;
 }
@@ -64,7 +92,6 @@ export function buildPoster(item, source, { glow = true, landscape = false, item
   el.innerHTML = `
     ${glow ? '<div class="glow"></div>' : ""}
     <div class="card">
-      <img loading="lazy" src="${src}" alt="${ctx.escape(item.title)}" />
       <div class="img-spinner"><div class="spinner-sm"></div></div>
       <div class="img-fallback"><div class="badge">${POSTER_FALLBACK_ICON_SVG}</div></div>
       ${
@@ -91,7 +118,8 @@ export function buildPoster(item, source, { glow = true, landscape = false, item
   if (!src) {
     el.classList.add("img-error");
   } else {
-    const img = el.querySelector("img");
+    const img = getPosterImg(src, item.title);
+    el.querySelector(".card").prepend(img);
     if (img.complete) {
       el.classList.add(img.naturalWidth > 0 ? "img-loaded" : "img-error");
     } else {

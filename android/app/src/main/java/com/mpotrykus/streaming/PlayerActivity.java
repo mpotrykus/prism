@@ -1,16 +1,15 @@
 package com.mpotrykus.streaming;
 
-import android.graphics.Color;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
-import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.ScaleGestureDetector;
 import android.view.View;
 import android.view.WindowManager;
 import android.widget.FrameLayout;
+import android.widget.PopupWindow;
 import android.widget.ProgressBar;
 import android.widget.SeekBar;
 import android.widget.TextView;
@@ -44,7 +43,16 @@ public class PlayerActivity extends AppCompatActivity {
        detectShaderType's genre check) rather than re-implemented here - one Plex-genre
        interpretation shared by both platforms instead of duplicated in Java. */
     public static final String EXTRA_UPSCALE_STRENGTH = "upscaleStrength";
+    public static final String EXTRA_SHADER_ENABLED = "shaderEnabled";
     public static final String EXTRA_SHADER_TYPE = "shaderType";
+    /* Shown in the transport bar header (see PlayerUiHelper.buildTransportBar) - same
+       title/season-episode-or-year fields web-fallback.js's buildTransportBar reads off
+       controller._session directly. -1 (not 0) marks "absent" for the numeric extras
+       since 0 is a valid season/episode number. */
+    public static final String EXTRA_TITLE = "title";
+    public static final String EXTRA_YEAR = "year";
+    public static final String EXTRA_SEASON_NUMBER = "seasonNumber";
+    public static final String EXTRA_EPISODE_NUMBER = "episodeNumber";
 
     private static final long PROGRESS_INTERVAL_MS = 1000L;
     static final long CONTROLS_HIDE_DELAY_MS = 4000L;
@@ -89,19 +97,30 @@ public class PlayerActivity extends AppCompatActivity {
     TextView skipButton;
     long skipButtonSeekToMs;
     /* detectedShaderType is never OFF - it's just the auto-detected algorithm for this
-       title's genre, shown as read-only info in showShaderUpscaleDialog. shaderType is
-       the one actually rendered with (OFF whenever upscaleStrength is 0), same "0% is
-       off" model as plex-player.js's web-side _setShaderStrength. */
+       title's genre, shown as read-only info in PlayerUiHelper's shader panel. shaderType
+       is the one actually rendered with (OFF whenever disabled or upscaleStrength is 0),
+       same "0% is off" model as plex-player.js's web-side _setShaderStrength. */
     ShaderType detectedShaderType = ShaderType.LIVE_ACTION;
     ShaderType shaderType = ShaderType.OFF;
     float upscaleStrength = 0f;
+    /* Independent of upscaleStrength - toggling this off and back on (see the Shader
+       Upscaling menu row) must restore whatever strength the slider was already at
+       rather than resetting it, the same model shader-pipeline.js's setShaderEnabled/
+       setShaderStrength use on the web leg. */
+    boolean shaderEnabled = false;
+    int sleepMinutes = 0;
+    String currentAudioStreamId;
+    /* The currently-open options-menu flyout (see PlayerUiHelper's PopupWindow-based
+       menu system) - tracked here, not just a PlayerUiHelper-local variable, since a new
+       submenu replaces it and PlayerActivity.onDestroy needs a way to know none is
+       leaked, the same "shared session state lives on the activity" reasoning every
+       other package-private field here follows. */
+    PopupWindow menuPopup;
     final Handler controlsFadeHandler = new Handler(Looper.getMainLooper());
     final Runnable controlsFadeRunnable = () -> setControlsVisible(false);
     boolean controlsVisible = true;
     PlayPauseIconView playPauseButton;
     SeekBar transportSeekBar;
-    TextView timeCurrentText;
-    TextView timeDurationText;
     boolean seekBarScrubbing = false;
     ProgressBar loadingSpinner;
 
@@ -112,7 +131,12 @@ public class PlayerActivity extends AppCompatActivity {
     final List<AudioStreamEntry> audioStreams = new ArrayList<>();
     private String currentUrl;
     boolean muted = false;
-    TextView muteButton;
+    VolumeIconView muteButton;
+    String title = "";
+    int year = -1;
+    int seasonNumber = -1;
+    int episodeNumber = -1;
+    TextView timeRemainingText;
 
     /* Chrome that should fade in lockstep via setControlsVisible/showControlsTemporarily
        rather than each new button running its own independent inactivity timer that
@@ -135,7 +159,13 @@ public class PlayerActivity extends AppCompatActivity {
         parseAudioStreams(getIntent().getStringExtra(EXTRA_AUDIO_STREAMS_JSON));
         detectedShaderType = parseShaderType(getIntent().getStringExtra(EXTRA_SHADER_TYPE));
         upscaleStrength = getIntent().getFloatExtra(EXTRA_UPSCALE_STRENGTH, 0f);
-        shaderType = upscaleStrength > 0f ? detectedShaderType : ShaderType.OFF;
+        shaderEnabled = getIntent().getBooleanExtra(EXTRA_SHADER_ENABLED, false);
+        shaderType = shaderEnabled && upscaleStrength > 0f ? detectedShaderType : ShaderType.OFF;
+        title = getIntent().getStringExtra(EXTRA_TITLE);
+        if (title == null) title = "";
+        year = getIntent().getIntExtra(EXTRA_YEAR, -1);
+        seasonNumber = getIntent().getIntExtra(EXTRA_SEASON_NUMBER, -1);
+        episodeNumber = getIntent().getIntExtra(EXTRA_EPISODE_NUMBER, -1);
 
         if (url == null || url.isEmpty()) {
             notifyErrorAndFinish("Missing required extra: url");
@@ -154,41 +184,10 @@ public class PlayerActivity extends AppCompatActivity {
             FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
 
         float density = getResources().getDisplayMetrics().density;
-        TextView closeButton = new TextView(this);
-        closeButton.setText("✕");
-        closeButton.setTextColor(Color.WHITE);
-        closeButton.setTextSize(18);
-        closeButton.setGravity(Gravity.CENTER);
-        closeButton.setBackgroundColor(Color.parseColor("#B3141414"));
-        int sizePx = (int) (44 * density);
-        int marginPx = (int) (20 * density);
-        FrameLayout.LayoutParams closeParams = new FrameLayout.LayoutParams(sizePx, sizePx);
-        closeParams.gravity = Gravity.TOP | Gravity.END;
-        closeParams.setMargins(0, marginPx, marginPx, 0);
-        closeButton.setLayoutParams(closeParams);
-        closeButton.setOnClickListener(v -> onBackPressed());
-        root.addView(closeButton);
-        registerFadingControl(closeButton);
-
-        /* Every custom option (speed, sleep timer, chapters, shader upscaling) lives
-           behind this single button instead of one icon each - see showPlayerMenu. */
-        TextView menuButton = new TextView(this);
-        menuButton.setText("☰");
-        menuButton.setContentDescription("Player options");
-        menuButton.setTextColor(Color.WHITE);
-        menuButton.setTextSize(18);
-        menuButton.setGravity(Gravity.CENTER);
-        menuButton.setBackgroundColor(Color.parseColor("#B3141414"));
-        FrameLayout.LayoutParams menuParams = new FrameLayout.LayoutParams(sizePx, sizePx);
-        menuParams.gravity = Gravity.TOP | Gravity.START;
-        menuParams.setMargins(marginPx, marginPx, 0, 0);
-        menuButton.setLayoutParams(menuParams);
-        menuButton.setOnClickListener(this::showPlayerMenu);
-        root.addView(menuButton);
-        registerFadingControl(menuButton);
+        PlayerUiHelper.buildCloseButton(this, density);
+        PlayerUiHelper.buildMenuButton(this, density);
 
         buildLoadingSpinner();
-        buildCenterControls(density);
         buildTransportBar(density);
 
         setContentView(root);
@@ -313,10 +312,6 @@ public class PlayerActivity extends AppCompatActivity {
         PlayerUiHelper.buildLoadingSpinner(this);
     }
 
-    private void buildCenterControls(float density) {
-        PlayerUiHelper.buildCenterControls(this, density);
-    }
-
     private void buildTransportBar(float density) {
         PlayerUiHelper.buildTransportBar(this, density);
     }
@@ -357,12 +352,16 @@ public class PlayerActivity extends AppCompatActivity {
 
     private void parseAudioStreams(String json) {
         audioStreams.clear();
+        currentAudioStreamId = null;
         if (json == null) return;
         try {
             org.json.JSONArray arr = new org.json.JSONArray(json);
             for (int i = 0; i < arr.length(); i++) {
                 org.json.JSONObject obj = arr.getJSONObject(i);
-                audioStreams.add(new AudioStreamEntry(obj.optString("id", ""), obj.optString("label", "Unknown")));
+                boolean selected = obj.optBoolean("selected", false);
+                String id = obj.optString("id", "");
+                audioStreams.add(new AudioStreamEntry(id, obj.optString("label", "Unknown"), selected));
+                if (selected) currentAudioStreamId = id;
             }
         } catch (org.json.JSONException e) {
             // malformed audio-stream data - show no Audio Track entry rather than crash
@@ -383,6 +382,7 @@ public class PlayerActivity extends AppCompatActivity {
             sleepTimerRunnable = PlayerActivity::pause;
             sleepTimerHandler.postDelayed(sleepTimerRunnable, ms);
         }
+        sleepMinutes = ms > 0 ? (int) (ms / 60_000L) : 0;
     }
 
     /* Lazily created on first marker hit, then just shown/hidden - kept out of
@@ -539,6 +539,7 @@ public class PlayerActivity extends AppCompatActivity {
         builder.appendQueryParameter("offset", String.valueOf(resumeMs / 1000));
         builder.appendQueryParameter("session", java.util.UUID.randomUUID().toString());
         currentUrl = builder.build().toString();
+        currentAudioStreamId = streamId;
         MediaItem newItem = new MediaItem.Builder().setUri(Uri.parse(currentUrl)).build();
         player.setMediaItem(newItem, resumeMs);
         player.prepare();
@@ -571,6 +572,10 @@ public class PlayerActivity extends AppCompatActivity {
         stopProgressLoop();
         sleepTimerHandler.removeCallbacksAndMessages(null);
         controlsFadeHandler.removeCallbacksAndMessages(null);
+        if (menuPopup != null) {
+            menuPopup.dismiss();
+            menuPopup = null;
+        }
         reportStoppedIfNeeded();
         if (player != null) {
             player.release();

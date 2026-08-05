@@ -40,17 +40,18 @@ export async function playNative(controller, streamUrl, startOffsetMs) {
     await NativePlayer.play({
         url: streamUrl,
         startPositionMs: startOffsetMs,
-        /* PlayerActivity only ever sees the already-detected type (never "off" - strength
-           0 is what turns the shader off there, same as the web path's _shaderType
-           collapsing to "off" below) and the resolved strength number - it doesn't run
-           its own genre detection, so there's one detection implementation instead of
-           one per platform. Gated on _shaderEnabled here rather than passing
-           _shaderStrength as-is - that field now holds the slider's position independent
-           of on/off (see setShaderEnabled), so an initial-launch session with upscaling
-           disabled but a remembered non-zero strength must still start native playback
-           with 0, not silently re-enable it on a platform with no toggle of its own. */
+        /* PlayerActivity only ever sees the already-detected type (never "off" - that's
+           what shaderEnabled/upscaleStrength below are for) - it doesn't run its own
+           genre detection, so there's one detection implementation instead of one per
+           platform. */
         shaderType: controller._shaderAutoType,
-        upscaleStrength: controller._shaderEnabled ? controller._shaderStrength : 0,
+        /* Passed as two independent values, not pre-collapsed to 0 when disabled - the
+           in-player Shader Upscaling toggle on the Android leg (PlayerActivity's
+           setShaderEnabled) needs to restore whatever strength the slider was already at
+           when re-enabled, the same "toggle and strength are independent" model
+           shader-pipeline.js's setShaderEnabled/setShaderStrength use here. */
+        shaderEnabled: controller._shaderEnabled,
+        upscaleStrength: controller._shaderStrength,
         /* Native code only ever sees {title, startTimeOffsetMs} - it doesn't need to know
            Plex's own Chapter field names, keeping that one Plex-protocol interpretation
            here instead of duplicated into Java. */
@@ -58,13 +59,20 @@ export async function playNative(controller, streamUrl, startOffsetMs) {
             title: c.title || c.tag || "",
             startTimeOffsetMs: c.startTimeOffset ?? 0,
         })),
-        /* {id, label} only - PlayerActivity rebuilds the transcode URL itself when the
-           user picks one (see switchAudioStream), it never needs the raw Plex Stream
-           shape. */
+        /* {id, label, selected} - PlayerActivity rebuilds the transcode URL itself when
+           the user picks one (see switchAudioStream), it never needs the raw Plex Stream
+           shape, just enough to preselect/checkmark the one already playing. */
         audioStreams: (controller._session.audioStreams || []).map((s) => ({
             id: String(s.id),
             label: s.label || "Unknown",
+            selected: !!s.selected,
         })),
+        /* Title/season-episode-or-year, shown in the transport bar header - same fields
+           web-fallback.js's buildTransportBar reads off controller._session directly. */
+        title: controller._session.title || "",
+        year: controller._session.year ?? null,
+        seasonNumber: controller._session.seasonNumber ?? null,
+        episodeNumber: controller._session.episodeNumber ?? null,
     });
 }
 

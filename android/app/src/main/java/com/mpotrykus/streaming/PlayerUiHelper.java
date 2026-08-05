@@ -1,15 +1,29 @@
 package com.mpotrykus.streaming;
 
+import android.content.res.ColorStateList;
 import android.graphics.Color;
 import android.graphics.PorterDuff;
+import android.graphics.drawable.ClipDrawable;
+import android.graphics.drawable.ColorDrawable;
+import android.graphics.drawable.Drawable;
+import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.LayerDrawable;
+import android.graphics.drawable.StateListDrawable;
+import android.text.TextUtils;
 import android.view.Gravity;
 import android.view.View;
+import android.view.ViewGroup;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
-import android.widget.PopupMenu;
+import android.widget.PopupWindow;
 import android.widget.ProgressBar;
+import android.widget.ScrollView;
 import android.widget.SeekBar;
 import android.widget.TextView;
+import androidx.appcompat.widget.SwitchCompat;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.function.Function;
 
 /* Transport-bar/menu/chapter-skip chrome for PlayerActivity, pulled out into its own
    class the same way plex-player.js's web-side transport bar/menus live in
@@ -17,9 +31,27 @@ import android.widget.TextView;
    here takes the PlayerActivity instance as an explicit first argument and reads/writes
    its fields directly (those fields are package-private, not private, for exactly this
    reason) rather than through a narrower interface - same "one playback session's
-   shared state, not a separable subsystem" reasoning the JS-side split uses. */
+   shared state, not a separable subsystem" reasoning the JS-side split uses.
+
+   Visual language mirrors chrome.js's redesign directly: the amber accent color, the
+   gradient transport bar with a title/remaining-time header, and glass-panel PopupWindow
+   flyouts standing in for chrome.js's div-based menu panels (openHamburgerMenu/
+   openInlineMenu) instead of a native PopupMenu/AlertDialog. */
 final class PlayerUiHelper {
     private PlayerUiHelper() {}
+
+    private static final int ACCENT_COLOR = Color.parseColor("#E5A00D");
+    private static final int PANEL_BG = Color.argb(240, 24, 24, 26);
+    private static final int PANEL_BORDER = Color.argb(20, 255, 255, 255);
+    private static final int ROW_PRESSED_BG = Color.argb(26, 255, 255, 255);
+    private static final int DIM_TEXT = Color.argb(166, 255, 255, 255);
+    private static final int SUBTLE_TEXT = Color.argb(140, 255, 255, 255);
+    private static final int VALUE_TEXT = Color.argb(102, 255, 255, 255);
+    private static final int TRACK_BG = Color.argb(76, 255, 255, 255);
+    private static final int REMAINING_TEXT = Color.argb(191, 255, 255, 255);
+
+    private static final float[] PLAYBACK_RATES = {0.25f, 0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f, 4f, 8f};
+    private static final int[] SLEEP_TIMER_PRESETS_MIN = {15, 30, 45, 60};
 
     /* Buffering indicator - independent of fadingControls (same "contextual, not ambient
        chrome" reasoning as the skip button): it reflects actual ExoPlayer state, not user
@@ -28,7 +60,7 @@ final class PlayerUiHelper {
        state before the first prepare() completes. */
     static void buildLoadingSpinner(PlayerActivity activity) {
         activity.loadingSpinner = new ProgressBar(activity, null, android.R.attr.progressBarStyleLarge);
-        activity.loadingSpinner.getIndeterminateDrawable().setColorFilter(Color.WHITE, PorterDuff.Mode.SRC_IN);
+        activity.loadingSpinner.getIndeterminateDrawable().setColorFilter(ACCENT_COLOR, PorterDuff.Mode.SRC_IN);
         FrameLayout.LayoutParams spinnerParams =
             new FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT);
         spinnerParams.gravity = Gravity.CENTER;
@@ -36,56 +68,268 @@ final class PlayerUiHelper {
         activity.root.addView(activity.loadingSpinner);
     }
 
-    /* Center overlay: play/pause flanked by previous/next-chapter buttons, matching
-       YouTube's mobile layout - only built when the session actually has chapters, same
-       "never an empty/dead affordance" rule showPlayerMenu's Chapters entry follows. */
-    static void buildCenterControls(PlayerActivity activity, float density) {
-        LinearLayout row = new LinearLayout(activity);
-        row.setOrientation(LinearLayout.HORIZONTAL);
-        row.setGravity(Gravity.CENTER_VERTICAL);
-        int gapPx = (int) (24 * density);
+    /* Transparent, text-shadowed icon buttons - matches chrome.js's makeControlButton
+       (no circular pill background, just a white glyph with a drop shadow for legibility
+       over any frame). Anchored to a top corner with a fixed 24dp margin, same as
+       chrome.js's `top: 24px` control row. */
+    static void buildCloseButton(PlayerActivity activity, float density) {
+        /* "‹" not "✕" - matches web-fallback.js's closeBtn, a back chevron in the
+           top-left rather than an X, since this is a "back to details page" affordance
+           and not a modal dismiss. */
+        TextView btn = makeTopIconButton(activity, "‹", "Close", density);
+        btn.setTextSize(28);
+        FrameLayout.LayoutParams params = new FrameLayout.LayoutParams((int) (40 * density), (int) (40 * density));
+        params.gravity = Gravity.TOP | Gravity.START;
+        params.setMargins((int) (24 * density), (int) (24 * density), 0, 0);
+        btn.setLayoutParams(params);
+        btn.setOnClickListener(v -> activity.onBackPressed());
+        activity.root.addView(btn);
+        activity.registerFadingControl(btn);
+    }
 
-        if (!activity.chapters.isEmpty()) {
-            row.addView(makeChapterSkipButton(activity, false, density, gapPx));
+    /* Every custom option (speed, sleep timer, chapters, shader upscaling, audio track)
+       lives behind this single button instead of one icon each - see showPlayerMenu.
+       Right side, matching web-fallback.js's side:"right" for its own menu button
+       (close is side:"left" there too). */
+    static void buildMenuButton(PlayerActivity activity, float density) {
+        TextView btn = makeTopIconButton(activity, "☰", "Player options", density);
+        FrameLayout.LayoutParams params = new FrameLayout.LayoutParams((int) (40 * density), (int) (40 * density));
+        params.gravity = Gravity.TOP | Gravity.END;
+        params.setMargins(0, (int) (24 * density), (int) (24 * density), 0);
+        btn.setLayoutParams(params);
+        btn.setOnClickListener(v -> showPlayerMenu(activity, v));
+        activity.root.addView(btn);
+        activity.registerFadingControl(btn);
+    }
+
+    private static TextView makeTopIconButton(PlayerActivity activity, String glyph, String contentDescription, float density) {
+        TextView btn = new TextView(activity);
+        btn.setText(glyph);
+        btn.setContentDescription(contentDescription);
+        btn.setTextColor(Color.WHITE);
+        btn.setTextSize(20);
+        btn.setGravity(Gravity.CENTER);
+        btn.setBackground(null);
+        btn.setShadowLayer(4f * density, 0f, density, Color.argb(217, 0, 0, 0));
+        return btn;
+    }
+
+    /* Bottom transport bar, redesigned to match chrome.js's buildTransportBar: a
+       transparent-to-black gradient (not a flat translucent color) holding a
+       title/subtitle-vs-remaining-time header row, an amber-accented scrub bar, and a
+       three-cell controls row (empty left spacer, centered play/pause + seek/chapter
+       buttons, mute pinned to the right) - replacing the old flat time/seekbar/mute row
+       and the separate floating center-controls overlay this used to render mid-screen. */
+    static void buildTransportBar(PlayerActivity activity, float density) {
+        LinearLayout bar = new LinearLayout(activity);
+        bar.setOrientation(LinearLayout.VERTICAL);
+        GradientDrawable gradient = new GradientDrawable(GradientDrawable.Orientation.BOTTOM_TOP,
+            new int[]{Color.argb(209, 0, 0, 0), Color.argb(140, 0, 0, 0), Color.argb(0, 0, 0, 0)});
+        bar.setBackground(gradient);
+        int topPad = (int) (56 * density);
+        int sidePad = (int) (20 * density);
+        int bottomPad = (int) (14 * density);
+        bar.setPadding(sidePad, topPad, sidePad, bottomPad);
+
+        LinearLayout infoRow = new LinearLayout(activity);
+        infoRow.setOrientation(LinearLayout.HORIZONTAL);
+        infoRow.setGravity(Gravity.CENTER_VERTICAL);
+
+        LinearLayout titleBlock = new LinearLayout(activity);
+        titleBlock.setOrientation(LinearLayout.VERTICAL);
+        titleBlock.setLayoutParams(new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+
+        TextView titleLine = new TextView(activity);
+        titleLine.setText(activity.title);
+        titleLine.setTextColor(Color.WHITE);
+        titleLine.setTextSize(16);
+        titleLine.setTypeface(titleLine.getTypeface(), android.graphics.Typeface.BOLD);
+        titleLine.setMaxLines(1);
+        titleLine.setEllipsize(TextUtils.TruncateAt.END);
+        titleBlock.addView(titleLine);
+
+        String subtitle = buildSubtitle(activity);
+        if (!subtitle.isEmpty()) {
+            TextView subtitleLine = new TextView(activity);
+            subtitleLine.setText(subtitle);
+            subtitleLine.setTextColor(DIM_TEXT);
+            subtitleLine.setTextSize(12);
+            LinearLayout.LayoutParams subParams =
+                new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+            subParams.topMargin = (int) (2 * density);
+            subtitleLine.setLayoutParams(subParams);
+            titleBlock.addView(subtitleLine);
         }
+        infoRow.addView(titleBlock);
+
+        activity.timeRemainingText = new TextView(activity);
+        activity.timeRemainingText.setText("-0:00");
+        activity.timeRemainingText.setTextColor(REMAINING_TEXT);
+        activity.timeRemainingText.setTextSize(12);
+        infoRow.addView(activity.timeRemainingText);
+        bar.addView(infoRow);
+
+        activity.transportSeekBar = new SeekBar(activity);
+        styleSeekBar(activity.transportSeekBar, density);
+        activity.transportSeekBar.setMax(1000);
+        LinearLayout.LayoutParams seekParams =
+            new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        seekParams.topMargin = (int) (8 * density);
+        activity.transportSeekBar.setLayoutParams(seekParams);
+        activity.transportSeekBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override
+            public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+                if (fromUser && activity.player != null) {
+                    long duration = activity.player.getDuration();
+                    if (duration != androidx.media3.common.C.TIME_UNSET && duration > 0) {
+                        long previewMs = progress * duration / 1000;
+                        activity.timeRemainingText.setText("-" + formatTimestamp(duration - previewMs));
+                    }
+                }
+            }
+
+            @Override
+            public void onStartTrackingTouch(SeekBar seekBar) {
+                activity.seekBarScrubbing = true;
+                showControlsTemporarily(activity);
+            }
+
+            @Override
+            public void onStopTrackingTouch(SeekBar seekBar) {
+                activity.seekBarScrubbing = false;
+                if (activity.player != null) {
+                    long duration = activity.player.getDuration();
+                    if (duration != androidx.media3.common.C.TIME_UNSET && duration > 0) {
+                        PlayerActivity.seek(seekBar.getProgress() * duration / 1000);
+                    }
+                }
+            }
+        });
+        bar.addView(activity.transportSeekBar);
+
+        LinearLayout controlsRow = new LinearLayout(activity);
+        controlsRow.setOrientation(LinearLayout.HORIZONTAL);
+        controlsRow.setGravity(Gravity.CENTER_VERTICAL);
+        LinearLayout.LayoutParams controlsRowParams =
+            new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        controlsRowParams.topMargin = (int) (4 * density);
+        controlsRow.setLayoutParams(controlsRowParams);
+
+        /* Height pinned to 0, not WRAP_CONTENT - a bare View (unlike a ViewGroup or
+           TextView) doesn't shrink-to-content under an AT_MOST measure spec, it just
+           reports the full available size (View.getDefaultSize() treats AT_MOST like
+           EXACTLY). With WRAP_CONTENT that stretched this spacer to fill nearly the whole
+           screen height, which dragged controlsRow's own wrap-content height up to match
+           it, and that in turn dragged the whole transport bar's height up with it. */
+        View leftCell = new View(activity);
+        leftCell.setLayoutParams(new LinearLayout.LayoutParams(0, 0, 1f));
+        controlsRow.addView(leftCell);
+
+        LinearLayout centerCell = new LinearLayout(activity);
+        centerCell.setOrientation(LinearLayout.HORIZONTAL);
+        centerCell.setGravity(Gravity.CENTER);
+        centerCell.setLayoutParams(new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+        buildCenterControlsRow(activity, centerCell, density);
+        controlsRow.addView(centerCell);
+
+        LinearLayout rightCell = new LinearLayout(activity);
+        rightCell.setOrientation(LinearLayout.HORIZONTAL);
+        rightCell.setGravity(Gravity.CENTER_VERTICAL | Gravity.END);
+        rightCell.setLayoutParams(new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+
+        activity.muteButton = new VolumeIconView(activity);
+        activity.muteButton.setContentDescription("Mute");
+        activity.muteButton.setLayoutParams(new LinearLayout.LayoutParams((int) (26 * density), (int) (26 * density)));
+        activity.muteButton.setOnClickListener(v -> {
+            activity.muted = !activity.muted;
+            if (activity.player != null) activity.player.setVolume(activity.muted ? 0f : 1f);
+            activity.muteButton.setMuted(activity.muted);
+            activity.muteButton.setContentDescription(activity.muted ? "Unmute" : "Mute");
+            showControlsTemporarily(activity);
+        });
+        rightCell.addView(activity.muteButton);
+        controlsRow.addView(rightCell);
+
+        bar.addView(controlsRow);
+
+        FrameLayout.LayoutParams barParams =
+            new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT);
+        barParams.gravity = Gravity.BOTTOM;
+        bar.setLayoutParams(barParams);
+        activity.root.addView(bar);
+        activity.registerFadingControl(bar);
+    }
+
+    private static String buildSubtitle(PlayerActivity activity) {
+        if (activity.seasonNumber >= 0 && activity.episodeNumber >= 0) {
+            return "S" + activity.seasonNumber + " E" + activity.episodeNumber;
+        }
+        if (activity.year >= 0) {
+            return String.valueOf(activity.year);
+        }
+        return "";
+    }
+
+    /* Play/pause flanked by back-5s/forward-5s seek buttons, chapter nav further out when
+       the session has chapters - matching chrome.js's buildCenterControls layout (which
+       lives inside the transport bar's own center cell, not a separate floating overlay
+       like this used to render). */
+    private static void buildCenterControlsRow(PlayerActivity activity, LinearLayout row, float density) {
+        int gapPx = (int) (14 * density);
+        int chapterSizePx = (int) (36 * density);
+        int seekSizePx = (int) (44 * density);
+        int playSizePx = (int) (60 * density);
+        boolean hasChapters = !activity.chapters.isEmpty();
+
+        if (hasChapters) {
+            row.addView(makeChapterSkipButton(activity, false), marginEndParams(chapterSizePx, gapPx));
+        }
+
+        row.addView(makeSeekButton(activity, false), marginEndParams(seekSizePx, gapPx));
 
         activity.playPauseButton = new PlayPauseIconView(activity);
-        int playSizePx = (int) (64 * density);
-        LinearLayout.LayoutParams playParams = new LinearLayout.LayoutParams(playSizePx, playSizePx);
-        if (!activity.chapters.isEmpty()) {
-            playParams.setMarginStart(gapPx);
-            playParams.setMarginEnd(gapPx);
-        }
-        activity.playPauseButton.setLayoutParams(playParams);
-        activity.playPauseButton.setBackgroundColor(Color.parseColor("#8C141414"));
         activity.playPauseButton.setOnClickListener(v -> {
             if (activity.player != null) activity.player.setPlayWhenReady(!activity.player.getPlayWhenReady());
             showControlsTemporarily(activity);
         });
-        row.addView(activity.playPauseButton);
+        row.addView(activity.playPauseButton, marginEndParams(playSizePx, gapPx));
 
-        if (!activity.chapters.isEmpty()) {
-            row.addView(makeChapterSkipButton(activity, true, density, gapPx));
+        row.addView(makeSeekButton(activity, true), marginEndParams(seekSizePx, hasChapters ? gapPx : 0));
+
+        if (hasChapters) {
+            row.addView(makeChapterSkipButton(activity, true), new LinearLayout.LayoutParams(chapterSizePx, chapterSizePx));
         }
+    }
 
-        FrameLayout.LayoutParams rowParams =
-            new FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT);
-        rowParams.gravity = Gravity.CENTER;
-        row.setLayoutParams(rowParams);
-        activity.root.addView(row);
-        activity.registerFadingControl(row);
+    private static LinearLayout.LayoutParams marginEndParams(int sizePx, int marginEndPx) {
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(sizePx, sizePx);
+        params.setMarginEnd(marginEndPx);
+        return params;
+    }
+
+    private static View makeSeekButton(PlayerActivity activity, boolean forward) {
+        SeekIconView btn = new SeekIconView(activity, forward);
+        btn.setContentDescription(forward ? "Forward 5 seconds" : "Back 5 seconds");
+        btn.setOnClickListener(v -> {
+            if (activity.player == null) return;
+            long duration = activity.player.getDuration();
+            long target = activity.player.getCurrentPosition() + (forward ? 5000 : -5000);
+            target = Math.max(0, target);
+            if (duration != androidx.media3.common.C.TIME_UNSET && duration > 0) {
+                target = Math.min(duration, target);
+            }
+            PlayerActivity.seek(target);
+            showControlsTemporarily(activity);
+        });
+        return btn;
     }
 
     /* forward=true seeks to the next chapter's start; forward=false restarts the current
        chapter once more than a few seconds into it (else jumps to the previous chapter) -
        the same convention as prev-track buttons on physical media remotes. */
-    private static View makeChapterSkipButton(PlayerActivity activity, boolean forward, float density, int marginPx) {
+    private static View makeChapterSkipButton(PlayerActivity activity, boolean forward) {
         ChapterSkipIconView btn = new ChapterSkipIconView(activity, forward);
-        int sizePx = (int) (44 * density);
-        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(sizePx, sizePx);
-        if (!forward) params.setMarginEnd(marginPx);
-        btn.setLayoutParams(params);
-        btn.setBackgroundColor(Color.parseColor("#8C141414"));
+        btn.setContentDescription(forward ? "Next chapter" : "Previous chapter");
         btn.setOnClickListener(v -> {
             seekToAdjacentChapter(activity, forward);
             showControlsTemporarily(activity);
@@ -122,99 +366,47 @@ final class PlayerUiHelper {
         }
     }
 
-    /* Bottom transport bar: scrub bar and elapsed/total time - replaces ExoPlayer's own
-       controller chrome (disabled via setUseController(false)) with custom-styled UI
-       matching the web/Xbox leg's transport bar. */
-    static void buildTransportBar(PlayerActivity activity, float density) {
-        LinearLayout bar = new LinearLayout(activity);
-        bar.setOrientation(LinearLayout.HORIZONTAL);
-        bar.setGravity(Gravity.CENTER_VERTICAL);
-        bar.setBackgroundColor(Color.parseColor("#BF141414"));
-        int vPad = (int) (10 * density);
-        int hPad = (int) (16 * density);
-        bar.setPadding(hPad, vPad, hPad, vPad);
+    /* Thin amber-filled track (matching chrome.js's scrub-bar CSS) built from a
+       LayerDrawable, the same android.R.id.background/progress convention the platform's
+       own progress_horizontal.xml uses - required for SeekBar to recognize which layer to
+       clip as playback advances. */
+    private static void styleSeekBar(SeekBar seekBar, float density) {
+        int trackHeightPx = Math.max(2, Math.round(2 * density));
 
-        activity.timeCurrentText = new TextView(activity);
-        activity.timeCurrentText.setText("0:00");
-        activity.timeCurrentText.setTextColor(Color.WHITE);
-        activity.timeCurrentText.setTextSize(13);
-        LinearLayout.LayoutParams currentParams =
-            new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        currentParams.setMarginEnd((int) (10 * density));
-        activity.timeCurrentText.setLayoutParams(currentParams);
-        bar.addView(activity.timeCurrentText);
+        GradientDrawable trackBg = new GradientDrawable();
+        trackBg.setShape(GradientDrawable.RECTANGLE);
+        trackBg.setCornerRadius(trackHeightPx / 2f);
+        trackBg.setColor(TRACK_BG);
 
-        activity.transportSeekBar = new SeekBar(activity);
-        LinearLayout.LayoutParams seekParams =
-            new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
-        seekParams.setMarginEnd((int) (10 * density));
-        activity.transportSeekBar.setLayoutParams(seekParams);
-        activity.transportSeekBar.setMax(1000);
-        activity.transportSeekBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
-            @Override
-            public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
-                if (fromUser && activity.player != null) {
-                    long duration = activity.player.getDuration();
-                    if (duration != androidx.media3.common.C.TIME_UNSET && duration > 0) {
-                        activity.timeCurrentText.setText(formatTimestamp(progress * duration / 1000));
-                    }
-                }
-            }
+        GradientDrawable progressShape = new GradientDrawable();
+        progressShape.setShape(GradientDrawable.RECTANGLE);
+        progressShape.setCornerRadius(trackHeightPx / 2f);
+        progressShape.setColor(ACCENT_COLOR);
+        ClipDrawable progressClip = new ClipDrawable(progressShape, Gravity.START, ClipDrawable.HORIZONTAL);
 
-            @Override
-            public void onStartTrackingTouch(SeekBar seekBar) {
-                activity.seekBarScrubbing = true;
-                showControlsTemporarily(activity);
-            }
+        LayerDrawable layers = new LayerDrawable(new Drawable[]{trackBg, progressClip});
+        layers.setId(0, android.R.id.background);
+        layers.setId(1, android.R.id.progress);
+        /* A GradientDrawable stretches to fill whatever bounds it's assigned rather than
+           honoring setSize()'s intrinsic-size hint once actual (taller) bounds are given -
+           SeekBar always sizes itself well past this thin track for a comfortable touch
+           target, so without pinning each layer's height/gravity here the track visually
+           stretched to match the widget's full touch height instead of staying thin. */
+        layers.setLayerHeight(0, trackHeightPx);
+        layers.setLayerGravity(0, Gravity.CENTER_VERTICAL);
+        layers.setLayerHeight(1, trackHeightPx);
+        layers.setLayerGravity(1, Gravity.CENTER_VERTICAL);
+        seekBar.setProgressDrawable(layers);
 
-            @Override
-            public void onStopTrackingTouch(SeekBar seekBar) {
-                activity.seekBarScrubbing = false;
-                if (activity.player != null) {
-                    long duration = activity.player.getDuration();
-                    if (duration != androidx.media3.common.C.TIME_UNSET && duration > 0) {
-                        PlayerActivity.seek(seekBar.getProgress() * duration / 1000);
-                    }
-                }
-            }
-        });
-        bar.addView(activity.transportSeekBar);
-
-        activity.timeDurationText = new TextView(activity);
-        activity.timeDurationText.setText("0:00");
-        activity.timeDurationText.setTextColor(Color.WHITE);
-        activity.timeDurationText.setTextSize(13);
-        bar.addView(activity.timeDurationText);
-
-        /* A slider isn't offered here the way the web/Xbox leg's transport bar has one -
-           the hardware volume rocker already gives fine-grained control over the media
-           stream on a real device, so this is mute-only, matching common mobile-player
-           convention. */
-        activity.muteButton = new TextView(activity);
-        activity.muteButton.setText("🔊");
-        activity.muteButton.setContentDescription("Mute");
-        activity.muteButton.setTextColor(Color.WHITE);
-        activity.muteButton.setTextSize(16);
-        activity.muteButton.setGravity(Gravity.CENTER);
-        LinearLayout.LayoutParams muteParams =
-            new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        muteParams.setMarginStart((int) (10 * density));
-        activity.muteButton.setLayoutParams(muteParams);
-        activity.muteButton.setOnClickListener(v -> {
-            activity.muted = !activity.muted;
-            if (activity.player != null) activity.player.setVolume(activity.muted ? 0f : 1f);
-            activity.muteButton.setText(activity.muted ? "🔇" : "🔊");
-            activity.muteButton.setContentDescription(activity.muted ? "Unmute" : "Mute");
-            showControlsTemporarily(activity);
-        });
-        bar.addView(activity.muteButton);
-
-        FrameLayout.LayoutParams barParams =
-            new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT);
-        barParams.gravity = Gravity.BOTTOM;
-        bar.setLayoutParams(barParams);
-        activity.root.addView(bar);
-        activity.registerFadingControl(bar);
+        int thumbSizePx = Math.round(12 * density);
+        GradientDrawable thumb = new GradientDrawable();
+        thumb.setShape(GradientDrawable.OVAL);
+        thumb.setColor(ACCENT_COLOR);
+        thumb.setSize(thumbSizePx, thumbSizePx);
+        seekBar.setThumb(thumb);
+        seekBar.setThumbOffset(0);
+        seekBar.setPadding(0, 0, 0, 0);
+        seekBar.setSplitTrack(false);
     }
 
     static void toggleControls(PlayerActivity activity) {
@@ -251,117 +443,192 @@ final class PlayerUiHelper {
         }
     }
 
-    /* One menu instead of one bespoke picker View per feature - later phases (chapters,
-       quality) add entries here rather than building their own popup/dialog chrome. */
-    static void showPlayerMenu(PlayerActivity activity, View anchor) {
-        PopupMenu popup = new PopupMenu(activity, anchor);
+    // ---- Options menu: glass-panel PopupWindow flyouts, mirroring chrome.js's
+    // ---- openHamburgerMenu/openInlineMenu/openShaderMenu instead of a native
+    // ---- PopupMenu/AlertDialog.
 
-        android.view.SubMenu speedMenu = popup.getMenu().addSubMenu("Playback Speed");
-        float[] rates = {0.25f, 0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f, 4f, 8f};
-        for (float rate : rates) {
-            String label = (rate == Math.floor(rate)) ? ((int) rate) + "x" : rate + "x";
-            speedMenu.add(label).setOnMenuItemClickListener(item -> {
-                PlayerActivity.setPlaybackSpeed(rate);
-                return true;
-            });
+    private static final class MenuRow {
+        final String label;
+        String value;
+        boolean chevron;
+        Boolean toggleChecked;
+        Function<Boolean, String> onToggle;
+        Runnable onSelect;
+
+        MenuRow(String label) {
+            this.label = label;
         }
-
-        android.view.SubMenu sleepMenu = popup.getMenu().addSubMenu("Sleep Timer");
-        sleepMenu.add("Off").setOnMenuItemClickListener(item -> {
-            activity.setSleepTimer(0);
-            return true;
-        });
-        int[] sleepMinutes = {15, 30, 45, 60};
-        for (int minutes : sleepMinutes) {
-            sleepMenu.add(minutes + " min").setOnMenuItemClickListener(item -> {
-                activity.setSleepTimer(minutes * 60_000L);
-                return true;
-            });
-        }
-        sleepMenu.add("End of episode").setOnMenuItemClickListener(item -> {
-            activity.setSleepTimer(0);
-            return true;
-        });
-
-        /* Hidden entirely rather than shown disabled when there are no chapters - an
-           empty popup with nothing explaining it is worse than not offering the entry. */
-        if (!activity.chapters.isEmpty()) {
-            popup.getMenu().add("Chapters").setOnMenuItemClickListener(item -> {
-                showChapterDialog(activity);
-                return true;
-            });
-        }
-
-        /* Same "never an empty/dead affordance" rule as Chapters above - only offered
-           when there's actually more than one stream to switch between. */
-        if (activity.audioStreams.size() > 1) {
-            android.view.SubMenu audioMenu = popup.getMenu().addSubMenu("Audio Track");
-            for (AudioStreamEntry entry : activity.audioStreams) {
-                audioMenu.add(entry.label).setOnMenuItemClickListener(item -> {
-                    activity.switchAudioStream(entry.id);
-                    return true;
-                });
-            }
-        }
-
-        /* Off by default - this spends an extra GPU pass on every frame, and the effect is
-           only worth the cost on already-low-resolution transcodes/direct-play sources (see
-           ShaderUpscaleEffect's isNoOp check, which skips it once the source already fills the
-           display). A dialog rather than another PopupMenu entry - a PopupMenu can't host a
-           SeekBar, and a continuous strength slider replaced the old fixed-tier preset list. */
-        popup.getMenu().add("Shader Upscaling...").setOnMenuItemClickListener(item -> {
-            showShaderUpscaleDialog(activity);
-            return true;
-        });
-
-        popup.show();
     }
 
-    /* No more manual Off/Anime4K/Live-Action RadioGroup - detectedShaderType came from
+    static void showPlayerMenu(PlayerActivity activity, View anchor) {
+        List<MenuRow> rows = new ArrayList<>();
+
+        MenuRow speedRow = new MenuRow("Playback Speed");
+        float currentRate = activity.player != null ? activity.player.getPlaybackParameters().speed : 1f;
+        speedRow.value = formatRate(currentRate);
+        speedRow.chevron = true;
+        speedRow.onSelect = () -> openSpeedMenu(activity, anchor);
+        rows.add(speedRow);
+
+        MenuRow sleepRow = new MenuRow("Sleep Timer");
+        sleepRow.value = activity.sleepMinutes > 0 ? activity.sleepMinutes + "m" : null;
+        sleepRow.chevron = true;
+        sleepRow.onSelect = () -> openSleepMenu(activity, anchor);
+        rows.add(sleepRow);
+
+        MenuRow shaderRow = new MenuRow("Shader Upscaling");
+        shaderRow.value = activity.shaderEnabled ? activity.detectedShaderType.label : null;
+        shaderRow.chevron = true;
+        shaderRow.toggleChecked = activity.shaderEnabled;
+        /* Flips on/off in place without leaving this menu - onSelect (tap anywhere else
+           on the row) still drills into the strength panel, same as chrome.js's toggle +
+           trailing chevron being independent gestures on one row. */
+        shaderRow.onToggle = (checked) -> {
+            activity.shaderEnabled = checked;
+            activity.shaderType = checked && activity.upscaleStrength > 0f ? activity.detectedShaderType : ShaderType.OFF;
+            activity.applyVideoEffects();
+            return checked ? activity.detectedShaderType.label : null;
+        };
+        shaderRow.onSelect = () -> openShaderPanel(activity, anchor);
+        rows.add(shaderRow);
+
+        if (!activity.chapters.isEmpty()) {
+            MenuRow chaptersRow = new MenuRow("Chapters");
+            chaptersRow.chevron = true;
+            chaptersRow.onSelect = () -> openChapterMenu(activity, anchor);
+            rows.add(chaptersRow);
+        }
+
+        if (activity.audioStreams.size() > 1) {
+            MenuRow audioRow = new MenuRow("Audio Track");
+            AudioStreamEntry current = findAudioStream(activity, activity.currentAudioStreamId);
+            audioRow.value = current != null ? current.label : null;
+            audioRow.chevron = true;
+            audioRow.onSelect = () -> openAudioMenu(activity, anchor);
+            rows.add(audioRow);
+        }
+
+        openMenuPanel(activity, anchor, rows, null);
+    }
+
+    private static AudioStreamEntry findAudioStream(PlayerActivity activity, String id) {
+        if (id == null) return null;
+        for (AudioStreamEntry entry : activity.audioStreams) {
+            if (entry.id.equals(id)) return entry;
+        }
+        return null;
+    }
+
+    private static String formatRate(float rate) {
+        return rate == Math.floor(rate) ? ((int) rate) + "x" : rate + "x";
+    }
+
+    private static void openSpeedMenu(PlayerActivity activity, View anchor) {
+        float current = activity.player != null ? activity.player.getPlaybackParameters().speed : 1f;
+        List<MenuRow> rows = new ArrayList<>();
+        for (float rate : PLAYBACK_RATES) {
+            MenuRow row = new MenuRow(formatRate(rate) + (rate == current ? "  ✓" : ""));
+            row.onSelect = () -> PlayerActivity.setPlaybackSpeed(rate);
+            rows.add(row);
+        }
+        openMenuPanel(activity, anchor, rows, () -> showPlayerMenu(activity, anchor));
+    }
+
+    private static void openSleepMenu(PlayerActivity activity, View anchor) {
+        List<MenuRow> rows = new ArrayList<>();
+        MenuRow off = new MenuRow("Off" + (activity.sleepMinutes == 0 ? "  ✓" : ""));
+        off.onSelect = () -> activity.setSleepTimer(0);
+        rows.add(off);
+        for (int minutes : SLEEP_TIMER_PRESETS_MIN) {
+            MenuRow row = new MenuRow(minutes + " min" + (activity.sleepMinutes == minutes ? "  ✓" : ""));
+            row.onSelect = () -> activity.setSleepTimer(minutes * 60_000L);
+            rows.add(row);
+        }
+        MenuRow endOfEpisode = new MenuRow("End of episode");
+        endOfEpisode.onSelect = () -> activity.setSleepTimer(0);
+        rows.add(endOfEpisode);
+        openMenuPanel(activity, anchor, rows, () -> showPlayerMenu(activity, anchor));
+    }
+
+    private static void openAudioMenu(PlayerActivity activity, View anchor) {
+        List<MenuRow> rows = new ArrayList<>();
+        for (AudioStreamEntry entry : activity.audioStreams) {
+            boolean isCurrent = entry.id.equals(activity.currentAudioStreamId);
+            MenuRow row = new MenuRow(entry.label + (isCurrent ? "  ✓" : ""));
+            row.onSelect = () -> activity.switchAudioStream(entry.id);
+            rows.add(row);
+        }
+        openMenuPanel(activity, anchor, rows, () -> showPlayerMenu(activity, anchor));
+    }
+
+    private static void openChapterMenu(PlayerActivity activity, View anchor) {
+        List<MenuRow> rows = new ArrayList<>();
+        for (ChapterEntry chapter : activity.chapters) {
+            String time = formatTimestamp(chapter.startTimeOffsetMs);
+            MenuRow row = new MenuRow(chapter.title.isEmpty() ? time : time + "  " + chapter.title);
+            row.onSelect = () -> PlayerActivity.seek(chapter.startTimeOffsetMs);
+            rows.add(row);
+        }
+        openMenuPanel(activity, anchor, rows, () -> showPlayerMenu(activity, anchor));
+    }
+
+    /* No more manual Off/Anime4K/Live-Action picker - detectedShaderType came from
        plex-player.js's genre-based detection before this Activity ever launched, shown
        here as read-only info. The SeekBar is the only remaining control; dragging it to
-       0% is what "Off" used to be (see the shaderType assignment in onStopTrackingTouch
-       below). setVideoEffects() supports being called mid-playback (see
-       PlayerActivity.applyVideoEffects()'s own comment), so there's no need for an
-       Apply/Cancel step. */
-    static void showShaderUpscaleDialog(PlayerActivity activity) {
+       0% is what "Off" used to be. setVideoEffects() supports being called mid-playback
+       (see PlayerActivity.applyVideoEffects's own comment), so there's no Apply/Cancel
+       step - matches chrome.js's openShaderMenu panel. */
+    private static void openShaderPanel(PlayerActivity activity, View anchor) {
         float density = activity.getResources().getDisplayMetrics().density;
-        int pad = (int) (20 * density);
-        int labelPad = (int) (8 * density);
+        dismissMenuPopup(activity);
 
-        LinearLayout container = new LinearLayout(activity);
-        container.setOrientation(LinearLayout.VERTICAL);
-        container.setPadding(pad, pad, pad, pad);
+        LinearLayout content = new LinearLayout(activity);
+        content.setOrientation(LinearLayout.VERTICAL);
+        int pad = Math.round(14 * density);
+        content.setPadding(pad, pad, pad, pad);
+        content.setBackground(panelBackground(density));
+        content.addView(makeBackRow(activity, density, () -> showPlayerMenu(activity, anchor)));
 
         TextView detectedLabel = new TextView(activity);
         detectedLabel.setText("Detected: " + activity.detectedShaderType.label);
-        container.addView(detectedLabel);
+        detectedLabel.setTextColor(Color.WHITE);
+        detectedLabel.setTextSize(13);
+        detectedLabel.setTypeface(detectedLabel.getTypeface(), android.graphics.Typeface.BOLD);
+        content.addView(detectedLabel);
 
         TextView detectedHint = new TextView(activity);
         detectedHint.setText("Auto-detected from this title's genre");
-        detectedHint.setTextColor(Color.GRAY);
-        detectedHint.setTextSize(12);
-        detectedHint.setPadding(0, 0, 0, labelPad);
-        container.addView(detectedHint);
+        detectedHint.setTextColor(VALUE_TEXT);
+        detectedHint.setTextSize(11);
+        LinearLayout.LayoutParams hintParams =
+            new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        hintParams.topMargin = Math.round(2 * density);
+        hintParams.bottomMargin = Math.round(10 * density);
+        detectedHint.setLayoutParams(hintParams);
+        content.addView(detectedHint);
 
         TextView strengthLabel = new TextView(activity);
-        strengthLabel.setPadding(0, labelPad * 2, 0, labelPad);
         strengthLabel.setText("Strength: " + Math.round(activity.upscaleStrength * 100) + "%");
-        container.addView(strengthLabel);
+        strengthLabel.setTextColor(SUBTLE_TEXT);
+        strengthLabel.setTextSize(12);
+        content.addView(strengthLabel);
 
         SeekBar strengthSeekBar = new SeekBar(activity);
+        styleSeekBar(strengthSeekBar, density);
         strengthSeekBar.setMax(100);
         strengthSeekBar.setProgress(Math.round(activity.upscaleStrength * 100));
-        container.addView(strengthSeekBar);
-
+        LinearLayout.LayoutParams strengthParams =
+            new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        strengthParams.topMargin = Math.round(4 * density);
+        strengthSeekBar.setLayoutParams(strengthParams);
         strengthSeekBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override
             public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
-                /* Label only here - applyVideoEffects() recompiles/relinks a brand-new GL shader
-                   program and rebuilds ExoPlayer's whole video-effects pipeline on every call.
-                   Calling that at drag frequency (many times a second) was what got the renderer
-                   stuck (playback paused and wouldn't resume) - it's meant for occasional effect
-                   changes, not a continuous scrubber. Committed once on release instead. */
+                /* Label only here - applyVideoEffects() recompiles/relinks a brand-new GL
+                   shader program and rebuilds ExoPlayer's whole video-effects pipeline on
+                   every call. Calling that at drag frequency previously got the renderer
+                   stuck (playback paused and wouldn't resume) - committed once on release
+                   instead, below. */
                 activity.upscaleStrength = progress / 100f;
                 strengthLabel.setText("Strength: " + progress + "%");
             }
@@ -371,28 +638,185 @@ final class PlayerUiHelper {
 
             @Override
             public void onStopTrackingTouch(SeekBar seekBar) {
-                activity.shaderType = activity.upscaleStrength > 0f ? activity.detectedShaderType : ShaderType.OFF;
+                activity.shaderType = activity.shaderEnabled && activity.upscaleStrength > 0f
+                    ? activity.detectedShaderType : ShaderType.OFF;
                 activity.applyVideoEffects();
             }
         });
+        content.addView(strengthSeekBar);
 
-        new androidx.appcompat.app.AlertDialog.Builder(activity)
-            .setTitle("Shader Upscaling")
-            .setView(container)
-            .setPositiveButton("Done", null)
-            .show();
+        showPopup(activity, anchor, content, density);
     }
 
-    static void showChapterDialog(PlayerActivity activity) {
-        String[] labels = new String[activity.chapters.size()];
-        for (int i = 0; i < activity.chapters.size(); i++) {
-            ChapterEntry c = activity.chapters.get(i);
-            labels[i] = c.title.isEmpty() ? formatTimestamp(c.startTimeOffsetMs) : formatTimestamp(c.startTimeOffsetMs) + "  " + c.title;
+    private static Drawable panelBackground(float density) {
+        GradientDrawable bg = new GradientDrawable();
+        bg.setShape(GradientDrawable.RECTANGLE);
+        bg.setColor(PANEL_BG);
+        bg.setCornerRadius(12 * density);
+        bg.setStroke(Math.max(1, Math.round(density)), PANEL_BORDER);
+        return bg;
+    }
+
+    private static Drawable rowPressBackground() {
+        StateListDrawable states = new StateListDrawable();
+        states.addState(new int[]{android.R.attr.state_pressed}, new ColorDrawable(ROW_PRESSED_BG));
+        states.addState(new int[]{}, new ColorDrawable(Color.TRANSPARENT));
+        return states;
+    }
+
+    private static View makeBackRow(PlayerActivity activity, float density, Runnable onBack) {
+        TextView row = new TextView(activity);
+        row.setText("‹  Back");
+        row.setTextColor(SUBTLE_TEXT);
+        row.setTextSize(12);
+        row.setTypeface(row.getTypeface(), android.graphics.Typeface.BOLD);
+        row.setBackground(rowPressBackground());
+        int padH = Math.round(10 * density);
+        int padV = Math.round(8 * density);
+        row.setPadding(padH, padV, padH, padV);
+        LinearLayout.LayoutParams params =
+            new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        params.bottomMargin = Math.round(4 * density);
+        row.setLayoutParams(params);
+        row.setOnClickListener(v -> onBack.run());
+        return row;
+    }
+
+    private static ColorStateList toggleTrackTint() {
+        return new ColorStateList(
+            new int[][]{new int[]{android.R.attr.state_checked}, new int[]{}},
+            new int[]{ACCENT_COLOR, Color.argb(64, 255, 255, 255)});
+    }
+
+    private static ColorStateList toggleThumbTint() {
+        return new ColorStateList(
+            new int[][]{new int[]{android.R.attr.state_checked}, new int[]{}},
+            new int[]{ACCENT_COLOR, Color.WHITE});
+    }
+
+    private static View makeMenuRowView(PlayerActivity activity, float density, MenuRow item) {
+        LinearLayout row = new LinearLayout(activity);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setBackground(rowPressBackground());
+        int padH = Math.round(14 * density);
+        int padV = Math.round(10 * density);
+        row.setPadding(padH, padV, padH, padV);
+        row.setLayoutParams(new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        LinearLayout labelStack = new LinearLayout(activity);
+        labelStack.setOrientation(LinearLayout.VERTICAL);
+        labelStack.setLayoutParams(new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+
+        TextView label = new TextView(activity);
+        label.setText(item.label);
+        label.setTextColor(Color.WHITE);
+        label.setTextSize(14);
+        labelStack.addView(label);
+
+        TextView valueView = new TextView(activity);
+        valueView.setTextColor(VALUE_TEXT);
+        valueView.setTextSize(11);
+        valueView.setVisibility(item.value != null ? View.VISIBLE : View.GONE);
+        if (item.value != null) valueView.setText(item.value);
+        labelStack.addView(valueView);
+        row.addView(labelStack);
+
+        if (item.toggleChecked != null) {
+            SwitchCompat toggle = new SwitchCompat(activity);
+            toggle.setChecked(item.toggleChecked);
+            toggle.setTrackTintList(toggleTrackTint());
+            toggle.setThumbTintList(toggleThumbTint());
+            toggle.setOnCheckedChangeListener((buttonView, checked) -> {
+                String newValue = item.onToggle != null ? item.onToggle.apply(checked) : null;
+                item.value = newValue;
+                valueView.setVisibility(newValue != null ? View.VISIBLE : View.GONE);
+                if (newValue != null) valueView.setText(newValue);
+            });
+            LinearLayout.LayoutParams toggleParams =
+                new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+            toggleParams.setMarginEnd(item.chevron ? Math.round(8 * density) : 0);
+            toggle.setLayoutParams(toggleParams);
+            row.addView(toggle);
         }
-        new androidx.appcompat.app.AlertDialog.Builder(activity)
-            .setTitle("Chapters")
-            .setItems(labels, (dialog, index) -> PlayerActivity.seek(activity.chapters.get(index).startTimeOffsetMs))
-            .show();
+
+        if (item.chevron) {
+            TextView chevron = new TextView(activity);
+            chevron.setText("›");
+            chevron.setTextColor(SUBTLE_TEXT);
+            chevron.setTextSize(16);
+            row.addView(chevron);
+        }
+
+        row.setOnClickListener(v -> {
+            if (item.onSelect != null) item.onSelect.run();
+        });
+        return row;
+    }
+
+    private static void openMenuPanel(PlayerActivity activity, View anchor, List<MenuRow> rows, Runnable onBack) {
+        float density = activity.getResources().getDisplayMetrics().density;
+        dismissMenuPopup(activity);
+
+        LinearLayout content = new LinearLayout(activity);
+        content.setOrientation(LinearLayout.VERTICAL);
+        int pad = Math.round(8 * density);
+        content.setPadding(pad, pad, pad, pad);
+        content.setBackground(panelBackground(density));
+        if (onBack != null) content.addView(makeBackRow(activity, density, onBack));
+        for (MenuRow row : rows) content.addView(makeMenuRowView(activity, density, row));
+
+        showPopup(activity, anchor, content, density);
+    }
+
+    /* Wraps `content` in a PopupWindow anchored below the hamburger/back-anchor, matching
+       chrome.js's anchor-below-the-button flyouts. Content taller than maxHeightPx is
+       wrapped in a ScrollView instead - PopupWindow's own width/height govern the actual
+       window size the ScrollView is laid out against, so capping the window height here
+       is what makes the ScrollView actually scroll rather than just growing forever. */
+    private static void showPopup(PlayerActivity activity, View anchor, LinearLayout content, float density) {
+        int widthPx = Math.round(260 * density);
+        int maxHeightPx = Math.round(360 * density);
+        content.measure(View.MeasureSpec.makeMeasureSpec(widthPx, View.MeasureSpec.EXACTLY), View.MeasureSpec.UNSPECIFIED);
+
+        View displayed = content;
+        int height = ViewGroup.LayoutParams.WRAP_CONTENT;
+        if (content.getMeasuredHeight() > maxHeightPx) {
+            ScrollView scroll = new ScrollView(activity);
+            scroll.setVerticalScrollBarEnabled(false);
+            scroll.addView(content, new ScrollView.LayoutParams(ScrollView.LayoutParams.MATCH_PARENT, ScrollView.LayoutParams.WRAP_CONTENT));
+            displayed = scroll;
+            height = maxHeightPx;
+        }
+
+        PopupWindow popup = new PopupWindow(displayed, widthPx, height, true);
+        popup.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
+        popup.setOutsideTouchable(true);
+        popup.setElevation(8 * density);
+        popup.setOnDismissListener(() -> {
+            if (activity.menuPopup == popup) {
+                activity.menuPopup = null;
+                showControlsTemporarily(activity);
+            }
+        });
+
+        activity.menuPopup = popup;
+        activity.controlsFadeHandler.removeCallbacks(activity.controlsFadeRunnable);
+        setControlsVisible(activity, true);
+        /* Right-aligned under the anchor (the hamburger button lives top-right) rather
+           than left-aligned, matching chrome.js's menuAnchorPosition for a right-side
+           anchor - the panel's right edge lines up with the button's right edge instead
+           of overflowing off the right of the screen. */
+        int xOffset = anchor.getWidth() - widthPx;
+        popup.showAsDropDown(anchor, xOffset, Math.round(8 * density));
+    }
+
+    private static void dismissMenuPopup(PlayerActivity activity) {
+        if (activity.menuPopup != null) {
+            PopupWindow popup = activity.menuPopup;
+            activity.menuPopup = null;
+            popup.dismiss();
+        }
     }
 
     static String formatTimestamp(long ms) {
@@ -421,7 +845,9 @@ final class PlayerUiHelper {
             FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT);
             params.gravity = Gravity.BOTTOM | Gravity.END;
-            params.setMargins(0, 0, (int) (40 * density), (int) (110 * density));
+            /* Clears the taller transport bar this redesign introduced (title/subtitle
+               header row + seek bar + controls row, vs. the old flat mute-only row). */
+            params.setMargins(0, 0, (int) (40 * density), (int) (200 * density));
             activity.skipButton.setLayoutParams(params);
             activity.skipButton.setOnClickListener(v -> PlayerActivity.seek(activity.skipButtonSeekToMs));
             activity.root.addView(activity.skipButton);
@@ -451,8 +877,9 @@ final class PlayerUiHelper {
         if (activity.transportSeekBar == null || activity.seekBarScrubbing) return;
         if (durationMs > 0) {
             activity.transportSeekBar.setProgress((int) ((positionMs * 1000) / durationMs));
-            activity.timeDurationText.setText(formatTimestamp(durationMs));
+            if (activity.timeRemainingText != null) {
+                activity.timeRemainingText.setText("-" + formatTimestamp(Math.max(0, durationMs - positionMs)));
+            }
         }
-        activity.timeCurrentText.setText(formatTimestamp(positionMs));
     }
 }
