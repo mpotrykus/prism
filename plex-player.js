@@ -76,6 +76,7 @@ class StreamingPlayerController {
         this._controlsHovering = false;
         this._controlsHideTimer = null;
         this._inlineMenuEl = null;
+        this._inlineMenuAnchor = null;
         this._inlineMenuCleanup = null;
         this._shaderType = "off";
         this._shaderStrength = 0;

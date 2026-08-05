@@ -27,3 +27,27 @@ export function volumeIconMarkup(level) {
     else inner += waveNear + waveFar;
     return `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" xmlns="http://www.w3.org/2000/svg">${inner}</svg>`;
 }
+
+/* Same currentColor-SVG reasoning as volumeIconMarkup above - a circular arrow drawn
+   from scratch rather than "⏪"/"⏩" glyphs, which have the same fixed-color emoji-
+   presentation problem. "back"/"forward" mirror the same arc+arrowhead across the
+   vertical axis (opposite sweep direction, opposite arrowhead) while the "5" label stays
+   unmirrored in both, matching the skip-5s convention HBO's own player uses.
+
+   The arc's start/end points are placed exactly on the radius-8 circle centered at
+   (12,12) (12,4 is 8px straight up from center; the two arcEnd values are that same
+   circle's point near the bottom-left/bottom-right) - an earlier version used a start
+   point that was only 7px from center, so the actual circle SVG solved for to pass
+   through both mismatched points was centered somewhere else entirely and swung outside
+   the 0-24 viewBox, clipping visibly (SVG's default overflow:hidden crops anything
+   outside it). The viewBox itself still carries a few px of padding beyond that on top,
+   as a margin against exactly this kind of arc-math mistake recurring unnoticed. */
+export function seekIconMarkup(direction) {
+    const sweepFlag = direction === "forward" ? 0 : 1;
+    const arcEnd = direction === "forward" ? "6.2 17.5" : "17.8 17.5";
+    const arrowhead = direction === "forward" ? "15,1 15,7 9,4" : "9,1 9,7 15,4";
+    const arc = `<path d="M12 4 A8 8 0 1 ${sweepFlag} ${arcEnd}" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" fill="none"/>`;
+    const arrow = `<polygon points="${arrowhead}" fill="currentColor"/>`;
+    const label = `<text x="12" y="16.5" font-size="7.5" font-weight="700" text-anchor="middle" font-family="Roboto, sans-serif" fill="currentColor">5</text>`;
+    return `<svg viewBox="-6 -6 36 36" width="26" height="26" fill="none" xmlns="http://www.w3.org/2000/svg">${arc}${arrow}${label}</svg>`;
+}

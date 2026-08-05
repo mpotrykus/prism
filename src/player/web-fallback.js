@@ -8,6 +8,25 @@ import { ZOOM_LEVELS, storedVolume } from "./ui/shared.js";
    UI-chrome/shader-pipeline methods (still defined on the class as thin delegates) for
    everything that isn't this path's own concern - the transport bar, shader pipeline,
    and skip-marker UI aren't separable from a playback session's own lifecycle. */
+/* Plain bold white-on-transparent cues instead of the browser's default boxed caption
+   style - only affects <track> rendering (attachSubtitleTrack in chrome.js), no change
+   to which captions load or when. */
+if (!document.getElementById("streaming-player-cue-style")) {
+    const style = document.createElement("style");
+    style.id = "streaming-player-cue-style";
+    style.textContent = `
+        .streaming-player-video::cue {
+            background: transparent;
+            color: rgba(235,235,235,0.95);
+            font-family: "Roboto", sans-serif;
+            font-weight: 700;
+            font-size: 1.05em;
+            text-shadow: 0 2px 6px rgba(0,0,0,0.85);
+        }
+    `;
+    document.head.appendChild(style);
+}
+
 export function playWeb(controller, streamUrl, startOffsetMs) {
     const video = document.createElement("video");
     video.className = "streaming-player-video";
@@ -55,32 +74,45 @@ export function playWeb(controller, streamUrl, startOffsetMs) {
 
     /* Not just a convenience: on the Xbox WebView2 shell there's no browser chrome and
        no back button to fall back on at all, so an explicit close control isn't
-       optional the way it might seem on desktop web. */
+       optional the way it might seem on desktop web. Styled as a back chevron,
+       top-left, rather than an "✕" - same close-the-player action, just matching where
+       a streaming app's own back affordance normally sits. */
     const closeBtn = controller._makeControlButton({
         ariaLabel: "Close player",
-        content: "✕",
+        content: "‹",
         onClick: () => controller.stop(),
     });
-    controller._registerControlButton(closeBtn);
+    controller._registerControlButton(closeBtn, { side: "left" });
 
     /* Every custom option (speed, sleep timer, zoom, chapters, subtitles) lives behind
        this single button instead of one circular button each - see openHamburgerMenu.
-       Opposite corner from the close button, matching the Android leg's layout
-       (hamburger top-left, close top-right). */
+       Opposite corner from the close button. Toggles closed on a second tap - re-opening
+       would otherwise be the only reachable outcome of tapping this button again, since
+       openHamburgerMenu (like every submenu) closes and immediately rebuilds the flyout
+       rather than no-op'ing when one is already open. */
     const menuBtn = controller._makeControlButton({
         ariaLabel: "Player options",
         content: "☰",
-        onClick: () => controller._openHamburgerMenu(menuBtn),
+        onClick: () => {
+            if (controller._inlineMenuEl && controller._inlineMenuAnchor === menuBtn) {
+                controller._closeInlineMenu();
+            } else {
+                controller._openHamburgerMenu(menuBtn);
+            }
+        },
     });
-    controller._registerControlButton(menuBtn, { side: "left" });
+    controller._registerControlButton(menuBtn, { side: "right" });
 
     controller._zoomIndex = 0;
     controller._zoomPanX = 0;
     controller._zoomPanY = 0;
     controller._sleepMinutes = 0;
     controller._wireZoomPan();
-    controller._buildCenterControls(video);
+    /* Transport bar first: it builds the bottom chrome's center cell that
+       _buildCenterControls fills with play/pause + chapter nav (see chrome.js), rather
+       than that row floating mid-screen on its own. */
     controller._buildTransportBar(video);
+    controller._buildCenterControls(video);
     /* _shaderType/_shaderStrength were already resolved in play() (global setting +
        this title's auto-detected type) before playWeb was called - this just spins up
        the WebGL pipeline for that starting state, same as any other change made
