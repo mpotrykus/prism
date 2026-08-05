@@ -53,29 +53,15 @@ namespace PrismXbox
             {
                 rootFrame = new Frame();
                 rootFrame.NavigationFailed += OnNavigationFailed;
+                Window.Current.Content = rootFrame;
             }
 
             if (e.PrelaunchActivated == false)
             {
                 if (rootFrame.Content == null)
                 {
-                    // The system splash screen shows its 620x300 image at native pixel size,
-                    // which reads as a tiny, blurry rectangle on a TV - ExtendedSplash replaces
-                    // it with the same wordmark sized relative to the real window, and stays up
-                    // until MainPage's WebView2 content is actually ready to show.
-                    Window.Current.Content = new ExtendedSplash();
-
                     rootFrame.Navigate(typeof(MainPage), e.Arguments);
-                    if (rootFrame.Content is MainPage mainPage)
-                    {
-                        mainPage.ContentReady += (_, __) => Window.Current.Content = rootFrame;
-                    }
                 }
-                else if (Window.Current.Content == null)
-                {
-                    Window.Current.Content = rootFrame;
-                }
-
                 Window.Current.Activate();
             }
         }

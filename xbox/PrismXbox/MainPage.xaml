@@ -6,4 +6,22 @@
       xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
       Background="#0a0a0c"
       mc:Ignorable="d">
+
+    <!--
+      Shown only until InitializeWebViewAsync() replaces this.Content with the WebView2 control
+      (see MainPage.xaml.cs) - covers the brief WebView2 setup gap after the system splash
+      screen dismisses. Same symmetric-3-column centering trick used for the (now-removed)
+      ExtendedSplash page, kept here since it's simple and self-correcting on every layout pass.
+    -->
+    <Grid>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="0.34*"/>
+            <ColumnDefinition Width="0.32*"/>
+            <ColumnDefinition Width="0.34*"/>
+        </Grid.ColumnDefinitions>
+        <Image Grid.Column="1"
+               Source="Assets/PrismLogo.svg"
+               Stretch="Uniform"
+               VerticalAlignment="Center" />
+    </Grid>
 </Page>
