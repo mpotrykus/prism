@@ -28,12 +28,16 @@ public class NativePlayerPlugin extends Plugin implements PlayerActivity.Playbac
         }
         long startPositionMs = call.getLong("startPositionMs", 0L);
         JSArray chapters = call.getArray("chapters");
+        JSArray audioStreams = call.getArray("audioStreams");
 
         Intent intent = new Intent(getContext(), PlayerActivity.class);
         intent.putExtra(PlayerActivity.EXTRA_URL, url);
         intent.putExtra(PlayerActivity.EXTRA_START_POSITION_MS, startPositionMs);
         if (chapters != null) {
             intent.putExtra(PlayerActivity.EXTRA_CHAPTERS_JSON, chapters.toString());
+        }
+        if (audioStreams != null) {
+            intent.putExtra(PlayerActivity.EXTRA_AUDIO_STREAMS_JSON, audioStreams.toString());
         }
 
         startActivityForResult(call, intent, "onPlaybackActivityResult");

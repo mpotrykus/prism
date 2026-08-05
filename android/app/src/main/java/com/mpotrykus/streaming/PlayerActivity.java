@@ -48,6 +48,7 @@ public class PlayerActivity extends AppCompatActivity {
     public static final String EXTRA_URL = "url";
     public static final String EXTRA_START_POSITION_MS = "startPositionMs";
     public static final String EXTRA_CHAPTERS_JSON = "chaptersJson";
+    public static final String EXTRA_AUDIO_STREAMS_JSON = "audioStreamsJson";
 
     private static final long PROGRESS_INTERVAL_MS = 1000L;
     private static final long CONTROLS_HIDE_DELAY_MS = 4000L;
@@ -197,8 +198,25 @@ public class PlayerActivity extends AppCompatActivity {
         }
     }
 
+    /* Native code only ever sees {id, label} - plex-player.js's play() already reduced
+       the raw Plex Stream objects down to this shape (see NativePlayerPlugin.play's
+       audioStreams extra), so switchAudioStream below only needs the id to rewrite the
+       transcode URL's audioStreamID param. */
+    private static class AudioStreamEntry {
+        final String id;
+        final String label;
+
+        AudioStreamEntry(String id, String label) {
+            this.id = id;
+            this.label = label;
+        }
+    }
+
     private final List<ChapterEntry> chapters = new ArrayList<>();
+    private final List<AudioStreamEntry> audioStreams = new ArrayList<>();
     private String currentUrl;
+    private boolean muted = false;
+    private TextView muteButton;
 
     /* Chrome that should fade in lockstep via setControlsVisible/showControlsTemporarily
        rather than each new button running its own independent inactivity timer that
@@ -218,6 +236,7 @@ public class PlayerActivity extends AppCompatActivity {
         String url = getIntent().getStringExtra(EXTRA_URL);
         long startPositionMs = getIntent().getLongExtra(EXTRA_START_POSITION_MS, 0L);
         parseChapters(getIntent().getStringExtra(EXTRA_CHAPTERS_JSON));
+        parseAudioStreams(getIntent().getStringExtra(EXTRA_AUDIO_STREAMS_JSON));
 
         if (url == null || url.isEmpty()) {
             notifyErrorAndFinish("Missing required extra: url");
@@ -551,6 +570,29 @@ public class PlayerActivity extends AppCompatActivity {
         timeDurationText.setTextSize(13);
         bar.addView(timeDurationText);
 
+        /* A slider isn't offered here the way the web/Xbox leg's transport bar has one -
+           the hardware volume rocker already gives fine-grained control over the media
+           stream on a real device, so this is mute-only, matching common mobile-player
+           convention. */
+        muteButton = new TextView(this);
+        muteButton.setText("🔊");
+        muteButton.setContentDescription("Mute");
+        muteButton.setTextColor(Color.WHITE);
+        muteButton.setTextSize(16);
+        muteButton.setGravity(Gravity.CENTER);
+        LinearLayout.LayoutParams muteParams =
+            new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        muteParams.setMarginStart((int) (10 * density));
+        muteButton.setLayoutParams(muteParams);
+        muteButton.setOnClickListener(v -> {
+            muted = !muted;
+            if (player != null) player.setVolume(muted ? 0f : 1f);
+            muteButton.setText(muted ? "🔇" : "🔊");
+            muteButton.setContentDescription(muted ? "Unmute" : "Mute");
+            showControlsTemporarily();
+        });
+        bar.addView(muteButton);
+
         FrameLayout.LayoutParams barParams =
             new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT);
         barParams.gravity = Gravity.BOTTOM;
@@ -632,6 +674,18 @@ public class PlayerActivity extends AppCompatActivity {
                 showChapterDialog();
                 return true;
             });
+        }
+
+        /* Same "never an empty/dead affordance" rule as Chapters above - only offered
+           when there's actually more than one stream to switch between. */
+        if (audioStreams.size() > 1) {
+            android.view.SubMenu audioMenu = popup.getMenu().addSubMenu("Audio Track");
+            for (AudioStreamEntry entry : audioStreams) {
+                audioMenu.add(entry.label).setOnMenuItemClickListener(item -> {
+                    switchAudioStream(entry.id);
+                    return true;
+                });
+            }
         }
 
         /* Off by default - this spends an extra GPU pass on every frame, and the effect is
@@ -736,6 +790,20 @@ public class PlayerActivity extends AppCompatActivity {
             }
         } catch (org.json.JSONException e) {
             // malformed chapter data - show no chapters rather than crash
+        }
+    }
+
+    private void parseAudioStreams(String json) {
+        audioStreams.clear();
+        if (json == null) return;
+        try {
+            org.json.JSONArray arr = new org.json.JSONArray(json);
+            for (int i = 0; i < arr.length(); i++) {
+                org.json.JSONObject obj = arr.getJSONObject(i);
+                audioStreams.add(new AudioStreamEntry(obj.optString("id", ""), obj.optString("label", "Unknown")));
+            }
+        } catch (org.json.JSONException e) {
+            // malformed audio-stream data - show no Audio Track entry rather than crash
         }
     }
 
@@ -940,6 +1008,34 @@ public class PlayerActivity extends AppCompatActivity {
             .setUri(Uri.parse(currentUrl))
             .setSubtitleConfigurations(java.util.Collections.singletonList(subtitleConfig))
             .build();
+        player.setMediaItem(newItem, resumeMs);
+        player.prepare();
+    }
+
+    /* Plex bakes the selected audio stream into the HLS transcode at session start, so
+       switching tracks means re-requesting the same transcode URL with a new
+       audioStreamID (best-known param name for this, unverified against a live request -
+       same caveat plex-player.js's _buildStreamUrl already carries for maxVideoBitrate)
+       plus a fresh session id and an offset resuming where playback left off. Reuses the
+       same "rebuild MediaItem, resume in place" mechanism applySubtitle uses above - note
+       this drops any active sidecar subtitle track, the same pre-existing limitation
+       applySubtitle already has when called a second time. */
+    private void switchAudioStream(String streamId) {
+        if (player == null || currentUrl == null) return;
+        long resumeMs = player.getCurrentPosition();
+        Uri oldUri = Uri.parse(currentUrl);
+        Uri.Builder builder = oldUri.buildUpon().clearQuery();
+        for (String name : oldUri.getQueryParameterNames()) {
+            if (name.equals("audioStreamID") || name.equals("offset") || name.equals("session")) continue;
+            for (String value : oldUri.getQueryParameters(name)) {
+                builder.appendQueryParameter(name, value);
+            }
+        }
+        builder.appendQueryParameter("audioStreamID", streamId);
+        builder.appendQueryParameter("offset", String.valueOf(resumeMs / 1000));
+        builder.appendQueryParameter("session", java.util.UUID.randomUUID().toString());
+        currentUrl = builder.build().toString();
+        MediaItem newItem = new MediaItem.Builder().setUri(Uri.parse(currentUrl)).build();
         player.setMediaItem(newItem, resumeMs);
         player.prepare();
     }

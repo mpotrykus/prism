@@ -21,6 +21,7 @@ import "./opensubtitles.js";
 const NativePlayer = registerPlugin("NativePlayer");
 const TIMELINE_PING_MS = 10000;
 const CLIENT_ID_KEY = "prism_plex_client_identifier";
+const VOLUME_STORAGE_KEY = "prism_player_volume";
 const CONTROLS_HIDE_DELAY_MS = 1000;
 const PLAYBACK_RATES = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 4, 8];
 const SLEEP_TIMER_PRESETS_MIN = [15, 30, 45, 60];
@@ -150,6 +151,30 @@ function clientIdentifier() {
     return id;
 }
 
+function storedVolume() {
+    const raw = Number(localStorage.getItem(VOLUME_STORAGE_KEY));
+    return Number.isFinite(raw) && raw > 0 && raw <= 1 ? raw : 1;
+}
+
+/* Drawn as an inline SVG using currentColor rather than a "🔊"/"🔉"/"🔇" emoji glyph -
+   those Unicode code points have default emoji presentation on every platform this app
+   targets, so they render as full-color pictures the CSS `color` on the button can never
+   touch (same font-glyph-rendering problem the Android leg's PlayPauseIconView/
+   ChapterSkipIconView already work around by drawing their icons instead of using a
+   glyph). */
+function volumeIconMarkup(level) {
+    const speaker = '<path d="M3 9v6h4l5 5V4L7 9H3z" fill="currentColor"/>';
+    const waveNear = '<path d="M16.5 12c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02z" fill="currentColor"/>';
+    const waveFar =
+        '<path d="M14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z" fill="currentColor"/>';
+    const muteSlash = '<line x1="16" y1="7" x2="22" y2="17" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>';
+    let inner = speaker;
+    if (level <= 0) inner += muteSlash;
+    else if (level < 0.5) inner += waveNear;
+    else inner += waveNear + waveFar;
+    return `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" xmlns="http://www.w3.org/2000/svg">${inner}</svg>`;
+}
+
 class StreamingPlayerController {
     constructor() {
         this._session = null;
@@ -207,6 +232,7 @@ class StreamingPlayerController {
             mediaIndex: item.mediaIndex || 0,
             qualityCapKbps: item.qualityCapKbps ?? null,
         });
+        const audioStreams = item.audioStreams || [];
         this._session = {
             ratingKey,
             key,
@@ -221,6 +247,10 @@ class StreamingPlayerController {
             year: item.year || null,
             seasonNumber: item.seasonNumber ?? null,
             episodeNumber: item.episodeNumber ?? null,
+            mediaIndex: item.mediaIndex || 0,
+            qualityCapKbps: item.qualityCapKbps ?? null,
+            audioStreams,
+            audioStreamId: audioStreams.find((s) => s.selected)?.id ?? null,
         };
         this._activeSkipMarker = null;
 
@@ -284,7 +314,7 @@ class StreamingPlayerController {
         }
     }
 
-    _buildStreamUrl({ plexUrl, plexToken, key, sessionId, startOffsetMs, mediaIndex = 0, partIndex = 0, qualityCapKbps = null }) {
+    _buildStreamUrl({ plexUrl, plexToken, key, sessionId, startOffsetMs, mediaIndex = 0, partIndex = 0, qualityCapKbps = null, audioStreamID = null }) {
         const url = new URL(`${plexUrl}/video/:/transcode/universal/start.m3u8`);
         url.searchParams.set("path", key);
         url.searchParams.set("mediaIndex", String(mediaIndex));
@@ -308,6 +338,11 @@ class StreamingPlayerController {
            param but unconfirmed against a real request from this codebase - verify via
            Plex Web's own network tab before relying on this for anything user-facing. */
         if (qualityCapKbps) url.searchParams.set("maxVideoBitrate", String(qualityCapKbps));
+        /* audioStreamID is the same "best-known param name for this endpoint, unverified
+           against a live request" situation as maxVideoBitrate above - only ever sent by
+           _reloadWebSource when the user actively switches tracks, never on first load,
+           so an initial play() is unaffected if this assumption turns out to be wrong. */
+        if (audioStreamID != null) url.searchParams.set("audioStreamID", String(audioStreamID));
         url.searchParams.set("offset", String(Math.floor(startOffsetMs / 1000)));
         url.searchParams.set("session", sessionId);
         url.searchParams.set("X-Plex-Client-Identifier", clientIdentifier());
@@ -357,6 +392,13 @@ class StreamingPlayerController {
                 title: c.title || c.tag || "",
                 startTimeOffsetMs: c.startTimeOffset ?? 0,
             })),
+            /* {id, label} only - PlayerActivity rebuilds the transcode URL itself when the
+               user picks one (see switchAudioStream), it never needs the raw Plex Stream
+               shape. */
+            audioStreams: (this._session.audioStreams || []).map((s) => ({
+                id: String(s.id),
+                label: s.label || "Unknown",
+            })),
         });
     }
 
@@ -392,29 +434,9 @@ class StreamingPlayerController {
             console.error("StreamingPlayer: <video> error -", err?.code, err?.message);
             this.stop();
         });
+        video.volume = storedVolume();
 
-        if (streamUrl.includes(".m3u8") && !video.canPlayType("application/vnd.apple.mpegurl") && Hls.isSupported()) {
-            const hls = new Hls();
-            hls.on(Hls.Events.ERROR, (event, data) => {
-                console.error("StreamingPlayer: hls.js error -", data.type, data.details, data.fatal ? "(fatal)" : "");
-                if (data.fatal) this.stop();
-            });
-            hls.loadSource(streamUrl);
-            hls.attachMedia(video);
-            this._hls = hls;
-        } else {
-            /* Only this branch needs crossOrigin, not the hls.js branch above - hls.js
-               attaches media via a same-origin blob: URL and feeds it segments through
-               MediaSource.appendBuffer(), so the video element's own origin (as far as
-               canvas/WebGL tainting cares) is the blob URL, never the actual cross-origin
-               Plex URL. This branch assigns the real cross-origin URL directly, so
-               texImage2D (see _renderShaderFrame) would taint the canvas without this -
-               relies on the CORS invariant noted in this repo's CLAUDE.md (Plex answers
-               CORS-clean as long as the token is a query param, which _buildStreamUrl
-               already does). */
-            video.crossOrigin = "anonymous";
-            video.src = streamUrl;
-        }
+        this._attachSource(video, streamUrl);
         video.currentTime = startOffsetMs / 1000;
         document.body.appendChild(video);
         this._videoEl = video;
@@ -467,6 +489,64 @@ class StreamingPlayerController {
         video.addEventListener("mousemove", () => this._showControls());
         video.addEventListener("touchstart", () => this._showControls());
         this._scheduleHideControls();
+    }
+
+    /* Shared by the initial load (_playWeb) and _reloadWebSource (audio-track switch) so
+       the hls.js-vs-native-HLS branching only lives in one place. Destroys any previous
+       hls.js instance first - attachMedia() on a video that already has one attached is
+       not a supported re-attach path. */
+    _attachSource(video, streamUrl) {
+        if (this._hls) {
+            this._hls.destroy();
+            this._hls = null;
+        }
+        if (streamUrl.includes(".m3u8") && !video.canPlayType("application/vnd.apple.mpegurl") && Hls.isSupported()) {
+            const hls = new Hls();
+            hls.on(Hls.Events.ERROR, (event, data) => {
+                console.error("StreamingPlayer: hls.js error -", data.type, data.details, data.fatal ? "(fatal)" : "");
+                if (data.fatal) this.stop();
+            });
+            hls.loadSource(streamUrl);
+            hls.attachMedia(video);
+            this._hls = hls;
+        } else {
+            /* Only this branch needs crossOrigin, not the hls.js branch above - hls.js
+               attaches media via a same-origin blob: URL and feeds it segments through
+               MediaSource.appendBuffer(), so the video element's own origin (as far as
+               canvas/WebGL tainting cares) is the blob URL, never the actual cross-origin
+               Plex URL. This branch assigns the real cross-origin URL directly, so
+               texImage2D (see _renderShaderFrame) would taint the canvas without this -
+               relies on the CORS invariant noted in this repo's CLAUDE.md (Plex answers
+               CORS-clean as long as the token is a query param, which _buildStreamUrl
+               already does). */
+            video.crossOrigin = "anonymous";
+            video.src = streamUrl;
+        }
+    }
+
+    /* Restarts the Plex transcode session with a new audioStreamID, resuming at the
+       current position - Plex bakes the selected audio stream into the HLS transcode at
+       session start, so there's no way to switch tracks without re-requesting the
+       playlist. A fresh session id avoids Plex reusing/confusing the just-abandoned
+       transcode session's own state. */
+    _reloadWebSource(newStreamId) {
+        const video = this._videoEl;
+        const s = this._session;
+        if (!video || !s) return;
+        const offsetMs = Math.round((video.currentTime || 0) * 1000);
+        const streamUrl = this._buildStreamUrl({
+            plexUrl: s.plexUrl,
+            plexToken: s.plexToken,
+            key: s.key,
+            sessionId: crypto.randomUUID(),
+            startOffsetMs: offsetMs,
+            mediaIndex: s.mediaIndex,
+            qualityCapKbps: s.qualityCapKbps,
+            audioStreamID: newStreamId,
+        });
+        this._attachSource(video, streamUrl);
+        video.currentTime = offsetMs / 1000;
+        s.audioStreamId = newStreamId;
     }
 
     /* One 44px circular button matching this player's existing inline-style chrome
@@ -792,9 +872,157 @@ class StreamingPlayerController {
         video.addEventListener("durationchange", syncDuration);
         video.addEventListener("loadedmetadata", syncDuration);
 
+        const muteBtn = document.createElement("button");
+        muteBtn.type = "button";
+        Object.assign(muteBtn.style, {
+            flex: "0 0 auto",
+            width: "28px",
+            height: "28px",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            border: "none",
+            background: "transparent",
+            color: "#fff",
+            cursor: "pointer",
+            padding: "0",
+        });
+
+        /* A floating panel above the mute icon - matches the volume-flyout convention
+           most desktop/TV players use (drag up for louder) rather than a slider that
+           permanently eats transport-bar space. Appended to document.body (not `bar`)
+           so its `position: fixed` coordinates, computed off muteBtn's own rect in
+           positionVolumePopout, aren't affected by the bar's own opacity/transform
+           transitions. */
+        const volumePopout = document.createElement("div");
+        Object.assign(volumePopout.style, {
+            position: "fixed",
+            zIndex: "10002",
+            background: "rgba(20,20,20,0.92)",
+            borderRadius: "8px",
+            padding: "14px 10px",
+            boxShadow: "0 12px 32px rgba(0,0,0,0.5)",
+            opacity: "0",
+            transform: "translate(-50%, 8px)",
+            transition: "opacity 0.15s ease, transform 0.15s ease",
+            pointerEvents: "none",
+        });
+
+        const volumeSlider = document.createElement("input");
+        volumeSlider.type = "range";
+        volumeSlider.className = "streaming-player-seek";
+        volumeSlider.min = "0";
+        volumeSlider.max = "100";
+        Object.assign(volumeSlider.style, {
+            /* writing-mode is the standards-based way to get a vertical range input -
+               every target this app ships to (Chrome/Edge, Android WebView, Xbox
+               WebView2) is Chromium-based and supports it. direction: rtl puts the
+               minimum at the bottom and the maximum at the top, matching a physical
+               volume slider. */
+            writingMode: "vertical-lr",
+            direction: "rtl",
+            width: "6px",
+            height: "90px",
+            accentColor: "#e5a00d",
+            cursor: "pointer",
+        });
+        volumePopout.appendChild(volumeSlider);
+        document.body.appendChild(volumePopout);
+        this._volumePopoutEl = volumePopout;
+
+        const positionVolumePopout = () => {
+            const rect = muteBtn.getBoundingClientRect();
+            volumePopout.style.left = `${rect.left + rect.width / 2}px`;
+            volumePopout.style.bottom = `${window.innerHeight - rect.top + 8}px`;
+        };
+        const showVolumePopout = () => {
+            positionVolumePopout();
+            volumePopout.style.opacity = "1";
+            volumePopout.style.pointerEvents = "auto";
+            volumePopout.style.transform = "translate(-50%, 0)";
+        };
+        /* sliderActive covers the duration of a drag - hideVolumePopout would otherwise
+           fire mid-drag whenever the pointer momentarily leaves the (narrow) slider or
+           popout bounds, yanking the control out from under the user's own gesture. */
+        let sliderActive = false;
+        let volumeHideTimer = null;
+        const hideVolumePopout = () => {
+            if (sliderActive) return;
+            volumePopout.style.opacity = "0";
+            volumePopout.style.pointerEvents = "none";
+            volumePopout.style.transform = "translate(-50%, 8px)";
+        };
+        /* Debounced rather than immediate - moving the mouse from muteBtn up to the
+           popout crosses a small real gap between two non-nested elements, and an
+           immediate hide-on-leave would close the popout before the cursor arrives. */
+        const scheduleHideVolumePopout = () => {
+            clearTimeout(volumeHideTimer);
+            volumeHideTimer = setTimeout(hideVolumePopout, 150);
+        };
+        muteBtn.addEventListener("mouseenter", () => {
+            clearTimeout(volumeHideTimer);
+            showVolumePopout();
+        });
+        muteBtn.addEventListener("mouseleave", scheduleHideVolumePopout);
+        /* The popout sits outside the transport bar's own DOM box (position: fixed off
+           document.body), so hovering it alone wouldn't otherwise count toward the bar's
+           own idle-fade tracking (see _registerControlButton) - mirrors that method's
+           onEnter/onLeave exactly so the rest of the chrome doesn't fade out from under
+           the popout while it's in use. */
+        volumePopout.addEventListener("mouseenter", () => {
+            clearTimeout(volumeHideTimer);
+            this._controlsHovering = true;
+            clearTimeout(this._controlsHideTimer);
+            this._showControls();
+        });
+        volumePopout.addEventListener("mouseleave", () => {
+            scheduleHideVolumePopout();
+            this._controlsHovering = false;
+            this._scheduleHideControls();
+        });
+        volumeSlider.addEventListener("focus", showVolumePopout);
+        volumeSlider.addEventListener("blur", scheduleHideVolumePopout);
+        volumeSlider.addEventListener("pointerdown", () => {
+            sliderActive = true;
+        });
+        const endSliderDrag = () => {
+            sliderActive = false;
+            scheduleHideVolumePopout();
+        };
+        volumeSlider.addEventListener("pointerup", endSliderDrag);
+        volumeSlider.addEventListener("pointercancel", endSliderDrag);
+
+        /* video.volume is already set from the stored preference before this bar is built
+           (see _playWeb) - this only syncs the icon/slider to whatever that (or a later
+           user change) actually is, never writes it. */
+        const syncVolumeUi = () => {
+            const level = video.muted ? 0 : video.volume;
+            volumeSlider.value = String(Math.round(level * 100));
+            muteBtn.innerHTML = volumeIconMarkup(level);
+            muteBtn.setAttribute("aria-label", level <= 0 ? "Unmute" : "Mute");
+        };
+        syncVolumeUi();
+
+        muteBtn.addEventListener("click", () => {
+            video.muted = !video.muted;
+            syncVolumeUi();
+        });
+        volumeSlider.addEventListener("input", () => {
+            const level = Number(volumeSlider.value) / 100;
+            video.muted = false;
+            video.volume = level;
+            /* Only a non-zero level is worth remembering as "the last volume the user
+               chose" - persisting 0 would make every future session open muted with no
+               visible way to tell why. */
+            if (level > 0) localStorage.setItem(VOLUME_STORAGE_KEY, String(level));
+            syncVolumeUi();
+        });
+        video.addEventListener("volumechange", syncVolumeUi);
+
         bar.appendChild(timeCurrent);
         bar.appendChild(seek);
         bar.appendChild(timeDuration);
+        bar.appendChild(muteBtn);
         document.body.appendChild(bar);
         this._registerControlButton(bar, { anchor: false });
         return bar;
@@ -829,8 +1057,27 @@ class StreamingPlayerController {
         if (this._session?.chapters?.length) {
             items.push({ label: "Chapters", onSelect: () => this._openChapterMenu(anchor) });
         }
+        if (this._session?.audioStreams?.length > 1) {
+            const current = this._session.audioStreams.find((s) => s.id === this._session.audioStreamId);
+            items.push({ label: `Audio Track${current ? `  (${current.label})` : ""}`, onSelect: () => this._openAudioMenu(anchor) });
+        }
         items.push({ label: "Subtitles", onSelect: () => this._openSubtitleSearch(anchor) });
         this._openInlineMenu({ anchor, items });
+    }
+
+    _openAudioMenu(anchor) {
+        const streams = this._session?.audioStreams || [];
+        const current = this._session?.audioStreamId;
+        this._openInlineMenu({
+            anchor,
+            items: [
+                { label: "← Back", onSelect: () => this._openHamburgerMenu(anchor) },
+                ...streams.map((stream) => ({
+                    label: `${stream.label}${stream.id === current ? "  ✓" : ""}`,
+                    onSelect: () => this._reloadWebSource(stream.id),
+                })),
+            ],
+        });
     }
 
     _openSpeedMenu(anchor) {
@@ -1641,6 +1888,10 @@ class StreamingPlayerController {
             this._skipBtnEl = null;
         }
         this._activeSkipMarker = null;
+        if (this._volumePopoutEl) {
+            this._volumePopoutEl.remove();
+            this._volumePopoutEl = null;
+        }
         if (this._spinnerEl) {
             this._spinnerEl.remove();
             this._spinnerEl = null;

@@ -2879,6 +2879,22 @@ class PlexNetflixCard extends HTMLElement {
     this._loadTitleInfoSimilar(meta.ratingKey);
   }
 
+  /* Plex's Media[].Part[].Stream[] carries every stream on a version (video/audio/
+     subtitle, distinguished by streamType - 2 is audio). Only surfaced for the player's
+     Audio Track menu, which stays hidden entirely when there's nothing to switch between
+     (see plex-player.js's _openHamburgerMenu), so an item with only one audio stream (or
+     no Stream data at all) just yields an empty list here rather than an error. */
+  _extractAudioStreams(media, mediaIndex) {
+    const streams = media?.[mediaIndex]?.Part?.[0]?.Stream || [];
+    return streams
+      .filter((s) => s.streamType === 2)
+      .map((s) => ({
+        id: s.id,
+        label: s.extendedDisplayTitle || s.displayTitle || s.languageCode || "Unknown",
+        selected: !!s.selected,
+      }));
+  }
+
   _formatRuntime(ms) {
     const mins = Math.round(ms / 60000);
     const h = Math.floor(mins / 60);
@@ -2940,6 +2956,7 @@ class PlexNetflixCard extends HTMLElement {
               source: "local",
               markers: ep.Marker || [],
               chapters: ep.Chapter || [],
+              audioStreams: this._extractAudioStreams(ep.Media, 0),
             });
           });
         });
@@ -3047,14 +3064,16 @@ class PlexNetflixCard extends HTMLElement {
     }
     const item = this._titleInfoItem;
     if (!item) return;
+    const mediaIndex = this._titleInfoSelectedMediaIndex || 0;
     await this._playItem(item, {
       durationMs: this._titleInfoDuration,
       startOffsetMs: this._titleInfoViewOffset,
       source: this._titleInfoSource,
       markers: this._titleInfoMarkers,
       chapters: this._titleInfoChapters,
-      mediaIndex: this._titleInfoSelectedMediaIndex || 0,
+      mediaIndex,
       qualityCapKbps: this._titleInfoQualityCapKbps,
+      audioStreams: this._extractAudioStreams(this._titleInfoMedia, mediaIndex),
     });
   }
 
@@ -3072,6 +3091,7 @@ class PlexNetflixCard extends HTMLElement {
         source: "local",
         markers: meta.Marker || [],
         chapters: meta.Chapter || [],
+        audioStreams: this._extractAudioStreams(meta.Media, 0),
       });
     } catch (e) {
       // best-effort - Play simply won't respond if this fails
@@ -3083,7 +3103,7 @@ class PlexNetflixCard extends HTMLElement {
      Plex web player) when that's unavailable or playback fails to start - e.g. a
      watchlist item with no local ratingKey, which StreamingPlayer.play rejects by design.
      Shared by the title-info modal's Play button and the episode list's direct-play rows. */
-  async _playItem(item, { durationMs = null, startOffsetMs = 0, source, markers = [], chapters = [], mediaIndex = 0, qualityCapKbps = null } = {}) {
+  async _playItem(item, { durationMs = null, startOffsetMs = 0, source, markers = [], chapters = [], mediaIndex = 0, qualityCapKbps = null, audioStreams = [] } = {}) {
     if (window.StreamingPlayer) {
       try {
         await window.StreamingPlayer.play({
@@ -3098,6 +3118,7 @@ class PlexNetflixCard extends HTMLElement {
           chapters,
           mediaIndex,
           qualityCapKbps,
+          audioStreams,
           /* Already produced by _mapItem for every call site - title is the show's own
              title (not the episode's) for episode items, which is what a subtitle search
              query needs to key off, not the individual episode title. */
