@@ -1,4 +1,4 @@
-import { wireLinearNav } from "./focus-nav.js";
+import { wireLinearNav, focusAfterPaint } from "./focus-nav.js";
 
 /* Only non-sensitive fields live here in plain localStorage. plex_token,
    youtube_api_key, openrouter_api_key, and plex_account_token go through vault.js
@@ -346,7 +346,7 @@ class StreamingSettingsModal extends HTMLElement {
     this._el(".save-status").textContent = "";
     this._el(".save-status").className = "status save-status";
     this._overlay.classList.add("open");
-    this._el(".modal-close").focus();
+    focusAfterPaint(this._el(".modal-close"));
   }
 
   /* Decrypts (once per open() - see above) whatever secrets are already stored, so

@@ -21,6 +21,17 @@
       navigating.
 */
 
+/* WebView2 (confirmed on the Xbox/UWP shell, reproduces on desktop too) won't accept
+   .focus() on an element in the same synchronous tick its display:none is lifted (e.g.
+   right after classList.add("open")) - the element silently stays unfocused until
+   something else (Tab, a click) forces a layout pass first. Chrome/Firefox don't have
+   this problem, which is why every modal/overlay in this app called .focus() inline for
+   so long without issue. Deferring to the next animation frame guarantees a layout pass
+   has already happened. */
+export function focusAfterPaint(el) {
+  requestAnimationFrame(() => el?.focus());
+}
+
 const COOLDOWN_MS = 120;
 const REPEAT_DELAY_MS = 400;
 const REPEAT_RATE_MS = 150;
@@ -113,7 +124,7 @@ export function wireLinearNav(root, selector, { orientation = "vertical", onActi
   }
 
   function focusFirst() {
-    items()[0]?.focus();
+    focusAfterPaint(items()[0]);
   }
 
   function move(delta) {

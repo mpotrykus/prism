@@ -1,4 +1,4 @@
-import { wireLinearNav, registerNavHandler } from "./focus-nav.js";
+import { wireLinearNav, registerNavHandler, focusAfterPaint } from "./focus-nav.js";
 import { App } from "@capacitor/app";
 
 const STYLE = `
@@ -1282,7 +1282,7 @@ class PlexNetflixCard extends HTMLElement {
       this._pinModal.classList.remove("shake");
       this._renderPinDots();
       this._pinOverlay.classList.add("open");
-      this.shadowRoot.querySelector(".pin-key[data-digit]")?.focus();
+      focusAfterPaint(this.shadowRoot.querySelector(".pin-key[data-digit]"));
     });
   }
 
@@ -2636,7 +2636,7 @@ class PlexNetflixCard extends HTMLElement {
       this._titleInfoWatchlistBtn.setAttribute("aria-label", added ? "Remove from My List" : "Add to My List");
     }
     this._titleInfoOverlay.classList.add("open");
-    this._titleInfoOverlay.focus();
+    focusAfterPaint(this._titleInfoOverlay);
 
     let ratingKey = item.ratingKey;
     if (source === "watchlist") {
@@ -2782,7 +2782,7 @@ class PlexNetflixCard extends HTMLElement {
   _openQualityPicker() {
     this._renderQualityPicker();
     this._qualityPickerOverlay.classList.add("open");
-    this._qualityPickerDoneBtn.focus();
+    focusAfterPaint(this._qualityPickerDoneBtn);
   }
 
   _closeQualityPicker() {

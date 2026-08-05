@@ -1,7 +1,7 @@
 /* Plex sign-in, split out from <streaming-settings-modal> so it can gate the whole app
    at boot (see app.js) - blocking until a server is connected - while everything else
    configurable (libraries, trailers, AI rows, kids mode, display) lives in Settings. */
-import { wireLinearNav } from "./focus-nav.js";
+import { wireLinearNav, focusAfterPaint } from "./focus-nav.js";
 
 const SECTION_TYPE_MAP = { movie: 1, show: 2 };
 
@@ -126,7 +126,7 @@ class StreamingPlexSigninModal extends HTMLElement {
     this._el(".server-picker").innerHTML = "";
     this._el(".link-code").hidden = true;
     this._overlay.classList.add("open");
-    this._el(".btn-plex-signin").focus();
+    focusAfterPaint(this._el(".btn-plex-signin"));
   }
 
   close() {
