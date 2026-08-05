@@ -240,7 +240,7 @@ class StreamingPlayerController {
     _playWeb(streamUrl, startOffsetMs) {
         const video = document.createElement("video");
         video.className = "streaming-player-video";
-        video.controls = true;
+        video.controls = false;
         video.autoplay = true;
         Object.assign(video.style, {
             position: "fixed",
@@ -285,12 +285,11 @@ class StreamingPlayerController {
         video.currentTime = startOffsetMs / 1000;
         document.body.appendChild(video);
         this._videoEl = video;
+        this._buildLoadingSpinner(video);
 
         /* Not just a convenience: on the Xbox WebView2 shell there's no browser chrome
            and no back button to fall back on at all, so an explicit close control isn't
-           optional the way it might seem on desktop web. Registered first so it lands
-           rightmost - every control button added after it (speed, sleep timer, ...)
-           stacks to its left, see _registerControlButton. */
+           optional the way it might seem on desktop web. */
         const closeBtn = this._makeControlButton({
             ariaLabel: "Close player",
             content: "✕",
@@ -298,19 +297,38 @@ class StreamingPlayerController {
         });
         this._registerControlButton(closeBtn);
 
+        /* Every custom option (speed, sleep timer, zoom, chapters, subtitles) lives behind
+           this single button instead of one circular button each - see _openHamburgerMenu.
+           Opposite corner from the close button, matching the Android leg's layout
+           (hamburger top-left, close top-right). */
+        const menuBtn = this._makeControlButton({
+            ariaLabel: "Player options",
+            content: "☰",
+            onClick: () => this._openHamburgerMenu(menuBtn),
+        });
+        this._registerControlButton(menuBtn, { side: "left" });
+
         this._zoomIndex = 0;
         this._zoomPanX = 0;
         this._zoomPanY = 0;
-        this._buildSpeedControl();
-        this._buildSleepTimerControl();
-        this._buildZoomControl();
-        if (this._session?.chapters?.length) this._buildChapterListControl();
-        this._buildSubtitleControl();
+        this._sleepMinutes = 0;
+        this._wireZoomPan();
+        this._buildCenterControls(video);
+        this._buildTransportBar(video);
 
-        /* Mirrors how native player chrome (and the browser's own <video controls>) behaves -
-           visible on activity, fades after a few seconds idle. video.controls hides its own
-           bar this way already but exposes no event for it, so this row of buttons fades on
-           its own shared timer instead of trying to sync with that. */
+        /* Tapping the video itself toggles play/pause, matching every mainstream player -
+           only when not zoomed in, since zoomed-in drag is already claimed by pan (see
+           _wireZoomPan) and would otherwise fight this for the same gesture. */
+        video.addEventListener("click", () => {
+            if (ZOOM_LEVELS[this._zoomIndex] > 1) return;
+            if (video.paused) video.play();
+            else video.pause();
+        });
+
+        /* Mirrors how native player chrome behaves - visible on activity, fades after a
+           few seconds idle. This custom chrome (transport bar + top buttons) replaces
+           video.controls entirely now, so it owns show/hide itself rather than trying to
+           piggyback on the browser's own (now-disabled) control bar. */
         video.addEventListener("mousemove", () => this._showControls());
         video.addEventListener("touchstart", () => this._showControls());
         this._scheduleHideControls();
@@ -344,12 +362,17 @@ class StreamingPlayerController {
         return btn;
     }
 
-    /* Registers a control button into the shared fade-timer row: right-anchored based
-       on registration order (each new button stacks to the left of the previous one),
-       and wired so hovering/focusing *any* registered button keeps the whole row visible
-       - not just itself - matching how a single physical control bar behaves. */
-    _registerControlButton(el) {
-        el.style.right = `${20 + this._controlButtons.length * 56}px`;
+    /* Registers an element into the shared fade-timer row: anchored to the given corner
+       (stacking further from the edge as more buttons join that same side) unless
+       anchor:false (used by the full-width transport bar, which positions itself), and
+       wired so hovering/focusing *any* registered element keeps the whole row visible -
+       not just itself - matching how a single physical control bar behaves. */
+    _registerControlButton(el, { anchor = true, side = "right" } = {}) {
+        if (anchor) {
+            const stacked = this._controlButtons.filter((b) => b.dataset.anchorSide === side).length;
+            el.dataset.anchorSide = side;
+            el.style[side] = `${20 + stacked * 56}px`;
+        }
         this._controlButtons.push(el);
         document.body.appendChild(el);
         const onEnter = () => {
@@ -371,36 +394,318 @@ class StreamingPlayerController {
     _showControls() {
         this._controlButtons.forEach((b) => {
             b.style.opacity = "1";
+            b.style.pointerEvents = "auto";
         });
         this._scheduleHideControls();
     }
 
+    /* pointerEvents is toggled alongside opacity, not just opacity alone - a faded-out
+       transport bar spanning the full screen width would otherwise still intercept clicks
+       (opacity:0 doesn't remove a hit target), swallowing taps on the video underneath that
+       are meant to toggle play/pause or reshow the controls. */
     _scheduleHideControls() {
         clearTimeout(this._controlsHideTimer);
         if (this._controlsHovering) return;
         this._controlsHideTimer = setTimeout(() => {
             this._controlButtons.forEach((b) => {
                 b.style.opacity = "0";
+                b.style.pointerEvents = "none";
             });
         }, CONTROLS_HIDE_DELAY_MS);
     }
 
-    _buildSpeedControl() {
-        const btn = this._makeControlButton({ ariaLabel: "Playback speed", content: "1x" });
-        btn.addEventListener("click", () =>
-            this._openInlineMenu({
-                anchor: btn,
-                items: PLAYBACK_RATES.map((rate) => ({
-                    label: `${rate}x`,
-                    onSelect: () => {
-                        this._setPlaybackRate(rate);
-                        btn.textContent = `${rate}x`;
-                    },
-                })),
-            })
-        );
-        this._registerControlButton(btn);
+    /* Buffering indicator - independent of the idle-fade control row (same "contextual,
+       not ambient chrome" reasoning as the skip button): it reflects actual network/decode
+       state, not user activity, so it has to stay visible even while the rest of the
+       chrome has faded out from inactivity. pointerEvents:none so it never blocks clicks
+       on the center play/pause button or video underneath it while overlapping them. */
+    _buildLoadingSpinner(video) {
+        if (!document.getElementById("streaming-player-spinner-style")) {
+            const style = document.createElement("style");
+            style.id = "streaming-player-spinner-style";
+            style.textContent = "@keyframes streaming-player-spin { to { transform: translate(-50%, -50%) rotate(360deg); } }";
+            document.head.appendChild(style);
+        }
+
+        const spinner = document.createElement("div");
+        Object.assign(spinner.style, {
+            position: "fixed",
+            top: "50%",
+            left: "50%",
+            transform: "translate(-50%, -50%)",
+            zIndex: "10002",
+            width: "48px",
+            height: "48px",
+            borderRadius: "50%",
+            border: "4px solid rgba(255,255,255,0.25)",
+            borderTopColor: "#fff",
+            animation: "streaming-player-spin 0.8s linear infinite",
+            pointerEvents: "none",
+        });
+        document.body.appendChild(spinner);
+        this._spinnerEl = spinner;
+
+        const show = () => {
+            spinner.style.display = "block";
+        };
+        const hide = () => {
+            spinner.style.display = "none";
+        };
+        video.addEventListener("waiting", show);
+        video.addEventListener("seeking", show);
+        video.addEventListener("playing", hide);
+        video.addEventListener("canplay", hide);
+        video.addEventListener("pause", hide);
+        video.addEventListener("seeked", () => {
+            if (!video.paused) hide();
+        });
+        show();
+    }
+
+    /* Center overlay: play/pause flanked by previous/next-chapter buttons, matching
+       YouTube's mobile layout - only built when the session actually has chapters, same
+       "never an empty/dead affordance" rule the hamburger's Chapters entry follows. */
+    _buildCenterControls(video) {
+        const row = document.createElement("div");
+        Object.assign(row.style, {
+            position: "fixed",
+            top: "50%",
+            left: "50%",
+            transform: "translate(-50%, -50%)",
+            zIndex: "10001",
+            display: "flex",
+            alignItems: "center",
+            gap: "24px",
+            opacity: "1",
+            transition: "opacity 0.25s ease",
+        });
+
+        const chapters = this._session?.chapters || [];
+        if (chapters.length) row.appendChild(this._makeChapterNavButton("prev", video));
+
+        const playBtn = document.createElement("button");
+        playBtn.type = "button";
+        playBtn.setAttribute("aria-label", "Play/Pause");
+        Object.assign(playBtn.style, {
+            width: "64px",
+            height: "64px",
+            borderRadius: "50%",
+            border: "none",
+            background: "rgba(20,20,20,0.55)",
+            color: "#fff",
+            fontSize: "24px",
+            cursor: "pointer",
+        });
+        const syncPlayIcon = () => {
+            playBtn.textContent = video.paused ? "▶" : "⏸";
+        };
+        syncPlayIcon();
+        playBtn.addEventListener("click", () => {
+            if (video.paused) video.play();
+            else video.pause();
+        });
+        video.addEventListener("play", syncPlayIcon);
+        video.addEventListener("pause", syncPlayIcon);
+        row.appendChild(playBtn);
+
+        if (chapters.length) row.appendChild(this._makeChapterNavButton("next", video));
+
+        this._registerControlButton(row, { anchor: false });
+        return row;
+    }
+
+    _makeChapterNavButton(direction, video) {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.setAttribute("aria-label", direction === "prev" ? "Previous chapter" : "Next chapter");
+        btn.textContent = direction === "prev" ? "⏮" : "⏭";
+        Object.assign(btn.style, {
+            width: "48px",
+            height: "48px",
+            borderRadius: "50%",
+            border: "none",
+            background: "rgba(20,20,20,0.55)",
+            color: "#fff",
+            fontSize: "18px",
+            cursor: "pointer",
+        });
+        btn.addEventListener("click", () => this._seekToAdjacentChapter(direction, video));
         return btn;
+    }
+
+    /* "Previous" restarts the current chapter once more than a few seconds into it (rather
+       than always jumping two chapters at once) - the same convention as prev-track buttons
+       on physical media remotes. */
+    _seekToAdjacentChapter(direction, video) {
+        const chapters = this._session?.chapters || [];
+        if (!chapters.length) return;
+        const position = video.currentTime * 1000;
+        if (direction === "next") {
+            const next = chapters.find((c) => (c.startTimeOffset ?? 0) > position);
+            if (next) video.currentTime = (next.startTimeOffset ?? 0) / 1000;
+            return;
+        }
+        let current = null;
+        let previous = null;
+        for (const c of chapters) {
+            if ((c.startTimeOffset ?? 0) <= position) {
+                previous = current;
+                current = c;
+            } else break;
+        }
+        if (current && position - (current.startTimeOffset ?? 0) > 3000) {
+            video.currentTime = (current.startTimeOffset ?? 0) / 1000;
+        } else {
+            video.currentTime = (previous?.startTimeOffset ?? 0) / 1000;
+        }
+    }
+
+    /* Bottom transport bar: scrub bar and elapsed/total time - replaces the browser's
+       native <video controls> chrome (disabled in _playWeb) so the transport looks and
+       behaves the same on every platform instead of whatever bar the host browser/OS
+       ships. Registered anchor:false since it spans the full width itself rather than
+       stacking as a small right-anchored button like the others. */
+    _buildTransportBar(video) {
+        const bar = document.createElement("div");
+        Object.assign(bar.style, {
+            position: "fixed",
+            left: "0",
+            right: "0",
+            bottom: "0",
+            zIndex: "10001",
+            display: "flex",
+            alignItems: "center",
+            gap: "12px",
+            padding: "10px 20px",
+            background: "linear-gradient(transparent, rgba(0,0,0,0.75))",
+            opacity: "1",
+            transition: "opacity 0.25s ease",
+            boxSizing: "border-box",
+        });
+
+        const timeCurrent = document.createElement("span");
+        const timeDuration = document.createElement("span");
+        [timeCurrent, timeDuration].forEach((el) => {
+            Object.assign(el.style, {
+                flex: "0 0 auto",
+                color: "#fff",
+                fontSize: "13px",
+                fontFamily: '"Roboto", sans-serif',
+                fontVariantNumeric: "tabular-nums",
+            });
+        });
+        timeCurrent.textContent = "0:00";
+        timeDuration.textContent = "0:00";
+
+        /* The lingering focus ring on a <input type=range> lives on its internal
+           ::-webkit-slider-thumb/::-moz-range-thumb shadow part, not the input element
+           itself - setting outline:none as an inline style on the input can't reach it, it
+           has to come from a real stylesheet rule. Chromium's own form-control refresh also
+           draws this ring via box-shadow rather than outline, so both need resetting. */
+        if (!document.getElementById("streaming-player-seek-style")) {
+            const style = document.createElement("style");
+            style.id = "streaming-player-seek-style";
+            style.textContent = `
+                .streaming-player-seek, .streaming-player-seek:focus, .streaming-player-seek:focus-visible {
+                    outline: none;
+                    box-shadow: none;
+                }
+                .streaming-player-seek::-webkit-slider-thumb { outline: none; box-shadow: none; }
+                .streaming-player-seek::-moz-range-thumb { outline: none; box-shadow: none; }
+                .streaming-player-seek::-moz-focus-outer { border: 0; }
+            `;
+            document.head.appendChild(style);
+        }
+
+        const seek = document.createElement("input");
+        seek.type = "range";
+        seek.className = "streaming-player-seek";
+        seek.min = "0";
+        seek.max = "1000";
+        seek.value = "0";
+        /* #e5a00d matches the app's existing amber accent (see plex-netflix-card.js's
+           poster/title-info progress bars) rather than the browser-default white fill. */
+        Object.assign(seek.style, { flex: "1 1 auto", accentColor: "#e5a00d", cursor: "pointer" });
+
+        /* Scrubbing is tracked so the timeupdate-driven sync below doesn't fight the
+           user's own drag - without it, every timeupdate tick would snap the thumb back
+           to the actual playback position mid-drag. */
+        let scrubbing = false;
+        seek.addEventListener("pointerdown", () => {
+            scrubbing = true;
+        });
+        const endScrub = () => {
+            scrubbing = false;
+        };
+        seek.addEventListener("pointerup", endScrub);
+        seek.addEventListener("pointercancel", endScrub);
+        seek.addEventListener("input", () => {
+            if (!video.duration) return;
+            const time = (Number(seek.value) / 1000) * video.duration;
+            video.currentTime = time;
+            timeCurrent.textContent = this._formatTime(time);
+        });
+
+        video.addEventListener("timeupdate", () => {
+            if (scrubbing || !video.duration) return;
+            seek.value = String(Math.round((video.currentTime / video.duration) * 1000));
+            timeCurrent.textContent = this._formatTime(video.currentTime);
+        });
+        const syncDuration = () => {
+            timeDuration.textContent = this._formatTime(video.duration || 0);
+        };
+        video.addEventListener("durationchange", syncDuration);
+        video.addEventListener("loadedmetadata", syncDuration);
+
+        bar.appendChild(timeCurrent);
+        bar.appendChild(seek);
+        bar.appendChild(timeDuration);
+        document.body.appendChild(bar);
+        this._registerControlButton(bar, { anchor: false });
+        return bar;
+    }
+
+    _formatTime(seconds) {
+        const total = Math.max(0, Math.floor(seconds || 0));
+        const h = Math.floor(total / 3600);
+        const m = Math.floor((total % 3600) / 60);
+        const s = total % 60;
+        return h > 0 ? `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}` : `${m}:${String(s).padStart(2, "0")}`;
+    }
+
+    /* Every custom option lives behind one hamburger button instead of one circular
+       button each (see _playWeb) - this is its top-level list; each entry either opens a
+       submenu (with its own "← Back" row back to here) or, for subtitles, the search panel. */
+    _openHamburgerMenu(anchor) {
+        const rate = this._session?.playbackRate || 1;
+        const zoomLevel = ZOOM_LEVELS[this._zoomIndex];
+        const items = [
+            { label: `Playback Speed  (${rate}x)`, onSelect: () => this._openSpeedMenu(anchor) },
+            {
+                label: `Sleep Timer${this._sleepMinutes ? `  (${this._sleepMinutes}m)` : ""}`,
+                onSelect: () => this._openSleepMenu(anchor),
+            },
+            { label: `Zoom  (${zoomLevel}x)`, onSelect: () => this._openZoomMenu(anchor) },
+        ];
+        if (this._session?.chapters?.length) {
+            items.push({ label: "Chapters", onSelect: () => this._openChapterMenu(anchor) });
+        }
+        items.push({ label: "Subtitles", onSelect: () => this._openSubtitleSearch(anchor) });
+        this._openInlineMenu({ anchor, items });
+    }
+
+    _openSpeedMenu(anchor) {
+        const current = this._session?.playbackRate || 1;
+        this._openInlineMenu({
+            anchor,
+            items: [
+                { label: "← Back", onSelect: () => this._openHamburgerMenu(anchor) },
+                ...PLAYBACK_RATES.map((rate) => ({
+                    label: `${rate}x${rate === current ? "  ✓" : ""}`,
+                    onSelect: () => this._setPlaybackRate(rate),
+                })),
+            ],
+        });
     }
 
     async _setPlaybackRate(rate) {
@@ -413,23 +718,19 @@ class StreamingPlayerController {
         }
     }
 
-    _buildSleepTimerControl() {
-        const btn = this._makeControlButton({ ariaLabel: "Sleep timer", content: "⏰" });
-        btn.addEventListener("click", () =>
-            this._openInlineMenu({
-                anchor: btn,
-                items: [
-                    { label: "Off", onSelect: () => this._setSleepTimer(0) },
-                    ...SLEEP_TIMER_PRESETS_MIN.map((min) => ({
-                        label: `${min} min`,
-                        onSelect: () => this._setSleepTimer(min * 60000),
-                    })),
-                    { label: "End of episode", onSelect: () => this._setSleepTimer(0) },
-                ],
-            })
-        );
-        this._registerControlButton(btn);
-        return btn;
+    _openSleepMenu(anchor) {
+        this._openInlineMenu({
+            anchor,
+            items: [
+                { label: "← Back", onSelect: () => this._openHamburgerMenu(anchor) },
+                { label: `Off${!this._sleepMinutes ? "  ✓" : ""}`, onSelect: () => this._setSleepTimer(0) },
+                ...SLEEP_TIMER_PRESETS_MIN.map((min) => ({
+                    label: `${min} min${this._sleepMinutes === min ? "  ✓" : ""}`,
+                    onSelect: () => this._setSleepTimer(min * 60000),
+                })),
+                { label: "End of episode", onSelect: () => this._setSleepTimer(0) },
+            ],
+        });
     }
 
     /* ms=0 clears any pending timer - used by both "Off" (don't pause early) and "End of
@@ -437,23 +738,25 @@ class StreamingPlayerController {
     _setSleepTimer(ms) {
         clearTimeout(this._sleepTimer);
         this._sleepTimer = ms > 0 ? setTimeout(() => this.pause(), ms) : null;
+        this._sleepMinutes = ms > 0 ? Math.round(ms / 60000) : 0;
     }
 
-    /* Cycles a fixed preset list rather than continuous pinch-zoom (which the web/Xbox
-       leg has no gesture for anyway, unlike Android's native pinch handling) - clicking
-       activates fine via mouse or D-pad "select," matching the button-only Xbox support
-       this feature is scoped to (pan itself has no D-pad mapping yet). */
-    _buildZoomControl() {
-        const btn = this._makeControlButton({ ariaLabel: "Zoom", content: "⤢" });
-        btn.addEventListener("click", () => {
-            this._zoomIndex = (this._zoomIndex + 1) % ZOOM_LEVELS.length;
-            this._zoomPanX = 0;
-            this._zoomPanY = 0;
-            this._applyZoomTransform();
+    _openZoomMenu(anchor) {
+        this._openInlineMenu({
+            anchor,
+            items: [
+                { label: "← Back", onSelect: () => this._openHamburgerMenu(anchor) },
+                ...ZOOM_LEVELS.map((level, idx) => ({
+                    label: `${level}x${idx === this._zoomIndex ? "  ✓" : ""}`,
+                    onSelect: () => {
+                        this._zoomIndex = idx;
+                        this._zoomPanX = 0;
+                        this._zoomPanY = 0;
+                        this._applyZoomTransform();
+                    },
+                })),
+            ],
         });
-        this._registerControlButton(btn);
-        this._wireZoomPan();
-        return btn;
     }
 
     _applyZoomTransform() {
@@ -500,31 +803,25 @@ class StreamingPlayerController {
 
     /* Reuses _openInlineMenu (same scrollable tap-to-pick list as the speed/sleep-timer
        presets) rather than a bespoke list UI - title + timestamp only, no thumbnails,
-       per this feature's scope. Only built when the session actually has chapters (see
-       _playWeb), so there's never an empty popup with nothing explaining it. */
-    _buildChapterListControl() {
-        const btn = this._makeControlButton({ ariaLabel: "Chapters", content: "☰" });
-        btn.addEventListener("click", () =>
-            this._openInlineMenu({
-                anchor: btn,
-                items: (this._session?.chapters || []).map((chapter) => ({
+       per this feature's scope. Only offered from the hamburger menu when the session
+       actually has chapters (see _openHamburgerMenu), so there's never an empty list. */
+    _openChapterMenu(anchor) {
+        this._openInlineMenu({
+            anchor,
+            items: [
+                { label: "← Back", onSelect: () => this._openHamburgerMenu(anchor) },
+                ...(this._session?.chapters || []).map((chapter) => ({
                     label: this._chapterLabel(chapter),
                     onSelect: () => {
                         if (this._videoEl) this._videoEl.currentTime = (chapter.startTimeOffset ?? 0) / 1000;
                     },
                 })),
-            })
-        );
-        this._registerControlButton(btn);
-        return btn;
+            ],
+        });
     }
 
     _chapterLabel(chapter) {
-        const totalSeconds = Math.floor((chapter.startTimeOffset ?? 0) / 1000);
-        const h = Math.floor(totalSeconds / 3600);
-        const m = Math.floor((totalSeconds % 3600) / 60);
-        const s = totalSeconds % 60;
-        const time = h > 0 ? `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}` : `${m}:${String(s).padStart(2, "0")}`;
+        const time = this._formatTime((chapter.startTimeOffset ?? 0) / 1000);
         const title = chapter.title || chapter.tag || "";
         return title ? `${time}  ${title}` : time;
     }
@@ -534,13 +831,6 @@ class StreamingPlayerController {
        me search") more than a pre-playback picker step. Reuses the anchor/menu-cleanup
        bookkeeping _openInlineMenu already tracks, even though this panel has an input
        and dynamic results rather than a fixed item list. */
-    _buildSubtitleControl() {
-        const btn = this._makeControlButton({ ariaLabel: "Subtitles", content: "CC" });
-        btn.addEventListener("click", () => this._openSubtitleSearch(btn));
-        this._registerControlButton(btn);
-        return btn;
-    }
-
     _openSubtitleSearch(anchor) {
         this._closeInlineMenu();
         const rect = anchor.getBoundingClientRect();
@@ -559,6 +849,21 @@ class StreamingPlayerController {
             boxShadow: "0 12px 32px rgba(0,0,0,0.5)",
             boxSizing: "border-box",
         });
+
+        const backBtn = document.createElement("button");
+        backBtn.type = "button";
+        backBtn.textContent = "← Back";
+        Object.assign(backBtn.style, {
+            display: "block",
+            background: "transparent",
+            border: "none",
+            color: "rgba(255,255,255,0.7)",
+            fontSize: "12px",
+            cursor: "pointer",
+            padding: "0 0 8px",
+        });
+        backBtn.addEventListener("click", () => this._openHamburgerMenu(anchor));
+        panel.appendChild(backBtn);
 
         const input = document.createElement("input");
         input.type = "text";
@@ -747,7 +1052,7 @@ class StreamingPlayerController {
             btn.type = "button";
             Object.assign(btn.style, {
                 position: "fixed",
-                bottom: "80px",
+                bottom: "110px",
                 right: "40px",
                 zIndex: "10001",
                 padding: "10px 20px",
@@ -877,6 +1182,10 @@ class StreamingPlayerController {
             this._skipBtnEl = null;
         }
         this._activeSkipMarker = null;
+        if (this._spinnerEl) {
+            this._spinnerEl.remove();
+            this._spinnerEl = null;
+        }
         if (this._subtitleTrackUrl) {
             URL.revokeObjectURL(this._subtitleTrackUrl);
             this._subtitleTrackUrl = null;

@@ -63,7 +63,7 @@ const MODAL_STYLE = `
     backdrop-filter: blur(6px);
     display: none;
     align-items: center; justify-content: center;
-    padding: calc(24px + var(--safe-top)) 24px calc(24px + var(--safe-bottom));
+    padding: calc(56px + var(--safe-top)) 24px calc(56px + var(--safe-bottom));
   }
   .overlay.open { display: flex; }
   .modal {

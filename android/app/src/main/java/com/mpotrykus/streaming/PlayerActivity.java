@@ -1,6 +1,11 @@
 package com.mpotrykus.streaming;
 
+import android.content.Context;
+import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.Paint;
+import android.graphics.Path;
+import android.graphics.PorterDuff;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
@@ -13,6 +18,7 @@ import android.view.WindowManager;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.PopupMenu;
+import android.widget.ProgressBar;
 import android.widget.RadioButton;
 import android.widget.RadioGroup;
 import android.widget.SeekBar;
@@ -44,6 +50,8 @@ public class PlayerActivity extends AppCompatActivity {
     public static final String EXTRA_CHAPTERS_JSON = "chaptersJson";
 
     private static final long PROGRESS_INTERVAL_MS = 1000L;
+    private static final long CONTROLS_HIDE_DELAY_MS = 4000L;
+    private static final float TAP_SLOP_DP = 8f;
 
     public interface PlaybackListener {
         void onProgress(long positionMs, long durationMs);
@@ -80,6 +88,102 @@ public class PlayerActivity extends AppCompatActivity {
     private long skipButtonSeekToMs;
     private ShaderType shaderType = ShaderType.OFF;
     private float upscaleStrength = 0.5f;
+    private final Handler controlsFadeHandler = new Handler(Looper.getMainLooper());
+    private final Runnable controlsFadeRunnable = () -> setControlsVisible(false);
+    private boolean controlsVisible = true;
+    private PlayPauseIconView playPauseButton;
+    private SeekBar transportSeekBar;
+    private TextView timeCurrentText;
+    private TextView timeDurationText;
+    private boolean seekBarScrubbing = false;
+    private ProgressBar loadingSpinner;
+
+    /* Drawn directly rather than a text glyph (the previous "▶"/"⏸" approach) - U+23F8
+       PAUSE isn't covered by most system UI fonts, so devices fall back to a placeholder
+       glyph for it; Samsung's fallback in particular renders it as a solid orange box
+       instead of the usual hollow "tofu" outline. Drawing the shape ourselves sidesteps
+       font/emoji-fallback behavior entirely. */
+    private static class PlayPauseIconView extends View {
+        private boolean playing = true;
+        private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Path path = new Path();
+
+        PlayPauseIconView(Context context) {
+            super(context);
+            paint.setColor(Color.WHITE);
+            paint.setStyle(Paint.Style.FILL);
+        }
+
+        void setPlaying(boolean playing) {
+            if (this.playing == playing) return;
+            this.playing = playing;
+            invalidate();
+        }
+
+        @Override
+        protected void onDraw(Canvas canvas) {
+            super.onDraw(canvas);
+            float w = getWidth();
+            float h = getHeight();
+            float pad = w * 0.28f;
+            if (playing) {
+                float barWidth = (w - pad * 2f) * 0.32f;
+                float top = h * 0.2f;
+                float bottom = h * 0.8f;
+                canvas.drawRect(pad, top, pad + barWidth, bottom, paint);
+                canvas.drawRect(w - pad - barWidth, top, w - pad, bottom, paint);
+            } else {
+                path.reset();
+                path.moveTo(pad, h * 0.18f);
+                path.lineTo(pad, h * 0.82f);
+                path.lineTo(w - pad * 0.8f, h / 2f);
+                path.close();
+                canvas.drawPath(path, paint);
+            }
+        }
+    }
+
+    /* Same rationale as PlayPauseIconView above - drawn rather than a "⏮"/"⏭" glyph, which
+       sits in the same Unicode block as "⏸" and would hit the same font-fallback issue. */
+    private static class ChapterSkipIconView extends View {
+        private final boolean forward;
+        private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Path path = new Path();
+
+        ChapterSkipIconView(Context context, boolean forward) {
+            super(context);
+            this.forward = forward;
+            paint.setColor(Color.WHITE);
+            paint.setStyle(Paint.Style.FILL);
+        }
+
+        @Override
+        protected void onDraw(Canvas canvas) {
+            super.onDraw(canvas);
+            float w = getWidth();
+            float h = getHeight();
+            float pad = w * 0.22f;
+            float barWidth = w * 0.1f;
+            float top = h * 0.22f;
+            float bottom = h * 0.78f;
+            path.reset();
+            if (forward) {
+                path.moveTo(pad, top);
+                path.lineTo(pad, bottom);
+                path.lineTo(w - pad - barWidth, h / 2f);
+                path.close();
+                canvas.drawPath(path, paint);
+                canvas.drawRect(w - pad - barWidth, top, w - pad, bottom, paint);
+            } else {
+                canvas.drawRect(pad, top, pad + barWidth, bottom, paint);
+                path.moveTo(w - pad, top);
+                path.lineTo(w - pad, bottom);
+                path.lineTo(pad + barWidth, h / 2f);
+                path.close();
+                canvas.drawPath(path, paint);
+            }
+        }
+    }
 
     /* Native code only ever sees {title, startTimeOffsetMs} - Plex's own Chapter field
        names are interpreted once, in plex-player.js, and never duplicated here. */
@@ -96,9 +200,9 @@ public class PlayerActivity extends AppCompatActivity {
     private final List<ChapterEntry> chapters = new ArrayList<>();
     private String currentUrl;
 
-    /* Chrome that should fade in lockstep with ExoPlayer's own controller overlay
-       (see the visibility listener in onCreate) rather than each new button running
-       its own independent inactivity timer that could drift out of sync. */
+    /* Chrome that should fade in lockstep via setControlsVisible/showControlsTemporarily
+       rather than each new button running its own independent inactivity timer that
+       could drift out of sync. */
     private void registerFadingControl(View v) {
         fadingControls.add(v);
     }
@@ -121,7 +225,7 @@ public class PlayerActivity extends AppCompatActivity {
         }
 
         PlayerView playerView = new PlayerView(this);
-        playerView.setUseController(true);
+        playerView.setUseController(false);
 
         /* An explicit close control, not just reliance on the hardware/gesture back
            button - there's no browser chrome to fall back on once this ships to the
@@ -148,43 +252,38 @@ public class PlayerActivity extends AppCompatActivity {
         root.addView(closeButton);
         registerFadingControl(closeButton);
 
-        TextView gearButton = new TextView(this);
-        gearButton.setText("⚙");
-        gearButton.setTextColor(Color.WHITE);
-        gearButton.setTextSize(18);
-        gearButton.setGravity(Gravity.CENTER);
-        gearButton.setBackgroundColor(Color.parseColor("#B3141414"));
-        FrameLayout.LayoutParams gearParams = new FrameLayout.LayoutParams(sizePx, sizePx);
-        gearParams.gravity = Gravity.TOP | Gravity.START;
-        gearParams.setMargins(marginPx, marginPx, 0, 0);
-        gearButton.setLayoutParams(gearParams);
-        gearButton.setOnClickListener(this::showPlayerMenu);
-        root.addView(gearButton);
-        registerFadingControl(gearButton);
+        /* Every custom option (speed, sleep timer, chapters, shader upscaling) lives
+           behind this single button instead of one icon each - see showPlayerMenu. */
+        TextView menuButton = new TextView(this);
+        menuButton.setText("☰");
+        menuButton.setContentDescription("Player options");
+        menuButton.setTextColor(Color.WHITE);
+        menuButton.setTextSize(18);
+        menuButton.setGravity(Gravity.CENTER);
+        menuButton.setBackgroundColor(Color.parseColor("#B3141414"));
+        FrameLayout.LayoutParams menuParams = new FrameLayout.LayoutParams(sizePx, sizePx);
+        menuParams.gravity = Gravity.TOP | Gravity.START;
+        menuParams.setMargins(marginPx, marginPx, 0, 0);
+        menuButton.setLayoutParams(menuParams);
+        menuButton.setOnClickListener(this::showPlayerMenu);
+        root.addView(menuButton);
+        registerFadingControl(menuButton);
 
-        /* Fades every registered control (close button, gear menu, ...) in lockstep with
-           ExoPlayer's own controller overlay (PlayerView's built-in show-on-tap/hide-after-
-           timeout behavior) rather than running a second, independent inactivity timer that
-           could drift out of sync with the native controls they sit next to. */
-        playerView.setControllerVisibilityListener(
-            (PlayerView.ControllerVisibilityListener)
-                visibility -> {
-                    float alpha = visibility == View.VISIBLE ? 1f : 0f;
-                    for (View v : fadingControls) {
-                        v.animate().alpha(alpha).setDuration(200).start();
-                    }
-                }
-        );
+        buildLoadingSpinner();
+        buildCenterControls(density);
+        buildTransportBar(density);
 
         setContentView(root);
 
         /* Pinch-to-zoom + single-finger drag-to-pan directly on the PlayerView surface -
            self-contained here rather than going through the plugin bridge, since it's a
-           pure View transform with no Plex-protocol or playback-state involvement. Only
-           consumes the touch stream once actually zoomed/panning; at 1x it returns false
-           so PlayerView's own tap-to-show-controls listener still receives the gesture -
-           unverified on a real device whether that split works cleanly at the exact
-           moment a pinch starts, see the phase's QA notes. */
+           pure View transform with no Plex-protocol or playback-state involvement. Always
+           returns true: this is the only touch consumer on playerView now that its built-in
+           controller is disabled, and returning false on ACTION_DOWN (as an earlier version
+           of this listener did whenever not zoomed, to let PlayerView's own now-removed
+           tap-to-show-controls handling see the event) stops Android from delivering the
+           rest of that gesture to this listener at all - ACTION_UP, where the tap-to-toggle
+           logic below lives, would simply never arrive. */
         ScaleGestureDetector scaleDetector = new ScaleGestureDetector(this, new ScaleGestureDetector.SimpleOnScaleGestureListener() {
             @Override
             public boolean onScale(ScaleGestureDetector detector) {
@@ -217,11 +316,21 @@ public class PlayerActivity extends AppCompatActivity {
                     }
                     break;
                 case MotionEvent.ACTION_UP:
+                    if (!isPanning) {
+                        float dx = event.getRawX() - dragStartRawX;
+                        float dy = event.getRawY() - dragStartRawY;
+                        float slopPx = TAP_SLOP_DP * density;
+                        if (Math.abs(dx) < slopPx && Math.abs(dy) < slopPx) {
+                            toggleControls();
+                        }
+                    }
+                    isPanning = false;
+                    break;
                 case MotionEvent.ACTION_CANCEL:
                     isPanning = false;
                     break;
             }
-            return zoomScale > 1f || isPanning;
+            return true;
         });
 
         DefaultHttpDataSource.Factory httpDataSourceFactory = new DefaultHttpDataSource.Factory();
@@ -237,6 +346,9 @@ public class PlayerActivity extends AppCompatActivity {
             new Player.Listener() {
                 @Override
                 public void onPlaybackStateChanged(int state) {
+                    if (loadingSpinner != null) {
+                        loadingSpinner.setVisibility(state == Player.STATE_BUFFERING ? View.VISIBLE : View.GONE);
+                    }
                     if (state == Player.STATE_ENDED) {
                         stopProgressLoop();
                         terminalStateReported = true;
@@ -251,6 +363,13 @@ public class PlayerActivity extends AppCompatActivity {
                 public void onPlayerError(PlaybackException error) {
                     notifyErrorAndFinish(error.getMessage());
                 }
+
+                @Override
+                public void onIsPlayingChanged(boolean isPlaying) {
+                    if (playPauseButton != null) {
+                        playPauseButton.setPlaying(isPlaying);
+                    }
+                }
             }
         );
 
@@ -264,6 +383,214 @@ public class PlayerActivity extends AppCompatActivity {
         player.prepare();
 
         startProgressLoop();
+        showControlsTemporarily();
+    }
+
+    /* Buffering indicator - independent of fadingControls (same "contextual, not ambient
+       chrome" reasoning as the skip button): it reflects actual ExoPlayer state, not user
+       activity, so it has to stay visible even once the rest of the chrome has faded out
+       from inactivity. Visible from creation since STATE_BUFFERING is also the player's
+       state before the first prepare() completes. */
+    private void buildLoadingSpinner() {
+        loadingSpinner = new ProgressBar(this, null, android.R.attr.progressBarStyleLarge);
+        loadingSpinner.getIndeterminateDrawable().setColorFilter(Color.WHITE, PorterDuff.Mode.SRC_IN);
+        FrameLayout.LayoutParams spinnerParams =
+            new FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT);
+        spinnerParams.gravity = Gravity.CENTER;
+        loadingSpinner.setLayoutParams(spinnerParams);
+        root.addView(loadingSpinner);
+    }
+
+    /* Center overlay: play/pause flanked by previous/next-chapter buttons, matching
+       YouTube's mobile layout - only built when the session actually has chapters, same
+       "never an empty/dead affordance" rule showPlayerMenu's Chapters entry follows. */
+    private void buildCenterControls(float density) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        int gapPx = (int) (24 * density);
+
+        if (!chapters.isEmpty()) {
+            row.addView(makeChapterSkipButton(false, density, gapPx));
+        }
+
+        playPauseButton = new PlayPauseIconView(this);
+        int playSizePx = (int) (64 * density);
+        LinearLayout.LayoutParams playParams = new LinearLayout.LayoutParams(playSizePx, playSizePx);
+        if (!chapters.isEmpty()) {
+            playParams.setMarginStart(gapPx);
+            playParams.setMarginEnd(gapPx);
+        }
+        playPauseButton.setLayoutParams(playParams);
+        playPauseButton.setBackgroundColor(Color.parseColor("#8C141414"));
+        playPauseButton.setOnClickListener(v -> {
+            if (player != null) player.setPlayWhenReady(!player.getPlayWhenReady());
+            showControlsTemporarily();
+        });
+        row.addView(playPauseButton);
+
+        if (!chapters.isEmpty()) {
+            row.addView(makeChapterSkipButton(true, density, gapPx));
+        }
+
+        FrameLayout.LayoutParams rowParams =
+            new FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT);
+        rowParams.gravity = Gravity.CENTER;
+        row.setLayoutParams(rowParams);
+        root.addView(row);
+        registerFadingControl(row);
+    }
+
+    /* forward=true seeks to the next chapter's start; forward=false restarts the current
+       chapter once more than a few seconds into it (else jumps to the previous chapter) -
+       the same convention as prev-track buttons on physical media remotes. */
+    private View makeChapterSkipButton(boolean forward, float density, int marginPx) {
+        ChapterSkipIconView btn = new ChapterSkipIconView(this, forward);
+        int sizePx = (int) (44 * density);
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(sizePx, sizePx);
+        if (!forward) params.setMarginEnd(marginPx);
+        btn.setLayoutParams(params);
+        btn.setBackgroundColor(Color.parseColor("#8C141414"));
+        btn.setOnClickListener(v -> {
+            seekToAdjacentChapter(forward);
+            showControlsTemporarily();
+        });
+        return btn;
+    }
+
+    private void seekToAdjacentChapter(boolean forward) {
+        if (player == null || chapters.isEmpty()) return;
+        long position = player.getCurrentPosition();
+        if (forward) {
+            for (ChapterEntry c : chapters) {
+                if (c.startTimeOffsetMs > position) {
+                    seek(c.startTimeOffsetMs);
+                    return;
+                }
+            }
+            return;
+        }
+        ChapterEntry current = null;
+        ChapterEntry previous = null;
+        for (ChapterEntry c : chapters) {
+            if (c.startTimeOffsetMs <= position) {
+                previous = current;
+                current = c;
+            } else {
+                break;
+            }
+        }
+        if (current != null && position - current.startTimeOffsetMs > 3000) {
+            seek(current.startTimeOffsetMs);
+        } else {
+            seek(previous != null ? previous.startTimeOffsetMs : 0);
+        }
+    }
+
+    /* Bottom transport bar: scrub bar and elapsed/total time - replaces ExoPlayer's own
+       controller chrome (disabled via setUseController(false) above) with custom-styled UI
+       matching the web/Xbox leg's transport bar. */
+    private void buildTransportBar(float density) {
+        LinearLayout bar = new LinearLayout(this);
+        bar.setOrientation(LinearLayout.HORIZONTAL);
+        bar.setGravity(Gravity.CENTER_VERTICAL);
+        bar.setBackgroundColor(Color.parseColor("#BF141414"));
+        int vPad = (int) (10 * density);
+        int hPad = (int) (16 * density);
+        bar.setPadding(hPad, vPad, hPad, vPad);
+
+        timeCurrentText = new TextView(this);
+        timeCurrentText.setText("0:00");
+        timeCurrentText.setTextColor(Color.WHITE);
+        timeCurrentText.setTextSize(13);
+        LinearLayout.LayoutParams currentParams =
+            new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        currentParams.setMarginEnd((int) (10 * density));
+        timeCurrentText.setLayoutParams(currentParams);
+        bar.addView(timeCurrentText);
+
+        transportSeekBar = new SeekBar(this);
+        LinearLayout.LayoutParams seekParams =
+            new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
+        seekParams.setMarginEnd((int) (10 * density));
+        transportSeekBar.setLayoutParams(seekParams);
+        transportSeekBar.setMax(1000);
+        transportSeekBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override
+            public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+                if (fromUser && player != null) {
+                    long duration = player.getDuration();
+                    if (duration != androidx.media3.common.C.TIME_UNSET && duration > 0) {
+                        timeCurrentText.setText(formatTimestamp(progress * duration / 1000));
+                    }
+                }
+            }
+
+            @Override
+            public void onStartTrackingTouch(SeekBar seekBar) {
+                seekBarScrubbing = true;
+                showControlsTemporarily();
+            }
+
+            @Override
+            public void onStopTrackingTouch(SeekBar seekBar) {
+                seekBarScrubbing = false;
+                if (player != null) {
+                    long duration = player.getDuration();
+                    if (duration != androidx.media3.common.C.TIME_UNSET && duration > 0) {
+                        seek(seekBar.getProgress() * duration / 1000);
+                    }
+                }
+            }
+        });
+        bar.addView(transportSeekBar);
+
+        timeDurationText = new TextView(this);
+        timeDurationText.setText("0:00");
+        timeDurationText.setTextColor(Color.WHITE);
+        timeDurationText.setTextSize(13);
+        bar.addView(timeDurationText);
+
+        FrameLayout.LayoutParams barParams =
+            new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT);
+        barParams.gravity = Gravity.BOTTOM;
+        bar.setLayoutParams(barParams);
+        root.addView(bar);
+        registerFadingControl(bar);
+    }
+
+    private void toggleControls() {
+        if (controlsVisible) {
+            setControlsVisible(false);
+            controlsFadeHandler.removeCallbacks(controlsFadeRunnable);
+        } else {
+            showControlsTemporarily();
+        }
+    }
+
+    private void showControlsTemporarily() {
+        setControlsVisible(true);
+        controlsFadeHandler.removeCallbacks(controlsFadeRunnable);
+        controlsFadeHandler.postDelayed(controlsFadeRunnable, CONTROLS_HIDE_DELAY_MS);
+    }
+
+    /* Fades every registered control (close button, hamburger menu, transport bar) in
+       lockstep, replacing ExoPlayer's own controller-visibility fade now that its built-in
+       controller is disabled (setUseController(false) above) in favor of this custom chrome.
+       Visibility is toggled alongside alpha, not just alpha alone - otherwise a faded-out
+       transport bar spanning the full screen width would still intercept touches, creating
+       a dead zone where a tap meant to bring the controls back never reaches the
+       tap-to-toggle handler on the PlayerView underneath. */
+    private void setControlsVisible(boolean visible) {
+        controlsVisible = visible;
+        for (View v : fadingControls) {
+            if (visible) {
+                v.setVisibility(View.VISIBLE);
+                v.animate().alpha(1f).setDuration(200).start();
+            } else {
+                v.animate().alpha(0f).setDuration(200).withEndAction(() -> v.setVisibility(View.INVISIBLE)).start();
+            }
+        }
     }
 
     /* One menu instead of one bespoke picker View per feature - later phases (chapters,
@@ -466,7 +793,7 @@ public class PlayerActivity extends AppCompatActivity {
             FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT);
             params.gravity = Gravity.BOTTOM | Gravity.END;
-            params.setMargins(0, 0, (int) (40 * density), (int) (80 * density));
+            params.setMargins(0, 0, (int) (40 * density), (int) (110 * density));
             skipButton.setLayoutParams(params);
             skipButton.setOnClickListener(v -> seek(skipButtonSeekToMs));
             root.addView(skipButton);
@@ -522,11 +849,25 @@ public class PlayerActivity extends AppCompatActivity {
     }
 
     private void reportProgress() {
-        if (player != null && listener != null) {
+        if (player != null) {
             long duration = player.getDuration();
-            listener.onProgress(player.getCurrentPosition(), duration == androidx.media3.common.C.TIME_UNSET ? 0 : duration);
+            long safeDuration = duration == androidx.media3.common.C.TIME_UNSET ? 0 : duration;
+            long position = player.getCurrentPosition();
+            if (listener != null) {
+                listener.onProgress(position, safeDuration);
+            }
+            updateTransportUi(position, safeDuration);
         }
         progressHandler.postDelayed(progressRunnable, PROGRESS_INTERVAL_MS);
+    }
+
+    private void updateTransportUi(long positionMs, long durationMs) {
+        if (transportSeekBar == null || seekBarScrubbing) return;
+        if (durationMs > 0) {
+            transportSeekBar.setProgress((int) ((positionMs * 1000) / durationMs));
+            timeDurationText.setText(formatTimestamp(durationMs));
+        }
+        timeCurrentText.setText(formatTimestamp(positionMs));
     }
 
     private void notifyErrorAndFinish(String message) {
@@ -629,6 +970,7 @@ public class PlayerActivity extends AppCompatActivity {
     protected void onDestroy() {
         stopProgressLoop();
         sleepTimerHandler.removeCallbacksAndMessages(null);
+        controlsFadeHandler.removeCallbacksAndMessages(null);
         reportStoppedIfNeeded();
         if (player != null) {
             player.release();

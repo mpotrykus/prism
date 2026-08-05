@@ -865,7 +865,7 @@ const STYLE = `
     z-index: 200;
     outline: none;
     overflow-y: auto;
-    padding: 40px 20px;
+    padding: 72px 20px;
   }
   .title-info-overlay.open { display: flex; }
   .title-info-modal {
@@ -2655,8 +2655,12 @@ class PlexNetflixCard extends HTMLElement {
       item.ratingKey = ratingKey;
     }
     if (!ratingKey) return;
+    /* Playlists aren't part of library metadata (see _fetchPlaylistsRaw) - their detail
+       lives under /playlists/{ratingKey}, not /library/metadata/{ratingKey} like every
+       other item type here. */
+    const metaPath = item.type === "playlist" ? `/playlists/${ratingKey}` : `/library/metadata/${ratingKey}`;
     try {
-      const data = await this._plexFetch(`/library/metadata/${ratingKey}`);
+      const data = await this._plexFetch(metaPath);
       const meta = data?.MediaContainer?.Metadata?.[0];
       if (meta && this._titleInfoItem === item) this._renderTitleInfoDetail(meta);
     } catch (e) {
@@ -2870,6 +2874,8 @@ class PlexNetflixCard extends HTMLElement {
       .join("");
 
     if (meta.type === "show") this._loadTitleInfoSeasons(meta.ratingKey);
+    else if (meta.type === "collection") this._loadTitleInfoCollectionItems(meta.ratingKey);
+    else if (meta.type === "playlist") this._loadTitleInfoPlaylistItems(meta.ratingKey);
     this._loadTitleInfoSimilar(meta.ratingKey);
   }
 
@@ -2956,6 +2962,58 @@ class PlexNetflixCard extends HTMLElement {
       showSeason(initialSeasonKey, focusSeason ? focus.episodeRatingKey : null);
     } catch (e) {
       // episode list is supplementary; leave the rest of the modal usable on failure
+    }
+  }
+
+  /* Collections/playlists are just a flat ordered list of full items (movies/shows,
+     occasionally episodes for a playlist) rather than a show's season/episode tree, so
+     there's no season <select> - clicking a row opens that item's own info (episodes
+     redirect to their show via _openTitleInfoForEpisode) instead of playing directly,
+     since these rows aren't playable segments the way a show's episodes are. */
+  _renderTitleInfoFlatItems(rawItems, ratingKey) {
+    if (!rawItems.length || this._titleInfoItem?.ratingKey !== ratingKey) return;
+    this._titleInfoEpisodesEl.innerHTML = rawItems
+      .map((m) => {
+        const mapped = this._mapItem(m, true);
+        const watched = !!mapped.viewCount && !(mapped.progress > 0);
+        return `
+      <div class="title-info-episode" data-rating-key="${mapped.ratingKey}">
+        <div class="title-info-episode-thumb">
+          <img loading="lazy" src="${this._escape(mapped.art || mapped.image)}" alt="" />
+          ${watched ? `<div class="title-info-episode-watched">${WATCHED_ICON_SVG}</div>` : ""}
+          ${
+            mapped.progress > 0
+              ? `<div class="title-info-episode-progress"><div class="bar" style="width:${Math.round(mapped.progress * 100)}%"></div></div>`
+              : ""
+          }
+        </div>
+        <div>
+          <div class="title-info-episode-title">${this._escape(mapped.title)}</div>
+          <div class="title-info-episode-summary">${this._escape(m.summary || "")}</div>
+        </div>
+      </div>`;
+      })
+      .join("");
+    this._titleInfoEpisodesEl.querySelectorAll(".title-info-episode").forEach((row, i) => {
+      row.addEventListener("click", () => this._openTitleInfo(this._mapItem(rawItems[i], false), "local"));
+    });
+  }
+
+  async _loadTitleInfoCollectionItems(ratingKey) {
+    try {
+      const data = await this._plexFetch(`/library/collections/${ratingKey}/children`);
+      this._renderTitleInfoFlatItems(data?.MediaContainer?.Metadata || [], ratingKey);
+    } catch (e) {
+      // item list is supplementary; leave the rest of the modal usable on failure
+    }
+  }
+
+  async _loadTitleInfoPlaylistItems(ratingKey) {
+    try {
+      const data = await this._plexFetch(`/playlists/${ratingKey}/items`);
+      this._renderTitleInfoFlatItems(data?.MediaContainer?.Metadata || [], ratingKey);
+    } catch (e) {
+      // item list is supplementary; leave the rest of the modal usable on failure
     }
   }
 
