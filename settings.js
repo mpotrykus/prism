@@ -148,6 +148,13 @@ const MODAL_STYLE = `
   .modal-footer .left { display: flex; gap: 8px; }
   .modal-footer .right { display: flex; gap: 8px; }
   input[type="file"] { display: none; }
+  @media (max-width: 700px) {
+    .overlay { padding: 0; overflow-y: auto; align-items: flex-start; }
+    .modal { width: 100%; max-width: 100%; min-height: 100dvh; max-height: none; overflow-y: visible; border-radius: 0; border: none; }
+    .modal-close { display: none; }
+    .modal-header { padding: calc(20px + var(--safe-top)) 24px 20px; }
+    .modal-footer { padding: 16px 24px calc(22px + var(--safe-bottom)); }
+  }
 `;
 
 class StreamingSettingsModal extends HTMLElement {
@@ -353,6 +360,10 @@ class StreamingSettingsModal extends HTMLElement {
 
   close() {
     this._overlay.classList.remove("open");
+  }
+
+  isOpen() {
+    return this._overlay.classList.contains("open");
   }
 
   /* Delegates to <streaming-plex-signin-modal> (see app.js) rather than re-implementing

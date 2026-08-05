@@ -1743,11 +1743,13 @@ class PlexNetflixCard extends HTMLElement {
        z-index (highest first) since more than one can theoretically be open at once
        (e.g. quality-picker over title-info). */
     App.addListener("backButton", () => {
+      const settingsModal = document.querySelector("streaming-settings-modal");
       if (this._qualityPickerOverlay.classList.contains("open")) this._closeQualityPicker();
       else if (this._titleInfoOverlay.classList.contains("open")) this._closeTitleInfo();
       else if (this._pinOverlay.classList.contains("open")) this._resolvePin(null);
       else if (this._profileOverlay.classList.contains("open")) this._closeProfileOverlay();
       else if (this._moreOverlay.classList.contains("open")) this._closeMoreSheet();
+      else if (settingsModal?.isOpen()) settingsModal.close();
       else App.exitApp();
     });
 
