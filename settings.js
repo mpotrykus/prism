@@ -8,15 +8,6 @@ import { wireLinearNav, focusAfterPaint } from "./focus-nav.js";
    card actually uses) so "refresh servers" can re-run discovery later without a
    full re-login. */
 const PLAIN_STORAGE_KEY = "prism.config";
-const SECRET_FIELDS = [
-  "plex_token",
-  "youtube_api_key",
-  "openrouter_api_key",
-  "plex_account_token",
-  "opensubtitles_api_key",
-  "opensubtitles_username",
-  "opensubtitles_password",
-];
 
 const DEFAULT_PLAIN_CONFIG = {
   plex_url: "",
@@ -142,12 +133,9 @@ const MODAL_STYLE = `
   }
   .row-2col { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
   .modal-footer {
-    display: flex; justify-content: space-between; align-items: center; gap: 10px;
+    display: flex; justify-content: flex-end; align-items: center; gap: 10px;
     padding: 16px 24px 22px;
   }
-  .modal-footer .left { display: flex; gap: 8px; }
-  .modal-footer .right { display: flex; gap: 8px; }
-  input[type="file"] { display: none; }
   @media (max-width: 700px) {
     .overlay { padding: 0; overflow-y: auto; align-items: flex-start; }
     .modal { width: 100%; max-width: 100%; min-height: 100dvh; max-height: none; overflow-y: visible; border-radius: 0; border: none; }
@@ -213,20 +201,20 @@ class StreamingSettingsModal extends HTMLElement {
             </section>
 
             <section class="group">
-              <div class="group-title">Subtitles (optional)</div>
-              <div class="field">
-                <label>OpenSubtitles API Key</label>
-                <input type="password" class="f-opensubtitles-key" placeholder="Used by the player's subtitle search" />
-              </div>
+              <div class="group-title">OpenSubtitles (optional)</div>
               <div class="row-2col">
                 <div class="field">
-                  <label>OpenSubtitles Username</label>
+                  <label>Username</label>
                   <input type="text" class="f-opensubtitles-username" placeholder="Needed to download, not just search" />
                 </div>
                 <div class="field">
-                  <label>OpenSubtitles Password</label>
+                  <label>Password</label>
                   <input type="password" class="f-opensubtitles-password" />
                 </div>
+              </div>
+              <div class="field">
+                <label>API Key</label>
+                <input type="password" class="f-opensubtitles-key" placeholder="Used by the player's subtitle search" />
               </div>
             </section>
 
@@ -254,15 +242,8 @@ class StreamingSettingsModal extends HTMLElement {
           </div>
           <div class="status save-status"></div>
           <div class="modal-footer">
-            <div class="left">
-              <button type="button" class="btn btn-secondary btn-export" title="Includes your keys in plain text - only share this file with people you trust">Export</button>
-              <button type="button" class="btn btn-secondary btn-import">Import</button>
-              <input type="file" class="f-import-file" accept="application/json" />
-            </div>
-            <div class="right">
-              <button type="button" class="btn btn-secondary btn-cancel">Cancel</button>
-              <button type="button" class="btn btn-primary btn-save">Save</button>
-            </div>
+            <button type="button" class="btn btn-secondary btn-cancel">Cancel</button>
+            <button type="button" class="btn btn-primary btn-save">Save</button>
           </div>
         </div>
       </div>
@@ -284,9 +265,6 @@ class StreamingSettingsModal extends HTMLElement {
     this._el(".btn-reauth").addEventListener("click", () => this._reauthenticate());
     this._el(".btn-fetch-libraries").addEventListener("click", () => this._fetchLibraries());
     this._el(".btn-save").addEventListener("click", () => this._save());
-    this._el(".btn-export").addEventListener("click", () => this._exportConfig());
-    this._el(".btn-import").addEventListener("click", () => this._el(".f-import-file").click());
-    this._el(".f-import-file").addEventListener("change", (e) => this._importConfig(e));
     /* One long vertical list rather than per-row/per-section sub-navigation - simpler,
        and good enough for a screen that isn't the primary Xbox-blocking flow the way
        sign-in is. Native Left/Right cursor movement inside text/number inputs is left
@@ -297,9 +275,9 @@ class StreamingSettingsModal extends HTMLElement {
     wireLinearNav(
       this.shadowRoot,
       ".modal-close, .btn-reauth, .btn-fetch-libraries, .section-row .s-enabled, .section-row .s-label, " +
-        ".f-youtube-key, .f-openrouter-key, .f-opensubtitles-key, .f-opensubtitles-username, .f-opensubtitles-password, " +
+        ".f-youtube-key, .f-openrouter-key, .f-opensubtitles-username, .f-opensubtitles-password, .f-opensubtitles-key, " +
         ".f-ai-cadence, .f-kids-pin, .f-max-genre-rows, .f-row-size, " +
-        ".btn-export, .btn-import, .btn-cancel, .btn-save",
+        ".btn-cancel, .btn-save",
       { orientation: "vertical", onBack: () => this.close() }
     );
   }
@@ -497,55 +475,6 @@ class StreamingSettingsModal extends HTMLElement {
     }
   }
 
-  async _exportConfig() {
-    const plain = this._collectPlainConfig();
-    let secrets;
-    try {
-      secrets = await this._collectSecrets();
-    } catch (e) {
-      const statusEl = this._el(".save-status");
-      statusEl.textContent = `Couldn't unlock stored keys: ${e.message}`;
-      statusEl.className = "status save-status err";
-      return;
-    }
-    /* Deliberately plaintext on disk - this file exists so you can carry your own
-       setup to another device/browser. The hint text next to Export says as much. */
-    const blob = new Blob([JSON.stringify({ ...plain, ...secrets }, null, 2)], { type: "application/json" });
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = "prism-config.json";
-    a.click();
-    URL.revokeObjectURL(a.href);
-  }
-
-  _importConfig(e) {
-    const file = e.target.files[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = async () => {
-      try {
-        const imported = JSON.parse(reader.result);
-        const plain = { ...window.StreamingSettings.loadPlain(), ...imported };
-        const secrets = {};
-        for (const field of SECRET_FIELDS) {
-          if (imported[field]) secrets[field] = imported[field];
-          delete plain[field];
-        }
-        window.StreamingSettings.savePlain(plain);
-        if (Object.keys(secrets).length) {
-          const merged = { ...(await this._getEffectiveSecrets()), ...secrets };
-          await window.StreamingVault.saveSecrets(merged);
-        }
-        this.open();
-      } catch (err) {
-        const statusEl = this._el(".save-status");
-        statusEl.textContent = `Import failed: ${err.message}`;
-        statusEl.className = "status save-status err";
-      }
-    };
-    reader.readAsText(file);
-    e.target.value = "";
-  }
 }
 
 if (!customElements.get("streaming-settings-modal")) {

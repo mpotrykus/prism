@@ -6,12 +6,4 @@
       xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
       Background="#0a0a0c"
       mc:Ignorable="d">
-
-    <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
-        <TextBlock Foreground="White"
-                   FontSize="50"
-                   FontWeight="Bold">
-            Loading Prism...
-        </TextBlock>
-    </StackPanel>
 </Page>

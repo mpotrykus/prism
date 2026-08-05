@@ -1701,7 +1701,7 @@ class PlexNetflixCard extends HTMLElement {
     this._titleInfoOverlay.addEventListener("click", (e) => {
       if (e.target === this._titleInfoOverlay) this._closeTitleInfo();
     });
-    wireLinearNav(
+    this._titleInfoNav = wireLinearNav(
       this.shadowRoot,
       ".title-info-close, .title-info-play, .title-info-watchlist-btn, .title-info-quality-btn, .title-info-season-select, .title-info-episode, .title-info-similar-item",
       { orientation: "vertical", onBack: () => this._closeTitleInfo() }
@@ -2636,7 +2636,13 @@ class PlexNetflixCard extends HTMLElement {
       this._titleInfoWatchlistBtn.setAttribute("aria-label", added ? "Remove from My List" : "Add to My List");
     }
     this._titleInfoOverlay.classList.add("open");
-    focusAfterPaint(this._titleInfoOverlay);
+    /* Focusing the overlay shell itself (tabindex="-1", just so a click outside it can
+       still blur out of whatever was focused before) would leave document.activeElement
+       pointing at an element wireLinearNav's own selector never matches - every D-pad
+       command then falls straight through as unhandled, since registerNavHandler's
+       handler here only acts when the active element is one of its own watched items.
+       focusFirst() lands on the actual first nav target (.title-info-close) instead. */
+    this._titleInfoNav.focusFirst();
 
     let ratingKey = item.ratingKey;
     if (source === "watchlist") {

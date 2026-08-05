@@ -1,5 +1,10 @@
 {
   "appId": "com.mpotrykus.streaming",
   "appName": "Streaming",
-  "webDir": "dist"
+  "webDir": "dist",
+  "plugins": {
+    "SystemBars": {
+      "style": "DARK"
+    }
+  }
 }

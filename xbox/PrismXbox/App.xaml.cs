@@ -1,8 +1,6 @@
 using System;
-using System.Diagnostics;
 using Windows.ApplicationModel;
 using Windows.ApplicationModel.Activation;
-using Windows.UI.ViewManagement;
 using Windows.UI.Xaml;
 using Windows.UI.Xaml.Controls;
 using Windows.UI.Xaml.Navigation;
@@ -40,12 +38,11 @@ namespace PrismXbox
             // Store submission" bucket as MainPage's AreDevToolsEnabled.
             Environment.SetEnvironmentVariable("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", "--remote-debugging-port=9222");
 
-            // By default, XAML apps are scaled up 2x on Xbox. This disables that so the WebView2
-            // control (and the web app inside it) renders at the device's native resolution.
-            if (!ApplicationViewScaling.TrySetDisableLayoutScaling(true))
-            {
-                Debug.WriteLine("Error: Failed to disable layout scaling.");
-            }
+            // Xbox's default ~200% UI scale exists specifically to compensate for TV viewing
+            // distance - disabling it (as this used to) makes WebView2 report native resolution
+            // with no distance compensation, which on real hardware renders the whole app tiny
+            // on a TV screen despite looking correct on desktop/Android. Leave the platform
+            // default (scaling enabled) alone.
         }
 
         protected override void OnLaunched(LaunchActivatedEventArgs e)
@@ -56,15 +53,29 @@ namespace PrismXbox
             {
                 rootFrame = new Frame();
                 rootFrame.NavigationFailed += OnNavigationFailed;
-                Window.Current.Content = rootFrame;
             }
 
             if (e.PrelaunchActivated == false)
             {
                 if (rootFrame.Content == null)
                 {
+                    // The system splash screen shows its 620x300 image at native pixel size,
+                    // which reads as a tiny, blurry rectangle on a TV - ExtendedSplash replaces
+                    // it with the same wordmark sized relative to the real window, and stays up
+                    // until MainPage's WebView2 content is actually ready to show.
+                    Window.Current.Content = new ExtendedSplash();
+
                     rootFrame.Navigate(typeof(MainPage), e.Arguments);
+                    if (rootFrame.Content is MainPage mainPage)
+                    {
+                        mainPage.ContentReady += (_, __) => Window.Current.Content = rootFrame;
+                    }
                 }
+                else if (Window.Current.Content == null)
+                {
+                    Window.Current.Content = rootFrame;
+                }
+
                 Window.Current.Activate();
             }
         }

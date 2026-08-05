@@ -22,6 +22,11 @@ namespace PrismXbox
     {
         private WebView2 webView;
 
+        // Raised once the WebView2 content has either finished its first navigation or hit an
+        // unrecoverable setup failure - either way, ExtendedSplash is waiting on this to know
+        // when it's safe to hand off (see App.xaml.cs's OnLaunched).
+        public event EventHandler ContentReady;
+
         // "prismxbox.local" is an arbitrary virtual hostname mapped below to the bundled "www"
         // folder via SetVirtualHostNameToFolderMapping. This is WebView2's recommended mechanism
         // for local content and is what Microsoft's own current Xbox WebView2 reference sample
@@ -68,6 +73,7 @@ namespace PrismXbox
                 // couldn't be resolved/installed - worth checking for on real Xbox hardware as
                 // part of the Phase 3 validation pass.
                 Debug.WriteLine("Unable to retrieve CoreWebView2 - is the WebView2 Runtime available?");
+                ContentReady?.Invoke(this, EventArgs.Empty);
                 return;
             }
 
@@ -95,6 +101,7 @@ namespace PrismXbox
             {
                 Debug.WriteLine($"Initial WebView2 navigation failed: {args.WebErrorStatus}");
             }
+            ContentReady?.Invoke(this, EventArgs.Empty);
         }
 
         private void OnWebViewProcessFailed(CoreWebView2 sender, CoreWebView2ProcessFailedEventArgs args)
