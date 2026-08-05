@@ -1,10 +1,9 @@
-import { wireLinearNav, registerNavHandler, focusAfterPaint } from "./focus-nav.js";
+import { wireLinearNav, focusAfterPaint } from "./focus-nav.js";
 import { App } from "@capacitor/app";
 import { player } from "./plex-player.js";
 import { passesKidsMode, isBlockedGenreName } from "./src/card/logic/kids-mode.js";
-import { slugify, isAndroidUserAgent, tapUrl } from "./src/card/logic/deep-link.js";
+import { tapUrl } from "./src/card/logic/deep-link.js";
 import { normalizeTitle, isInWatchlist } from "./src/card/logic/watchlist-match.js";
-import { parseYearQuery, buildGenreMatchHubs, buildReasonMatchHubs, SEARCH_REASON_LABELS } from "./src/card/logic/search.js";
 import {
   shuffle,
   mapItem,
@@ -13,19 +12,15 @@ import {
   buildPopularRaw,
   buildCollectionRows,
   buildAiRows,
-  parseAiSectionIdeas,
 } from "./src/card/logic/catalog.js";
 import { paintWatchlistButton, addToWatchlist, removeFromWatchlist } from "./src/card/watchlist.js";
 import {
-  EMPTY_STATE_ICON_SVG,
   WATCHED_ICON_SVG,
   emptyStateHtml,
   renderMessage,
   renderLoading,
   renderRows,
   buildRowSection,
-  buildScrollArrow,
-  wireArrowVisibility,
   buildPoster,
 } from "./src/card/rows.js";
 import { PinEntry } from "./src/card/pin.js";
@@ -33,6 +28,9 @@ import { renderMoreSheet } from "./src/card/more-sheet.js";
 import { fetchHomeProfiles, renderProfileNav, renderProfileList, switchToUser } from "./src/card/profile.js";
 import { TitleInfoController } from "./src/card/title-info.js";
 import { HeroController } from "./src/card/hero.js";
+import { plexFetch, loadAll, sectionForView, sectionsForView, fetchWatchlistRaw } from "./src/card/data.js";
+import { onSearchInput, exitSearch, renderSearchPage } from "./src/card/search-page.js";
+import { wireNavItem, renderNavSections, wireHomeNav } from "./src/card/nav.js";
 
 import hostResetCss from "./src/card/styles/host-reset.css?inline";
 import sidenavCss from "./src/card/styles/sidenav.css?inline";
@@ -67,29 +65,6 @@ const SECTION_TYPE_FILTERS = {
   2: { onDeck: "episode", other: "show" },
 };
 
-/* How many library tabs stay directly on the mobile bottom nav bar before the rest
-   spill into the "More" overflow sheet alongside Profile/Kids Mode/Settings - desktop's
-   hover sidenav has room for all of them regardless, see .nav-item-overflow. */
-const MOBILE_VISIBLE_SECTION_CAP = 3;
-
-const MOVIE_NAV_ICON_SVG =
-  '<svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2" fill="none" stroke="currentColor" stroke-width="1.6"/><rect x="3" y="8" width="4" height="1.6" fill="currentColor"/><rect x="3" y="13" width="4" height="1.6" fill="currentColor"/><rect x="17" y="8" width="4" height="1.6" fill="currentColor"/><rect x="17" y="13" width="4" height="1.6" fill="currentColor"/></svg>';
-const TV_NAV_ICON_SVG =
-  '<svg viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="1.6"/><line x1="8" y1="21" x2="16" y2="21" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><line x1="12" y1="18" x2="12" y2="21" stroke="currentColor" stroke-width="1.6"/></svg>';
-const GENERIC_NAV_ICON_SVG =
-  '<svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="3.2" rx="1.2" fill="currentColor"/><rect x="3" y="10.4" width="18" height="3.2" rx="1.2" fill="currentColor"/><rect x="3" y="15.8" width="18" height="3.2" rx="1.2" fill="currentColor"/></svg>';
-/* Best-effort icon-by-name for a fetched library's own label (freely user-edited in
-   Settings) - falls back to a generic library icon rather than guessing from the
-   section's movie/show type, since a "Kids" or "Anime" library shouldn't just get
-   whichever of the two hand-drawn icons happens to match its underlying Plex type. */
-const NAV_ICON_NAME_RULES = [
-  { test: /movie|film|cinema/i, icon: MOVIE_NAV_ICON_SVG },
-  { test: /tv|show|series|anime/i, icon: TV_NAV_ICON_SVG },
-];
-function iconForLibraryLabel(label) {
-  const rule = NAV_ICON_NAME_RULES.find((r) => r.test.test(label || ""));
-  return rule ? rule.icon : GENERIC_NAV_ICON_SVG;
-}
 
 const SEARCH_ICON_SVG =
   '<svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="1.6"/><line x1="16.2" y1="16.2" x2="21" y2="21" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>';
@@ -97,14 +72,6 @@ const CLEAR_ICON_SVG =
   '<svg viewBox="0 0 24 24"><line x1="6" y1="6" x2="18" y2="18" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><line x1="18" y1="6" x2="6" y2="18" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>';
 const MORE_ICON_SVG =
   '<svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.8" fill="currentColor"/><circle cx="12" cy="12" r="1.8" fill="currentColor"/><circle cx="19" cy="12" r="1.8" fill="currentColor"/></svg>';
-
-/* Plex's /hubs/search `reason` field marks a match as coming from a specific
-   person/entity rather than a plain title hit - only these two are confirmed
-   to actually appear in practice, so only these get promoted to their own section. */
-const SEARCH_HUB_LIMIT = 24;
-/* "See All" section expansion - large enough that no single library section's
-   search hub is likely to actually hit this ceiling. */
-const SEARCH_EXPAND_LIMIT = 500;
 
 class PlexNetflixCard extends HTMLElement {
   /* No required fields here, unlike the original HA-card version - this can be called
@@ -497,46 +464,11 @@ class PlexNetflixCard extends HTMLElement {
   }
 
   _wireNavItem(el) {
-    el.addEventListener("click", () => {
-      const view = el.dataset.view;
-      this._clearSearchInput();
-      this._searchWrap.classList.remove("expanded");
-      if (view === this._currentView) return;
-      this._currentView = view;
-      this._navItems.forEach((n) => n.classList.toggle("active", n === el));
-      window.scrollTo({ top: 0, behavior: "instant" });
-      this._renderCurrentView();
-      this._advanceHero();
-    });
+    wireNavItem(this, el);
   }
 
-  /* Renders one nav tab per fetched library (config.sections) instead of fixed
-     Movies/TV entries - lets Settings' "Fetch Libraries" list drive the tabs
-     directly, so it naturally covers however many/whatever-named libraries the
-     server actually has. Re-run on every setConfig() after the initial build (see
-     setConfig) so re-fetching/renaming/toggling libraries in Settings updates the
-     nav without a full rebuild. Home stays a separate static item since it's the
-     fixed "everything combined" view, not tied to any one section. */
   _renderNavSections() {
-    const homeItem = this.shadowRoot.querySelector('.nav-item[data-view="home"]');
-    this.shadowRoot.querySelectorAll(".nav-item-dynamic").forEach((el) => el.remove());
-    const sections = this._config.sections || [];
-    const html = sections
-      .map(
-        (s, i) => `
-            <div class="nav-item nav-item-dynamic${i >= MOBILE_VISIBLE_SECTION_CAP ? " nav-item-overflow" : ""}" data-view="section-${s.key}" tabindex="0">
-              <span class="nav-icon">${iconForLibraryLabel(s.label)}</span>
-              <span class="nav-label">${this._escape(s.label)}</span>
-            </div>`
-      )
-      .join("");
-    if (html) homeItem.insertAdjacentHTML("afterend", html);
-    this._navItems = [...this.shadowRoot.querySelectorAll(".nav-item[data-view]")];
-    this.shadowRoot.querySelectorAll(".nav-item-dynamic").forEach((el) => this._wireNavItem(el));
-    if (this._currentView !== "home" && this._currentView !== "search" && !sections.some((s) => `section-${s.key}` === this._currentView)) {
-      this._currentView = "home";
-    }
-    this._navItems.forEach((n) => n.classList.toggle("active", n.dataset.view === this._currentView));
+    renderNavSections(this);
   }
 
   _clearSearchInput() {
@@ -550,90 +482,24 @@ class PlexNetflixCard extends HTMLElement {
     this._searchToggle.setAttribute("aria-label", hasValue ? "Clear search" : "Search");
   }
 
-  async _plexFetch(path, params = {}) {
-    const url = new URL(this._config.plex_url + path);
-    Object.entries(params).forEach(([k, v]) => {
-      /* Plex ANDs repeated same-key filter params (e.g. two `genre=` keys) rather
-         than ORing them - array values let AI-generated multi-genre rows use that. */
-      if (Array.isArray(v)) v.forEach((vv) => url.searchParams.append(k, vv));
-      else url.searchParams.set(k, v);
-    });
-    url.searchParams.set("X-Plex-Token", this._config.plex_token);
-    const res = await fetch(url, { headers: { Accept: "application/json" } });
-    if (!res.ok) throw new Error(`Plex ${path} -> HTTP ${res.status}`);
-    return res.json();
+  _plexFetch(path, params = {}) {
+    return plexFetch(this, path, params);
   }
 
-  async _loadAll() {
-    if (!this._config.plex_url || !this._config.plex_token) {
-      this._renderMessage("Open Settings to add your Plex server URL and token.");
-      return;
-    }
-    if (!this._config.sections || !this._config.sections.length) {
-      this._renderMessage('Open Settings and click "Fetch Libraries" to choose what to show.');
-      return;
-    }
-    this._renderLoading();
-    try {
-      const [
-        onDeckRaw,
-        watchlistRaw,
-        recentlyAddedRaw,
-        genreBySection,
-        searchFacets,
-        historyRaw,
-        collectionsRaw,
-        playlistsRaw,
-        homeProfiles,
-      ] = await Promise.all([
-        this._fetchOnDeckRaw(),
-        this._fetchWatchlistRaw(),
-        this._fetchRecentlyAddedRaw(),
-        this._loadGenreDataBySection(),
-        this._loadSearchFacets(),
-        this._fetchWatchHistoryRaw(),
-        this._fetchCollectionsRaw(),
-        this._fetchPlaylistsRaw(),
-        this._fetchHomeProfiles(),
-      ]);
-      this._onDeckRaw = onDeckRaw;
-      this._watchlistRaw = watchlistRaw;
-      this._recentlyAddedRaw = recentlyAddedRaw;
-      this._genreBySection = genreBySection;
-      this._genreRowsCache = {};
-      this._recommendedRowCache = {};
-      this._studioFacets = searchFacets.studios;
-      this._collectionFacets = searchFacets.collections;
-      this._collectionsRaw = collectionsRaw;
-      this._playlistsRaw = playlistsRaw;
-      this._homeUsers = homeProfiles.users;
-      this._activeUserId = homeProfiles.activeId;
-      this._renderProfileNav();
-      const rowCount = this._config.collection_row_count ?? 0;
-      this._collectionRowPicks = this._shuffle(this._collectionsRaw).slice(0, rowCount);
-      this._collectionRowsRaw = await this._fetchCollectionRowItems(this._collectionRowPicks);
-      this._recommendedRaw = this._buildRecommendedRaw(historyRaw);
-      this._popularRaw = this._buildPopularRaw();
-      const aiIdeas = await this._loadAiIdeas();
-      this._aiRowsRaw = aiIdeas.length ? await this._fetchAiRowsRaw(aiIdeas) : [];
-      await this._hero.loadInitialItem(this._sectionsForView(this._currentView));
-      this._renderCurrentView();
-    } catch (err) {
-      this._renderMessage(`Couldn't load Plex: ${err.message}`);
-    }
+  _loadAll() {
+    return loadAll(this);
   }
 
-  /* "home"/"search" (or any unrecognized view) fall through to null, meaning "no
-     single section" - callers treat that as "all sections". */
   _sectionForView(view) {
-    if (typeof view !== "string" || !view.startsWith("section-")) return null;
-    const key = Number(view.slice("section-".length));
-    return (this._config.sections || []).find((s) => s.key === key) || null;
+    return sectionForView(this, view);
   }
 
   _sectionsForView(view) {
-    const section = this._sectionForView(view);
-    return section ? [section] : this._config.sections;
+    return sectionsForView(this, view);
+  }
+
+  _fetchWatchlistRaw() {
+    return fetchWatchlistRaw(this);
   }
 
   _shuffle(array) {
@@ -779,32 +645,6 @@ class PlexNetflixCard extends HTMLElement {
     return { title: "Playlists", items, source: "local" };
   }
 
-  async _fetchOnDeckRaw() {
-    try {
-      const data = await this._plexFetch("/library/onDeck");
-      return data?.MediaContainer?.Metadata || [];
-    } catch (e) {
-      return [];
-    }
-  }
-
-  async _fetchWatchlistRaw() {
-    try {
-      const url = new URL("https://discover.provider.plex.tv/library/sections/watchlist/all");
-      /* discover.provider.plex.tv is plex.tv's account-level Discover service, not the
-         local server - it needs the account token (plex_account_token), not the
-         server-specific plex_token, so this scopes correctly per switched Home profile
-         instead of always reflecting whichever profile originally signed in. */
-      url.searchParams.set("X-Plex-Token", this._config.plex_account_token);
-      const res = await fetch(url, { headers: { Accept: "application/json" } });
-      if (!res.ok) return [];
-      const data = await res.json();
-      return data?.MediaContainer?.Metadata || [];
-    } catch (e) {
-      return [];
-    }
-  }
-
   /* Plex Home profiles - only worth surfacing the switcher UI at all when there's more
      than one (a solo account has nothing to switch to). Failures (no account token yet,
      no Plex Home set up, network error) all collapse to "no switcher", same as an empty
@@ -874,120 +714,8 @@ class PlexNetflixCard extends HTMLElement {
     return this._titleInfo.open(item, source);
   }
 
-  /* The home screen (sidenav + hero + a 2D grid of poster rows) isn't a single list -
-     wireLinearNav's 1D model doesn't cover "Left/Right moves within whichever row
-     currently has focus, Up/Down moves between rows while roughly preserving column
-     position." Scoped by checking active-element membership first, so it never fires
-     while a modal overlay (which registers its own handler elsewhere) currently owns
-     focus - only one handler ever actually acts on a given keypress since focus is a
-     singleton. */
   _wireHomeNav() {
-    const sidenavItems = () =>
-      Array.from(this.shadowRoot.querySelectorAll(".nav-item")).filter((el) => el.offsetParent !== null);
-    const heroItems = () =>
-      Array.from(this.shadowRoot.querySelectorAll(".hero-info-btn, .hero-watchlist-btn, .hero-play-btn, .hero-mute-btn")).filter(
-        (el) => el.offsetParent !== null
-      );
-    const rowSections = () =>
-      Array.from(this.shadowRoot.querySelectorAll(".row-section")).filter((s) => s.offsetParent !== null);
-    const postersIn = (section) =>
-      section ? Array.from(section.querySelectorAll(".poster")).filter((el) => el.offsetParent !== null) : [];
-
-    registerNavHandler((command, e, active) => {
-      const inSidenav = sidenavItems().includes(active);
-      const inHero = !inSidenav && heroItems().includes(active);
-      const posterSection = !inSidenav && !inHero && active?.classList?.contains("poster") ? active.closest(".row-section") : null;
-
-      if (!inSidenav && !inHero && !posterSection) {
-        /* Every registered handler sees every keydown regardless of which one owns
-           focus - a handler returning false here must NOT assume that means "nothing is
-           focused," only "not focused in my scope" (a modal overlay's own handler may
-           legitimately own this keypress instead). Only the true fresh-load case (no
-           active element anywhere, or it's just document.body/the card host with
-           nothing focused inside) gets the lazy first-D-pad-press starting point;
-           anything else falls through untouched, letting the real owner act instead of
-           this handler stealing focus mid-interaction with some other overlay. */
-        const nothingFocusedYet = !active || active === document.body || active === this;
-        if (nothingFocusedYet && ["up", "down", "left", "right"].includes(command)) {
-          sidenavItems()[0]?.focus();
-          return true;
-        }
-        return false;
-      }
-
-      if (command === "activate") {
-        active.click();
-        return true;
-      }
-
-      if (inSidenav) {
-        const list = sidenavItems();
-        const idx = list.indexOf(active);
-        if (command === "down") {
-          list[Math.min(idx + 1, list.length - 1)].focus();
-          return true;
-        }
-        if (command === "up") {
-          list[Math.max(idx - 1, 0)].focus();
-          return true;
-        }
-        if (command === "right") {
-          const target = heroItems()[0] || postersIn(rowSections()[0])[0];
-          target?.focus();
-          return true;
-        }
-        return false;
-      }
-
-      if (inHero) {
-        const list = heroItems();
-        const idx = list.indexOf(active);
-        if (command === "right") {
-          list[Math.min(idx + 1, list.length - 1)].focus();
-          return true;
-        }
-        if (command === "left") {
-          if (idx <= 0) sidenavItems()[0]?.focus();
-          else list[idx - 1].focus();
-          return true;
-        }
-        if (command === "down") {
-          postersIn(rowSections()[0])[0]?.focus();
-          return true;
-        }
-        if (command === "up") return true; // nothing above the hero - swallow, don't fall through
-        return false;
-      }
-
-      // posterSection
-      const posters = postersIn(posterSection);
-      const idx = posters.indexOf(active);
-      if (command === "right") {
-        posters[Math.min(idx + 1, posters.length - 1)].focus();
-        return true;
-      }
-      if (command === "left") {
-        if (idx <= 0) sidenavItems()[0]?.focus();
-        else posters[idx - 1].focus();
-        return true;
-      }
-      if (command === "down" || command === "up") {
-        const sections = rowSections();
-        const sectionIdx = sections.indexOf(posterSection);
-        if (command === "up" && sectionIdx === 0) {
-          heroItems()[0]?.focus();
-          return true;
-        }
-        const targetSection = sections[sectionIdx + (command === "down" ? 1 : -1)];
-        if (!targetSection) return true; // no more rows that way - swallow
-        const targetPosters = postersIn(targetSection);
-        const target = targetPosters[Math.min(idx, targetPosters.length - 1)];
-        target?.focus();
-        target?.scrollIntoView({ block: "nearest", inline: "center" });
-        return true;
-      }
-      return false;
-    });
+    wireHomeNav(this);
   }
 
   /* Prefers the shared player (native on Android, <video>+hls.js everywhere else - see
@@ -1048,153 +776,6 @@ class PlexNetflixCard extends HTMLElement {
     });
   }
 
-  async _fetchWatchHistoryRaw() {
-    try {
-      const data = await this._plexFetch("/status/sessions/history/all", {
-        sort: "viewedAt:desc",
-        "X-Plex-Container-Size": 500,
-      });
-      return data?.MediaContainer?.Metadata || [];
-    } catch (e) {
-      return [];
-    }
-  }
-
-  async _fetchRecentlyAddedRaw() {
-    const rowSize = this._config.row_size;
-    const perSection = await Promise.all(
-      this._config.sections.map(async (s) => {
-        try {
-          const data = await this._plexFetch(`/library/sections/${s.key}/all`, {
-            type: s.type,
-            sort: "addedAt:desc",
-            "X-Plex-Container-Size": rowSize,
-          });
-          return data?.MediaContainer?.Metadata || [];
-        } catch (e) {
-          return [];
-        }
-      })
-    );
-    return perSection.flat();
-  }
-
-  async _fetchCollectionsRaw() {
-    /* Deliberately NOT the /library/sections/{key}/collection (singular) endpoint used by
-       _loadSearchFacets below - that one is Plex's filter-facet listing and only returns
-       {key, title}, no ratingKey/thumb/childCount. The real collection objects (with
-       posters) live at the plural /collections endpoint, under MediaContainer.Metadata.
-       No `type` param here, deliberately - passing the section's type (e.g. 1 for movie)
-       makes Plex return every movie in the section instead of the collection objects
-       themselves (confirmed empirically), unlike every other endpoint in this file. */
-    const perSection = await Promise.all(
-      this._config.sections.map(async (s) => {
-        try {
-          const data = await this._plexFetch(`/library/sections/${s.key}/collections`);
-          return (data?.MediaContainer?.Metadata || []).map((d) => ({ ...d, section: s }));
-        } catch (e) {
-          return [];
-        }
-      })
-    );
-    return perSection.flat();
-  }
-
-  /* Fetches actual movie items for a handful of randomly-picked real Plex Collections
-     (picked fresh in _loadAll each real page load) so they can be mixed in as their own
-     titled rows - title = collection name, items = its movies - alongside genre/AI rows.
-     Uses the dedicated /library/collections/{ratingKey}/children endpoint, NOT a
-     `collection=` filter param against /all - confirmed empirically that the latter does
-     NOT filter by the collection at all (it silently matched a single unrelated movie
-     instead of the collection's real members). The children endpoint also doesn't respect
-     sort/X-Plex-Container-Size query params (tested), but returns items in a sensible
-     built-in order (chronological/release order) already, and row-size slicing happens
-     client-side in _buildCollectionRows anyway, so no params are needed here. */
-  async _fetchCollectionRowItems(picks) {
-    const results = await Promise.all(
-      picks.map(async (c) => {
-        try {
-          const data = await this._plexFetch(`/library/collections/${c.ratingKey}/children`);
-          return { title: c.title, items: data?.MediaContainer?.Metadata || [] };
-        } catch (e) {
-          return { title: c.title, items: [] };
-        }
-      })
-    );
-    return results.filter((r) => r.items.length);
-  }
-
-  async _fetchPlaylistsRaw() {
-    /* Server-wide endpoint, not per-section like collections - a playlist can span
-       multiple libraries. Posters live under `composite`, not `thumb` (confirmed via
-       raw JSON, unlike every other item type in this file). Filtered to playlistType
-       "video" since this dashboard has no audio/music sections configured. */
-    try {
-      const data = await this._plexFetch("/playlists");
-      return (data?.MediaContainer?.Metadata || []).filter((p) => p.playlistType === "video");
-    } catch (e) {
-      return [];
-    }
-  }
-
-  async _loadSearchFacets() {
-    const studios = [];
-    const collections = [];
-    await Promise.all(
-      this._config.sections.map(async (s) => {
-        try {
-          const data = await this._plexFetch(`/library/sections/${s.key}/studio`, { type: s.type });
-          for (const d of data?.MediaContainer?.Directory || []) {
-            studios.push({ title: d.title, key: d.key, section: s });
-          }
-        } catch (e) {}
-        try {
-          const data = await this._plexFetch(`/library/sections/${s.key}/collection`, { type: s.type });
-          for (const d of data?.MediaContainer?.Directory || []) {
-            collections.push({ title: d.title, key: d.key, section: s });
-          }
-        } catch (e) {}
-      })
-    );
-    return { studios, collections };
-  }
-
-  async _loadGenreDataBySection() {
-    const sections = this._config.sections;
-    const rowSize = this._config.row_size;
-    const result = new Map();
-
-    await Promise.all(
-      sections.map(async (s) => {
-        try {
-          const data = await this._plexFetch(`/library/sections/${s.key}/genre`, { type: s.type });
-          const genres = data?.MediaContainer?.Directory || [];
-          const perGenre = await Promise.all(
-            genres.map(async (g) => {
-              try {
-                const gdata = await this._plexFetch(`/library/sections/${s.key}/all`, {
-                  type: s.type,
-                  genre: g.key,
-                  sort: "addedAt:desc",
-                  "X-Plex-Container-Size": rowSize,
-                });
-                const mc = gdata?.MediaContainer || {};
-                return { title: g.title, key: g.key, items: mc.Metadata || [], totalSize: mc.totalSize ?? mc.size ?? 0 };
-              } catch (e) {
-                return { title: g.title, key: g.key, items: [], totalSize: 0 };
-              }
-            })
-          );
-          result.set(s.key, perGenre);
-        } catch (e) {
-          result.set(s.key, []);
-        }
-      })
-    );
-
-    return result;
-  }
-
   _getRecommendedForView(view, filterFn) {
     if (!this._recommendedRowCache) this._recommendedRowCache = {};
     if (!this._recommendedRowCache[view]) {
@@ -1252,87 +833,6 @@ class PlexNetflixCard extends HTMLElement {
     });
   }
 
-  /* The model is asked for strict JSON but may still wrap it in a code fence or
-     return junk, so this validates everything regardless of source. */
-  _parseAiSectionIdeas(raw) {
-    return parseAiSectionIdeas(raw);
-  }
-
-  /* AI row ideas, fetched directly from OpenRouter with the user's own key (Settings)
-     and cached in localStorage - no server/HA dependency. Falls back to the last good
-     cache entry on any fetch/parse error rather than dropping the feature for the
-     session, and skips the network entirely with no key configured. */
-  async _loadAiIdeas() {
-    const key = this._config.openrouter_api_key;
-    if (!key) return [];
-    const cacheKey = "prism.aiIdeasCache";
-    const cadenceMs = this._config.ai_rows_cadence_ms;
-    let cached = null;
-    try {
-      cached = JSON.parse(localStorage.getItem(cacheKey) || "null");
-    } catch (e) {
-      cached = null;
-    }
-    if (cached && Array.isArray(cached.ideas) && Date.now() - cached.fetchedAt < cadenceMs) {
-      return cached.ideas;
-    }
-    try {
-      const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-        method: "POST",
-        headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: "meta-llama/llama-3.1-8b-instruct",
-          messages: [
-            {
-              role: "user",
-              content:
-                "Generate a JSON array of exactly 10 objects. Each object must have a label field (a short catchy row title, 2 to 5 words) and a genres field (an array of 1 or 2 genre words drawn only from this list: Action, Adventure, Animation, Anime, Biography, Comedy, Crime, Documentary, Drama, Family, Fantasy, History, Horror, Music, Musical, Mystery, Romance, Sci-Fi, Sport, Suspense, Thriller, War, Western). About half the ideas should combine two different genres for interesting mixes, for example Sci-Fi Comedy would have genres Sci-Fi and Comedy. Respond with ONLY the raw JSON array. No markdown code fences. No explanation. No extra text before or after the array.",
-            },
-          ],
-        }),
-      });
-      if (!res.ok) throw new Error(`OpenRouter HTTP ${res.status}`);
-      const data = await res.json();
-      const ideas = this._parseAiSectionIdeas(data?.choices?.[0]?.message?.content);
-      if (ideas.length) localStorage.setItem(cacheKey, JSON.stringify({ ideas, fetchedAt: Date.now() }));
-      return ideas;
-    } catch (e) {
-      return (cached && cached.ideas) || [];
-    }
-  }
-
-  async _fetchAiRowsRaw(ideas) {
-    const rowSize = this._config.row_size;
-    const results = await Promise.all(
-      ideas.map(async (idea) => {
-        const perSection = await Promise.all(
-          this._config.sections.map(async (s) => {
-            const genreEntries = (this._genreBySection && this._genreBySection.get(s.key)) || [];
-            const keys = idea.genres.map((g) => {
-              const norm = g.trim().toLowerCase();
-              const match = genreEntries.find((e) => e.title.trim().toLowerCase() === norm);
-              return match ? match.key : null;
-            });
-            if (keys.some((k) => !k)) return [];
-            try {
-              const data = await this._plexFetch(`/library/sections/${s.key}/all`, {
-                type: s.type,
-                genre: keys,
-                sort: "addedAt:desc",
-                "X-Plex-Container-Size": rowSize,
-              });
-              return data?.MediaContainer?.Metadata || [];
-            } catch (e) {
-              return [];
-            }
-          })
-        );
-        return { label: idea.label, genres: idea.genres, items: perSection.flat() };
-      })
-    );
-    return results.filter((r) => r.items.length);
-  }
-
   _mergeGenreRows(sections) {
     return mergeGenreRows(sections, {
       genreBySection: this._genreBySection,
@@ -1378,14 +878,6 @@ class PlexNetflixCard extends HTMLElement {
     });
   }
 
-  _slugify(text) {
-    return slugify(text);
-  }
-
-  _isAndroid() {
-    return isAndroidUserAgent(navigator.userAgent);
-  }
-
   _tapUrl(item, source) {
     return tapUrl(item, source, {
       machineId: this._config.machine_id,
@@ -1423,14 +915,6 @@ class PlexNetflixCard extends HTMLElement {
 
   _buildRowSection(row, landscape = false, rowIndex = 0) {
     return buildRowSection(row, landscape, rowIndex, this._rowCtx);
-  }
-
-  _buildScrollArrow(dir, scroller) {
-    return buildScrollArrow(dir, scroller);
-  }
-
-  _wireArrowVisibility(scroller, leftArrow, rightArrow) {
-    return wireArrowVisibility(scroller, leftArrow, rightArrow);
   }
 
   _buildPoster(item, source, opts = {}) {
@@ -1488,255 +972,15 @@ class PlexNetflixCard extends HTMLElement {
   }
 
   _onSearchInput() {
-    clearTimeout(this._searchTimer);
-    const q = this._searchInput.value.trim();
-    if (!q) {
-      this._exitSearch();
-      return;
-    }
-    if (this._currentView !== "search") this._enterSearch();
-    this._searchTimer = setTimeout(() => this._runSearch(q), 300);
-  }
-
-  _enterSearch() {
-    this._preSearchView = this._currentView;
-    this._currentView = "search";
-    this._navItems.forEach((n) => n.classList.remove("active"));
-    this._showHero();
-    this._renderLoading();
+    onSearchInput(this);
   }
 
   _exitSearch() {
-    if (this._currentView !== "search") return;
-    this._currentView = this._preSearchView || "home";
-    this._navItems.forEach((n) => n.classList.toggle("active", n.dataset.view === this._currentView));
-    this._renderCurrentView();
-    this._advanceHero();
+    exitSearch(this);
   }
 
-  async _runSearch(q) {
-    try {
-      const hubs = await this._buildSearchHubs(q, SEARCH_HUB_LIMIT, this._config.row_size);
-      if (this._currentView !== "search") return;
-      this._lastSearchQuery = q;
-      this._lastSearchHubs = hubs;
-      this._renderSearchPage(hubs);
-    } catch (e) {
-      if (this._currentView !== "search") return;
-      this._rowsEl.innerHTML = `<div class="empty">${this._emptyStateHtml("Search failed")}</div>`;
-    }
-  }
-
-  /* Shared by both the normal (capped) search page and "See All" section expansion -
-     the two differ only in the limits passed to Plex's hub search and to the
-     locally-built genre/year/facet hubs. */
-  async _buildSearchHubs(q, hubLimit, rowLimit) {
-    /* /hubs/search ignores X-Plex-Container-Size for its per-hub result count (silently
-       caps at 3 regardless of that value) - the real per-hub limit param is `limit`,
-       confirmed empirically. */
-    const data = await this._plexFetch("/hubs/search", { query: q, limit: hubLimit });
-    const hubs = (data?.MediaContainer?.Hub || []).filter((h) => (h.Metadata || []).length);
-    const reasonHubs = this._buildReasonMatchHubs(hubs, hubLimit);
-    const otherHubs = hubs
-      .map((h) => {
-        const rawLen = (h.Metadata || []).length;
-        return {
-          ...h,
-          Metadata: (h.Metadata || []).filter((m) => !SEARCH_REASON_LABELS[m.reason]),
-          /* /hubs/search DOES honor `limit` (unlike X-Plex-Container-Size elsewhere), so
-             hitting it exactly is a reliable "there may be more" signal - there's no
-             per-hub totalSize in this response to check precisely. */
-          hasMore: rawLen >= hubLimit,
-        };
-      })
-      .filter((h) => h.Metadata.length);
-    const genreHubs = this._buildGenreMatchHubs(q, rowLimit);
-    const yearHubs = await this._buildYearMatchHubs(q, rowLimit);
-    const facetHubs = await this._buildFacetMatchHubs(q, rowLimit);
-    return [...otherHubs, ...reasonHubs, ...genreHubs, ...yearHubs, ...facetHubs];
-  }
-
-  async _expandSearchSection(title) {
-    const q = this._lastSearchQuery;
-    if (!q) return;
-    this._renderLoading();
-    try {
-      const hubs = await this._buildSearchHubs(q, SEARCH_EXPAND_LIMIT, SEARCH_EXPAND_LIMIT);
-      if (this._currentView !== "search") return;
-      const hub = hubs.find((h) => h.title === title);
-      this._renderSearchPage(hub ? [hub] : [], { expanded: true });
-    } catch (e) {
-      if (this._currentView !== "search") return;
-      this._rowsEl.innerHTML = `<div class="empty">${this._emptyStateHtml("Search failed")}</div>`;
-    }
-  }
-
-  _buildGenreMatchHubs(query, limit) {
-    return buildGenreMatchHubs(query, limit, {
-      genreBySection: this._genreBySection,
-      isBlockedGenreName: (name) => this._isBlockedGenreName(name),
-    });
-  }
-
-  _parseYearQuery(query) {
-    return parseYearQuery(query);
-  }
-
-  async _buildYearMatchHubs(query, limit) {
-    const range = this._parseYearQuery(query);
-    if (!range) return [];
-    const [start, end] = range;
-    /* Plex's advanced filter operators (>>/<< on the field name) are strict
-       inequalities, so an inclusive range needs the bounds nudged by one -
-       confirmed empirically against this server (year>>1989&year<<1996 returns
-       exactly 1990-1995). */
-    const yearParams = start === end ? { year: start } : { "year>>": start - 1, "year<<": end + 1 };
-    const perSection = await Promise.all(
-      this._config.sections.map(async (s) => {
-        try {
-          const data = await this._plexFetch(`/library/sections/${s.key}/all`, {
-            type: s.type,
-            "X-Plex-Container-Size": limit,
-            ...yearParams,
-          });
-          return data?.MediaContainer?.Metadata || [];
-        } catch (e) {
-          return [];
-        }
-      })
-    );
-    const items = perSection.flat();
-    if (!items.length) return [];
-    const title = start === end ? `Year ${start}` : `Year ${start}–${end}`;
-    /* X-Plex-Container-Size is silently ignored on /library/sections/{key}/all (confirmed
-       empirically, same as the /hubs/search quirk noted above) - Plex already returned
-       the full matching set here, so `items.length` is the true total, not just what
-       got requested, and the slice below is the only thing actually capping this row. */
-    return [{ title, Metadata: items.slice(0, limit), hasMore: items.length > limit }];
-  }
-
-  async _buildFacetMatchHubs(query, limit) {
-    const q = query.trim().toLowerCase();
-    if (!q) return [];
-    const matchFacets = (facets) => (facets || []).filter((f) => f.title.toLowerCase().includes(q));
-    const jobs = [
-      ...matchFacets(this._studioFacets).map((facet) => ({ facet, filterName: "studio", label: "Studio" })),
-      ...matchFacets(this._collectionFacets).map((facet) => ({ facet, filterName: "collection", label: "Collection" })),
-    ];
-    const hubs = await Promise.all(
-      jobs.map(async ({ facet, filterName, label }) => {
-        const items = await this._fetchByFacet(facet, filterName, limit);
-        /* _fetchByFacet already returns everything Plex has for this facet (see its
-           comment - X-Plex-Container-Size is ignored server-side and nothing slices
-           the result afterward), so there's never anything left to reveal via "See All". */
-        if (!items.length) return null;
-        const hub = { title: `${label} "${facet.title}"`, Metadata: items, hasMore: false };
-        if (filterName === "collection") {
-          /* facet comes from the singular /collection facet-listing endpoint, which has
-             no thumb - look the real poster up by title from the plural /collections
-             fetch (_fetchCollectionsRaw) instead, matched within the same section. */
-          const match = (this._collectionsRaw || []).find(
-            (c) => c.section.key === facet.section.key && c.title === facet.title
-          );
-          if (match?.thumb) hub.image = this._plexImageUrl(match.thumb);
-        }
-        return hub;
-      })
-    );
-    return hubs.filter(Boolean);
-  }
-
-  async _fetchByFacet(facet, filterName, limit) {
-    try {
-      /* facet.key comes back from Plex's own /studio and /collection directory listings
-         already percent-escaped for direct reuse as a filter value (double-escaped for
-         studio names with spaces, e.g. "Marvel%2520Studios") - it must be appended to the
-         URL as-is, not passed through URLSearchParams/searchParams.set, which would
-         re-encode the literal "%" characters and break the match. */
-      const base = new URL(`${this._config.plex_url}/library/sections/${facet.section.key}/all`);
-      base.searchParams.set("type", facet.section.type);
-      base.searchParams.set("X-Plex-Container-Size", limit);
-      base.searchParams.set("X-Plex-Token", this._config.plex_token);
-      const res = await fetch(`${base.toString()}&${filterName}=${facet.key}`, {
-        headers: { Accept: "application/json" },
-      });
-      if (!res.ok) return [];
-      const data = await res.json();
-      return data?.MediaContainer?.Metadata || [];
-    } catch (e) {
-      return [];
-    }
-  }
-
-  _buildReasonMatchHubs(hubs, hubLimit) {
-    return buildReasonMatchHubs(hubs, hubLimit);
-  }
-
-  _renderSearchPage(hubs, { expanded = false } = {}) {
-    /* Filtered here rather than at each hub-building function (reason/genre/year/facet
-       hubs all funnel through this one render call) so Kids Mode covers search with a
-       single change, and re-rendering from the cached _lastSearchHubs (Back button,
-       or a Kids Mode toggle mid-search) always re-applies the current filter live. */
-    const visibleHubs = hubs
-      .map((hub) => ({ ...hub, Metadata: (hub.Metadata || []).filter((m) => this._passesKidsMode(m)) }))
-      .filter((hub) => hub.Metadata.length);
-    if (!visibleHubs.length) {
-      this._rowsEl.innerHTML = `<div class="empty">${this._emptyStateHtml("No results")}</div>`;
-      return;
-    }
-    const page = document.createElement("div");
-    page.className = "search-page";
-    if (expanded) {
-      const back = document.createElement("button");
-      back.type = "button";
-      back.className = "search-page-back";
-      back.textContent = "← Back to all results";
-      back.addEventListener("click", () => {
-        if (this._lastSearchHubs) this._renderSearchPage(this._lastSearchHubs);
-      });
-      page.appendChild(back);
-    }
-    for (const hub of visibleHubs) {
-      const group = document.createElement("div");
-      group.className = "search-page-group";
-      const header = document.createElement("div");
-      header.className = "search-page-group-header";
-      const h = document.createElement("div");
-      h.className = "search-page-group-title";
-      h.textContent = hub.title;
-      if (hub.image) {
-        const titleWrap = document.createElement("div");
-        titleWrap.className = "search-page-group-title-wrap";
-        const img = document.createElement("img");
-        img.className = "search-page-group-image";
-        img.src = hub.image;
-        img.alt = "";
-        titleWrap.appendChild(img);
-        titleWrap.appendChild(h);
-        header.appendChild(titleWrap);
-      } else {
-        header.appendChild(h);
-      }
-      if (!expanded && hub.hasMore) {
-        const seeAll = document.createElement("button");
-        seeAll.type = "button";
-        seeAll.className = "search-page-see-all";
-        seeAll.textContent = "See All";
-        seeAll.addEventListener("click", () => this._expandSearchSection(hub.title));
-        header.appendChild(seeAll);
-      }
-      group.appendChild(header);
-      const grid = document.createElement("div");
-      grid.className = "search-page-grid";
-      for (const m of hub.Metadata || []) {
-        const item = this._mapItem(m, false);
-        grid.appendChild(this._buildPoster(item, "local"));
-      }
-      group.appendChild(grid);
-      page.appendChild(group);
-    }
-    this._rowsEl.innerHTML = "";
-    this._rowsEl.appendChild(page);
+  _renderSearchPage(hubs, opts = {}) {
+    renderSearchPage(this, hubs, opts);
   }
 
   _escape(s) {
