@@ -285,18 +285,38 @@ function layoutGlowPanels(controller) {
     const rect = computePictureRect(controller);
     const right = rect.left + rect.width;
     const bottom = rect.top + rect.height;
+    /* Real gap per side, before any AMBIENT_BLUR_PX overscan is added - computePictureRect
+       always makes at least one axis come out exactly 0 (object-fit:contain never
+       leaves a gap on both axes at once, only whichever one doesn't match the
+       viewport's own AR), so a video is letterboxed/pillarboxed on one axis pair far
+       more often than not. Overscan must only extend a side that actually *has* a gap -
+       adding it unconditionally (an earlier version of this fix did) made the
+       already-zero-height/width side of a plain pillarboxed/letterboxed video
+       AMBIENT_BLUR_PX tall/wide anyway, and any tiny mismatch between this computed
+       rect and the browser's real object-fit:contain rendering let a full-width/height
+       bright streak leak through right across the video itself on that side. */
+    const topGap = Math.max(0, rect.top);
+    const bottomGap = Math.max(0, vh - bottom);
+    const leftGap = Math.max(0, rect.left);
+    const rightGap = Math.max(0, vw - right);
 
     Object.assign(panels.top.wrapper.style, {
-        left: "0px", top: "0px", width: `${vw}px`, height: `${Math.max(0, rect.top) + AMBIENT_BLUR_PX}px`,
+        left: "0px", top: "0px", width: `${vw}px`, height: `${topGap > 0 ? topGap + AMBIENT_BLUR_PX : 0}px`,
     });
     Object.assign(panels.bottom.wrapper.style, {
-        left: "0px", top: `${bottom - AMBIENT_BLUR_PX}px`, width: `${vw}px`, height: `${Math.max(0, vh - bottom) + AMBIENT_BLUR_PX}px`,
+        left: "0px",
+        top: `${bottomGap > 0 ? bottom - AMBIENT_BLUR_PX : vh}px`,
+        width: `${vw}px`,
+        height: `${bottomGap > 0 ? bottomGap + AMBIENT_BLUR_PX : 0}px`,
     });
     Object.assign(panels.left.wrapper.style, {
-        left: "0px", top: "0px", width: `${Math.max(0, rect.left) + AMBIENT_BLUR_PX}px`, height: `${vh}px`,
+        left: "0px", top: "0px", width: `${leftGap > 0 ? leftGap + AMBIENT_BLUR_PX : 0}px`, height: `${vh}px`,
     });
     Object.assign(panels.right.wrapper.style, {
-        left: `${right - AMBIENT_BLUR_PX}px`, top: "0px", width: `${Math.max(0, vw - right) + AMBIENT_BLUR_PX}px`, height: `${vh}px`,
+        left: `${rightGap > 0 ? right - AMBIENT_BLUR_PX : vw}px`,
+        top: "0px",
+        width: `${rightGap > 0 ? rightGap + AMBIENT_BLUR_PX : 0}px`,
+        height: `${vh}px`,
     });
 }
 
