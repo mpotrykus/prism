@@ -122,6 +122,10 @@ export function playWeb(controller, streamUrl, startOffsetMs) {
        the shader call above - controller._ambientEnabled was set from
        storedAmbientEnabled() in play() before playWeb was called. */
     controller._updateAmbientPipeline();
+    /* Same "already-resolved global default, just spin up the pipeline" reasoning as
+       the calls above - controller._statsOverlayEnabled was set from
+       storedStatsOverlayEnabled() in play() before playWeb was called. */
+    controller._updateStatsOverlayPipeline();
 
     /* Tapping the video itself toggles play/pause, matching every mainstream player -
        only when not zoomed in, since zoomed-in drag is already claimed by pan (see
@@ -222,6 +226,14 @@ export function teardownWeb(controller) {
     controller._ambientSampleCanvas = null;
     controller._ambientSampleCtx = null;
     controller._ambientSmoothed = null;
+    if (controller._statsOverlayIntervalId) {
+        clearInterval(controller._statsOverlayIntervalId);
+        controller._statsOverlayIntervalId = null;
+    }
+    if (controller._statsOverlayEl) {
+        controller._statsOverlayEl.remove();
+        controller._statsOverlayEl = null;
+    }
     controller._closeInlineMenu();
     clearTimeout(controller._controlsHideTimer);
     controller._controlsHideTimer = null;

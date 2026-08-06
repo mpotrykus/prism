@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { shaderTuningAt, detectShaderType, SHADER_TYPES } from "./shaders.js";
+import { shaderTuningAt, colorBoostAt, detectShaderType, SHADER_TYPES, COLOR_BOOST_TUNING } from "./shaders.js";
 
 describe("detectShaderType", () => {
   it("picks anime4k for anime/animation genres", () => {
@@ -34,5 +34,31 @@ describe("shaderTuningAt", () => {
     const beyondRamp = shaderTuningAt("live_action", 0.9);
     expect(atRamp).toEqual(SHADER_TYPES.live_action.max);
     expect(beyondRamp).toEqual(SHADER_TYPES.live_action.max);
+  });
+
+  it("carries no saturation/contrast knobs - those moved to colorBoostAt", () => {
+    expect(SHADER_TYPES.anime4k.min).not.toHaveProperty("saturation");
+    expect(SHADER_TYPES.anime4k.min).not.toHaveProperty("contrast");
+    expect(SHADER_TYPES.live_action.max).not.toHaveProperty("saturation");
+    expect(SHADER_TYPES.live_action.max).not.toHaveProperty("contrast");
+  });
+});
+
+describe("colorBoostAt", () => {
+  it("is neutral (no boost) at strength 0", () => {
+    expect(colorBoostAt(0)).toEqual(COLOR_BOOST_TUNING.min);
+  });
+
+  it("reaches max boost at strength 1", () => {
+    expect(colorBoostAt(1)).toEqual(COLOR_BOOST_TUNING.max);
+  });
+
+  it("clamps strength outside 0-1", () => {
+    expect(colorBoostAt(-1)).toEqual(COLOR_BOOST_TUNING.min);
+    expect(colorBoostAt(2)).toEqual(COLOR_BOOST_TUNING.max);
+  });
+
+  it("is independent of shader-upscale type/strength", () => {
+    expect(colorBoostAt(0.5)).toEqual(colorBoostAt(0.5));
   });
 });

@@ -1,7 +1,7 @@
 import { Capacitor } from "@capacitor/core";
 import * as StreamingSubtitles from "../../../opensubtitles.js";
 import { SHADER_TYPES } from "../shader/shaders.js";
-import { setShaderStrength } from "../shader-pipeline.js";
+import { setShaderStrength, setColorBoostStrength } from "../shader-pipeline.js";
 import { setAmbientEnabled, setAmbientOpacity } from "../ambient-pipeline.js";
 import { reloadWebSource } from "../web-fallback.js";
 import { setNativePlaybackRate, setNativeSubtitle } from "../native-bridge.js";
@@ -748,7 +748,23 @@ export function openHamburgerMenu(controller, anchor) {
             onSelect: () => openShaderMenu(controller, anchor),
         },
         {
+            label: "Color Boost",
+            value: controller._colorBoostEnabled ? `${Math.round(controller._colorBoostStrength * 100)}%` : null,
+            trailing: "›",
+            /* Contrast/saturation "look" lift - independent of Shader Upscaling above
+               (see shaders.js's COLOR_BOOST_TUNING), same toggle-flips-in-place pattern. */
+            toggle: {
+                checked: controller._colorBoostEnabled,
+                onChange: (checked) => {
+                    controller._setColorBoostEnabled(checked);
+                    return checked ? `${Math.round(controller._colorBoostStrength * 100)}%` : null;
+                },
+            },
+            onSelect: () => openColorBoostMenu(controller, anchor),
+        },
+        {
             label: "Ambient Lighting",
+            value: controller._ambientEnabled ? `${Math.round(controller._ambientOpacity * 100)}%` : null,
             trailing: "›",
             /* Toggle flips on/off in place without leaving this menu - onSelect (tap
                anywhere else on the row) still drills into the opacity slider, same
@@ -757,10 +773,27 @@ export function openHamburgerMenu(controller, anchor) {
                 checked: controller._ambientEnabled,
                 onChange: (checked) => {
                     controller._setAmbientEnabled(checked);
-                    return null;
+                    return checked ? `${Math.round(controller._ambientOpacity * 100)}%` : null;
                 },
             },
             onSelect: () => openAmbientMenu(controller, anchor),
+        },
+        {
+            label: "Performance Overlay",
+            value: controller._statsOverlayEnabled ? "On" : null,
+            /* No trailing chevron - nothing to drill into (no strength/opacity slider,
+               unlike Shader Upscaling/Color Boost/Ambient Lighting above), just a plain
+               on/off toggle. onSelect is required by openInlineMenu's row click handler
+               (called unconditionally, unlike Android's null-checked MenuRow.onSelect) -
+               a no-op here since the switch itself is the only thing this row does. */
+            toggle: {
+                checked: controller._statsOverlayEnabled,
+                onChange: (checked) => {
+                    controller._setStatsOverlayEnabled(checked);
+                    return checked ? "On" : null;
+                },
+            },
+            onSelect: () => {},
         },
     ];
     if (controller._session?.chapters?.length) {
@@ -902,6 +935,51 @@ function openShaderMenu(controller, anchor) {
     strengthInput.addEventListener("input", () => {
         strengthLabel.textContent = `Strength: ${strengthInput.value}%`;
         setShaderStrength(controller, Number(strengthInput.value) / 100);
+    });
+    panel.appendChild(strengthInput);
+
+    mountMenuPanel(controller, panel, anchor);
+
+    const onOutsideClick = (e) => {
+        if (panel.contains(e.target) || anchor.contains(e.target)) return;
+        closeInlineMenu(controller);
+    };
+    setTimeout(() => document.addEventListener("click", onOutsideClick), 0);
+    controller._inlineMenuCleanup = () => document.removeEventListener("click", onOutsideClick);
+}
+
+/* Same custom-panel pattern as openShaderMenu above, simpler since there's no
+   auto-detected type to show as read-only info here - just the one strength control.
+   Unlike Android's equivalent panel, this applies live on every `input` event rather
+   than gating to release: both compiled GL programs stay resident (see
+   ensureShaderPipeline), so a strength change here is only a uniform update on the next
+   frame, not a program rebuild. */
+function openColorBoostMenu(controller, anchor) {
+    closeInlineMenu(controller);
+    const panel = document.createElement("div");
+    Object.assign(panel.style, { ...menuAnchorPosition(anchor), ...MENU_PANEL_STYLE, padding: "14px", width: "240px" });
+
+    panel.appendChild(makeBackRow(() => openHamburgerMenu(controller, anchor)));
+
+    const strengthLabel = document.createElement("div");
+    strengthLabel.textContent = `Strength: ${Math.round(controller._colorBoostStrength * 100)}%`;
+    Object.assign(strengthLabel.style, { color: "rgba(255,255,255,0.7)", fontSize: "12px", padding: "0 0 4px" });
+    panel.appendChild(strengthLabel);
+
+    const strengthInput = document.createElement("input");
+    strengthInput.type = "range";
+    strengthInput.min = "0";
+    strengthInput.max = "100";
+    strengthInput.value = String(Math.round(controller._colorBoostStrength * 100));
+    Object.assign(strengthInput.style, {
+        width: "100%",
+        accentColor: "#e5a00d",
+        cursor: "pointer",
+        boxSizing: "border-box",
+    });
+    strengthInput.addEventListener("input", () => {
+        strengthLabel.textContent = `Strength: ${strengthInput.value}%`;
+        setColorBoostStrength(controller, Number(strengthInput.value) / 100);
     });
     panel.appendChild(strengthInput);
 

@@ -28,9 +28,10 @@ import { detectShaderType, UPSCALE_STRENGTH_PRESETS } from "./src/player/shader/
 import { buildStreamUrl } from "./src/player/core/stream-url.js";
 import { playNative, stopNative, pauseNative, resumeNative } from "./src/player/native-bridge.js";
 import { playWeb, attachSource, reloadWebSource, teardownWeb } from "./src/player/web-fallback.js";
-import { setShaderStrength, setShaderEnabled, updateShaderPipeline, ensureShaderPipeline, stopShaderLoop } from "./src/player/shader-pipeline.js";
+import { setShaderStrength, setShaderEnabled, setColorBoostEnabled, setColorBoostStrength, updateShaderPipeline, ensureShaderPipeline, stopShaderLoop } from "./src/player/shader-pipeline.js";
 import { setAmbientEnabled, setAmbientOpacity, updateAmbientPipeline, stopAmbientLoop } from "./src/player/ambient-pipeline.js";
-import { storedAmbientEnabled, storedAmbientOpacity } from "./src/player/ui/shared.js";
+import { setStatsOverlayEnabled, updateStatsOverlayPipeline } from "./src/player/stats-overlay.js";
+import { storedAmbientEnabled, storedAmbientOpacity, storedColorBoostEnabled, storedColorBoostStrength, storedStatsOverlayEnabled } from "./src/player/ui/shared.js";
 import {
     makeControlButton,
     registerControlButton,
@@ -98,6 +99,11 @@ class StreamingPlayerController {
         this._shaderQuadBuffer = null;
         this._shaderTexture = null;
         this._shaderRafId = null;
+        this._colorBoostEnabled = false;
+        this._colorBoostStrength = 0.5;
+        this._statsOverlayEnabled = false;
+        this._statsOverlayEl = null;
+        this._statsOverlayIntervalId = null;
         this._onPopState = this._onPopState.bind(this);
         /* A player has no sidenav/rows to navigate - the only D-pad/gamepad action it
            needs is an exit, same effect as the visible close button. Registered once,
@@ -166,6 +172,11 @@ class StreamingPlayerController {
            ambient-pipeline.js's setAmbientEnabled). */
         this._ambientEnabled = storedAmbientEnabled();
         this._ambientOpacity = storedAmbientOpacity();
+        /* Same no-per-video-concern reasoning as ambient lighting above - Color Boost's
+           contrast/saturation lift has nothing genre-specific to resolve either. */
+        this._colorBoostEnabled = storedColorBoostEnabled();
+        this._colorBoostStrength = storedColorBoostStrength();
+        this._statsOverlayEnabled = storedStatsOverlayEnabled();
 
         this._pushedHistoryState = true;
         history.pushState({ prismPlayer: true }, "", location.href);
@@ -275,6 +286,22 @@ class StreamingPlayerController {
 
     _setAmbientOpacity(opacity) {
         return setAmbientOpacity(this, opacity);
+    }
+
+    _setColorBoostEnabled(enabled) {
+        return setColorBoostEnabled(this, enabled);
+    }
+
+    _setColorBoostStrength(strength) {
+        return setColorBoostStrength(this, strength);
+    }
+
+    _setStatsOverlayEnabled(enabled) {
+        return setStatsOverlayEnabled(this, enabled);
+    }
+
+    _updateStatsOverlayPipeline() {
+        return updateStatsOverlayPipeline(this);
     }
 
     _updateAmbientPipeline() {

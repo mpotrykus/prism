@@ -5,6 +5,9 @@ export const ZOOM_LEVELS = [1, 1.25, 1.5, 2];
 export const VOLUME_STORAGE_KEY = "prism_player_volume";
 export const AMBIENT_STORAGE_KEY = "prism_player_ambient_enabled";
 export const AMBIENT_OPACITY_STORAGE_KEY = "prism_player_ambient_opacity";
+export const COLOR_BOOST_STORAGE_KEY = "prism_player_color_boost_enabled";
+export const COLOR_BOOST_STRENGTH_STORAGE_KEY = "prism_player_color_boost_strength";
+export const STATS_OVERLAY_STORAGE_KEY = "prism_player_stats_overlay_enabled";
 
 export function storedVolume() {
     const raw = Number(localStorage.getItem(VOLUME_STORAGE_KEY));
@@ -27,6 +30,24 @@ export function storedAmbientEnabled() {
 export function storedAmbientOpacity() {
     const raw = Number(localStorage.getItem(AMBIENT_OPACITY_STORAGE_KEY));
     return Number.isFinite(raw) && raw >= 0 && raw <= 1 ? raw : 0.5;
+}
+
+/* Same immediate-persistence model as storedAmbientEnabled - Color Boost (contrast/
+   saturation) has no per-video/genre concern to reconcile against either, unlike shader
+   upscaling's Settings-modal-default-plus-session-override model. */
+export function storedColorBoostEnabled() {
+    return localStorage.getItem(COLOR_BOOST_STORAGE_KEY) === "1";
+}
+
+export function storedColorBoostStrength() {
+    const raw = Number(localStorage.getItem(COLOR_BOOST_STRENGTH_STORAGE_KEY));
+    return Number.isFinite(raw) && raw >= 0 && raw <= 1 ? raw : 0.5;
+}
+
+/* Same immediate-persistence model as storedAmbientEnabled - a debug readout has no
+   per-video/genre concern to reconcile either. */
+export function storedStatsOverlayEnabled() {
+    return localStorage.getItem(STATS_OVERLAY_STORAGE_KEY) === "1";
 }
 
 /* Drawn as an inline SVG using currentColor rather than a "🔊"/"🔉"/"🔇" emoji glyph -

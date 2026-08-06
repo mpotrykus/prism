@@ -1,4 +1,5 @@
-import { shaderTuningAt, SHADER_VERTEX_SRC, SHADER_FRAGMENT_ANIME, SHADER_FRAGMENT_CAS } from "./shader/shaders.js";
+import { shaderTuningAt, colorBoostAt, SHADER_VERTEX_SRC, SHADER_FRAGMENT_ANIME, SHADER_FRAGMENT_CAS } from "./shader/shaders.js";
+import { COLOR_BOOST_STORAGE_KEY, COLOR_BOOST_STRENGTH_STORAGE_KEY } from "./ui/shared.js";
 
 /* WebGL upscaling pipeline (Anime4K/CAS) - reads frames from the controller's <video>
    element and renders an upscaled frame into a canvas stacked on top of it. Takes the
@@ -27,6 +28,24 @@ export function setShaderEnabled(controller, enabled) {
     updateShaderPipeline(controller);
 }
 
+/* Color Boost (contrast/saturation "look" lift) - independent of shader upscaling's
+   on/off state, but shares the same GL pass/canvas (see updateShaderPipeline/
+   renderShaderFrame below) rather than spending a second full-frame GPU pass. Same
+   "toggle IS the persisted setting" immediate-persistence model as ambient lighting
+   (ambient-pipeline.js's setAmbientEnabled) - no per-video/genre concern to reconcile
+   here either. */
+export function setColorBoostEnabled(controller, enabled) {
+    controller._colorBoostEnabled = enabled;
+    localStorage.setItem(COLOR_BOOST_STORAGE_KEY, enabled ? "1" : "0");
+    updateShaderPipeline(controller);
+}
+
+export function setColorBoostStrength(controller, strength) {
+    controller._colorBoostStrength = strength;
+    localStorage.setItem(COLOR_BOOST_STRENGTH_STORAGE_KEY, String(strength));
+    updateShaderPipeline(controller);
+}
+
 /* Off by default - same reasoning as the Android leg (ShaderUpscaleEffect): this spends
    an extra GPU pass every frame, only worth it on already-low-resolution sources.
    Unlike Android, there's no per-drag rebuild hazard here (see PlayerActivity's
@@ -35,7 +54,10 @@ export function setShaderEnabled(controller, enabled) {
    no-ops once already built, and start/stop only takes effect when the 0%/>0% boundary
    is actually crossed. */
 export function updateShaderPipeline(controller) {
-    if (controller._shaderType === "off") {
+    /* Either toggle keeps this GL pass alive - Color Boost alone still needs the canvas
+       rendering (with sharpenStrength forced to 0 in renderShaderFrame below), same as
+       shader upscaling alone. */
+    if (controller._shaderType === "off" && !controller._colorBoostEnabled) {
         stopShaderLoop(controller);
         if (controller._shaderCanvas) controller._shaderCanvas.style.display = "none";
         if (controller._videoEl) controller._videoEl.style.opacity = "1";
@@ -43,6 +65,7 @@ export function updateShaderPipeline(controller) {
     }
     if (!ensureShaderPipeline(controller)) {
         controller._shaderType = "off";
+        controller._colorBoostEnabled = false;
         return;
     }
     controller._shaderCanvas.style.display = "block";
@@ -194,8 +217,20 @@ export function renderShaderFrame(controller) {
     const dpr = window.devicePixelRatio || 1;
     const displayW = Math.round((window.innerWidth || document.documentElement.clientWidth) * dpr);
     const displayH = Math.round((window.innerHeight || document.documentElement.clientHeight) * dpr);
-    const tuning = shaderTuningAt(controller._shaderType, controller._shaderStrength);
-    const scale = Math.max(1, Math.min(tuning.scale, Math.min(displayW / video.videoWidth, displayH / video.videoHeight)));
+    /* Shader Upscaling and Color Boost are independent toggles sharing this one GL pass.
+       When only Color Boost is on, there's no compiled "plain" program to fall back to -
+       reuse whichever algorithm this title's genre auto-detected (_shaderAutoType) with
+       sharpen forced to 0, which both fragment shaders already reduce to an exact
+       passthrough for (see SHADER_FRAGMENT_ANIME/_CAS - zero sharpen strength leaves the
+       sharpen stage a no-op either way). */
+    const programType = controller._shaderType !== "off" ? controller._shaderType : controller._shaderAutoType;
+    const sharpenTuning = controller._shaderType !== "off"
+        ? shaderTuningAt(controller._shaderType, controller._shaderStrength)
+        : { scale: 1, sharpen: 0, kernel: 1 };
+    const colorTuning = controller._colorBoostEnabled
+        ? colorBoostAt(controller._colorBoostStrength)
+        : { saturation: 1, contrast: 1 };
+    const scale = Math.max(1, Math.min(sharpenTuning.scale, Math.min(displayW / video.videoWidth, displayH / video.videoHeight)));
     const outW = Math.round(video.videoWidth * scale);
     const outH = Math.round(video.videoHeight * scale);
     const canvas = controller._shaderCanvas;
@@ -205,7 +240,7 @@ export function renderShaderFrame(controller) {
     }
     gl.viewport(0, 0, outW, outH);
 
-    const { program, uniforms, aPosition } = controller._shaderPrograms[controller._shaderType];
+    const { program, uniforms, aPosition } = controller._shaderPrograms[programType];
     gl.useProgram(program);
     gl.bindTexture(gl.TEXTURE_2D, controller._shaderTexture);
     try {
@@ -226,11 +261,11 @@ export function renderShaderFrame(controller) {
     gl.vertexAttribPointer(aPosition, 2, gl.FLOAT, false, 0, 0);
     gl.uniform1i(uniforms.uTex, 0);
     gl.uniform2f(uniforms.uTexelSize, 1 / video.videoWidth, 1 / video.videoHeight);
-    gl.uniform1f(uniforms.uKernelScale, tuning.kernel);
-    gl.uniform1f(uniforms.uSharpenStrength, tuning.sharpen);
+    gl.uniform1f(uniforms.uKernelScale, sharpenTuning.kernel);
+    gl.uniform1f(uniforms.uSharpenStrength, sharpenTuning.sharpen);
     if (uniforms.uSaturationBoost) {
-        gl.uniform1f(uniforms.uSaturationBoost, tuning.saturation);
-        gl.uniform1f(uniforms.uContrastBoost, tuning.contrast);
+        gl.uniform1f(uniforms.uSaturationBoost, colorTuning.saturation);
+        gl.uniform1f(uniforms.uContrastBoost, colorTuning.contrast);
     }
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
 }

@@ -21,6 +21,7 @@ import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsCompat;
 import androidx.core.view.WindowInsetsControllerCompat;
 import androidx.media3.common.C;
+import androidx.media3.common.ColorInfo;
 import androidx.media3.common.Format;
 import androidx.media3.common.MediaItem;
 import androidx.media3.common.PlaybackException;
@@ -43,6 +44,7 @@ import java.util.List;
 public class PlayerActivity extends AppCompatActivity {
 
     private static final String AMBIENT_TAG = "AmbientLighting";
+    private static final String SHADER_TAG = "ShaderEffects";
 
     public static final String EXTRA_URL = "url";
     public static final String EXTRA_START_POSITION_MS = "startPositionMs";
@@ -69,6 +71,9 @@ public class PlayerActivity extends AppCompatActivity {
     private static final String PREFS_NAME = "prism_player_prefs";
     private static final String PREF_AMBIENT_ENABLED = "ambient_lighting_enabled";
     private static final String PREF_AMBIENT_OPACITY = "ambient_lighting_opacity";
+    private static final String PREF_COLOR_BOOST_ENABLED = "color_boost_enabled";
+    private static final String PREF_COLOR_BOOST_STRENGTH = "color_boost_strength";
+    private static final String PREF_STATS_OVERLAY_ENABLED = "stats_overlay_enabled";
 
     public interface PlaybackListener {
         void onProgress(long positionMs, long durationMs);
@@ -130,6 +135,17 @@ public class PlayerActivity extends AppCompatActivity {
     boolean ambientEnabled = false;
     /* Same immediate-persistence model as ambientEnabled above - see setAmbientOpacity. */
     float ambientOpacity = 0.5f;
+    /* Contrast/saturation "look" boost - same immediate-persistence model as ambient
+       lighting above (no per-video/genre concern of its own either), but independent of
+       shaderType/shaderEnabled/upscaleStrength above: see ShaderUpscaleEffect's own
+       header comment for how the two toggles now share one GL pass. */
+    boolean colorBoostEnabled = false;
+    float colorBoostStrength = 0.5f;
+    /* Same immediate-persistence model as ambientEnabled/colorBoostEnabled above - a debug
+       readout has no per-video/genre concern to reconcile either. Read view, not player
+       state - see PlayerUiHelper.buildStatsOverlay/updateStatsOverlay. */
+    boolean statsOverlayEnabled = false;
+    TextView statsOverlayText;
     PlayerView playerView;
     AmbientGlowView ambientGlowView;
     private AmbientLightSampler ambientSampler;
@@ -189,6 +205,9 @@ public class PlayerActivity extends AppCompatActivity {
         shaderType = shaderEnabled && upscaleStrength > 0f ? detectedShaderType : ShaderType.OFF;
         ambientEnabled = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(PREF_AMBIENT_ENABLED, false);
         ambientOpacity = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getFloat(PREF_AMBIENT_OPACITY, 0.5f);
+        colorBoostEnabled = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(PREF_COLOR_BOOST_ENABLED, false);
+        colorBoostStrength = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getFloat(PREF_COLOR_BOOST_STRENGTH, 0.5f);
+        statsOverlayEnabled = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(PREF_STATS_OVERLAY_ENABLED, false);
         title = getIntent().getStringExtra(EXTRA_TITLE);
         if (title == null) title = "";
         year = getIntent().getIntExtra(EXTRA_YEAR, -1);
@@ -232,6 +251,7 @@ public class PlayerActivity extends AppCompatActivity {
         float density = getResources().getDisplayMetrics().density;
         PlayerUiHelper.buildCloseButton(this, density);
         PlayerUiHelper.buildMenuButton(this, density);
+        PlayerUiHelper.buildStatsOverlay(this, density);
 
         buildLoadingSpinner();
         buildTransportBar(density);
@@ -363,6 +383,17 @@ public class PlayerActivity extends AppCompatActivity {
                        letterboxing" fallback for a visible beat. */
                     layoutGlow();
                 }
+
+                @Override
+                public void onTracksChanged(Tracks tracks) {
+                    /* applyVideoEffects()'s very first call (see below) runs before
+                       prepare() even starts, so isHdrContent() has no track format to
+                       inspect yet at that point - re-run once ExoPlayer actually
+                       resolves the selected video track's colorInfo, so a real HDR
+                       source doesn't slip through with the effects pass still
+                       attached for the first few frames. */
+                    applyVideoEffects();
+                }
             }
         );
 
@@ -473,15 +504,74 @@ public class PlayerActivity extends AppCompatActivity {
     }
 
     /* Re-issued on every toggle rather than only once at startup - ExoPlayer's javadoc says
-       setVideoEffects() can be called again mid-playback to swap the active effect list. */
+       setVideoEffects() can be called again mid-playback to swap the active effect list.
+
+       Both Shader Upscaling and Color Boost share one GL pass now (see ShaderUpscaleEffect's
+       own header comment) - programType always picks a real algorithm to render through
+       (whichever this title's genre auto-detected) even when shader upscaling itself is off,
+       with sharpenTuning forced to ShaderType.NEUTRAL in that case rather than
+       programType.tuningAt(0) (which would apply that type's lightest-tier sharpen amount, not
+       true zero - see ShaderType.NEUTRAL's own comment). */
     void applyVideoEffects() {
         if (player == null) {
             return;
         }
-        List<Effect> effects = shaderType == ShaderType.OFF
-            ? Collections.emptyList()
-            : Collections.singletonList(new ShaderUpscaleEffect(this, shaderType, upscaleStrength));
-        player.setVideoEffects(effects);
+        boolean sharpenOn = shaderType != ShaderType.OFF;
+        boolean hdr = isHdrContent();
+        if ((!sharpenOn && !colorBoostEnabled) || hdr) {
+            Log.d(SHADER_TAG, "applyVideoEffects: no effects ("
+                + (hdr ? "HDR content detected, auto-skipping" : "both toggles off") + ")");
+            player.setVideoEffects(Collections.emptyList());
+            PlayerUiHelper.updateStatsOverlay(this);
+            return;
+        }
+        Log.d(SHADER_TAG, "applyVideoEffects: sharpenOn=" + sharpenOn + " (" + shaderType + " @ " + upscaleStrength
+            + "), colorBoostEnabled=" + colorBoostEnabled + " (" + colorBoostStrength + "), hdr=false");
+        ShaderType programType = sharpenOn ? shaderType : detectedShaderType;
+        ShaderTuning sharpenTuning = sharpenOn ? programType.tuningAt(upscaleStrength) : ShaderType.NEUTRAL;
+        ColorBoostTuning colorTuning = colorBoostEnabled ? ColorBoostTuning.at(colorBoostStrength) : ColorBoostTuning.NEUTRAL;
+        player.setVideoEffects(
+            Collections.singletonList(new ShaderUpscaleEffect(this, programType, sharpenTuning, colorTuning)));
+        PlayerUiHelper.updateStatsOverlay(this);
+    }
+
+    /* Shared by isHdrContent() and resolveVideoAR() below (and PlayerUiHelper's stats
+       overlay) rather than each re-walking player.getCurrentTracks() independently - the
+       selected video track's Format is the one place resolution/colorInfo/rotation all
+       come from. Package-private, not private, so PlayerUiHelper.updateStatsOverlay can
+       read the same Format the "HDR: yes/no" line is computed from. */
+    Format selectedVideoFormat() {
+        if (player == null) return null;
+        for (Tracks.Group group : player.getCurrentTracks().getGroups()) {
+            if (group.getType() != C.TRACK_TYPE_VIDEO) continue;
+            for (int i = 0; i < group.length; i++) {
+                if (group.isTrackSelected(i)) return group.getTrackFormat(i);
+            }
+        }
+        return null;
+    }
+
+    /* Automatic, not a user-facing toggle - real HDR-mastered sources (wide BT.2020 gamut or a
+       PQ/HLG transfer function) skip this GL effects pass entirely rather than composing an
+       SDR-tuned contrast/saturation/sharpen boost on top of it, the same reasoning Plezy's own
+       ShaderService._isHdrContent()/autoHdrSkip uses (see docs/plezy-player-comparison.md's HDR
+       notes) - our shadow-crush fix (see ShaderUpscaleShaderProgram's shadowProtect) was tuned
+       against SDR luma assumptions, not PQ/HLG's own much wider range. This is NOT full HDR
+       passthrough (no Dolby Vision profile handling, no display HDR-mode switching à la Plezy's
+       matchDynamicRange on Windows) - that's tracked separately, deliberately scoped out here;
+       see docs/plezy-player-comparison.md's "Deferred features" for the full plan.
+
+       The exact colorSpace/colorTransfer values that drove this decision are surfaced in the
+       Performance Overlay's "HDR" line (see PlayerUiHelper.updateStatsOverlay) rather than
+       logged here on every call - this runs on the applyVideoEffects()/onTracksChanged() path,
+       and logcat isn't where you'd normally be looking to confirm this during real playback. */
+    boolean isHdrContent() {
+        Format format = selectedVideoFormat();
+        ColorInfo colorInfo = format != null ? format.colorInfo : null;
+        if (colorInfo == null) return false;
+        return colorInfo.colorSpace == C.COLOR_SPACE_BT2020
+            || colorInfo.colorTransfer == C.COLOR_TRANSFER_ST2084
+            || colorInfo.colorTransfer == C.COLOR_TRANSFER_HLG;
     }
 
     private void applyZoomTransform(View v) {
@@ -533,6 +623,38 @@ public class PlayerActivity extends AppCompatActivity {
         if (ambientGlowView != null) ambientGlowView.setGlowOpacity(opacity);
     }
 
+    /* Same "toggle IS the persisted setting" immediate-persistence model as
+       setAmbientEnabled above. Unlike ambient opacity, this goes through
+       applyVideoEffects() (a GL program rebuild via setVideoEffects()), so
+       PlayerUiHelper's Color Boost strength SeekBar gates the actual apply to
+       onStopTrackingTouch, same drag-frequency hazard as the Shader Upscaling panel -
+       see that panel's own comment. */
+    void setColorBoostEnabled(boolean enabled) {
+        colorBoostEnabled = enabled;
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().putBoolean(PREF_COLOR_BOOST_ENABLED, enabled).apply();
+        applyVideoEffects();
+    }
+
+    void setColorBoostStrength(float strength) {
+        colorBoostStrength = strength;
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().putFloat(PREF_COLOR_BOOST_STRENGTH, strength).apply();
+        applyVideoEffects();
+    }
+
+    /* Same "toggle IS the persisted setting" immediate-persistence model as
+       setAmbientEnabled/setColorBoostEnabled above - just a View visibility flip, no GL
+       rebuild, so this applies instantly with no drag-frequency concern at all (see
+       PlayerUiHelper's Performance Overlay menu row, a plain toggle with no drill-down
+       panel - there's no strength to tune here). */
+    void setStatsOverlayEnabled(boolean enabled) {
+        statsOverlayEnabled = enabled;
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().putBoolean(PREF_STATS_OVERLAY_ENABLED, enabled).apply();
+        if (statsOverlayText != null) {
+            statsOverlayText.setVisibility(enabled ? View.VISIBLE : View.GONE);
+        }
+        PlayerUiHelper.updateStatsOverlay(this);
+    }
+
     /* player.getVideoSize()/onVideoSizeChanged never resolve past 0x0 for the entire
        playback session once applyVideoEffects() has attached any effects list to this
        player - confirmed via logcat on real hardware, even minutes into playback with
@@ -548,17 +670,10 @@ public class PlayerActivity extends AppCompatActivity {
         if (videoSize.width > 0 && videoSize.height > 0) {
             return (float) videoSize.width / videoSize.height;
         }
-        for (Tracks.Group group : player.getCurrentTracks().getGroups()) {
-            if (group.getType() != C.TRACK_TYPE_VIDEO) continue;
-            for (int i = 0; i < group.length; i++) {
-                if (!group.isTrackSelected(i)) continue;
-                Format format = group.getTrackFormat(i);
-                if (format.width <= 0 || format.height <= 0) continue;
-                float ar = (float) format.width / format.height;
-                return format.rotationDegrees % 180 != 0 ? 1f / ar : ar;
-            }
-        }
-        return fallback;
+        Format format = selectedVideoFormat();
+        if (format == null || format.width <= 0 || format.height <= 0) return fallback;
+        float ar = (float) format.width / format.height;
+        return format.rotationDegrees % 180 != 0 ? 1f / ar : ar;
     }
 
     /* Mirrors ambient-pipeline.js's computePictureRect on the web leg: where the
@@ -655,6 +770,12 @@ public class PlayerActivity extends AppCompatActivity {
             }
             PlayerUiHelper.updateTransportUi(this, position, safeDuration);
         }
+        /* Piggybacks on this existing ~1s tick rather than its own timer - a debug
+           readout doesn't need faster-than-1s refresh, and this is already the
+           established "periodic, not per-frame" cadence for anything that doesn't
+           (contrast AmbientLightSampler's own faster ~42ms tick, which does). No-ops
+           internally when the overlay isn't toggled on. */
+        PlayerUiHelper.updateStatsOverlay(this);
         progressHandler.postDelayed(progressRunnable, PROGRESS_INTERVAL_MS);
     }
 

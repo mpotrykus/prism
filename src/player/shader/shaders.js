@@ -4,24 +4,27 @@
    interpolates between, just running as a WebGL pass over the <video> element instead
    of inside ExoPlayer's native pipeline. See plex-player.js's _ensureShaderPipeline for
    how frames get from <video> to this shader. */
+/* Sharpen/upscale knobs only - no saturation/contrast here anymore. Those used to be
+   coupled to this same shader-type strength slider, but a linear contrast stretch
+   pivoted at mid-gray crushes near-black shades into flat 0 once the boost multiplier
+   rides high enough (confirmed: Anime4K's old 1.18x max crushed anything under ~7.6%
+   luma to exact 0 post-clamp) - a shadow-detail bug that's inherent to that formula, not
+   a tuning mistake. Plezy's own shader presets (NVScaler/ArtCNN/Anime4K) carry no
+   contrast/saturation knobs at all for the same reason - sharpening and "look" grading
+   are different concerns. See COLOR_BOOST_TUNING/colorBoostAt below for where
+   contrast/saturation moved, as their own independent toggle. */
 export const SHADER_TYPES = {
   anime4k: {
     label: "Anime4K",
     useCas: false,
-    min: { scale: 1.8, sharpen: 1.8, kernel: 1.5, saturation: 1.1, contrast: 1.05 },
-    max: { scale: 2.4, sharpen: 3.8, kernel: 2.8, saturation: 1.35, contrast: 1.18 },
+    min: { scale: 1.8, sharpen: 1.8, kernel: 1.5 },
+    max: { scale: 2.4, sharpen: 3.8, kernel: 2.8 },
   },
   live_action: {
     label: "Live-Action (CAS)",
     useCas: true,
-    /* saturation/contrast are a small compensating boost, not the anime shader's
-       exaggeration - CAS's per-channel anti-ringing clamp (see SHADER_FRAGMENT_CAS)
-       pulls sharpened pixels back toward the local neighborhood's own min/max, which
-       has the side effect of slightly flattening contrast/saturation along with the
-       ringing it's actually guarding against. This nudges both back up rather than
-       leaving the picture looking duller than the source. */
-    min: { scale: 1.3, sharpen: 1.0, kernel: 1.2, saturation: 1, contrast: 1 },
-    max: { scale: 1.6, sharpen: 2.2, kernel: 1.8, saturation: 1.12, contrast: 1.06 },
+    min: { scale: 1.3, sharpen: 1.0, kernel: 1.2 },
+    max: { scale: 1.6, sharpen: 2.2, kernel: 1.8 },
     /* CAS ramps to its max tuning by 15% strength instead of 100% - the old full
        0-100% range made the slider's first ~2/3 barely perceptible (see the weight-gate
        fix above), so the previous "100%" tuning now arrives at "Light" instead of only
@@ -39,8 +42,26 @@ export function shaderTuningAt(shaderKey, strength) {
     scale: lerp(type.min.scale, type.max.scale),
     sharpen: lerp(type.min.sharpen, type.max.sharpen),
     kernel: lerp(type.min.kernel, type.max.kernel),
-    saturation: lerp(type.min.saturation, type.max.saturation),
-    contrast: lerp(type.min.contrast, type.max.contrast),
+  };
+}
+
+/* Contrast/saturation "look" boost - its own independent toggle (Color Boost, see
+   shader-pipeline.js's setColorBoostEnabled/setColorBoostStrength), not tied to
+   whichever shader-upscale algorithm this title's genre detected. Shares the same GL
+   pass as shader upscaling (one frame, one GPU pass - see renderShaderFrame) but is
+   otherwise unrelated: enabling this alone runs with sharpenStrength forced to 0, no
+   upscale, purely the contrast/saturation lift below. */
+export const COLOR_BOOST_TUNING = {
+  min: { saturation: 1, contrast: 1 },
+  max: { saturation: 1.3, contrast: 1.15 },
+};
+
+export function colorBoostAt(strength) {
+  const t = Math.max(0, Math.min(1, strength));
+  const lerp = (a, b) => a + (b - a) * t;
+  return {
+    saturation: lerp(COLOR_BOOST_TUNING.min.saturation, COLOR_BOOST_TUNING.max.saturation),
+    contrast: lerp(COLOR_BOOST_TUNING.min.contrast, COLOR_BOOST_TUNING.max.contrast),
   };
 }
 
@@ -104,8 +125,17 @@ void main() {
   vec3 blurredNeighborhood = (n + s + w + e) * 0.25;
   vec3 outColor = center + (center - blurredNeighborhood) * uSharpenStrength * edge;
   outColor = clamp(outColor, 0.0, 1.0);
-  outColor = (outColor - 0.5) * uContrastBoost + 0.5;
-  outColor = mix(vec3(luma(outColor)), outColor, uSaturationBoost);
+  /* Shadow protection - (x-0.5)*contrastBoost+0.5 is a linear stretch pivoted at
+     mid-gray, and for any contrastBoost > 1 that pushes near-black values negative,
+     which the final clamp(0,1) then flattens to exact 0 - different near-black shades
+     collapsing into the same crushed black. Feathering both boosts down to 1.0 (no-op)
+     as luma approaches 0 keeps shadow detail intact while midtones/highlights still get
+     the full lift. */
+  float shadowProtect = smoothstep(0.0, 0.22, luma(outColor));
+  float contrast = mix(1.0, uContrastBoost, shadowProtect);
+  float saturation = mix(1.0, uSaturationBoost, shadowProtect);
+  outColor = (outColor - 0.5) * contrast + 0.5;
+  outColor = mix(vec3(luma(outColor)), outColor, saturation);
   gl_FragColor = vec4(clamp(outColor, 0.0, 1.0), 1.0);
 }
 `;
@@ -147,11 +177,14 @@ void main() {
   vec3 minRgb = min(c, min(min(n, s), min(w, e)));
   vec3 maxRgb = max(c, max(max(n, s), max(w, e)));
   vec3 outColor = clamp(sharpened, minRgb, maxRgb);
-  /* Applied after the anti-ringing clamp above, not folded into it - this is compensating
-     for that clamp's own flattening side effect (see SHADER_TYPES.live_action's comment),
-     so it needs to run on the already-clamped result rather than change what gets clamped. */
-  outColor = (outColor - 0.5) * uContrastBoost + 0.5;
-  outColor = mix(vec3(luma(outColor)), outColor, uSaturationBoost);
+  /* Same shadow-protection reasoning as SHADER_FRAGMENT_ANIME above - feather the
+     contrast/saturation boost down to 1.0 (no-op) as luma approaches 0, so a linear
+     mid-gray-pivoted contrast stretch can't crush near-black shades into flat 0. */
+  float shadowProtect = smoothstep(0.0, 0.22, luma(outColor));
+  float contrast = mix(1.0, uContrastBoost, shadowProtect);
+  float saturation = mix(1.0, uSaturationBoost, shadowProtect);
+  outColor = (outColor - 0.5) * contrast + 0.5;
+  outColor = mix(vec3(luma(outColor)), outColor, saturation);
   gl_FragColor = vec4(clamp(outColor, 0.0, 1.0), 1.0);
 }
 `;

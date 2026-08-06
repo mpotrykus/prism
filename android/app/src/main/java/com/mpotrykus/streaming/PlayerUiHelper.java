@@ -20,7 +20,11 @@ import android.widget.ProgressBar;
 import android.widget.ScrollView;
 import android.widget.SeekBar;
 import android.widget.TextView;
+import androidx.annotation.OptIn;
 import androidx.appcompat.widget.SwitchCompat;
+import androidx.media3.common.ColorInfo;
+import androidx.media3.common.Format;
+import androidx.media3.common.util.UnstableApi;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Function;
@@ -37,6 +41,7 @@ import java.util.function.Function;
    gradient transport bar with a title/remaining-time header, and glass-panel PopupWindow
    flyouts standing in for chrome.js's div-based menu panels (openHamburgerMenu/
    openInlineMenu) instead of a native PopupMenu/AlertDialog. */
+@OptIn(markerClass = UnstableApi.class)
 final class PlayerUiHelper {
     private PlayerUiHelper() {}
 
@@ -100,6 +105,70 @@ final class PlayerUiHelper {
         btn.setOnClickListener(v -> showPlayerMenu(activity, v));
         activity.root.addView(btn);
         activity.registerFadingControl(btn);
+    }
+
+    /* "Performance Overlay" gear-menu toggle - a small monospace stats readout, added
+       here (not lazily on first toggle like the shader canvas/ambient glow) since it's
+       cheap to build and this keeps every corner overlay's construction in one place.
+       Positioned below the close/menu buttons' own top row (24dp margin, 40dp tall) so
+       it doesn't overlap them, still the "upper left corner" the toggle is named for.
+       Independent of fadingControls - same "contextual, not ambient chrome" reasoning as
+       the buffering spinner, since a debug overlay should stay visible even once the
+       rest of the chrome fades from inactivity, not disappear right when you're trying
+       to read it. */
+    static void buildStatsOverlay(PlayerActivity activity, float density) {
+        TextView text = new TextView(activity);
+        text.setTypeface(android.graphics.Typeface.MONOSPACE);
+        text.setTextSize(11);
+        text.setTextColor(Color.WHITE);
+        text.setLineSpacing(2f * density, 1f);
+        GradientDrawable bg = new GradientDrawable();
+        bg.setColor(Color.argb(140, 0, 0, 0));
+        bg.setCornerRadius(6 * density);
+        text.setBackground(bg);
+        int pad = (int) (8 * density);
+        text.setPadding(pad, pad, pad, pad);
+        FrameLayout.LayoutParams params =
+            new FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT);
+        params.gravity = Gravity.TOP | Gravity.START;
+        params.setMargins((int) (24 * density), (int) (80 * density), 0, 0);
+        text.setLayoutParams(params);
+        text.setVisibility(activity.statsOverlayEnabled ? View.VISIBLE : View.GONE);
+        activity.root.addView(text);
+        activity.statsOverlayText = text;
+        updateStatsOverlay(activity);
+    }
+
+    /* Called from PlayerActivity's ~1s reportProgress tick and immediately on every
+       applyVideoEffects()/setStatsOverlayEnabled() call, rather than owning its own
+       timer - a debug readout doesn't need faster-than-1s refresh on its own, but
+       shouldn't visibly lag a toggle flip either. No-ops if the overlay was never
+       toggled on or the view hasn't been built yet. */
+    static void updateStatsOverlay(PlayerActivity activity) {
+        TextView text = activity.statsOverlayText;
+        if (text == null || !activity.statsOverlayEnabled) return;
+
+        Format format = activity.selectedVideoFormat();
+        StringBuilder sb = new StringBuilder();
+        sb.append(format != null && format.width > 0 ? format.width + "x" + format.height : "? x ?").append('\n');
+
+        boolean hdr = activity.isHdrContent();
+        sb.append("HDR: ").append(hdr ? "yes" : "no");
+        ColorInfo colorInfo = format != null ? format.colorInfo : null;
+        if (colorInfo != null) {
+            sb.append(" (space=").append(colorInfo.colorSpace)
+                .append(" transfer=").append(colorInfo.colorTransfer).append(')');
+        }
+        sb.append('\n');
+
+        sb.append("Shader Upscaling: ").append(activity.shaderType == ShaderType.OFF
+            ? "off"
+            : activity.shaderType.label + " @ " + Math.round(activity.upscaleStrength * 100) + "%").append('\n');
+        sb.append("Color Boost: ").append(activity.colorBoostEnabled
+            ? Math.round(activity.colorBoostStrength * 100) + "%"
+            : "off");
+
+        text.setText(sb.toString());
     }
 
     private static TextView makeTopIconButton(PlayerActivity activity, String glyph, String contentDescription, float density) {
@@ -492,6 +561,20 @@ final class PlayerUiHelper {
         shaderRow.onSelect = () -> openShaderPanel(activity, anchor);
         rows.add(shaderRow);
 
+        MenuRow colorBoostRow = new MenuRow("Color Boost");
+        colorBoostRow.value = activity.colorBoostEnabled ? Math.round(activity.colorBoostStrength * 100) + "%" : null;
+        colorBoostRow.chevron = true;
+        colorBoostRow.toggleChecked = activity.colorBoostEnabled;
+        /* Contrast/saturation "look" lift - independent of Shader Upscaling above (see
+           ColorBoostTuning), same toggle-flips-in-place-without-leaving-the-menu
+           pattern. */
+        colorBoostRow.onToggle = (checked) -> {
+            activity.setColorBoostEnabled(checked);
+            return checked ? Math.round(activity.colorBoostStrength * 100) + "%" : null;
+        };
+        colorBoostRow.onSelect = () -> openColorBoostPanel(activity, anchor);
+        rows.add(colorBoostRow);
+
         MenuRow ambientRow = new MenuRow("Ambient Lighting");
         ambientRow.toggleChecked = activity.ambientEnabled;
         ambientRow.chevron = true;
@@ -504,6 +587,18 @@ final class PlayerUiHelper {
         };
         ambientRow.onSelect = () -> openAmbientPanel(activity, anchor);
         rows.add(ambientRow);
+
+        MenuRow statsRow = new MenuRow("Performance Overlay");
+        statsRow.toggleChecked = activity.statsOverlayEnabled;
+        /* No chevron/onSelect - nothing to drill into, unlike Shader Upscaling/Color
+           Boost/Ambient Lighting above (each has a strength/opacity slider). Toggling
+           this is just a View visibility flip (see setStatsOverlayEnabled), so it's a
+           plain on/off row. */
+        statsRow.onToggle = (checked) -> {
+            activity.setStatsOverlayEnabled(checked);
+            return null;
+        };
+        rows.add(statsRow);
 
         if (!activity.chapters.isEmpty()) {
             MenuRow chaptersRow = new MenuRow("Chapters");
@@ -654,6 +749,56 @@ final class PlayerUiHelper {
                 activity.shaderType = activity.shaderEnabled && activity.upscaleStrength > 0f
                     ? activity.detectedShaderType : ShaderType.OFF;
                 activity.applyVideoEffects();
+            }
+        });
+        content.addView(strengthSeekBar);
+
+        showPopup(activity, anchor, content, density);
+    }
+
+    /* Same custom-panel pattern as openShaderPanel above, simpler since there's no
+       auto-detected type to show as read-only info here - just the one strength
+       control. Gated to onStopTrackingTouch like Shader Upscaling's own panel (not
+       live like Ambient Lighting's opacity below) - PlayerActivity.setColorBoostStrength
+       goes through applyVideoEffects(), the same GL-program-rebuild-per-call hazard
+       documented on openShaderPanel's own SeekBar listener. */
+    private static void openColorBoostPanel(PlayerActivity activity, View anchor) {
+        float density = activity.getResources().getDisplayMetrics().density;
+        dismissMenuPopup(activity);
+
+        LinearLayout content = new LinearLayout(activity);
+        content.setOrientation(LinearLayout.VERTICAL);
+        int pad = Math.round(14 * density);
+        content.setPadding(pad, pad, pad, pad);
+        content.setBackground(panelBackground(density));
+        content.addView(makeBackRow(activity, density, () -> showPlayerMenu(activity, anchor)));
+
+        TextView strengthLabel = new TextView(activity);
+        strengthLabel.setText("Strength: " + Math.round(activity.colorBoostStrength * 100) + "%");
+        strengthLabel.setTextColor(SUBTLE_TEXT);
+        strengthLabel.setTextSize(12);
+        content.addView(strengthLabel);
+
+        SeekBar strengthSeekBar = new SeekBar(activity);
+        styleSeekBar(strengthSeekBar, density);
+        strengthSeekBar.setMax(100);
+        strengthSeekBar.setProgress(Math.round(activity.colorBoostStrength * 100));
+        LinearLayout.LayoutParams strengthParams =
+            new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        strengthParams.topMargin = Math.round(4 * density);
+        strengthSeekBar.setLayoutParams(strengthParams);
+        strengthSeekBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override
+            public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+                strengthLabel.setText("Strength: " + progress + "%");
+            }
+
+            @Override
+            public void onStartTrackingTouch(SeekBar seekBar) {}
+
+            @Override
+            public void onStopTrackingTouch(SeekBar seekBar) {
+                activity.setColorBoostStrength(seekBar.getProgress() / 100f);
             }
         });
         content.addView(strengthSeekBar);

@@ -26,7 +26,7 @@ API, no backend — so it's a fair feature benchmark, just not something we can 
 | Direct play + server transcode | Yes | Yes — `directStream=1` HLS remux (`plex-player.js` `_buildStreamUrl`) |
 | Quality presets (240p–1080p, bitrate caps) | Yes | Yes — version + quality-cap picker in the title-info modal |
 | Playback speed 0.25x–8x | Yes | Yes — player-chrome speed control (native `setPlaybackSpeed` on Android) |
-| HEVC/AV1/VP9, HDR, Dolby Vision | Yes (native decoders) | Partial (browser/WebView2-codec-dependent; Plex transcodes the rest) |
+| HEVC/AV1/VP9, HDR, Dolby Vision | Yes (native decoders) | Partial — Android auto-skips its SDR-tuned shader/Color Boost effects on real HDR sources (see "HDR" below), but true HDR passthrough/tone-mapping is still a tracked, unbuilt task |
 | ASS/SSA subtitle rendering with styling | Yes (libass) | No — only what `<video>`/Media3 render natively |
 | Online subtitle search/download | Yes | Yes — OpenSubtitles REST API (`opensubtitles.js`), login-gated downloads |
 | Skip intro / skip credits | Yes | Yes — Plex `Marker` data, shared range-check between web pill and Android native button |
@@ -41,6 +41,7 @@ API, no backend — so it's a fair feature benchmark, just not something we can 
 | Watch-together / real-time sync | Yes | No |
 | Audio passthrough / downmix + boost | Yes | No |
 | Shader-based AI-style upscaling (Anime4K/RAVU-style) | Yes (mpv GLSL shaders) | Yes on Android — `ShaderUpscaleEffect`/`ShaderUpscaleShaderProgram` via Media3's Effect API, "Shader Upscaling..." dialog on the gear menu: Anime4K (line-art) or Live-Action/CAS (photographic content) with a continuous strength slider. Also shipped on web/Xbox — same two shaders as a WebGL pass sampling the `<video>` element, "Shader Upscaling" entry in `plex-player.js`'s hamburger menu |
+| Contrast/saturation "look" boost | No (not a separate feature) | Yes — "Color Boost" toggle + strength slider, own independent toggle from Shader Upscaling (see that section's own notes for why they used to be coupled and the shadow-crush bug that split them apart) |
 
 ## Per-platform feasibility
 
@@ -51,7 +52,7 @@ API, no backend — so it's a fair feature benchmark, just not something we can 
 | Direct play + server transcode | ✅ | ✅ | ✅ |
 | Quality presets | 🟡 more `start.m3u8` query params | 🟡 same URL params | 🟡 same URL params (still on `<video>`+hls.js) |
 | Playback speed 0.25x–8x | 🟡 `video.playbackRate` | 🟡 Media3 `PlaybackParameters` | 🟡 `video.playbackRate` |
-| HEVC/AV1/VP9, HDR, Dolby Vision | ⛔ limited to whatever Chrome decodes | 🟡 native ExoPlayer already in place, just needs enabling/testing | ⛔ needs a new native `MediaPlayerElement` bridge (not started) |
+| HEVC/AV1/VP9, HDR, Dolby Vision | ⛔ limited to whatever Chrome decodes | 🟡 ✅ automatic SDR-effects skip on real HDR shipped (`isHdrContent()`); true HDR passthrough/tone-mapping still needs verifying against real hardware | ⛔ needs a new native `MediaPlayerElement` bridge (not started) |
 | ASS/SSA subtitle rendering with styling | ⛔ no libass in a browser without a wasm port | 🟡 Media3 has partial SSA support — plugin-side work | ⛔ still `<video>`+hls.js, same limit as web |
 | Online subtitle search/download | 🟡 client-side API call, same pattern as YouTube/OpenRouter | 🟡 same | 🟡 same |
 | Skip intro / skip credits | 🟡 Plex `Marker` data + a button | 🟡 same | 🟡 same |
@@ -66,6 +67,7 @@ API, no backend — so it's a fair feature benchmark, just not something we can 
 | Watch-together / real-time sync | ⛔ needs a signaling backend | ⛔ needs a signaling backend | ⛔ needs a signaling backend |
 | Audio passthrough / downmix + boost | ⛔ no passthrough from `<video>` | 🟡 Media3 audio processing | ⛔ still `<video>`, same limit as web |
 | Shader-based AI-style upscaling | ✅ WebGL canvas sampling `<video>` frames | ✅ `ExoPlayer.setVideoEffects()` + a custom `GlShaderProgram` running inside ExoPlayer's own native pipeline | ✅ same WebGL approach as web (still `<video>`+hls.js on Xbox); GPU/perf on real Xbox hardware unverified |
+| Contrast/saturation "look" boost | ✅ shares the shader-upscale WebGL pass, own toggle | ✅ shares the shader-upscale GL pass, own toggle | ✅ same WebGL pass as web (still `<video>`+hls.js on Xbox) |
 
 **Not achievable on any platform today:** watch-together / real-time sync — needs a signaling layer
 between clients, which breaks Prism's "no backend" architecture invariant unless it can piggyback
@@ -75,11 +77,11 @@ on a Plex-native sync feature (unverified that one exists).
 
 The focused core set (speed, sleep timer, zoom/pan, skip intro/credits, chapters, quality picker,
 subtitle search) shipped across `plex-player.js`, `plex-netflix-card.js`, `settings.js`,
-`opensubtitles.js`, and the Android native plugin. Shader-based upscaling and ambient lighting have
-since shipped too (see their own notes below). The three items below remain explicitly scoped out
-and unbuilt — kept here as the reference the moment any of them gets picked up again, since some of
-the reasoning (especially the now-resolved Android ambient-lighting/shader split) isn't obvious from
-the table cells alone.
+`opensubtitles.js`, and the Android native plugin. Shader-based upscaling, Color Boost, and ambient
+lighting have since shipped too (see their own notes below). The four items below remain explicitly
+scoped out and unbuilt — kept here as the reference the moment any of them gets picked up again,
+since some of the reasoning (especially the now-resolved Android ambient-lighting/shader split)
+isn't obvious from the table cells alone.
 
 **Picture-in-Picture** — feasible on web (`video.requestPictureInPicture()`, a standard API against
 the existing `<video>` element) and Android (standard `enterPictureInPictureMode`/
@@ -245,6 +247,26 @@ directly. Two differences from the Android leg, both improvements rather than pa
 GPU/perf on real Xbox WebView2 hardware is still unverified, same caveat as ambient lighting's own
 Xbox note above.
 
+**Contrast/saturation split into its own "Color Boost" toggle**, prompted by comparing this
+feature's actual `matchDynamicRange` "HDR" toggle (see the HDR section below) — Plezy's own shader
+presets (NVScaler/ArtCNN/Anime4K) carry no contrast/saturation knobs at all, treating sharpening and
+color grading as separate concerns. Prism's original shader tuning tables folded a contrast/
+saturation lift into the same per-shader-type strength slider as sharpening, which turned out to
+have a real shadow-detail bug: `(x-0.5)*contrastBoost+0.5` is a linear stretch pivoted at mid-gray,
+and for any boost above 1x it pushes near-black values negative, which the final `clamp(0,1)` then
+flattens to exact 0 — different near-black shades collapsing into one crushed black (confirmed: the
+old Anime4K max of 1.18x crushed anything under ~7.6% luma). Fixed two ways at once: contrast/
+saturation moved to their own independent "Color Boost" toggle + strength slider (`shaders.js`'s
+`COLOR_BOOST_TUNING`/`colorBoostAt`, Android's `ColorBoostTuning`), and both fragment shaders now
+feather the boost down to 1.0 (no-op) as luma approaches black (`shadowProtect`, a `smoothstep(0.0,
+0.22, luma)` gate) regardless of which toggle drives it. The two toggles share one GL pass rather
+than paying for two full-frame GPU passes — enabling Color Boost alone runs with sharpen strength
+forced to 0 and no upscale, which both shaders already reduce to an exact passthrough for, so no
+separate "plain" program was needed (`ShaderUpscaleEffect`'s own header comment; `renderShaderFrame`
+on the web leg). Both platforms compile clean and pass their existing shader unit tests
+(`shaders.test.js`); real-device visual verification is still outstanding, same caveat as the rest of
+this feature.
+
 **Frame-rate / motion interpolation** (raised alongside shader upscaling, since both get pitched as
 "AI-shader" video enhancement) — ruled out, not just deferred. `BaseGlShaderProgram`/`GlEffect`
 processes one decoded frame at a time; true motion interpolation needs at least two sequential
@@ -261,12 +283,77 @@ naive frame-blend/cross-dissolve between consecutive frames — real-time feasib
 ghosting/smearing on fast motion, since there's no actual motion estimation — considered not worth
 building given how much worse it looks than what "interpolation" implies.
 
+**HDR** — raised while investigating the shader shadow-crush bug above: does Plezy's "HDR" toggle
+apply a contrast/saturation lift, and should Prism's Color Boost be renamed to match? Checked
+against Plezy's actual source (`shader_service.dart`, `playback_settings_screen.dart`,
+`display_matching.dart`): its "HDR" toggle is `SettingsService.matchDynamicRange`, real display
+dynamic-range passthrough (switches mpv's `target-colorspace-hint` and the OS/monitor into its
+actual HDR swapchain for genuinely HDR-mastered sources), completely unrelated to its shader chain
+or to any contrast/saturation lift — confirming Color Boost should stay named what it is, not
+"HDR". Also confirmed Plezy's `ShaderService._isHdrContent()`/`autoHdrSkip` auto-*skips* its own
+shader chain entirely on real HDR content (checks `video-params/colormatrix` for bt.2020 and
+`video-params/gamma` for pq/hlg) rather than trying to compose an SDR-tuned effect on top of it —
+the same "sharpening and HDR are different concerns, don't fight each other" reasoning behind the
+Color Boost split above.
+
+Two different things live under "HDR" here, deliberately kept separate:
+
+- **Shipped now (Android): automatic SDR-effects skip on real HDR content.** Not a user-facing
+  toggle — the user explicitly doesn't want one. `PlayerActivity.applyVideoEffects()` now calls
+  `isHdrContent()` (checks the selected video track's `Format.colorInfo` for `COLOR_SPACE_BT2020`/
+  `COLOR_TRANSFER_ST2084`/`COLOR_TRANSFER_HLG`, re-run on `Player.Listener.onTracksChanged` since the
+  very first `applyVideoEffects()` call happens before `prepare()` resolves any track format) and
+  skips the whole shader-upscale/Color-Boost GL pass on real HDR sources, mirroring Plezy's own
+  `autoHdrSkip` precedent above. This is the small, concrete, already-automatic piece of "HDR
+  support" — it does not touch decoding, tone-mapping, or display color mode at all, it only keeps
+  Prism's own SDR-tuned effects from fighting real HDR content. Web/Xbox has no equivalent: there's
+  no way to read a `<video>` element's actual color-space/transfer info from a browser without
+  WebCodecs, so this leg is Android-only for now.
+- **Not built — tracked task, deliberately scoped out here: true HDR passthrough/tone-mapping.**
+  What Plezy's `matchDynamicRange` actually does (real display HDR-mode switching) plus properly
+  decoding and rendering HDR10/HLG/Dolby Vision end-to-end, automatically and per-source, the way
+  Netflix/Plex's own apps do — no toggle, matching what was asked for here. Concretely, per
+  platform:
+  - **Android** is the most feasible leg to build this on: `ShaderUpscaleShaderProgram` already
+    threads a `useHdr` flag through from Media3's `GlEffect.toGlShaderProgram(Context, boolean
+    useHdr)` (used today only for `useHighPrecisionColorComponents`), and ExoPlayer's default
+    pipeline likely already preserves HDR color info end-to-end when no effect forces SDR
+    tonemapping — needs verifying on real HDR-capable hardware, not assumed. The real gaps: (1)
+    confirming `MediaCodec`'s HDR10/HLG output surface negotiates correctly against this device's
+    display, (2) Dolby Vision profile handling (Plezy's own `DoviBridge.kt` exists for exactly this
+    — worth reading once this is picked up, though it's GPLv3 so it's a reference, not something to
+    vendor directly), (3) whether the display itself needs an explicit HDR mode switch the way
+    Plezy's Windows `matchDynamicRange` does, or whether Android's own display pipeline handles that
+    automatically for a fullscreen HDR surface.
+  - **Web** has no realistic path: browsers give no reliable way to request/verify true HDR
+    `<video>` output alongside Plex's HLS transcode pipeline, and there's no display-HDR-mode API
+    exposed to web content at all.
+  - **Xbox is expected to fully support HDR eventually — not ruled out, just blocked on the same
+    not-yet-started native bridge every other native-decoder-dependent Xbox feature in this doc
+    needs.** WebView2's `<video>`+hls.js path (what Xbox still runs today) has no HDR story, same
+    as the web leg — but that's a limitation of the *current* pipeline, not of Xbox/UWP itself.
+    `moonlight-xbox` (this machine's other Xbox UWP project, C++/CX) is standing proof real HDR
+    works from a native UWP app on this exact hardware/OS combination — worth reading its approach
+    once this is picked up, as the concrete reference for whichever native `MediaPlayerElement`-
+    based pipeline eventually replaces WebView2's `<video>` tag here. Sequencing: the
+    `MediaPlayerElement` bridge itself (needed for ASS/SSA subtitles, refresh-rate matching, and
+    audio passthrough too — see those sections above) has to exist first; real HDR passthrough is
+    then a matter of wiring that bridge up the way `moonlight-xbox` already does, not a separate
+    unknown.
+
+  Not started. Revisit once real HDR-capable Android hardware is available to verify the Android
+  leg against, and once the Xbox `MediaPlayerElement` bridge itself is underway — everything above
+  is reasoning from documentation and other projects' source, not confirmed behavior on this repo's
+  own Xbox build.
+
 ## Takeaway
 
 Most of Plezy's UX-layer features — skip intro/credits, chapters, quality picker, multi-version
 switching, playback speed, sleep timer, zoom, subtitle search — have now shipped as ordinary
 additions to `plex-player.js`: more Plex API calls plus UI, not blocked by Prism's architecture.
-Shader-based AI-style upscaling and ambient lighting have also shipped, across all three platforms.
-The remaining gaps are tied to native decoder/OS capabilities (HDR/Dolby Vision, PiP, audio
-passthrough, refresh-rate matching, libass rendering) — see "Deferred features" above for the
-detailed per-item breakdown.
+Shader-based AI-style upscaling, Color Boost, and ambient lighting have also shipped, across all
+three platforms (Color Boost web/Android only where the underlying shader/GL pass already exists,
+same as shader upscaling itself). Android also now automatically skips its own SDR-tuned effects on
+real HDR content. The remaining gaps are tied to native decoder/OS capabilities (true HDR/Dolby
+Vision passthrough, PiP, audio passthrough, refresh-rate matching, libass rendering) — see "Deferred
+features" above for the detailed per-item breakdown, including HDR's own tracked scope.

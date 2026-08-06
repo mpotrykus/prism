@@ -73,8 +73,17 @@ final class ShaderUpscaleShaderProgram extends BaseGlShaderProgram {
           + "  vec3 blurredNeighborhood = (n + s + w + e) * 0.25;\n"
           + "  vec3 outColor = center + (center - blurredNeighborhood) * uSharpenStrength * edge;\n"
           + "  outColor = clamp(outColor, 0.0, 1.0);\n"
-          + "  outColor = (outColor - 0.5) * uContrastBoost + 0.5;\n"
-          + "  outColor = mix(vec3(luma(outColor)), outColor, uSaturationBoost);\n"
+          // Shadow protection - (x-0.5)*contrastBoost+0.5 is a linear stretch pivoted at
+          // mid-gray, and for any contrastBoost > 1 that pushes near-black values negative,
+          // which the final clamp(0,1) then flattens to exact 0 - different near-black
+          // shades collapsing into the same crushed black. Feathering both boosts down to
+          // 1.0 (no-op) as luma approaches 0 keeps shadow detail intact while
+          // midtones/highlights still get the full lift.
+          + "  float shadowProtect = smoothstep(0.0, 0.22, luma(outColor));\n"
+          + "  float contrast = mix(1.0, uContrastBoost, shadowProtect);\n"
+          + "  float saturation = mix(1.0, uSaturationBoost, shadowProtect);\n"
+          + "  outColor = (outColor - 0.5) * contrast + 0.5;\n"
+          + "  outColor = mix(vec3(luma(outColor)), outColor, saturation);\n"
           + "  gl_FragColor = vec4(clamp(outColor, 0.0, 1.0), 1.0);\n"
           + "}\n";
 
@@ -109,11 +118,14 @@ final class ShaderUpscaleShaderProgram extends BaseGlShaderProgram {
           + "  vec3 minRgb = min(c, min(min(n, s), min(w, e)));\n"
           + "  vec3 maxRgb = max(c, max(max(n, s), max(w, e)));\n"
           + "  vec3 outColor = clamp(sharpened, minRgb, maxRgb);\n"
-          // Applied after the anti-ringing clamp above, not folded into it - compensating
-          // for that clamp's own contrast/saturation-flattening side effect (see
-          // ShaderType.LIVE_ACTION's comment), so it runs on the already-clamped result.
-          + "  outColor = (outColor - 0.5) * uContrastBoost + 0.5;\n"
-          + "  outColor = mix(vec3(luma(outColor)), outColor, uSaturationBoost);\n"
+          // Same shadow-protection reasoning as FRAGMENT_SHADER_ANIME above - feather the
+          // contrast/saturation boost down to 1.0 (no-op) as luma approaches 0, so a linear
+          // mid-gray-pivoted contrast stretch can't crush near-black shades into flat 0.
+          + "  float shadowProtect = smoothstep(0.0, 0.22, luma(outColor));\n"
+          + "  float contrast = mix(1.0, uContrastBoost, shadowProtect);\n"
+          + "  float saturation = mix(1.0, uSaturationBoost, shadowProtect);\n"
+          + "  outColor = (outColor - 0.5) * contrast + 0.5;\n"
+          + "  outColor = mix(vec3(luma(outColor)), outColor, saturation);\n"
           + "  gl_FragColor = vec4(clamp(outColor, 0.0, 1.0), 1.0);\n"
           + "}\n";
 
@@ -122,22 +134,29 @@ final class ShaderUpscaleShaderProgram extends BaseGlShaderProgram {
   private final int maxOutputWidth;
   private final int maxOutputHeight;
 
-  ShaderUpscaleShaderProgram(boolean useHdr, ShaderType shaderType, float strength,
-      int maxOutputWidth, int maxOutputHeight) throws VideoFrameProcessingException {
+  /* programType picks which GLSL variant compiles (Anime4K vs. CAS) - always a real
+     algorithm, never OFF, even when sharpenTuning is ShaderType.NEUTRAL (see
+     ShaderUpscaleEffect's own header comment for why a program is always needed to
+     render through whenever either Shader Upscaling or Color Boost is on).
+     sharpenTuning/colorTuning are resolved separately by the caller now (PlayerActivity's
+     applyVideoEffects) rather than both coming from one shaderType.tuningAt(strength)
+     call - see ShaderTuning/ColorBoostTuning's own header comments for why those two
+     concerns were split. */
+  ShaderUpscaleShaderProgram(boolean useHdr, ShaderType programType, ShaderTuning sharpenTuning,
+      ColorBoostTuning colorTuning, int maxOutputWidth, int maxOutputHeight) throws VideoFrameProcessingException {
     super(/* useHighPrecisionColorComponents= */ useHdr, /* texturePoolCapacity= */ 1);
-    ShaderTuning tuning = shaderType.tuningAt(strength);
-    this.scaleFactor = tuning.scaleFactor;
+    this.scaleFactor = sharpenTuning.scaleFactor;
     this.maxOutputWidth = maxOutputWidth;
     this.maxOutputHeight = maxOutputHeight;
     try {
-      glProgram = new GlProgram(VERTEX_SHADER, shaderType.useCas ? FRAGMENT_SHADER_CAS : FRAGMENT_SHADER_ANIME);
+      glProgram = new GlProgram(VERTEX_SHADER, programType.useCas ? FRAGMENT_SHADER_CAS : FRAGMENT_SHADER_ANIME);
     } catch (GlUtil.GlException e) {
       throw new VideoFrameProcessingException(e);
     }
-    glProgram.setFloatUniform("uKernelScale", tuning.kernelScale);
-    glProgram.setFloatUniform("uSharpenStrength", tuning.sharpenStrength);
-    glProgram.setFloatUniform("uSaturationBoost", tuning.saturationBoost);
-    glProgram.setFloatUniform("uContrastBoost", tuning.contrastBoost);
+    glProgram.setFloatUniform("uKernelScale", sharpenTuning.kernelScale);
+    glProgram.setFloatUniform("uSharpenStrength", sharpenTuning.sharpenStrength);
+    glProgram.setFloatUniform("uSaturationBoost", colorTuning.saturationBoost);
+    glProgram.setFloatUniform("uContrastBoost", colorTuning.contrastBoost);
     glProgram.setBufferAttribute(
         "aFramePosition",
         GlUtil.getNormalizedCoordinateBounds(),
