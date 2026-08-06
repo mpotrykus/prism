@@ -36,11 +36,23 @@ const AMBIENT_SAMPLE_INTERVAL_MS = 42;
 const AMBIENT_SAMPLE_W = 32;
 const AMBIENT_SAMPLE_H = 18;
 const AMBIENT_EDGE_FRACTION = 0.25;
+/* filter:blur() averages in "nothing" (fully transparent) from just outside an
+   element's own box when blurring pixels near its edge - true on both sides of each
+   wrapper, not just the outer (true viewport edge) side the blur-radius comment below
+   discusses. On the INNER side (toward the picture), that diluted/darkened blur-edge
+   read as a visible shadow hugging the video's own boundary, sitting right on top of
+   the ambient glow (confirmed by disabling blur - the shadow vanished immediately).
+   layoutGlowPanels extends each wrapper this many px into the picture's own side (fully
+   hidden there behind the opaque video, itself on top in z-order) and glowGradient
+   shifts its stops by the same amount, so blur has real, correctly-colored, opaque
+   margin to sample near that edge instead of transparency - eliminating the artifact
+   without touching the *outer* edge's own (already-intended, already-tuned) fade-out. */
+const AMBIENT_BLUR_PX = 36;
 /* Zones per edge, like a real Ambilight strip's discrete LED segments rather than one
    flat averaged color per side - each edge is split into this many equal cells along its
-   own length, each independently sampled/colored. filter:blur(36px) is applied to the
-   whole per-edge wrapper (not per zone) specifically so it blends adjacent zones' colors
-   into each other, not just softening each zone's own inner fade. */
+   own length, each independently sampled/colored. AMBIENT_BLUR_PX's blur is applied to
+   the whole per-edge wrapper (not per zone) specifically so it blends adjacent zones'
+   colors into each other, not just softening each zone's own inner fade. */
 const AMBIENT_ZONES_PER_EDGE = 8;
 /* A plain average of a real video frame's edge pixels tends to read as dull/grayish -
    many differently-colored/lit pixels blending together pulls the result toward gray
@@ -69,7 +81,7 @@ const AMBIENT_SMOOTHING_FACTOR = 0.3;
    beyond its own reach - both intentional, matching how a real light source's glow
    doesn't stretch to always exactly reach the far wall. CSS gradient stop positions
    support raw px (not just %), so this works as a literal, viewport-size-independent
-   distance the same way filter:blur(36px) above already is. */
+   distance the same way AMBIENT_BLUR_PX's own blur radius above already is. */
 const AMBIENT_GLOW_REACH_PX = 240;
 /* Sampled points along a cosine ease (0.5*(1+cos(pi*t))) rather than a flat-hold-then-
    linear-drop - continuously eases from full opacity to fully transparent with no kink
@@ -148,7 +160,7 @@ function makeGlowEdge(edge) {
            gap only a few dozen px tall diluted most of the color away entirely. The
            gradient's own cosine-eased falloff (see glowGradient) does most of the
            softening now. */
-        filter: "blur(36px)",
+        filter: `blur(${AMBIENT_BLUR_PX}px)`,
         pointerEvents: "none",
     });
     const zones = [];
@@ -257,13 +269,14 @@ function computePictureRect(controller) {
     return { left: (vw - w) / 2, top: (vh - h) / 2, width: w, height: h };
 }
 
-/* Sizes each glow panel to span from the true viewport edge to the picture's own edge -
-   variable per side, since it depends entirely on how far the video's own aspect ratio
-   is from the viewport's. Cheap enough to run every animation frame (a handful of
-   multiplications, no canvas work) rather than throttled like renderAmbientFrame's own
-   color sampling below - keeps the panels responsive to window resizes and to
-   video.videoWidth/videoHeight only becoming known a frame or two after playback
-   starts. */
+/* Sizes each glow panel to span from the true viewport edge to the picture's own edge,
+   plus AMBIENT_BLUR_PX further into the picture's own side (see that constant's own
+   comment for why - blur-edge dilution, not a layout need) - variable per side, since it
+   depends entirely on how far the video's own aspect ratio is from the viewport's.
+   Cheap enough to run every animation frame (a handful of multiplications, no canvas
+   work) rather than throttled like renderAmbientFrame's own color sampling below -
+   keeps the panels responsive to window resizes and to video.videoWidth/videoHeight
+   only becoming known a frame or two after playback starts. */
 function layoutGlowPanels(controller) {
     const panels = controller._ambientGlowPanels;
     if (!panels) return;
@@ -273,10 +286,18 @@ function layoutGlowPanels(controller) {
     const right = rect.left + rect.width;
     const bottom = rect.top + rect.height;
 
-    Object.assign(panels.top.wrapper.style, { left: "0px", top: "0px", width: `${vw}px`, height: `${Math.max(0, rect.top)}px` });
-    Object.assign(panels.bottom.wrapper.style, { left: "0px", top: `${bottom}px`, width: `${vw}px`, height: `${Math.max(0, vh - bottom)}px` });
-    Object.assign(panels.left.wrapper.style, { left: "0px", top: "0px", width: `${Math.max(0, rect.left)}px`, height: `${vh}px` });
-    Object.assign(panels.right.wrapper.style, { left: `${right}px`, top: "0px", width: `${Math.max(0, vw - right)}px`, height: `${vh}px` });
+    Object.assign(panels.top.wrapper.style, {
+        left: "0px", top: "0px", width: `${vw}px`, height: `${Math.max(0, rect.top) + AMBIENT_BLUR_PX}px`,
+    });
+    Object.assign(panels.bottom.wrapper.style, {
+        left: "0px", top: `${bottom - AMBIENT_BLUR_PX}px`, width: `${vw}px`, height: `${Math.max(0, vh - bottom) + AMBIENT_BLUR_PX}px`,
+    });
+    Object.assign(panels.left.wrapper.style, {
+        left: "0px", top: "0px", width: `${Math.max(0, rect.left) + AMBIENT_BLUR_PX}px`, height: `${vh}px`,
+    });
+    Object.assign(panels.right.wrapper.style, {
+        left: `${right - AMBIENT_BLUR_PX}px`, top: "0px", width: `${Math.max(0, vw - right) + AMBIENT_BLUR_PX}px`, height: `${vh}px`,
+    });
 }
 
 export function startAmbientLoop(controller) {
@@ -386,13 +407,17 @@ function sampleZones(data, stride, axisLen, thickness, isHorizontalEdge, atStart
    gradient holds that stop's (fully transparent) color automatically - CSS's normal
    behavior for any point past a gradient's final explicit stop - which is exactly the
    "plain black beyond the glow's own reach" effect when the panel's box is larger than
-   AMBIENT_GLOW_REACH_PX. */
+   AMBIENT_GLOW_REACH_PX. All positions are offset by AMBIENT_BLUR_PX to match
+   layoutGlowPanels' own overscan - CSS holds the *first* stop's color for anything
+   before its own position too, so this doesn't shift where full-opacity visually starts
+   (still the true picture edge), it just gives that same full-opacity color real,
+   non-transparent margin for AMBIENT_BLUR_PX worth of blur to sample from. */
 function glowGradient(direction, [r, g, b]) {
     const stops = [];
     for (let i = 0; i < AMBIENT_FALLOFF_STEPS; i++) {
         const t = i / (AMBIENT_FALLOFF_STEPS - 1);
         const alpha = 0.5 * (1 + Math.cos(Math.PI * t));
-        const pos = t * AMBIENT_GLOW_REACH_PX;
+        const pos = AMBIENT_BLUR_PX + t * AMBIENT_GLOW_REACH_PX;
         stops.push(`rgba(${r}, ${g}, ${b}, ${alpha.toFixed(3)}) ${pos.toFixed(1)}px`);
     }
     return `linear-gradient(${direction}, ${stops.join(", ")})`;
