@@ -50,11 +50,13 @@ public class PlayerActivity extends AppCompatActivity {
     public static final String EXTRA_START_POSITION_MS = "startPositionMs";
     public static final String EXTRA_CHAPTERS_JSON = "chaptersJson";
     public static final String EXTRA_AUDIO_STREAMS_JSON = "audioStreamsJson";
-    /* Both resolved once in plex-player.js (Settings' global upscale_strength preset +
-       detectShaderType's genre check) rather than re-implemented here - one Plex-genre
-       interpretation shared by both platforms instead of duplicated in Java. */
-    public static final String EXTRA_UPSCALE_STRENGTH = "upscaleStrength";
-    public static final String EXTRA_SHADER_ENABLED = "shaderEnabled";
+    /* Resolved once in plex-player.js from detectShaderType's genre check rather than
+       re-implemented here - one Plex-genre interpretation shared by both platforms
+       instead of duplicated in Java. shaderEnabled/upscaleStrength/upscaleAuto below are
+       NOT passed this way - they're this Activity's own SharedPreferences-persisted
+       state (see PREF_COLOR_BOOST_ENABLED and friends), same immediate-persistence model
+       as colorBoostEnabled/colorBoostStrength/colorBoostAuto, since there's no JS
+       Settings-modal counterpart to seed a per-video default from any more. */
     public static final String EXTRA_SHADER_TYPE = "shaderType";
     /* Shown in the transport bar header (see PlayerUiHelper.buildTransportBar) - same
        title/season-episode-or-year fields web-fallback.js's buildTransportBar reads off
@@ -71,8 +73,12 @@ public class PlayerActivity extends AppCompatActivity {
     private static final String PREFS_NAME = "prism_player_prefs";
     private static final String PREF_AMBIENT_ENABLED = "ambient_lighting_enabled";
     private static final String PREF_AMBIENT_OPACITY = "ambient_lighting_opacity";
+    private static final String PREF_UPSCALE_ENABLED = "upscale_enabled";
+    private static final String PREF_UPSCALE_STRENGTH = "upscale_strength";
+    private static final String PREF_UPSCALE_AUTO = "upscale_auto";
     private static final String PREF_COLOR_BOOST_ENABLED = "color_boost_enabled";
     private static final String PREF_COLOR_BOOST_STRENGTH = "color_boost_strength";
+    private static final String PREF_COLOR_BOOST_AUTO = "color_boost_auto";
     private static final String PREF_STATS_OVERLAY_ENABLED = "stats_overlay_enabled";
 
     public interface PlaybackListener {
@@ -120,15 +126,27 @@ public class PlayerActivity extends AppCompatActivity {
        same "0% is off" model as plex-player.js's web-side _setShaderStrength. */
     ShaderType detectedShaderType = ShaderType.LIVE_ACTION;
     ShaderType shaderType = ShaderType.OFF;
+    /* Same immediate-persistence model as ambientEnabled/colorBoostEnabled below - see
+       setShaderStrength/setShaderEnabled. No JS Settings-modal default any more (unlike
+       this leg's previous EXTRA_UPSCALE_STRENGTH/EXTRA_SHADER_ENABLED intent extras) -
+       whatever this was last set to in-player is what every subsequent video starts
+       from. */
     float upscaleStrength = 0f;
     /* Independent of upscaleStrength - toggling this off and back on (see the Shader
        Upscaling menu row) must restore whatever strength the slider was already at
        rather than resetting it, the same model shader-pipeline.js's setShaderEnabled/
-       setShaderStrength use on the web leg. */
+       setShaderStrength use on the web leg. Same immediate-persistence model as
+       upscaleStrength above. */
     boolean shaderEnabled = false;
-    /* Independent of the JS-side settings.js/localStorage this class otherwise never
-       touches directly (see EXTRA_UPSCALE_STRENGTH's own comment) - ambient lighting has
-       no per-video/genre concern to resolve on this leg, unlike shader upscaling, so its
+    /* Same "toggle overrides, doesn't erase" independence from upscaleStrength as
+       shaderEnabled above - checking this doesn't touch the slider's own remembered
+       position, so unchecking falls straight back to it. Live-computed autoUpscaleStrength
+       is never persisted (see ContentAnalysisSampler/updateContentAnalysis) - only this
+       on/off flag is, same immediate-persistence model as upscaleStrength/shaderEnabled
+       above (see setUpscaleAuto). */
+    boolean upscaleAuto = false;
+    float autoUpscaleStrength = 0f;
+    /* Ambient lighting has no per-video/genre concern to resolve on this leg, so its
        persisted default lives entirely in this Activity's own SharedPreferences (see
        PREFS_NAME/PREF_AMBIENT_ENABLED), read once in onCreate and written back whenever
        the gear-menu toggle flips (see setAmbientEnabled). */
@@ -141,6 +159,11 @@ public class PlayerActivity extends AppCompatActivity {
        header comment for how the two toggles now share one GL pass. */
     boolean colorBoostEnabled = false;
     float colorBoostStrength = 0.5f;
+    /* Same immediate-persistence model as colorBoostEnabled/upscaleAuto above -
+       live-computed strength itself is never persisted, only this flag - see
+       setColorBoostAuto. */
+    boolean colorBoostAuto = false;
+    float autoColorBoostStrength = 0.5f;
     /* Same immediate-persistence model as ambientEnabled/colorBoostEnabled above - a debug
        readout has no per-video/genre concern to reconcile either. Read view, not player
        state - see PlayerUiHelper.buildStatsOverlay/updateStatsOverlay. */
@@ -150,6 +173,7 @@ public class PlayerActivity extends AppCompatActivity {
     AmbientGlowView ambientGlowView;
     private AmbientLightSampler ambientSampler;
     private boolean loggedFirstAmbientLayout = false;
+    private ContentAnalysisSampler contentSampler;
     int sleepMinutes = 0;
     String currentAudioStreamId;
     /* The currently-open options-menu flyout (see PlayerUiHelper's PopupWindow-based
@@ -200,13 +224,18 @@ public class PlayerActivity extends AppCompatActivity {
         parseChapters(getIntent().getStringExtra(EXTRA_CHAPTERS_JSON));
         parseAudioStreams(getIntent().getStringExtra(EXTRA_AUDIO_STREAMS_JSON));
         detectedShaderType = parseShaderType(getIntent().getStringExtra(EXTRA_SHADER_TYPE));
-        upscaleStrength = getIntent().getFloatExtra(EXTRA_UPSCALE_STRENGTH, 0f);
-        shaderEnabled = getIntent().getBooleanExtra(EXTRA_SHADER_ENABLED, false);
-        shaderType = shaderEnabled && upscaleStrength > 0f ? detectedShaderType : ShaderType.OFF;
+        upscaleStrength = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getFloat(PREF_UPSCALE_STRENGTH, 0.65f);
+        shaderEnabled = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(PREF_UPSCALE_ENABLED, false);
+        /* upscaleAuto has to be read before resolving shaderType below - in Auto mode
+           the manual strength is irrelevant to whether the shader is "off" (see
+           resolveShaderType), so this order matters, not just the values themselves. */
+        upscaleAuto = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(PREF_UPSCALE_AUTO, false);
+        shaderType = resolveShaderType();
         ambientEnabled = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(PREF_AMBIENT_ENABLED, false);
         ambientOpacity = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getFloat(PREF_AMBIENT_OPACITY, 0.5f);
         colorBoostEnabled = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(PREF_COLOR_BOOST_ENABLED, false);
         colorBoostStrength = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getFloat(PREF_COLOR_BOOST_STRENGTH, 0.5f);
+        colorBoostAuto = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(PREF_COLOR_BOOST_AUTO, false);
         statsOverlayEnabled = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(PREF_STATS_OVERLAY_ENABLED, false);
         title = getIntent().getStringExtra(EXTRA_TITLE);
         if (title == null) title = "";
@@ -344,6 +373,20 @@ public class PlayerActivity extends AppCompatActivity {
             ambientSampler.start();
         }
         layoutGlow();
+
+        /* Same "built unconditionally, started only if already needed from a previous
+           session" reasoning as ambientSampler above. */
+        contentSampler = new ContentAnalysisSampler(playerView.getVideoSurfaceView(),
+            (avgSaturation, edgeEnergy) -> {
+                if (colorBoostAuto) {
+                    autoColorBoostStrength = AutoStrength.colorBoost(avgSaturation);
+                }
+                if (upscaleAuto) {
+                    autoUpscaleStrength = AutoStrength.upscale(resolveScaleFactor(), edgeEnergy);
+                }
+                applyVideoEffects();
+            });
+        updateContentAnalysis();
 
         player.addListener(
             new Player.Listener() {
@@ -528,8 +571,26 @@ public class PlayerActivity extends AppCompatActivity {
         Log.d(SHADER_TAG, "applyVideoEffects: sharpenOn=" + sharpenOn + " (" + shaderType + " @ " + upscaleStrength
             + "), colorBoostEnabled=" + colorBoostEnabled + " (" + colorBoostStrength + "), hdr=false");
         ShaderType programType = sharpenOn ? shaderType : detectedShaderType;
-        ShaderTuning sharpenTuning = sharpenOn ? programType.tuningAt(upscaleStrength) : ShaderType.NEUTRAL;
-        ColorBoostTuning colorTuning = colorBoostEnabled ? ColorBoostTuning.at(colorBoostStrength) : ColorBoostTuning.NEUTRAL;
+        /* Auto strength (see ContentAnalysisSampler/AutoStrength) resolves separately
+           from upscaleStrength/colorBoostStrength rather than overwriting them - those
+           stay the remembered manual slider position, restored the moment auto is
+           unchecked, same shape as programType being resolved from shaderType just
+           above. */
+        float resolvedUpscaleStrength = upscaleAuto ? autoUpscaleStrength : upscaleStrength;
+        float resolvedColorBoostStrength = colorBoostAuto ? autoColorBoostStrength : colorBoostStrength;
+        /* sharpenOn alone isn't enough to gate this - resolveShaderType keeps shaderType
+           resolved to a real type throughout Auto mode regardless of the live auto
+           strength (it has to, so ContentAnalysisSampler keeps running for whenever a
+           nonzero value does arrive). But tuningAt(0) returns that type's own MIN tuning,
+           not true zero (see this method's own header comment on NEUTRAL vs tuningAt(0))
+           - the same "0 strength" that means fully off in manual mode (there, shaderType
+           itself already becomes OFF at exactly 0, hitting the sharpenOn=false branch
+           below) would otherwise render as still-visibly-sharpened once auto legitimately
+           computes 0 (source doesn't need upscaling). Checking resolvedUpscaleStrength >
+           0f here too is what actually makes a live 0 look like NEUTRAL, regardless of
+           which mode produced it. */
+        ShaderTuning sharpenTuning = (sharpenOn && resolvedUpscaleStrength > 0f) ? programType.tuningAt(resolvedUpscaleStrength) : ShaderType.NEUTRAL;
+        ColorBoostTuning colorTuning = colorBoostEnabled ? ColorBoostTuning.at(resolvedColorBoostStrength) : ColorBoostTuning.NEUTRAL;
         player.setVideoEffects(
             Collections.singletonList(new ShaderUpscaleEffect(this, programType, sharpenTuning, colorTuning)));
         PlayerUiHelper.updateStatsOverlay(this);
@@ -565,6 +626,22 @@ public class PlayerActivity extends AppCompatActivity {
        Performance Overlay's "HDR" line (see PlayerUiHelper.updateStatsOverlay) rather than
        logged here on every call - this runs on the applyVideoEffects()/onTracksChanged() path,
        and logcat isn't where you'd normally be looking to confirm this during real playback. */
+    /* How much the source would need to be stretched to fill playerView - same ratio
+       renderShaderFrame computes on the web leg, recomputed fresh on every
+       ContentAnalysisSampler tick rather than cached, since the window/display metrics
+       this depends on can't change mid-session on Android the way a resizable browser
+       window can, but the video track's own Format isn't guaranteed known yet on the
+       very first tick either. */
+    private float resolveScaleFactor() {
+        Format format = selectedVideoFormat();
+        if (format == null || format.width <= 0 || format.height <= 0 || playerView.getWidth() <= 0 || playerView.getHeight() <= 0) {
+            return 1f;
+        }
+        float scaleW = playerView.getWidth() / (float) format.width;
+        float scaleH = playerView.getHeight() / (float) format.height;
+        return Math.max(1f, Math.min(scaleW, scaleH));
+    }
+
     boolean isHdrContent() {
         Format format = selectedVideoFormat();
         ColorInfo colorInfo = format != null ? format.colorInfo : null;
@@ -611,16 +688,64 @@ public class PlayerActivity extends AppCompatActivity {
         layoutGlow();
     }
 
-    /* Same immediate-persistence model as setAmbientEnabled above - see that method's
-       own comment for why ambient lighting doesn't follow shader upscaling's
-       Settings-modal-default-plus-session-override model instead. Cheap to apply live
-       (just Paint.setAlpha in AmbientGlowView, no GL program rebuild), unlike
-       applyVideoEffects for shader strength - see openAmbientPanel in PlayerUiHelper for
-       why that one doesn't need to gate to the slider's release. */
+    /* Same immediate-persistence model as setAmbientEnabled/setShaderStrength above.
+       Cheap to apply live (just Paint.setAlpha in AmbientGlowView, no GL program
+       rebuild), unlike applyVideoEffects for shader/color-boost strength - see
+       openAmbientPanel in PlayerUiHelper for why that one doesn't need to gate to the
+       slider's release. */
     void setAmbientOpacity(float opacity) {
         ambientOpacity = opacity;
         getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().putFloat(PREF_AMBIENT_OPACITY, opacity).apply();
         if (ambientGlowView != null) ambientGlowView.setGlowOpacity(opacity);
+    }
+
+    /* Same immediate-persistence model as setAmbientEnabled - whatever this is last set
+       to (see PlayerUiHelper's Shader Upscaling menu row) is what every subsequent video
+       starts from, not a Settings-modal default read from an Intent extra any more (see
+       EXTRA_SHADER_TYPE's own comment). shaderType still needs re-resolving here since
+       flipping this toggle doesn't touch upscaleStrength - restoring it just restores
+       whatever strength the slider was already at. */
+    void setShaderEnabled(boolean enabled) {
+        shaderEnabled = enabled;
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().putBoolean(PREF_UPSCALE_ENABLED, enabled).apply();
+        shaderType = resolveShaderType();
+        applyVideoEffects();
+    }
+
+    /* Same immediate-persistence model as setShaderEnabled above. Gated to
+       onStopTrackingTouch by PlayerUiHelper's Shader Upscaling SeekBar, not called at
+       drag frequency - applyVideoEffects() rebuilds ExoPlayer's whole video-effects
+       pipeline on every call, previously observed to get the renderer stuck when called
+       that often (see that panel's own SeekBar listener comment). */
+    void setShaderStrength(float strength) {
+        upscaleStrength = strength;
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().putFloat(PREF_UPSCALE_STRENGTH, strength).apply();
+        shaderType = resolveShaderType();
+        applyVideoEffects();
+    }
+
+    /* Same immediate-persistence model as setShaderEnabled/setShaderStrength above - only
+       this on/off flag is written through, never the live-computed autoUpscaleStrength
+       itself (see ContentAnalysisSampler). Switching auto off falls back to whatever
+       upscaleStrength the slider was last left at, same "toggle overrides, doesn't
+       erase" model setShaderEnabled already uses for the shader on/off toggle. */
+    void setUpscaleAuto(boolean enabled) {
+        upscaleAuto = enabled;
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().putBoolean(PREF_UPSCALE_AUTO, enabled).apply();
+        shaderType = resolveShaderType();
+        updateContentAnalysis();
+        applyVideoEffects();
+    }
+
+    /* Whether the shader actually renders as OFF can't just check upscaleStrength > 0f -
+       in Auto mode the manual slider's position is irrelevant (it isn't applied at all,
+       see applyVideoEffects's own resolvedUpscaleStrength), so a manual strength of
+       exactly 0 must not force OFF while upscaleAuto is true. Shared by every place that
+       can change shaderEnabled, upscaleStrength, or upscaleAuto, so none of them can
+       resolve this stale relative to the other two. */
+    private ShaderType resolveShaderType() {
+        boolean hasStrength = upscaleAuto || upscaleStrength > 0f;
+        return shaderEnabled && hasStrength ? detectedShaderType : ShaderType.OFF;
     }
 
     /* Same "toggle IS the persisted setting" immediate-persistence model as
@@ -639,6 +764,54 @@ public class PlayerActivity extends AppCompatActivity {
         colorBoostStrength = strength;
         getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().putFloat(PREF_COLOR_BOOST_STRENGTH, strength).apply();
         applyVideoEffects();
+    }
+
+    /* Same immediate-persistence model as setColorBoostEnabled/setUpscaleAuto above. */
+    void setColorBoostAuto(boolean enabled) {
+        colorBoostAuto = enabled;
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().putBoolean(PREF_COLOR_BOOST_AUTO, enabled).apply();
+        updateContentAnalysis();
+        applyVideoEffects();
+    }
+
+    /* "auto"/"on"/"off" - the three-way state PlayerUiHelper's mode row presents in place
+       of the old separate enabled-toggle + Auto-checkbox pair, same collapsing reasoning
+       as shader-pipeline.js's upscaleModeOf on the web leg. shaderEnabled/upscaleAuto
+       still the two flags applyVideoEffects/persistence actually key off. */
+    String upscaleMode() {
+        if (!shaderEnabled) return "off";
+        return upscaleAuto ? "auto" : "on";
+    }
+
+    /* Drives both flags from one selection - "off" and "on" both set upscaleAuto false
+       so a later switch straight to "on" (skipping "auto") doesn't inherit a stale auto
+       flag from a previous session. */
+    void setUpscaleMode(String mode) {
+        setShaderEnabled(!"off".equals(mode));
+        setUpscaleAuto("auto".equals(mode));
+    }
+
+    /* Same collapsing reasoning as upscaleMode/setUpscaleMode above. */
+    String colorBoostMode() {
+        if (!colorBoostEnabled) return "off";
+        return colorBoostAuto ? "auto" : "on";
+    }
+
+    void setColorBoostMode(String mode) {
+        setColorBoostEnabled(!"off".equals(mode));
+        setColorBoostAuto("auto".equals(mode));
+    }
+
+    /* Starts/stops the shared content-analysis capture loop based on whether either auto
+       mode needs it - mirrors content-analysis.js's updateContentAnalysis on the web leg.
+       Called from setUpscaleAuto/setColorBoostAuto above. */
+    void updateContentAnalysis() {
+        if (contentSampler == null) return;
+        if (upscaleAuto || colorBoostAuto) {
+            contentSampler.start();
+        } else {
+            contentSampler.stop();
+        }
     }
 
     /* Same "toggle IS the persisted setting" immediate-persistence model as
@@ -909,6 +1082,9 @@ public class PlayerActivity extends AppCompatActivity {
         stopProgressLoop();
         if (ambientSampler != null) {
             ambientSampler.stop();
+        }
+        if (contentSampler != null) {
+            contentSampler.stop();
         }
         sleepTimerHandler.removeCallbacksAndMessages(null);
         controlsFadeHandler.removeCallbacksAndMessages(null);

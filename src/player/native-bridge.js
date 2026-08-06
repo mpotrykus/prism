@@ -40,18 +40,14 @@ export async function playNative(controller, streamUrl, startOffsetMs) {
     await NativePlayer.play({
         url: streamUrl,
         startPositionMs: startOffsetMs,
-        /* PlayerActivity only ever sees the already-detected type (never "off" - that's
-           what shaderEnabled/upscaleStrength below are for) - it doesn't run its own
-           genre detection, so there's one detection implementation instead of one per
-           platform. */
+        /* PlayerActivity only ever sees the already-detected type (never "off") - it
+           doesn't run its own genre detection, so there's one detection implementation
+           instead of one per platform. shaderEnabled/upscaleStrength/upscaleAuto are
+           NOT passed here - PlayerActivity owns those itself now (its own
+           SharedPreferences-persisted state, see PREF_UPSCALE_ENABLED and friends), same
+           immediate-persistence model as colorBoostEnabled/colorBoostStrength/
+           colorBoostAuto, which never traveled through this bridge either. */
         shaderType: controller._shaderAutoType,
-        /* Passed as two independent values, not pre-collapsed to 0 when disabled - the
-           in-player Shader Upscaling toggle on the Android leg (PlayerActivity's
-           setShaderEnabled) needs to restore whatever strength the slider was already at
-           when re-enabled, the same "toggle and strength are independent" model
-           shader-pipeline.js's setShaderEnabled/setShaderStrength use here. */
-        shaderEnabled: controller._shaderEnabled,
-        upscaleStrength: controller._shaderStrength,
         /* Native code only ever sees {title, startTimeOffsetMs} - it doesn't need to know
            Plex's own Chapter field names, keeping that one Plex-protocol interpretation
            here instead of duplicated into Java. */

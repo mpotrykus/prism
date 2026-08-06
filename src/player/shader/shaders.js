@@ -15,13 +15,13 @@
    contrast/saturation moved, as their own independent toggle. */
 export const SHADER_TYPES = {
   anime4k: {
-    label: "Anime4K",
+    label: "Anime",
     useCas: false,
     min: { scale: 1.8, sharpen: 1.8, kernel: 1.5 },
     max: { scale: 2.4, sharpen: 3.8, kernel: 2.8 },
   },
   live_action: {
-    label: "Live-Action (CAS)",
+    label: "Live-Action",
     useCas: true,
     min: { scale: 1.3, sharpen: 1.0, kernel: 1.2 },
     max: { scale: 1.6, sharpen: 2.2, kernel: 1.8 },
@@ -65,12 +65,63 @@ export function colorBoostAt(strength) {
   };
 }
 
-/* Settings' global "Upscaling" strength preset (settings.js's upscale_strength field) -
-   whether the shader runs at all is now the separate upscale_enabled flag (see
-   settings.js/plex-player.js's play()), so this only ever maps to this session's initial
-   strength slider position. Medium (0.65) is the pre-existing default the slider used
-   to always start at. */
-export const UPSCALE_STRENGTH_PRESETS = { light: 0.15, medium: 0.65, strong: 0.9 };
+function clamp(v, lo, hi) {
+  return Math.max(lo, Math.min(hi, v));
+}
+
+/* Auto-strength math for Shader Upscaling. scaleFactor is how much the source needs to
+   be stretched to fill the display (1 = native res or larger, no upscale need beyond
+   MIN_STRENGTH's own baseline below; higher = more upscale needed - see
+   content-analysis.js/renderShaderFrame for how it's computed). edgeEnergy (0..1) is a
+   Sobel-style "how much fine detail/edge content is already visible in this frame"
+   measure from the same sampler - used only to *damp* the resolution-driven strength
+   (DETAIL_DAMPEN_MAX caps how much), never to override it outright, since a blurry
+   upscale transcode and a genuinely soft-focus native source are indistinguishable from
+   edgeEnergy alone. MIN_STRENGTH is a baseline sharpen applied even at scaleFactor<=1 (a
+   1080p source already filling a 1080p display, say) - a mild sharpen still visibly
+   helps perceived clarity at native resolution, confirmed against real playback; an
+   earlier version floored strength at exactly 0 whenever no *resolution-driven* upscale
+   was needed, which read as "Auto does nothing" for the very common native-or-near-native
+   case. Calibration constants below are a starting point, not exhaustively tuned against
+   every kind of source - see this feature's own tuning notes. */
+const UPSCALE_AUTO_MIN_STRENGTH = 0.15;
+const UPSCALE_AUTO_RATIO_LOW = 1.0;
+const UPSCALE_AUTO_RATIO_HIGH = 3.0;
+const UPSCALE_AUTO_DETAIL_DAMPEN_MAX = 0.4;
+
+export function autoUpscaleStrength({ scaleFactor, edgeEnergy }) {
+  const ratioNeed = clamp((scaleFactor - UPSCALE_AUTO_RATIO_LOW) / (UPSCALE_AUTO_RATIO_HIGH - UPSCALE_AUTO_RATIO_LOW), 0, 1);
+  const base = UPSCALE_AUTO_MIN_STRENGTH + ratioNeed * (1 - UPSCALE_AUTO_MIN_STRENGTH);
+  const dampen = clamp(edgeEnergy, 0, 1) * UPSCALE_AUTO_DETAIL_DAMPEN_MAX;
+  return clamp(base * (1 - dampen), 0, 1);
+}
+
+/* Auto-strength math for Color Boost. avgSaturation (0..1, 0 = fully gray, 1 = fully
+   saturated) comes from averaging per-pixel (max-min)/255 across a sampled frame (see
+   content-analysis.js) - dull/desaturated footage gets boosted more, already-vivid
+   footage gets little to none. The original 0.15-0.55 range assumed real footage's
+   average per-pixel saturation would span roughly that band - confirmed against real
+   playback that it doesn't: typical (live-action) content (skin tones, muted grading,
+   shadows/highlights near black/white where max-min is naturally small) averages well
+   under 0.15 almost always, so the old range left strength pegged at or near 1 for
+   nearly everything. Both thresholds moved down and the band narrowed so live-action
+   content actually spreads across the range - confirmed working well.
+
+   A MIN_STRENGTH floor (never drop below a light touch) was tried next for vividly-
+   graded content that legitimately averages above SAT_HIGH (animation in particular),
+   mirroring UPSCALE_AUTO_MIN_STRENGTH's own floor above - but confirmed that was the
+   wrong fix here: it left strength pinned at the floor's exact value for any content
+   whose saturation sits at or past SAT_HIGH, i.e. a flat non-varying reading rather than
+   a real 0, and Color Boost already has its own on/off toggle for "I don't want this at
+   all" - unlike Shader Upscaling, where a mild sharpen is broadly beneficial even at
+   native resolution and a literal 0 was the actual bug. A genuinely vivid frame
+   legitimately warrants 0 boost, not a floored minimum. */
+const COLOR_BOOST_AUTO_SAT_LOW = 0.04;
+const COLOR_BOOST_AUTO_SAT_HIGH = 0.2;
+
+export function autoColorBoostStrength({ avgSaturation }) {
+  return clamp((COLOR_BOOST_AUTO_SAT_HIGH - avgSaturation) / (COLOR_BOOST_AUTO_SAT_HIGH - COLOR_BOOST_AUTO_SAT_LOW), 0, 1);
+}
 
 /* Picks which of the two SHADER_TYPES algorithms suits a title, from its Plex genre
    tags - Anime4K's edge-gated line-art shader for anything animated (matches "Animation"

@@ -71,11 +71,17 @@ export function stopStatsOverlayLoop(controller) {
 function shaderStatusLine(controller) {
     if (controller._shaderType === "off") return "off";
     const label = SHADER_TYPES[controller._shaderType]?.label ?? controller._shaderType;
-    return `${label} @ ${Math.round(controller._shaderStrength * 100)}%`;
+    /* Resolves auto vs. manual the same way shader-pipeline.js's renderShaderFrame does
+       - reading _shaderStrength directly here would show the frozen manual slider
+       position instead of what's actually being applied whenever Auto is on. */
+    const strength = controller._upscaleAuto ? (controller._autoUpscaleStrength ?? 0) : controller._shaderStrength;
+    return `${label} @ ${Math.round(strength * 100)}%${controller._upscaleAuto ? " (auto)" : ""}`;
 }
 
 function colorBoostStatusLine(controller) {
-    return controller._colorBoostEnabled ? `${Math.round(controller._colorBoostStrength * 100)}%` : "off";
+    if (!controller._colorBoostEnabled) return "off";
+    const strength = controller._colorBoostAuto ? (controller._autoColorBoostStrength ?? 0) : controller._colorBoostStrength;
+    return `${Math.round(strength * 100)}%${controller._colorBoostAuto ? " (auto)" : ""}`;
 }
 
 export function renderStatsOverlayFrame(controller) {

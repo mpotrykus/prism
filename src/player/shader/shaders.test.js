@@ -1,5 +1,13 @@
 import { describe, it, expect } from "vitest";
-import { shaderTuningAt, colorBoostAt, detectShaderType, SHADER_TYPES, COLOR_BOOST_TUNING } from "./shaders.js";
+import {
+  shaderTuningAt,
+  colorBoostAt,
+  detectShaderType,
+  autoUpscaleStrength,
+  autoColorBoostStrength,
+  SHADER_TYPES,
+  COLOR_BOOST_TUNING,
+} from "./shaders.js";
 
 describe("detectShaderType", () => {
   it("picks anime4k for anime/animation genres", () => {
@@ -60,5 +68,49 @@ describe("colorBoostAt", () => {
 
   it("is independent of shader-upscale type/strength", () => {
     expect(colorBoostAt(0.5)).toEqual(colorBoostAt(0.5));
+  });
+});
+
+describe("autoUpscaleStrength", () => {
+  it("applies a baseline floor at or under native resolution rather than dropping to 0", () => {
+    expect(autoUpscaleStrength({ scaleFactor: 1, edgeEnergy: 0 })).toBeCloseTo(0.15);
+    expect(autoUpscaleStrength({ scaleFactor: 0.5, edgeEnergy: 0 })).toBeCloseTo(0.15);
+  });
+
+  it("rises toward 1 as the required upscale ratio grows", () => {
+    const low = autoUpscaleStrength({ scaleFactor: 1.5, edgeEnergy: 0 });
+    const high = autoUpscaleStrength({ scaleFactor: 2.5, edgeEnergy: 0 });
+    expect(high).toBeGreaterThan(low);
+    expect(autoUpscaleStrength({ scaleFactor: 3, edgeEnergy: 0 })).toBe(1);
+    expect(autoUpscaleStrength({ scaleFactor: 10, edgeEnergy: 0 })).toBe(1);
+  });
+
+  it("damps but never eliminates the resolution-driven need when content already looks detailed", () => {
+    const base = autoUpscaleStrength({ scaleFactor: 3, edgeEnergy: 0 });
+    const damped = autoUpscaleStrength({ scaleFactor: 3, edgeEnergy: 1 });
+    expect(damped).toBeLessThan(base);
+    expect(damped).toBeGreaterThanOrEqual(base * 0.6);
+  });
+
+  it("clamps edgeEnergy outside 0-1", () => {
+    expect(autoUpscaleStrength({ scaleFactor: 3, edgeEnergy: -5 })).toBe(1);
+    expect(autoUpscaleStrength({ scaleFactor: 3, edgeEnergy: 5 })).toBeCloseTo(0.6);
+  });
+});
+
+describe("autoColorBoostStrength", () => {
+  it("is 0 once the frame is already vivid enough", () => {
+    expect(autoColorBoostStrength({ avgSaturation: 0.2 })).toBe(0);
+    expect(autoColorBoostStrength({ avgSaturation: 1 })).toBe(0);
+  });
+
+  it("is 1 for a fully desaturated (gray) frame", () => {
+    expect(autoColorBoostStrength({ avgSaturation: 0.04 })).toBe(1);
+    expect(autoColorBoostStrength({ avgSaturation: 0 })).toBe(1);
+  });
+
+  it("interpolates between the low/high saturation thresholds", () => {
+    const t = autoColorBoostStrength({ avgSaturation: 0.12 });
+    expect(t).toBeCloseTo(0.5);
   });
 });

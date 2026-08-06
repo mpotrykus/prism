@@ -1,5 +1,6 @@
 import Hls from "hls.js";
 import { ZOOM_LEVELS, storedVolume } from "./ui/shared.js";
+import { updateContentAnalysis } from "./content-analysis.js";
 
 /* <video>+hls.js fallback path - used everywhere WebView2/Chrome/Xbox/Android-web has
    no native player available (see native-bridge.js for the Android/ExoPlayer leg).
@@ -126,6 +127,10 @@ export function playWeb(controller, streamUrl, startOffsetMs) {
        the calls above - controller._statsOverlayEnabled was set from
        storedStatsOverlayEnabled() in play() before playWeb was called. */
     controller._updateStatsOverlayPipeline();
+    /* Same "already-resolved global default, just spin up the pipeline" reasoning as
+       the calls above - controller._upscaleAuto/_colorBoostAuto were set from
+       storedUpscaleAuto()/storedColorBoostAuto() in play() before playWeb was called. */
+    updateContentAnalysis(controller);
 
     /* Tapping the video itself toggles play/pause, matching every mainstream player -
        only when not zoomed in, since zoomed-in drag is already claimed by pan (see
@@ -226,6 +231,14 @@ export function teardownWeb(controller) {
     controller._ambientSampleCanvas = null;
     controller._ambientSampleCtx = null;
     controller._ambientSmoothed = null;
+    if (controller._contentRafId) {
+        cancelAnimationFrame(controller._contentRafId);
+        controller._contentRafId = null;
+    }
+    controller._contentSampleCanvas = null;
+    controller._contentSampleCtx = null;
+    controller._contentSmoothedSaturation = null;
+    controller._contentSmoothedEdgeEnergy = null;
     if (controller._statsOverlayIntervalId) {
         clearInterval(controller._statsOverlayIntervalId);
         controller._statsOverlayIntervalId = null;

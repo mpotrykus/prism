@@ -27,6 +27,7 @@ import androidx.media3.common.Format;
 import androidx.media3.common.util.UnstableApi;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.Consumer;
 import java.util.function.Function;
 
 /* Transport-bar/menu/chapter-skip chrome for PlayerActivity, pulled out into its own
@@ -161,11 +162,14 @@ final class PlayerUiHelper {
         }
         sb.append('\n');
 
+        float shownUpscaleStrength = activity.upscaleAuto ? activity.autoUpscaleStrength : activity.upscaleStrength;
         sb.append("Shader Upscaling: ").append(activity.shaderType == ShaderType.OFF
             ? "off"
-            : activity.shaderType.label + " @ " + Math.round(activity.upscaleStrength * 100) + "%").append('\n');
+            : activity.shaderType.label + " @ " + Math.round(shownUpscaleStrength * 100) + "%"
+                + (activity.upscaleAuto ? " (auto)" : "")).append('\n');
+        float shownColorBoostStrength = activity.colorBoostAuto ? activity.autoColorBoostStrength : activity.colorBoostStrength;
         sb.append("Color Boost: ").append(activity.colorBoostEnabled
-            ? Math.round(activity.colorBoostStrength * 100) + "%"
+            ? Math.round(shownColorBoostStrength * 100) + "%" + (activity.colorBoostAuto ? " (auto)" : "")
             : "off");
 
         text.setText(sb.toString());
@@ -545,33 +549,19 @@ final class PlayerUiHelper {
         sleepRow.onSelect = () -> openSleepMenu(activity, anchor);
         rows.add(sleepRow);
 
+        /* No inline toggle any more - Auto/On/Off is a 3-way mode, not a boolean, so it
+           needs the panel's own segmented control (see openShaderPanel) rather than a
+           SwitchCompat that fits this row. Same chevron-only, drill-in-to-change pattern
+           as Sleep Timer/Zoom/Playback Speed above. */
         MenuRow shaderRow = new MenuRow("Shader Upscaling");
-        shaderRow.value = activity.shaderEnabled ? activity.detectedShaderType.label : null;
+        shaderRow.value = activity.shaderEnabled ? shaderRowLabel(activity) : null;
         shaderRow.chevron = true;
-        shaderRow.toggleChecked = activity.shaderEnabled;
-        /* Flips on/off in place without leaving this menu - onSelect (tap anywhere else
-           on the row) still drills into the strength panel, same as chrome.js's toggle +
-           trailing chevron being independent gestures on one row. */
-        shaderRow.onToggle = (checked) -> {
-            activity.shaderEnabled = checked;
-            activity.shaderType = checked && activity.upscaleStrength > 0f ? activity.detectedShaderType : ShaderType.OFF;
-            activity.applyVideoEffects();
-            return checked ? activity.detectedShaderType.label : null;
-        };
         shaderRow.onSelect = () -> openShaderPanel(activity, anchor);
         rows.add(shaderRow);
 
         MenuRow colorBoostRow = new MenuRow("Color Boost");
-        colorBoostRow.value = activity.colorBoostEnabled ? Math.round(activity.colorBoostStrength * 100) + "%" : null;
+        colorBoostRow.value = activity.colorBoostEnabled ? colorBoostRowLabel(activity) : null;
         colorBoostRow.chevron = true;
-        colorBoostRow.toggleChecked = activity.colorBoostEnabled;
-        /* Contrast/saturation "look" lift - independent of Shader Upscaling above (see
-           ColorBoostTuning), same toggle-flips-in-place-without-leaving-the-menu
-           pattern. */
-        colorBoostRow.onToggle = (checked) -> {
-            activity.setColorBoostEnabled(checked);
-            return checked ? Math.round(activity.colorBoostStrength * 100) + "%" : null;
-        };
         colorBoostRow.onSelect = () -> openColorBoostPanel(activity, anchor);
         rows.add(colorBoostRow);
 
@@ -617,6 +607,99 @@ final class PlayerUiHelper {
         }
 
         openMenuPanel(activity, anchor, rows, null);
+    }
+
+    /* The hamburger row's value text (no inline toggle any more, see the mode row below)
+       - "Auto" replaces the numeric % once strength is computed dynamically (see
+       ContentAnalysisSampler) rather than showing a live-ticking percentage, matching
+       chrome.js's shaderRowLabel/colorBoostRowLabel on the web leg. */
+    private static String shaderRowLabel(PlayerActivity activity) {
+        return activity.upscaleAuto ? activity.detectedShaderType.label + " (Auto)" : activity.detectedShaderType.label;
+    }
+
+    private static String colorBoostRowLabel(PlayerActivity activity) {
+        return activity.colorBoostAuto ? "Auto" : Math.round(activity.colorBoostStrength * 100) + "%";
+    }
+
+    private static final String[] MODE_KEYS = { "auto", "on", "off" };
+    private static final String[] MODE_LABELS = { "Auto", "On", "Off" };
+
+    /* Shared by openShaderPanel/openColorBoostPanel's mode row - disables the manual
+       SeekBar and snapshots the current auto-resolved value into its label only in
+       "auto" mode ("on"/"off" both leave it showing/editable at the manual value, same
+       as the old enabled-toggle-off case always did), matching chrome.js's
+       applyStrengthDisplay on the web leg. Deliberately never calls
+       strengthSeekBar.setProgress() while auto is selected - unlike a plain HTML range
+       input, SeekBar.setProgress() fires onProgressChanged even for a programmatic
+       change, which would silently overwrite the remembered manual strength (see
+       openShaderPanel/openColorBoostPanel's own SeekBar listeners) with whatever the
+       auto snapshot happened to be. */
+    private static void applyStrengthDisplay(SeekBar strengthSeekBar, TextView strengthLabel, String mode, float autoValue, float manualValue) {
+        boolean auto = "auto".equals(mode);
+        strengthSeekBar.setEnabled(!auto);
+        strengthSeekBar.setAlpha(auto ? 0.5f : 1f);
+        if (!auto) {
+            strengthSeekBar.setProgress(Math.round(manualValue * 100));
+        }
+        int shown = Math.round((auto ? autoValue : manualValue) * 100);
+        strengthLabel.setText("Strength: " + shown + "%" + (auto ? " (auto)" : ""));
+    }
+
+    /* 3-way Auto/On/Off segmented control replacing the old separate enabled-toggle
+       (hamburger row) + "Auto strength" SwitchCompat (panel) pair - see
+       PlayerActivity.setUpscaleMode/setColorBoostMode for why the underlying
+       shaderEnabled/upscaleAuto (colorBoostEnabled/colorBoostAuto) flags stay as they
+       were rather than being replaced outright. Matches chrome.js's buildModeRow on the
+       web leg: three equal-weight buttons, tap wires straight through to onModeChange +
+       a strength-display refresh, no separate "commit" step. */
+    private static void addModeRow(PlayerActivity activity, LinearLayout content, float density, String mode, Consumer<String> onModeChange) {
+        LinearLayout row = new LinearLayout(activity);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        int gap = Math.round(6 * density);
+        LinearLayout.LayoutParams rowParams =
+            new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        rowParams.bottomMargin = Math.round(10 * density);
+        row.setLayoutParams(rowParams);
+
+        TextView[] buttons = new TextView[MODE_KEYS.length];
+        for (int i = 0; i < MODE_KEYS.length; i++) {
+            String key = MODE_KEYS[i];
+            TextView btn = new TextView(activity);
+            btn.setText(MODE_LABELS[i]);
+            btn.setGravity(Gravity.CENTER);
+            btn.setTextSize(12);
+            btn.setTypeface(btn.getTypeface(), android.graphics.Typeface.BOLD);
+            int pad = Math.round(6 * density);
+            btn.setPadding(0, pad, 0, pad);
+            LinearLayout.LayoutParams btnParams = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
+            if (i > 0) btnParams.setMarginStart(gap);
+            btn.setLayoutParams(btnParams);
+            btn.setOnClickListener(v -> {
+                onModeChange.accept(key);
+                setModeButtonsSelected(buttons, key);
+            });
+            buttons[i] = btn;
+            row.addView(btn);
+        }
+        setModeButtonsSelected(buttons, mode);
+        content.addView(row);
+    }
+
+    private static void setModeButtonsSelected(TextView[] buttons, String selectedMode) {
+        for (int i = 0; i < MODE_KEYS.length; i++) {
+            boolean selected = MODE_KEYS[i].equals(selectedMode);
+            GradientDrawable bg = new GradientDrawable();
+            bg.setShape(GradientDrawable.RECTANGLE);
+            bg.setCornerRadius(buttons[i].getResources().getDisplayMetrics().density * 6);
+            if (selected) {
+                bg.setColor(ACCENT_COLOR);
+            } else {
+                bg.setColor(Color.TRANSPARENT);
+                bg.setStroke(1, Color.argb(38, 255, 255, 255));
+            }
+            buttons[i].setBackground(bg);
+            buttons[i].setTextColor(selected ? Color.parseColor("#1A1A1A") : VALUE_TEXT);
+        }
     }
 
     private static AudioStreamEntry findAudioStream(PlayerActivity activity, String id) {
@@ -716,15 +799,12 @@ final class PlayerUiHelper {
         content.addView(detectedHint);
 
         TextView strengthLabel = new TextView(activity);
-        strengthLabel.setText("Strength: " + Math.round(activity.upscaleStrength * 100) + "%");
         strengthLabel.setTextColor(SUBTLE_TEXT);
         strengthLabel.setTextSize(12);
-        content.addView(strengthLabel);
 
         SeekBar strengthSeekBar = new SeekBar(activity);
         styleSeekBar(strengthSeekBar, density);
         strengthSeekBar.setMax(100);
-        strengthSeekBar.setProgress(Math.round(activity.upscaleStrength * 100));
         LinearLayout.LayoutParams strengthParams =
             new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
         strengthParams.topMargin = Math.round(4 * density);
@@ -737,7 +817,6 @@ final class PlayerUiHelper {
                    every call. Calling that at drag frequency previously got the renderer
                    stuck (playback paused and wouldn't resume) - committed once on release
                    instead, below. */
-                activity.upscaleStrength = progress / 100f;
                 strengthLabel.setText("Strength: " + progress + "%");
             }
 
@@ -746,11 +825,16 @@ final class PlayerUiHelper {
 
             @Override
             public void onStopTrackingTouch(SeekBar seekBar) {
-                activity.shaderType = activity.shaderEnabled && activity.upscaleStrength > 0f
-                    ? activity.detectedShaderType : ShaderType.OFF;
-                activity.applyVideoEffects();
+                activity.setShaderStrength(seekBar.getProgress() / 100f);
             }
         });
+
+        addModeRow(activity, content, density, activity.upscaleMode(), (mode) -> {
+            activity.setUpscaleMode(mode);
+            applyStrengthDisplay(strengthSeekBar, strengthLabel, mode, activity.autoUpscaleStrength, activity.upscaleStrength);
+        });
+        applyStrengthDisplay(strengthSeekBar, strengthLabel, activity.upscaleMode(), activity.autoUpscaleStrength, activity.upscaleStrength);
+        content.addView(strengthLabel);
         content.addView(strengthSeekBar);
 
         showPopup(activity, anchor, content, density);
@@ -774,15 +858,12 @@ final class PlayerUiHelper {
         content.addView(makeBackRow(activity, density, () -> showPlayerMenu(activity, anchor)));
 
         TextView strengthLabel = new TextView(activity);
-        strengthLabel.setText("Strength: " + Math.round(activity.colorBoostStrength * 100) + "%");
         strengthLabel.setTextColor(SUBTLE_TEXT);
         strengthLabel.setTextSize(12);
-        content.addView(strengthLabel);
 
         SeekBar strengthSeekBar = new SeekBar(activity);
         styleSeekBar(strengthSeekBar, density);
         strengthSeekBar.setMax(100);
-        strengthSeekBar.setProgress(Math.round(activity.colorBoostStrength * 100));
         LinearLayout.LayoutParams strengthParams =
             new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
         strengthParams.topMargin = Math.round(4 * density);
@@ -801,6 +882,13 @@ final class PlayerUiHelper {
                 activity.setColorBoostStrength(seekBar.getProgress() / 100f);
             }
         });
+
+        addModeRow(activity, content, density, activity.colorBoostMode(), (mode) -> {
+            activity.setColorBoostMode(mode);
+            applyStrengthDisplay(strengthSeekBar, strengthLabel, mode, activity.autoColorBoostStrength, activity.colorBoostStrength);
+        });
+        applyStrengthDisplay(strengthSeekBar, strengthLabel, activity.colorBoostMode(), activity.autoColorBoostStrength, activity.colorBoostStrength);
+        content.addView(strengthLabel);
         content.addView(strengthSeekBar);
 
         showPopup(activity, anchor, content, density);

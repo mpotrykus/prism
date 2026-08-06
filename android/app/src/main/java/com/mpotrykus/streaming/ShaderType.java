@@ -17,7 +17,7 @@ package com.mpotrykus.streaming;
    shader-upscale tuning made the crush worse than necessary). */
 enum ShaderType {
     OFF("Off", false, null, null, 1f),
-    ANIME4K("Anime4K", false,
+    ANIME4K("Anime", false,
         new ShaderTuning(/* scaleFactor= */ 1.8f, /* sharpenStrength= */ 1.8f, /* kernelScale= */ 1.5f),
         new ShaderTuning(/* scaleFactor= */ 2.4f, /* sharpenStrength= */ 3.8f, /* kernelScale= */ 2.8f),
         1f),
@@ -26,7 +26,7 @@ enum ShaderType {
        ShaderUpscaleShaderProgram's weight-gate fix), so the previous "100%" tuning now arrives
        at "Light" instead of only at "Strong". Strength above 0.15 just stays at max, same as
        reaching 100% used to. */
-    LIVE_ACTION("Live-Action (CAS)", true,
+    LIVE_ACTION("Live-Action", true,
         new ShaderTuning(/* scaleFactor= */ 1.3f, /* sharpenStrength= */ 1.0f, /* kernelScale= */ 1.2f),
         new ShaderTuning(/* scaleFactor= */ 1.6f, /* sharpenStrength= */ 2.2f, /* kernelScale= */ 1.8f),
         0.15f);

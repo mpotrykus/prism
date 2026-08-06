@@ -5,8 +5,12 @@ export const ZOOM_LEVELS = [1, 1.25, 1.5, 2];
 export const VOLUME_STORAGE_KEY = "prism_player_volume";
 export const AMBIENT_STORAGE_KEY = "prism_player_ambient_enabled";
 export const AMBIENT_OPACITY_STORAGE_KEY = "prism_player_ambient_opacity";
+export const UPSCALE_ENABLED_STORAGE_KEY = "prism_player_upscale_enabled";
+export const UPSCALE_STRENGTH_STORAGE_KEY = "prism_player_upscale_strength";
+export const UPSCALE_AUTO_STORAGE_KEY = "prism_player_upscale_auto";
 export const COLOR_BOOST_STORAGE_KEY = "prism_player_color_boost_enabled";
 export const COLOR_BOOST_STRENGTH_STORAGE_KEY = "prism_player_color_boost_strength";
+export const COLOR_BOOST_AUTO_STORAGE_KEY = "prism_player_color_boost_auto";
 export const STATS_OVERLAY_STORAGE_KEY = "prism_player_stats_overlay_enabled";
 
 export function storedVolume() {
@@ -14,34 +18,74 @@ export function storedVolume() {
     return Number.isFinite(raw) && raw > 0 && raw <= 1 ? raw : 1;
 }
 
-/* Unlike shader upscaling's upscale_enabled (a Settings-modal default the in-player
-   toggle only ever overrides for the current session, see shader-pipeline.js), ambient
-   lighting has no per-video auto-detected type to reconcile against - the in-player
-   toggle IS the setting, written here the moment it's flipped (see setAmbientEnabled)
-   and read back for every subsequent video, the same immediate-persistence model as
-   VOLUME_STORAGE_KEY above. */
+/* The in-player toggle IS the setting, written here the moment it's flipped (see
+   setAmbientEnabled) and read back for every subsequent video, same immediate-
+   persistence model as VOLUME_STORAGE_KEY above - no Settings-modal default to reconcile
+   against. */
 export function storedAmbientEnabled() {
     return localStorage.getItem(AMBIENT_STORAGE_KEY) === "1";
 }
 
-/* Same immediate-persistence model as storedAmbientEnabled above, not the Settings-modal
-   tiered-preset model shader strength uses (see ambient-pipeline.js's setAmbientOpacity)
-   - opacity has no per-video/genre concern to reconcile either. */
+/* Same immediate-persistence model as storedAmbientEnabled above - opacity has no
+   per-video/genre concern to reconcile either. The explicit `stored !== null` check
+   matters: Number(null) is 0, not NaN, which would otherwise pass the >= 0 check below
+   and silently make "never set" indistinguishable from "explicitly set to 0" - every
+   fresh session would start at 0% (invisible) instead of the intended 50% default. */
 export function storedAmbientOpacity() {
-    const raw = Number(localStorage.getItem(AMBIENT_OPACITY_STORAGE_KEY));
-    return Number.isFinite(raw) && raw >= 0 && raw <= 1 ? raw : 0.5;
+    const stored = localStorage.getItem(AMBIENT_OPACITY_STORAGE_KEY);
+    const raw = Number(stored);
+    return stored !== null && Number.isFinite(raw) && raw >= 0 && raw <= 1 ? raw : 0.5;
+}
+
+/* Same immediate-persistence model as storedAmbientEnabled - whatever the in-player
+   Shader Upscaling toggle was last set to (see shader-pipeline.js's setShaderEnabled),
+   not a Settings-modal default reset every video. detectShaderType's own per-video genre
+   detection is unrelated to this and still resolves fresh every time (see
+   plex-player.js's play()). */
+export function storedShaderEnabled() {
+    return localStorage.getItem(UPSCALE_ENABLED_STORAGE_KEY) === "1";
+}
+
+/* Same immediate-persistence model as storedShaderEnabled above. 0.65 (not documented
+   anywhere else now) was "Medium"'s value back when this was a Settings-modal preset
+   dropdown (light/medium/strong) rather than a raw persisted slider position - kept as
+   the default for a first-ever session, same reasoning storedColorBoostStrength's own
+   0.5 default follows. Same `stored !== null` reasoning as storedAmbientOpacity above -
+   without it, a never-set key silently defaults to strength 0 instead of 0.65 (Number(null)
+   is 0, not NaN), which combined with setUpscaleAuto not re-resolving _shaderType made
+   Auto mode look permanently stuck at 0% for anyone who'd never touched the manual
+   slider. */
+export function storedShaderStrength() {
+    const stored = localStorage.getItem(UPSCALE_STRENGTH_STORAGE_KEY);
+    const raw = Number(stored);
+    return stored !== null && Number.isFinite(raw) && raw >= 0 && raw <= 1 ? raw : 0.65;
+}
+
+/* Same immediate-persistence model as storedShaderEnabled above. The resolved auto
+   strength itself is never persisted, only this flag - see shader-pipeline.js's
+   renderShaderFrame. */
+export function storedUpscaleAuto() {
+    return localStorage.getItem(UPSCALE_AUTO_STORAGE_KEY) === "1";
 }
 
 /* Same immediate-persistence model as storedAmbientEnabled - Color Boost (contrast/
-   saturation) has no per-video/genre concern to reconcile against either, unlike shader
-   upscaling's Settings-modal-default-plus-session-override model. */
+   saturation) has no per-video/genre concern to reconcile against either. */
 export function storedColorBoostEnabled() {
     return localStorage.getItem(COLOR_BOOST_STORAGE_KEY) === "1";
 }
 
+/* Same `stored !== null` reasoning as storedAmbientOpacity/storedShaderStrength above. */
 export function storedColorBoostStrength() {
-    const raw = Number(localStorage.getItem(COLOR_BOOST_STRENGTH_STORAGE_KEY));
-    return Number.isFinite(raw) && raw >= 0 && raw <= 1 ? raw : 0.5;
+    const stored = localStorage.getItem(COLOR_BOOST_STRENGTH_STORAGE_KEY);
+    const raw = Number(stored);
+    return stored !== null && Number.isFinite(raw) && raw >= 0 && raw <= 1 ? raw : 0.5;
+}
+
+/* Same immediate-persistence model as storedColorBoostEnabled/storedUpscaleAuto above -
+   the resolved auto strength itself is never persisted, only this flag - see
+   shader-pipeline.js's renderShaderFrame. */
+export function storedColorBoostAuto() {
+    return localStorage.getItem(COLOR_BOOST_AUTO_STORAGE_KEY) === "1";
 }
 
 /* Same immediate-persistence model as storedAmbientEnabled - a debug readout has no

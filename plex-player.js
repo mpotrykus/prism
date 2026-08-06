@@ -23,15 +23,24 @@
    reaching into the shared control-row/menu chrome) keeps working unchanged. */
 import { Capacitor } from "@capacitor/core";
 import { registerNavHandler } from "./focus-nav.js";
-import { loadPlain } from "./settings.js";
-import { detectShaderType, UPSCALE_STRENGTH_PRESETS } from "./src/player/shader/shaders.js";
+import { detectShaderType } from "./src/player/shader/shaders.js";
 import { buildStreamUrl } from "./src/player/core/stream-url.js";
 import { playNative, stopNative, pauseNative, resumeNative } from "./src/player/native-bridge.js";
 import { playWeb, attachSource, reloadWebSource, teardownWeb } from "./src/player/web-fallback.js";
-import { setShaderStrength, setShaderEnabled, setColorBoostEnabled, setColorBoostStrength, updateShaderPipeline, ensureShaderPipeline, stopShaderLoop } from "./src/player/shader-pipeline.js";
+import { setShaderStrength, setColorBoostStrength, updateShaderPipeline, ensureShaderPipeline, stopShaderLoop } from "./src/player/shader-pipeline.js";
 import { setAmbientEnabled, setAmbientOpacity, updateAmbientPipeline, stopAmbientLoop } from "./src/player/ambient-pipeline.js";
 import { setStatsOverlayEnabled, updateStatsOverlayPipeline } from "./src/player/stats-overlay.js";
-import { storedAmbientEnabled, storedAmbientOpacity, storedColorBoostEnabled, storedColorBoostStrength, storedStatsOverlayEnabled } from "./src/player/ui/shared.js";
+import {
+    storedAmbientEnabled,
+    storedAmbientOpacity,
+    storedShaderEnabled,
+    storedShaderStrength,
+    storedUpscaleAuto,
+    storedColorBoostEnabled,
+    storedColorBoostStrength,
+    storedColorBoostAuto,
+    storedStatsOverlayEnabled,
+} from "./src/player/ui/shared.js";
 import {
     makeControlButton,
     registerControlButton,
@@ -101,6 +110,16 @@ class StreamingPlayerController {
         this._shaderRafId = null;
         this._colorBoostEnabled = false;
         this._colorBoostStrength = 0.5;
+        this._upscaleAuto = false;
+        this._colorBoostAuto = false;
+        this._autoUpscaleStrength = null;
+        this._autoColorBoostStrength = null;
+        this._contentSampleCanvas = null;
+        this._contentSampleCtx = null;
+        this._contentLastSampleAt = 0;
+        this._contentSmoothedSaturation = null;
+        this._contentSmoothedEdgeEnergy = null;
+        this._contentRafId = null;
         this._statsOverlayEnabled = false;
         this._statsOverlayEl = null;
         this._statsOverlayIntervalId = null;
@@ -156,16 +175,22 @@ class StreamingPlayerController {
         };
         this._activeSkipMarker = null;
 
-        /* Global default for this playback - the in-player Shader Upscaling menu can
-           still override the toggle/strength for this session (see _setShaderEnabled/
-           _setShaderStrength), but every video starts from Settings' upscale_enabled/
-           upscale_strength and its own auto-detected type rather than whatever the
-           previous video's session left behind. */
-        const settings = loadPlain();
+        /* detectShaderType still resolves fresh per-video from this title's own genre
+           tags - the only part of this that's genuinely per-video. shaderEnabled/
+           shaderStrength/upscaleAuto below follow the same immediate-persistence model
+           as colorBoostEnabled/colorBoostStrength/colorBoostAuto just below - whatever
+           the in-player menu was last set to (see shader-pipeline.js's setUpscaleMode/
+           setColorBoostMode), not a Settings-modal default reset every video. */
         this._shaderAutoType = detectShaderType(item.genres);
-        this._shaderEnabled = !!settings.upscale_enabled;
-        this._shaderStrength = UPSCALE_STRENGTH_PRESETS[settings.upscale_strength || "medium"] ?? 0;
-        this._shaderType = this._shaderEnabled && this._shaderStrength > 0 ? this._shaderAutoType : "off";
+        this._shaderEnabled = storedShaderEnabled();
+        this._shaderStrength = storedShaderStrength();
+        /* _upscaleAuto has to be read before resolving _shaderType below - in Auto mode
+           the manual strength is irrelevant to whether the shader is "off" (see
+           shader-pipeline.js's resolveShaderType), so this order matters, not just the
+           values themselves. */
+        this._upscaleAuto = storedUpscaleAuto();
+        this._shaderType = this._shaderEnabled && (this._upscaleAuto || this._shaderStrength > 0) ? this._shaderAutoType : "off";
+        this._autoUpscaleStrength = null;
         /* Unlike the shader fields above, ambient lighting has no per-video/genre
            concern to resolve here - storedAmbientEnabled() is the whole answer, the
            same on-disk source of truth the in-player toggle writes back to (see
@@ -176,6 +201,8 @@ class StreamingPlayerController {
            contrast/saturation lift has nothing genre-specific to resolve either. */
         this._colorBoostEnabled = storedColorBoostEnabled();
         this._colorBoostStrength = storedColorBoostStrength();
+        this._colorBoostAuto = storedColorBoostAuto();
+        this._autoColorBoostStrength = null;
         this._statsOverlayEnabled = storedStatsOverlayEnabled();
 
         this._pushedHistoryState = true;
@@ -264,10 +291,6 @@ class StreamingPlayerController {
         return setShaderStrength(this, strength);
     }
 
-    _setShaderEnabled(enabled) {
-        return setShaderEnabled(this, enabled);
-    }
-
     _updateShaderPipeline() {
         return updateShaderPipeline(this);
     }
@@ -286,10 +309,6 @@ class StreamingPlayerController {
 
     _setAmbientOpacity(opacity) {
         return setAmbientOpacity(this, opacity);
-    }
-
-    _setColorBoostEnabled(enabled) {
-        return setColorBoostEnabled(this, enabled);
     }
 
     _setColorBoostStrength(strength) {

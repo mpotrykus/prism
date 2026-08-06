@@ -2,29 +2,20 @@ package com.mpotrykus.streaming;
 
 import android.graphics.Bitmap;
 import android.graphics.Color;
-import android.os.Handler;
-import android.os.Looper;
 import android.util.Log;
-import android.view.PixelCopy;
-import android.view.SurfaceView;
-import android.view.TextureView;
 import android.view.View;
 
-/* Periodically captures a tiny downscaled snapshot of PlayerView's underlying video
-   surface and averages its four edge strips into RGB colors for AmbientGlowView to
-   render - see docs/plezy-player-comparison.md's "Ambient lighting" deferred-feature
-   note for why ShaderUpscaleEffect's GlShaderProgram pipeline (see
-   ShaderUpscaleShaderProgram) can't reach this any other way: those frames stay
-   GPU-side inside ExoPlayer's own VideoFrameProcessor with no CPU readback path already
-   wired up.
+/* Averages a periodically-captured tiny downscaled snapshot of PlayerView's underlying
+   video surface (via FrameBitmapCapture) into per-zone RGB colors for AmbientGlowView to
+   render - see docs/plezy-player-comparison.md's "Ambient lighting" deferred-feature note
+   for why ShaderUpscaleEffect's GlShaderProgram pipeline (see ShaderUpscaleShaderProgram)
+   can't reach this any other way: those frames stay GPU-side inside ExoPlayer's own
+   VideoFrameProcessor with no CPU readback path already wired up.
 
-   Handles both possible surface types PlayerView.getVideoSurfaceView() can return -
-   PixelCopy.request(SurfaceView, ...) (available since API 24, this project's
-   minSdkVersion) for the SurfaceView case, or the synchronous
-   TextureView.getBitmap(Bitmap) for the TextureView case - rather than assuming
-   PlayerView's default surface_type (SurfaceView) always holds. Both read whatever was
-   most recently presented to that surface, post-effects, if ShaderUpscaleEffect is also
-   active. */
+   Capture mechanics (PixelCopy/TextureView duality, scheduling) live in
+   FrameBitmapCapture, shared with ContentAnalysisSampler's own (differently-processed)
+   use of the same captured frames - this class only owns the edge-zone averaging/
+   smoothing that's specific to ambient lighting. */
 final class AmbientLightSampler {
     private static final String TAG = "AmbientLightSampler";
     private static final long SAMPLE_INTERVAL_MS = 42L;
@@ -57,11 +48,8 @@ final class AmbientLightSampler {
         void onColors(int[] top, int[] bottom, int[] left, int[] right);
     }
 
-    private final SurfaceView surfaceView;
-    private final TextureView textureView;
     private final ColorListener listener;
-    private final Handler mainHandler = new Handler(Looper.getMainLooper());
-    private final Bitmap bitmap = Bitmap.createBitmap(SAMPLE_W, SAMPLE_H, Bitmap.Config.ARGB_8888);
+    private final FrameBitmapCapture capture;
     private final int[] pixels = new int[SAMPLE_W * SAMPLE_H];
     /* Per-zone EMA state, one [r,g,b] float triplet per zone per edge - kept across
        start()/stop() cycles within a session (see setSmoothingInitialized's own comment)
@@ -72,21 +60,17 @@ final class AmbientLightSampler {
     private final float[][] smoothedLeft = new float[ZONES_PER_EDGE][3];
     private final float[][] smoothedRight = new float[ZONES_PER_EDGE][3];
     private boolean smoothingInitialized = false;
-    private boolean running = false;
     private boolean loggedFirstSample = false;
-    private final Runnable sampleRunnable = this::sampleOnce;
 
-    /* surfaceView/textureView are both null only if PlayerView's video surface is some
-       third View subtype neither branch handles - start()/stop() quietly no-op in that
-       case (same "feature silently unavailable" fallback as ensureShaderPipeline on the
-       web leg when WebGL itself is unavailable), but logs once so that's actually
-       debuggable rather than indistinguishable from "ambient lighting just doesn't do
-       anything." */
+    /* Logs once (not silently no-op'ing, same reasoning FrameBitmapCapture's own
+       isSupported() gate follows) if PlayerView's video surface is some third View
+       subtype neither FrameBitmapCapture branch handles - start()/stop() quietly no-op
+       in that case, but this makes that actually debuggable rather than indistinguishable
+       from "ambient lighting just doesn't do anything." */
     AmbientLightSampler(View videoSurfaceView, ColorListener listener) {
-        this.surfaceView = videoSurfaceView instanceof SurfaceView ? (SurfaceView) videoSurfaceView : null;
-        this.textureView = videoSurfaceView instanceof TextureView ? (TextureView) videoSurfaceView : null;
         this.listener = listener;
-        if (surfaceView == null && textureView == null) {
+        this.capture = new FrameBitmapCapture(videoSurfaceView, SAMPLE_W, SAMPLE_H, SAMPLE_INTERVAL_MS, this::processBitmap);
+        if (!capture.isSupported()) {
             Log.w(TAG, "PlayerView's video surface is neither a SurfaceView nor a TextureView ("
                 + (videoSurfaceView == null ? "null" : videoSurfaceView.getClass().getName())
                 + ") - ambient lighting has nothing to sample from");
@@ -94,64 +78,20 @@ final class AmbientLightSampler {
     }
 
     boolean isSupported() {
-        return surfaceView != null || textureView != null;
+        return capture.isSupported();
     }
 
     void start() {
-        Log.d(TAG, "start() called, isSupported=" + isSupported()
-            + (surfaceView != null ? " (SurfaceView)" : textureView != null ? " (TextureView)" : ""));
-        if (!isSupported() || running) return;
-        running = true;
+        Log.d(TAG, "start() called, isSupported=" + isSupported() + " " + capture.surfaceTypeLabel());
         loggedFirstSample = false;
-        mainHandler.post(sampleRunnable);
+        capture.start();
     }
 
     void stop() {
-        running = false;
-        mainHandler.removeCallbacks(sampleRunnable);
+        capture.stop();
     }
 
-    private void sampleOnce() {
-        if (!running) return;
-        if (textureView != null) {
-            sampleTextureView();
-            return;
-        }
-        try {
-            PixelCopy.request(surfaceView, bitmap, this::onCopyFinished, mainHandler);
-        } catch (IllegalArgumentException e) {
-            // Surface not ready yet (e.g. before the first frame lands) - just retry next tick.
-            scheduleNext();
-        }
-    }
-
-    /* Synchronous, unlike PixelCopy's callback-based API - TextureView backs its
-       content with an ordinary Bitmap-copyable SurfaceTexture, no round trip needed.
-       Reuses the same destination bitmap the SurfaceView path writes into so
-       processBitmap below is shared by both. */
-    private void sampleTextureView() {
-        try {
-            textureView.getBitmap(bitmap);
-            processBitmap();
-        } catch (RuntimeException e) {
-            Log.w(TAG, "TextureView.getBitmap() failed - " + e.getMessage());
-        }
-        scheduleNext();
-    }
-
-    private void onCopyFinished(int copyResult) {
-        if (copyResult == PixelCopy.SUCCESS) {
-            processBitmap();
-        } else {
-            Log.w(TAG, "PixelCopy.request failed with result code " + copyResult);
-        }
-        /* Next request chained only after this one finishes (success or not), rather
-           than a fixed-rate postDelayed loop that could pile up requests if a device's
-           PixelCopy round trip ever runs slower than SAMPLE_INTERVAL_MS. */
-        scheduleNext();
-    }
-
-    private void processBitmap() {
+    private void processBitmap(Bitmap bitmap) {
         bitmap.getPixels(pixels, 0, SAMPLE_W, 0, 0, SAMPLE_W, SAMPLE_H);
         int edgeRows = Math.max(1, Math.round(SAMPLE_H * EDGE_FRACTION));
         int edgeCols = Math.max(1, Math.round(SAMPLE_W * EDGE_FRACTION));
@@ -183,10 +123,6 @@ final class AmbientLightSampler {
             sb.append(String.format("#%06X", colors[i] & 0xFFFFFF));
         }
         return sb.append(']').toString();
-    }
-
-    private void scheduleNext() {
-        if (running) mainHandler.postDelayed(sampleRunnable, SAMPLE_INTERVAL_MS);
     }
 
     /* Splits one edge's own length (SAMPLE_W for the horizontal top/bottom edges,

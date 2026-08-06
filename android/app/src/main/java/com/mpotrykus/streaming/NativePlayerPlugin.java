@@ -29,11 +29,11 @@ public class NativePlayerPlugin extends Plugin implements PlayerActivity.Playbac
         long startPositionMs = call.getLong("startPositionMs", 0L);
         JSArray chapters = call.getArray("chapters");
         JSArray audioStreams = call.getArray("audioStreams");
-        /* upscaleStrength is the raw slider position, not pre-collapsed to 0 when
-           disabled - see native-bridge.js's playNative for why shaderEnabled travels
-           alongside it as an independent flag instead. */
-        float upscaleStrength = call.getFloat("upscaleStrength", 0f);
-        boolean shaderEnabled = call.getBoolean("shaderEnabled", false);
+        /* shaderEnabled/upscaleStrength/upscaleAuto are NOT read from the call here any
+           more - PlayerActivity now owns them as its own SharedPreferences-persisted
+           state (see that class's PREF_UPSCALE_ENABLED and friends), same immediate-
+           persistence model as colorBoostEnabled/colorBoostStrength/colorBoostAuto,
+           which never traveled through this plugin either. */
         String shaderType = call.getString("shaderType", "live_action");
         String title = call.getString("title", "");
         Integer year = call.getInt("year");
@@ -43,8 +43,6 @@ public class NativePlayerPlugin extends Plugin implements PlayerActivity.Playbac
         Intent intent = new Intent(getContext(), PlayerActivity.class);
         intent.putExtra(PlayerActivity.EXTRA_URL, url);
         intent.putExtra(PlayerActivity.EXTRA_START_POSITION_MS, startPositionMs);
-        intent.putExtra(PlayerActivity.EXTRA_UPSCALE_STRENGTH, upscaleStrength);
-        intent.putExtra(PlayerActivity.EXTRA_SHADER_ENABLED, shaderEnabled);
         intent.putExtra(PlayerActivity.EXTRA_SHADER_TYPE, shaderType);
         intent.putExtra(PlayerActivity.EXTRA_TITLE, title);
         if (year != null) intent.putExtra(PlayerActivity.EXTRA_YEAR, year);

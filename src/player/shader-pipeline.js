@@ -1,5 +1,13 @@
 import { shaderTuningAt, colorBoostAt, SHADER_VERTEX_SRC, SHADER_FRAGMENT_ANIME, SHADER_FRAGMENT_CAS } from "./shader/shaders.js";
-import { COLOR_BOOST_STORAGE_KEY, COLOR_BOOST_STRENGTH_STORAGE_KEY } from "./ui/shared.js";
+import {
+    UPSCALE_ENABLED_STORAGE_KEY,
+    UPSCALE_STRENGTH_STORAGE_KEY,
+    UPSCALE_AUTO_STORAGE_KEY,
+    COLOR_BOOST_STORAGE_KEY,
+    COLOR_BOOST_STRENGTH_STORAGE_KEY,
+    COLOR_BOOST_AUTO_STORAGE_KEY,
+} from "./ui/shared.js";
+import { updateContentAnalysis } from "./content-analysis.js";
 
 /* WebGL upscaling pipeline (Anime4K/CAS) - reads frames from the controller's <video>
    element and renders an upscaled frame into a canvas stacked on top of it. Takes the
@@ -12,19 +20,36 @@ import { COLOR_BOOST_STORAGE_KEY, COLOR_BOOST_STRENGTH_STORAGE_KEY } from "./ui/
    picked for this video, never a user-chosen algorithm. Gated on _shaderEnabled as well
    as strength>0 now that on/off is its own toggle (see setShaderEnabled below) rather
    than dragging the strength slider to 0 being the only way to turn this off - the
-   slider's position is remembered independently of whether the toggle is currently on. */
+   slider's position is remembered independently of whether the toggle is currently on.
+   Same "toggle IS the persisted setting" immediate-persistence model as Color Boost
+   below (see storedShaderStrength) - whatever this is last set to is what every
+   subsequent video starts from, not a Settings-modal default. */
 export function setShaderStrength(controller, strength) {
     controller._shaderStrength = strength;
-    controller._shaderType = controller._shaderEnabled && strength > 0 ? controller._shaderAutoType : "off";
+    controller._shaderType = resolveShaderType(controller);
+    localStorage.setItem(UPSCALE_STRENGTH_STORAGE_KEY, String(strength));
     updateShaderPipeline(controller);
+}
+
+/* Whether the shader actually renders as "off" can't just check _shaderStrength > 0 -
+   in Auto mode the manual slider's position is irrelevant (it isn't applied at all, see
+   renderShaderFrame), so a manual strength of exactly 0 must not force "off" while
+   _upscaleAuto is on. Shared by every place that can change either _shaderEnabled,
+   _shaderStrength, or _upscaleAuto, so none of them can resolve this stale relative to
+   the other two. */
+function resolveShaderType(controller) {
+    const hasStrength = controller._upscaleAuto || controller._shaderStrength > 0;
+    return controller._shaderEnabled && hasStrength ? controller._shaderAutoType : "off";
 }
 
 /* The "more" menu's inline toggle (see chrome.js's openHamburgerMenu) - flips whether the
    shader runs at all without touching _shaderStrength, so switching back on restores
-   whatever strength the slider was already at instead of resetting it. */
+   whatever strength the slider was already at instead of resetting it. Same immediate-
+   persistence model as setShaderStrength above. */
 export function setShaderEnabled(controller, enabled) {
     controller._shaderEnabled = enabled;
-    controller._shaderType = enabled && controller._shaderStrength > 0 ? controller._shaderAutoType : "off";
+    controller._shaderType = resolveShaderType(controller);
+    localStorage.setItem(UPSCALE_ENABLED_STORAGE_KEY, enabled ? "1" : "0");
     updateShaderPipeline(controller);
 }
 
@@ -44,6 +69,58 @@ export function setColorBoostStrength(controller, strength) {
     controller._colorBoostStrength = strength;
     localStorage.setItem(COLOR_BOOST_STRENGTH_STORAGE_KEY, String(strength));
     updateShaderPipeline(controller);
+}
+
+/* Same immediate-persistence model as setShaderStrength/setShaderEnabled above - only
+   this on/off flag is written through, never the live-computed strength itself (see
+   content-analysis.js's sampleContentFrame). Switching auto off falls back to whatever
+   _shaderStrength the slider was last left at, same "toggle overrides, doesn't erase"
+   model setShaderEnabled already uses for the shader on/off toggle above. */
+export function setUpscaleAuto(controller, enabled) {
+    controller._upscaleAuto = enabled;
+    controller._shaderType = resolveShaderType(controller);
+    localStorage.setItem(UPSCALE_AUTO_STORAGE_KEY, enabled ? "1" : "0");
+    updateContentAnalysis(controller);
+}
+
+/* Same immediate-persistence model as setColorBoostEnabled/setUpscaleAuto above. Only
+   this on/off flag is written through, never the live-computed strength itself (see
+   content-analysis.js's sampleContentFrame) - unchecking always falls back to whatever
+   _colorBoostStrength the slider was last left at. */
+export function setColorBoostAuto(controller, enabled) {
+    controller._colorBoostAuto = enabled;
+    localStorage.setItem(COLOR_BOOST_AUTO_STORAGE_KEY, enabled ? "1" : "0");
+    updateContentAnalysis(controller);
+}
+
+/* "auto"/"on"/"off" - the three-way state chrome.js's mode control presents in place of
+   the old separate enabled-toggle + Auto-checkbox pair. Collapses _shaderEnabled/
+   _upscaleAuto (still the two flags everything else here - renderShaderFrame,
+   persistence, Android's mirrored fields - actually keys off) into one value for the UI
+   layer, rather than threading a third piece of state through the rendering/persistence
+   code that already works correctly off the pair. */
+export function upscaleModeOf(controller) {
+    if (!controller._shaderEnabled) return "off";
+    return controller._upscaleAuto ? "auto" : "on";
+}
+
+/* Drives both flags from one selection - "off" and "on" both set _upscaleAuto false so
+   a later switch straight to "on" (skipping "auto") doesn't inherit a stale auto flag
+   from a previous session. */
+export function setUpscaleMode(controller, mode) {
+    setShaderEnabled(controller, mode !== "off");
+    setUpscaleAuto(controller, mode === "auto");
+}
+
+/* Same collapsing reasoning as upscaleModeOf/setUpscaleMode above. */
+export function colorBoostModeOf(controller) {
+    if (!controller._colorBoostEnabled) return "off";
+    return controller._colorBoostAuto ? "auto" : "on";
+}
+
+export function setColorBoostMode(controller, mode) {
+    setColorBoostEnabled(controller, mode !== "off");
+    setColorBoostAuto(controller, mode === "auto");
 }
 
 /* Off by default - same reasoning as the Android leg (ShaderUpscaleEffect): this spends
@@ -224,11 +301,28 @@ export function renderShaderFrame(controller) {
        passthrough for (see SHADER_FRAGMENT_ANIME/_CAS - zero sharpen strength leaves the
        sharpen stage a no-op either way). */
     const programType = controller._shaderType !== "off" ? controller._shaderType : controller._shaderAutoType;
-    const sharpenTuning = controller._shaderType !== "off"
-        ? shaderTuningAt(controller._shaderType, controller._shaderStrength)
+    /* Auto strength (see content-analysis.js) writes straight to _autoUpscaleStrength/
+       _autoColorBoostStrength rather than through setShaderStrength/setColorBoostStrength
+       - those persist to localStorage, which would clobber the remembered manual slider
+       position on every sample tick. Resolved here instead, same shape as _shaderAutoType
+       being resolved into programType just above. */
+    const upscaleStrength = controller._upscaleAuto ? (controller._autoUpscaleStrength ?? 0) : controller._shaderStrength;
+    const boostStrength = controller._colorBoostAuto ? (controller._autoColorBoostStrength ?? 0) : controller._colorBoostStrength;
+    /* _shaderType alone isn't enough to gate this - resolveShaderType keeps it resolved
+       to a real type throughout Auto mode regardless of the live auto strength (it has
+       to, so the content-analysis sampler keeps running and the GL pass stays alive for
+       whenever a nonzero value does arrive - see that function's own comment). But
+       shaderTuningAt(type, 0) returns that type's own MIN tuning, not a true no-op (e.g.
+       live_action's min already carries sharpen:1.0) - the same "0 strength" that means
+       fully off in manual mode (there, _shaderType itself already becomes "off" at
+       exactly 0) would otherwise render as still-visibly-sharpened once auto legitimately
+       computes 0 (source doesn't need upscaling). Checking upscaleStrength > 0 here too
+       is what actually makes a live 0 look like off, regardless of which mode produced it. */
+    const sharpenTuning = controller._shaderType !== "off" && upscaleStrength > 0
+        ? shaderTuningAt(controller._shaderType, upscaleStrength)
         : { scale: 1, sharpen: 0, kernel: 1 };
     const colorTuning = controller._colorBoostEnabled
-        ? colorBoostAt(controller._colorBoostStrength)
+        ? colorBoostAt(boostStrength)
         : { saturation: 1, contrast: 1 };
     const scale = Math.max(1, Math.min(sharpenTuning.scale, Math.min(displayW / video.videoWidth, displayH / video.videoHeight)));
     const outW = Math.round(video.videoWidth * scale);

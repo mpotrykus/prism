@@ -1,7 +1,7 @@
 import { Capacitor } from "@capacitor/core";
 import * as StreamingSubtitles from "../../../opensubtitles.js";
 import { SHADER_TYPES } from "../shader/shaders.js";
-import { setShaderStrength, setColorBoostStrength } from "../shader-pipeline.js";
+import { setShaderStrength, setColorBoostStrength, upscaleModeOf, setUpscaleMode, colorBoostModeOf, setColorBoostMode } from "../shader-pipeline.js";
 import { setAmbientEnabled, setAmbientOpacity } from "../ambient-pipeline.js";
 import { reloadWebSource } from "../web-fallback.js";
 import { setNativePlaybackRate, setNativeSubtitle } from "../native-bridge.js";
@@ -719,6 +719,18 @@ function makeBackRow(onClick) {
    each (see web-fallback.js's playWeb) - this is its top-level list; each entry either
    opens a submenu or, for subtitles, the search panel - the trailing "›" marks every
    row here as a drill-down rather than an immediate action. */
+/* Shared by the hamburger row's initial value and its toggle's onChange return value -
+   "Auto" replaces the numeric % once strength is computed dynamically (see
+   content-analysis.js) rather than showing a live-ticking percentage, since the row only
+   ever refreshes on toggle/menu-close, not every sample tick. */
+function shaderRowLabel(controller) {
+    return controller._upscaleAuto ? `${SHADER_TYPES[controller._shaderAutoType].label} (Auto)` : SHADER_TYPES[controller._shaderAutoType].label;
+}
+
+function colorBoostRowLabel(controller) {
+    return controller._colorBoostAuto ? "Auto" : `${Math.round(controller._colorBoostStrength * 100)}%`;
+}
+
 export function openHamburgerMenu(controller, anchor) {
     const rate = controller._session?.playbackRate || 1;
     const zoomLevel = ZOOM_LEVELS[controller._zoomIndex];
@@ -732,34 +744,19 @@ export function openHamburgerMenu(controller, anchor) {
         },
         { label: "Zoom", value: `${zoomLevel}x`, trailing: "›", onSelect: () => openZoomMenu(controller, anchor) },
         {
+            /* No inline toggle any more - Auto/On/Off is a 3-way mode, not a boolean, so
+               it needs the panel's own segmented control (see openShaderMenu) rather than
+               a switch that fits this row. Same chevron-only, drill-in-to-change pattern
+               as Zoom/Playback Speed/Sleep Timer above. */
             label: "Shader Upscaling",
-            value: controller._shaderEnabled ? SHADER_TYPES[controller._shaderAutoType].label : null,
+            value: controller._shaderEnabled ? shaderRowLabel(controller) : null,
             trailing: "›",
-            /* The toggle flips on/off in place without leaving this menu - onSelect (tap
-               anywhere else on the row) still drills into the strength slider, same as
-               every other row here; they're independent gestures on the same row. */
-            toggle: {
-                checked: controller._shaderEnabled,
-                onChange: (checked) => {
-                    controller._setShaderEnabled(checked);
-                    return checked ? SHADER_TYPES[controller._shaderAutoType].label : null;
-                },
-            },
             onSelect: () => openShaderMenu(controller, anchor),
         },
         {
             label: "Color Boost",
-            value: controller._colorBoostEnabled ? `${Math.round(controller._colorBoostStrength * 100)}%` : null,
+            value: controller._colorBoostEnabled ? colorBoostRowLabel(controller) : null,
             trailing: "›",
-            /* Contrast/saturation "look" lift - independent of Shader Upscaling above
-               (see shaders.js's COLOR_BOOST_TUNING), same toggle-flips-in-place pattern. */
-            toggle: {
-                checked: controller._colorBoostEnabled,
-                onChange: (checked) => {
-                    controller._setColorBoostEnabled(checked);
-                    return checked ? `${Math.round(controller._colorBoostStrength * 100)}%` : null;
-                },
-            },
             onSelect: () => openColorBoostMenu(controller, anchor),
         },
         {
@@ -893,6 +890,76 @@ export function applyZoomTransform(controller) {
     if (controller._shaderCanvas) controller._shaderCanvas.style.transform = transform;
 }
 
+const MODE_OPTIONS = [
+    { key: "auto", label: "Auto" },
+    { key: "on", label: "On" },
+    { key: "off", label: "Off" },
+];
+
+/* Shared by openShaderMenu/openColorBoostMenu - a 3-way Auto/On/Off segmented control
+   replacing the old separate enabled-toggle (hamburger row) + "Auto strength" checkbox
+   (panel) pair, collapsed into shader-pipeline.js's upscaleModeOf/setUpscaleMode (and the
+   Color Boost equivalents) - see those functions' own comments for why the underlying
+   _shaderEnabled/_upscaleAuto flags stay as they were rather than being replaced outright.
+   Disables the manual slider and snapshots the current auto-resolved value into it only
+   in "auto" mode - "on" and "off" both leave it showing/editable at the manual value,
+   same as the old enabled-toggle-off case always did (adjusting the remembered strength
+   while the effect itself isn't currently applied). Snapshotting only happens at
+   mode-switch time (not live-ticking while the panel stays open) since
+   content-analysis.js only updates every ~750ms and the panel is normally only glanced
+   at, not watched. */
+function buildModeRow({ mode, onModeChange, getAutoValue, getManualValue, strengthInput, strengthLabel }) {
+    const row = document.createElement("div");
+    Object.assign(row.style, { display: "flex", gap: "6px", padding: "0 0 10px" });
+
+    const applyStrengthDisplay = (m) => {
+        const auto = m === "auto";
+        strengthInput.disabled = auto;
+        strengthInput.style.opacity = auto ? "0.5" : "1";
+        strengthInput.style.cursor = auto ? "default" : "pointer";
+        const value = auto ? (getAutoValue() ?? 0) : getManualValue();
+        strengthInput.value = String(Math.round(value * 100));
+        strengthLabel.textContent = `Strength: ${Math.round(value * 100)}%${auto ? " (auto)" : ""}`;
+    };
+
+    const buttons = MODE_OPTIONS.map((opt) => {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.textContent = opt.label;
+        Object.assign(btn.style, {
+            flex: "1",
+            padding: "6px 0",
+            fontSize: "12px",
+            fontWeight: "600",
+            border: "1px solid rgba(255,255,255,0.15)",
+            borderRadius: "6px",
+            cursor: "pointer",
+            background: "transparent",
+            color: "rgba(255,255,255,0.7)",
+        });
+        btn.addEventListener("click", () => {
+            onModeChange(opt.key);
+            setActive(opt.key);
+            applyStrengthDisplay(opt.key);
+        });
+        row.appendChild(btn);
+        return { key: opt.key, btn };
+    });
+
+    const setActive = (activeMode) => {
+        buttons.forEach(({ key, btn }) => {
+            const selected = key === activeMode;
+            btn.style.background = selected ? "#e5a00d" : "transparent";
+            btn.style.color = selected ? "#1a1a1a" : "rgba(255,255,255,0.7)";
+            btn.style.borderColor = selected ? "#e5a00d" : "rgba(255,255,255,0.15)";
+        });
+    };
+    setActive(mode);
+    applyStrengthDisplay(mode);
+
+    return row;
+}
+
 /* Reuses openSubtitleSearch's custom-panel pattern rather than openInlineMenu's plain
    item list - a continuous strength slider can't be expressed as tappable menu rows. */
 function openShaderMenu(controller, anchor) {
@@ -917,15 +984,12 @@ function openShaderMenu(controller, anchor) {
     panel.appendChild(detectedHint);
 
     const strengthLabel = document.createElement("div");
-    strengthLabel.textContent = `Strength: ${Math.round(controller._shaderStrength * 100)}%`;
     Object.assign(strengthLabel.style, { color: "rgba(255,255,255,0.7)", fontSize: "12px", padding: "0 0 4px" });
-    panel.appendChild(strengthLabel);
 
     const strengthInput = document.createElement("input");
     strengthInput.type = "range";
     strengthInput.min = "0";
     strengthInput.max = "100";
-    strengthInput.value = String(Math.round(controller._shaderStrength * 100));
     Object.assign(strengthInput.style, {
         width: "100%",
         accentColor: "#e5a00d",
@@ -936,6 +1000,16 @@ function openShaderMenu(controller, anchor) {
         strengthLabel.textContent = `Strength: ${strengthInput.value}%`;
         setShaderStrength(controller, Number(strengthInput.value) / 100);
     });
+
+    panel.appendChild(buildModeRow({
+        mode: upscaleModeOf(controller),
+        onModeChange: (mode) => setUpscaleMode(controller, mode),
+        getAutoValue: () => controller._autoUpscaleStrength,
+        getManualValue: () => controller._shaderStrength,
+        strengthInput,
+        strengthLabel,
+    }));
+    panel.appendChild(strengthLabel);
     panel.appendChild(strengthInput);
 
     mountMenuPanel(controller, panel, anchor);
@@ -962,15 +1036,12 @@ function openColorBoostMenu(controller, anchor) {
     panel.appendChild(makeBackRow(() => openHamburgerMenu(controller, anchor)));
 
     const strengthLabel = document.createElement("div");
-    strengthLabel.textContent = `Strength: ${Math.round(controller._colorBoostStrength * 100)}%`;
     Object.assign(strengthLabel.style, { color: "rgba(255,255,255,0.7)", fontSize: "12px", padding: "0 0 4px" });
-    panel.appendChild(strengthLabel);
 
     const strengthInput = document.createElement("input");
     strengthInput.type = "range";
     strengthInput.min = "0";
     strengthInput.max = "100";
-    strengthInput.value = String(Math.round(controller._colorBoostStrength * 100));
     Object.assign(strengthInput.style, {
         width: "100%",
         accentColor: "#e5a00d",
@@ -981,6 +1052,16 @@ function openColorBoostMenu(controller, anchor) {
         strengthLabel.textContent = `Strength: ${strengthInput.value}%`;
         setColorBoostStrength(controller, Number(strengthInput.value) / 100);
     });
+
+    panel.appendChild(buildModeRow({
+        mode: colorBoostModeOf(controller),
+        onModeChange: (mode) => setColorBoostMode(controller, mode),
+        getAutoValue: () => controller._autoColorBoostStrength,
+        getManualValue: () => controller._colorBoostStrength,
+        strengthInput,
+        strengthLabel,
+    }));
+    panel.appendChild(strengthLabel);
     panel.appendChild(strengthInput);
 
     mountMenuPanel(controller, panel, anchor);
