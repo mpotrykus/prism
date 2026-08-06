@@ -1,9 +1,11 @@
 package com.mpotrykus.streaming;
 
+import android.graphics.Color;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.util.Log;
 import android.view.MotionEvent;
 import android.view.ScaleGestureDetector;
 import android.view.View;
@@ -18,15 +20,20 @@ import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsCompat;
 import androidx.core.view.WindowInsetsControllerCompat;
+import androidx.media3.common.C;
+import androidx.media3.common.Format;
 import androidx.media3.common.MediaItem;
 import androidx.media3.common.PlaybackException;
 import androidx.media3.common.PlaybackParameters;
 import androidx.media3.common.Player;
+import androidx.media3.common.Tracks;
+import androidx.media3.common.VideoSize;
 import androidx.media3.common.util.UnstableApi;
 import androidx.media3.common.Effect;
 import androidx.media3.datasource.DefaultHttpDataSource;
 import androidx.media3.exoplayer.ExoPlayer;
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory;
+import androidx.media3.ui.AspectRatioFrameLayout;
 import androidx.media3.ui.PlayerView;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -34,6 +41,8 @@ import java.util.List;
 
 @OptIn(markerClass = UnstableApi.class)
 public class PlayerActivity extends AppCompatActivity {
+
+    private static final String AMBIENT_TAG = "AmbientLighting";
 
     public static final String EXTRA_URL = "url";
     public static final String EXTRA_START_POSITION_MS = "startPositionMs";
@@ -57,6 +66,9 @@ public class PlayerActivity extends AppCompatActivity {
     private static final long PROGRESS_INTERVAL_MS = 1000L;
     static final long CONTROLS_HIDE_DELAY_MS = 4000L;
     private static final float TAP_SLOP_DP = 8f;
+    private static final String PREFS_NAME = "prism_player_prefs";
+    private static final String PREF_AMBIENT_ENABLED = "ambient_lighting_enabled";
+    private static final String PREF_AMBIENT_OPACITY = "ambient_lighting_opacity";
 
     public interface PlaybackListener {
         void onProgress(long positionMs, long durationMs);
@@ -78,6 +90,7 @@ public class PlayerActivity extends AppCompatActivity {
        playback session's shared state (same reasoning plex-player.js's JS-side modules use
        for taking the controller instance directly instead of a narrower interface). */
     ExoPlayer player;
+    private AspectRatioFrameLayout contentFrame;
     private final Handler progressHandler = new Handler(Looper.getMainLooper());
     private final Runnable progressRunnable = this::reportProgress;
     private boolean terminalStateReported = false;
@@ -108,6 +121,19 @@ public class PlayerActivity extends AppCompatActivity {
        rather than resetting it, the same model shader-pipeline.js's setShaderEnabled/
        setShaderStrength use on the web leg. */
     boolean shaderEnabled = false;
+    /* Independent of the JS-side settings.js/localStorage this class otherwise never
+       touches directly (see EXTRA_UPSCALE_STRENGTH's own comment) - ambient lighting has
+       no per-video/genre concern to resolve on this leg, unlike shader upscaling, so its
+       persisted default lives entirely in this Activity's own SharedPreferences (see
+       PREFS_NAME/PREF_AMBIENT_ENABLED), read once in onCreate and written back whenever
+       the gear-menu toggle flips (see setAmbientEnabled). */
+    boolean ambientEnabled = false;
+    /* Same immediate-persistence model as ambientEnabled above - see setAmbientOpacity. */
+    float ambientOpacity = 0.5f;
+    PlayerView playerView;
+    AmbientGlowView ambientGlowView;
+    private AmbientLightSampler ambientSampler;
+    private boolean loggedFirstAmbientLayout = false;
     int sleepMinutes = 0;
     String currentAudioStreamId;
     /* The currently-open options-menu flyout (see PlayerUiHelper's PopupWindow-based
@@ -161,6 +187,8 @@ public class PlayerActivity extends AppCompatActivity {
         upscaleStrength = getIntent().getFloatExtra(EXTRA_UPSCALE_STRENGTH, 0f);
         shaderEnabled = getIntent().getBooleanExtra(EXTRA_SHADER_ENABLED, false);
         shaderType = shaderEnabled && upscaleStrength > 0f ? detectedShaderType : ShaderType.OFF;
+        ambientEnabled = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(PREF_AMBIENT_ENABLED, false);
+        ambientOpacity = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getFloat(PREF_AMBIENT_OPACITY, 0.5f);
         title = getIntent().getStringExtra(EXTRA_TITLE);
         if (title == null) title = "";
         year = getIntent().getIntExtra(EXTRA_YEAR, -1);
@@ -172,14 +200,32 @@ public class PlayerActivity extends AppCompatActivity {
             return;
         }
 
-        PlayerView playerView = new PlayerView(this);
+        playerView = new PlayerView(this);
         playerView.setUseController(false);
+        /* PlayerView paints its own bounds black by default (its constructor calls
+           View.setBackgroundColor - confirmed via the compiled media3-ui aar, not
+           documented in its public API) so a letterboxed gap looks intentional in a
+           typical app that never touches this. That default is exactly what blocks
+           AmbientGlowView from ever showing through PlayerView's own
+           AspectRatioFrameLayout letterbox/pillarbox gap, so it's overridden here
+           whenever ambient lighting starts enabled - see setAmbientEnabled for the
+           toggle-time version of this same override. */
+        playerView.setBackgroundColor(ambientEnabled ? Color.TRANSPARENT : Color.BLACK);
 
         /* An explicit close control, not just reliance on the hardware/gesture back
            button - there's no browser chrome to fall back on once this ships to the
            Xbox WebView2 shell's own native bridge, and it's a more discoverable exit
            than back-button-only even here. */
         root = new FrameLayout(this);
+        /* Added before playerView, not after - a FrameLayout stacks children in add
+           order, and this needs to render behind playerView rather than on top of it.
+           Only meaningfully visible once ambient lighting is on AND playerView's own
+           background has gone transparent above, but built unconditionally so toggling
+           ambient lighting on mid-session doesn't need to touch the view hierarchy. */
+        ambientGlowView = new AmbientGlowView(this);
+        ambientGlowView.setGlowOpacity(ambientOpacity);
+        root.addView(ambientGlowView, new FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
         root.addView(playerView, new FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
 
@@ -259,6 +305,26 @@ public class PlayerActivity extends AppCompatActivity {
            empty (no-op) list - see ExoPlayer's javadoc on the method. */
         applyVideoEffects();
 
+        /* getVideoSurfaceView() is only valid once setPlayer() has attached PlayerView's
+           internal content view - see AmbientLightSampler's own header comment for why
+           this needs the SurfaceView specifically, not PlayerView itself. Built (and,
+           if ambientEnabled is already true from a previous session, started)
+           unconditionally rather than lazily on first toggle, matching ambientGlowView's
+           own "always present, only visible once its background goes transparent" reasoning
+           above. */
+        ambientSampler = new AmbientLightSampler(playerView.getVideoSurfaceView(),
+            (top, bottom, left, right) -> {
+                /* Piggybacks the picture-rect recompute onto the sampler's own ~42ms
+                   cadence (see AmbientLightSampler) rather than a separate timer -
+                   cheap arithmetic, no need for its own loop. */
+                layoutGlow();
+                ambientGlowView.setColors(top, bottom, left, right);
+            });
+        if (ambientEnabled) {
+            ambientSampler.start();
+        }
+        layoutGlow();
+
         player.addListener(
             new Player.Listener() {
                 @Override
@@ -286,6 +352,16 @@ public class PlayerActivity extends AppCompatActivity {
                     if (playPauseButton != null) {
                         playPauseButton.setPlaying(isPlaying);
                     }
+                }
+
+                @Override
+                public void onVideoSizeChanged(VideoSize videoSize) {
+                    /* Fires as soon as the real video dimensions are known (typically
+                       just after prepare(), before AmbientLightSampler's first tick) -
+                       recomputes immediately rather than waiting on that ~42ms
+                       cadence, so the glow doesn't start from the "assume no
+                       letterboxing" fallback for a visible beat. */
+                    layoutGlow();
                 }
             }
         );
@@ -410,6 +486,146 @@ public class PlayerActivity extends AppCompatActivity {
 
     private void applyZoomTransform(View v) {
         PlayerUiHelper.applyZoomTransform(this, v);
+    }
+
+    /* Flips on/off in place, same "toggle IS the persisted setting" model as
+       ambient-pipeline.js's setAmbientEnabled on the web leg - written to
+       SharedPreferences immediately rather than only a Settings-modal default, since
+       there's no per-video override to reconcile it against here. Deliberately does NOT
+       touch zoomScale/applyZoomTransform - ambient lighting only fills whatever
+       letterbox/pillarbox gap PlayerView's own AspectRatioFrameLayout already leaves
+       when the video's aspect ratio doesn't match the screen, it never resizes or zooms
+       the picture itself (see layoutGlow's own comment for why that gap needs
+       playerView's background made transparent, not shrinking playerView, to actually
+       show through). */
+    void setAmbientEnabled(boolean enabled) {
+        ambientEnabled = enabled;
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().putBoolean(PREF_AMBIENT_ENABLED, enabled).apply();
+        /* PlayerView paints its own bounds black by default (see the comment on its
+           construction in onCreate) - that default has to be overridden every time this
+           toggles, not just once at startup, since it's what blocks ambientGlowView
+           from showing through PlayerView's own letterbox/pillarbox gap. */
+        playerView.setBackgroundColor(enabled ? Color.TRANSPARENT : Color.BLACK);
+        Log.d(AMBIENT_TAG, "setAmbientEnabled(" + enabled + ") - playerView background now "
+            + (enabled ? "TRANSPARENT" : "BLACK") + ", sampler=" + ambientSampler);
+        if (enabled) {
+            loggedFirstAmbientLayout = false;
+            if (ambientSampler != null) ambientSampler.start();
+        } else {
+            if (ambientSampler != null) ambientSampler.stop();
+            if (ambientGlowView != null) {
+                int[] noZones = new int[0];
+                ambientGlowView.setColors(noZones, noZones, noZones, noZones);
+            }
+        }
+        layoutGlow();
+    }
+
+    /* Same immediate-persistence model as setAmbientEnabled above - see that method's
+       own comment for why ambient lighting doesn't follow shader upscaling's
+       Settings-modal-default-plus-session-override model instead. Cheap to apply live
+       (just Paint.setAlpha in AmbientGlowView, no GL program rebuild), unlike
+       applyVideoEffects for shader strength - see openAmbientPanel in PlayerUiHelper for
+       why that one doesn't need to gate to the slider's release. */
+    void setAmbientOpacity(float opacity) {
+        ambientOpacity = opacity;
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().putFloat(PREF_AMBIENT_OPACITY, opacity).apply();
+        if (ambientGlowView != null) ambientGlowView.setGlowOpacity(opacity);
+    }
+
+    /* player.getVideoSize()/onVideoSizeChanged never resolve past 0x0 for the entire
+       playback session once applyVideoEffects() has attached any effects list to this
+       player - confirmed via logcat on real hardware, even minutes into playback with
+       frames clearly decoding. setVideoEffects() (called unconditionally in onCreate,
+       even with an empty no-op list per its own javadoc) reroutes ExoPlayer through a
+       VideoFrameProcessor/compositing sink, and that path just doesn't feed the
+       classic MediaCodecVideoRenderer video-size signal in this Media3 version. Read
+       the selected video track's own Format instead - populated straight from the
+       parsed container/manifest, independent of whichever rendering path is active. */
+    private float resolveVideoAR(float fallback) {
+        if (player == null) return fallback;
+        VideoSize videoSize = player.getVideoSize();
+        if (videoSize.width > 0 && videoSize.height > 0) {
+            return (float) videoSize.width / videoSize.height;
+        }
+        for (Tracks.Group group : player.getCurrentTracks().getGroups()) {
+            if (group.getType() != C.TRACK_TYPE_VIDEO) continue;
+            for (int i = 0; i < group.length; i++) {
+                if (!group.isTrackSelected(i)) continue;
+                Format format = group.getTrackFormat(i);
+                if (format.width <= 0 || format.height <= 0) continue;
+                float ar = (float) format.width / format.height;
+                return format.rotationDegrees % 180 != 0 ? 1f / ar : ar;
+            }
+        }
+        return fallback;
+    }
+
+    /* Mirrors ambient-pipeline.js's computePictureRect on the web leg: where the
+       video's actual rendered picture sits within root's own bounds, accounting for
+       its own aspect-ratio letterboxing/pillarboxing against the full screen
+       (PlayerView's AspectRatioFrameLayout already does the fitting visually - this
+       just re-derives the same rect in root's coordinate space so AmbientGlowView's
+       four edge gradients can be sized off it, since there's no View API that reports
+       the fitted rect back directly). Deliberately measured against root's own full
+       bounds, not a shrunk box - ambient lighting only fills the gap the video's own
+       aspect ratio already leaves, it doesn't manufacture one by zooming/resizing the
+       picture. Safe to call before root has been measured (getWidth()/getHeight()
+       report 0 pre-layout) or before the player knows its own video size - both are
+       silently skipped/approximated and self-correct on the next call (see this
+       method's own callers). */
+    private void layoutGlow() {
+        if (ambientGlowView == null || root == null) return;
+        int vw = root.getWidth();
+        int vh = root.getHeight();
+        if (vw == 0 || vh == 0) return;
+
+        float screenAR = (float) vw / vh;
+        float videoAR = resolveVideoAR(screenAR);
+
+        /* PlayerView's own internal exo_content_frame relies on the same broken
+           onVideoSizeChanged/getVideoSize signal (see resolveVideoAR's comment above) to
+           decide how big to make the actual SurfaceView. Without this, exo_content_frame
+           never shrinks - the SurfaceView stays full-screen, and ExoPlayer's video-effects
+           GL pipeline (attached unconditionally by applyVideoEffects) bakes the
+           letterbox/pillarbox bars directly into the composited frame instead of leaving a
+           real transparent gap in the view hierarchy. Visually indistinguishable from a
+           real gap (bars appear in the same place) but AmbientGlowView, sitting behind a
+           now fully-opaque full-screen SurfaceView, can never show through it. Forcing the
+           same track-format-derived AR onto this frame directly fixes both. */
+        if (contentFrame == null) {
+            View frame = playerView.findViewById(androidx.media3.ui.R.id.exo_content_frame);
+            if (frame instanceof AspectRatioFrameLayout) {
+                contentFrame = (AspectRatioFrameLayout) frame;
+            }
+        }
+        if (contentFrame != null) {
+            contentFrame.setAspectRatio(videoAR);
+        }
+
+        float w;
+        float h;
+        if (videoAR > screenAR) {
+            w = vw;
+            h = vw / videoAR;
+        } else {
+            h = vh;
+            w = vh * videoAR;
+        }
+        float left = (vw - w) / 2f;
+        float top = (vh - h) / 2f;
+        /* Logged once per enable (see loggedFirstAmbientLayout reset in
+           setAmbientEnabled), not every ~42ms call - confirms the gap this method
+           computed actually has nonzero size. A picture rect equal to the full
+           root bounds (0,0,vw,vh) means videoAR came out equal to screenAR - i.e. no
+           letterbox gap exists for this content on this device, so there is nothing
+           for the glow to show regardless of anything else working correctly. */
+        if (!loggedFirstAmbientLayout) {
+            loggedFirstAmbientLayout = true;
+            Log.d(AMBIENT_TAG, "layoutGlow - root=" + vw + "x" + vh + " videoAR=" + videoAR
+                + " screenAR=" + screenAR + " pictureRect=[" + left + "," + top + "," + (left + w) + "," + (top + h) + "]");
+        }
+        ambientGlowView.setPictureRect(left, top, left + w, top + h);
     }
 
     private void hideSystemBars() {
@@ -570,6 +786,9 @@ public class PlayerActivity extends AppCompatActivity {
     @Override
     protected void onDestroy() {
         stopProgressLoop();
+        if (ambientSampler != null) {
+            ambientSampler.stop();
+        }
         sleepTimerHandler.removeCallbacksAndMessages(null);
         controlsFadeHandler.removeCallbacksAndMessages(null);
         if (menuPopup != null) {

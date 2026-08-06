@@ -3,10 +3,30 @@ export const PLAYBACK_RATES = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 4, 8];
 export const SLEEP_TIMER_PRESETS_MIN = [15, 30, 45, 60];
 export const ZOOM_LEVELS = [1, 1.25, 1.5, 2];
 export const VOLUME_STORAGE_KEY = "prism_player_volume";
+export const AMBIENT_STORAGE_KEY = "prism_player_ambient_enabled";
+export const AMBIENT_OPACITY_STORAGE_KEY = "prism_player_ambient_opacity";
 
 export function storedVolume() {
     const raw = Number(localStorage.getItem(VOLUME_STORAGE_KEY));
     return Number.isFinite(raw) && raw > 0 && raw <= 1 ? raw : 1;
+}
+
+/* Unlike shader upscaling's upscale_enabled (a Settings-modal default the in-player
+   toggle only ever overrides for the current session, see shader-pipeline.js), ambient
+   lighting has no per-video auto-detected type to reconcile against - the in-player
+   toggle IS the setting, written here the moment it's flipped (see setAmbientEnabled)
+   and read back for every subsequent video, the same immediate-persistence model as
+   VOLUME_STORAGE_KEY above. */
+export function storedAmbientEnabled() {
+    return localStorage.getItem(AMBIENT_STORAGE_KEY) === "1";
+}
+
+/* Same immediate-persistence model as storedAmbientEnabled above, not the Settings-modal
+   tiered-preset model shader strength uses (see ambient-pipeline.js's setAmbientOpacity)
+   - opacity has no per-video/genre concern to reconcile either. */
+export function storedAmbientOpacity() {
+    const raw = Number(localStorage.getItem(AMBIENT_OPACITY_STORAGE_KEY));
+    return Number.isFinite(raw) && raw >= 0 && raw <= 1 ? raw : 0.5;
 }
 
 /* Drawn as an inline SVG using currentColor rather than a "🔊"/"🔉"/"🔇" emoji glyph -

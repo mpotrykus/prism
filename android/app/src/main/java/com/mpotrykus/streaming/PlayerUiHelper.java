@@ -492,6 +492,19 @@ final class PlayerUiHelper {
         shaderRow.onSelect = () -> openShaderPanel(activity, anchor);
         rows.add(shaderRow);
 
+        MenuRow ambientRow = new MenuRow("Ambient Lighting");
+        ambientRow.toggleChecked = activity.ambientEnabled;
+        ambientRow.chevron = true;
+        /* Flips on/off in place without leaving this menu - onSelect (tap anywhere else
+           on the row) still drills into the opacity panel, same independent-gestures-
+           on-one-row pattern as Shader Upscaling above. */
+        ambientRow.onToggle = (checked) -> {
+            activity.setAmbientEnabled(checked);
+            return null;
+        };
+        ambientRow.onSelect = () -> openAmbientPanel(activity, anchor);
+        rows.add(ambientRow);
+
         if (!activity.chapters.isEmpty()) {
             MenuRow chaptersRow = new MenuRow("Chapters");
             chaptersRow.chevron = true;
@@ -644,6 +657,56 @@ final class PlayerUiHelper {
             }
         });
         content.addView(strengthSeekBar);
+
+        showPopup(activity, anchor, content, density);
+    }
+
+    /* Same custom-panel pattern as openShaderPanel above, simpler since there's no
+       auto-detected type to show as read-only info here, just the one opacity control.
+       Unlike strength's SeekBar, this one applies live on every onProgressChanged tick,
+       not gated to onStopTrackingTouch - PlayerActivity.setAmbientOpacity is just a
+       Paint.setAlpha (see AmbientGlowView.setGlowOpacity), not a GL program rebuild like
+       applyVideoEffects, so there's no drag-frequency renderer-freeze risk to guard
+       against here. */
+    private static void openAmbientPanel(PlayerActivity activity, View anchor) {
+        float density = activity.getResources().getDisplayMetrics().density;
+        dismissMenuPopup(activity);
+
+        LinearLayout content = new LinearLayout(activity);
+        content.setOrientation(LinearLayout.VERTICAL);
+        int pad = Math.round(14 * density);
+        content.setPadding(pad, pad, pad, pad);
+        content.setBackground(panelBackground(density));
+        content.addView(makeBackRow(activity, density, () -> showPlayerMenu(activity, anchor)));
+
+        TextView opacityLabel = new TextView(activity);
+        opacityLabel.setText("Opacity: " + Math.round(activity.ambientOpacity * 100) + "%");
+        opacityLabel.setTextColor(SUBTLE_TEXT);
+        opacityLabel.setTextSize(12);
+        content.addView(opacityLabel);
+
+        SeekBar opacitySeekBar = new SeekBar(activity);
+        styleSeekBar(opacitySeekBar, density);
+        opacitySeekBar.setMax(100);
+        opacitySeekBar.setProgress(Math.round(activity.ambientOpacity * 100));
+        LinearLayout.LayoutParams opacityParams =
+            new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        opacityParams.topMargin = Math.round(4 * density);
+        opacitySeekBar.setLayoutParams(opacityParams);
+        opacitySeekBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override
+            public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+                opacityLabel.setText("Opacity: " + progress + "%");
+                activity.setAmbientOpacity(progress / 100f);
+            }
+
+            @Override
+            public void onStartTrackingTouch(SeekBar seekBar) {}
+
+            @Override
+            public void onStopTrackingTouch(SeekBar seekBar) {}
+        });
+        content.addView(opacitySeekBar);
 
         showPopup(activity, anchor, content, density);
     }

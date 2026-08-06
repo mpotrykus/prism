@@ -74,7 +74,15 @@ export function ensureShaderPipeline(controller) {
            math entirely whenever the window's own aspect ratio doesn't match the
            video's. */
         objectFit: "contain",
-        background: "#000",
+        /* Transparent, not "#000", if ambient lighting is already on - this canvas
+           visually replaces the (opacity:0'd) video whenever shader upscaling is
+           active, so it needs the same "let the letterbox gap show the ambient glow
+           behind it" treatment ambient-pipeline.js's updateAmbientPipeline gives the
+           video element itself. Only relevant here because that toggle only touches
+           whichever shader canvas already exists at the moment ambient is flipped on -
+           this covers the case where shader upscaling gets enabled afterward, when no
+           canvas existed yet for it to reach. */
+        background: controller._ambientEnabled ? "transparent" : "#000",
         zIndex: "10000",
         pointerEvents: "none",
     });

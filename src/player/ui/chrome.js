@@ -2,6 +2,7 @@ import { Capacitor } from "@capacitor/core";
 import * as StreamingSubtitles from "../../../opensubtitles.js";
 import { SHADER_TYPES } from "../shader/shaders.js";
 import { setShaderStrength } from "../shader-pipeline.js";
+import { setAmbientEnabled, setAmbientOpacity } from "../ambient-pipeline.js";
 import { reloadWebSource } from "../web-fallback.js";
 import { setNativePlaybackRate, setNativeSubtitle } from "../native-bridge.js";
 import { CONTROLS_HIDE_DELAY_MS, PLAYBACK_RATES, SLEEP_TIMER_PRESETS_MIN, ZOOM_LEVELS, VOLUME_STORAGE_KEY, storedVolume, volumeIconMarkup, seekIconMarkup } from "./shared.js";
@@ -746,6 +747,21 @@ export function openHamburgerMenu(controller, anchor) {
             },
             onSelect: () => openShaderMenu(controller, anchor),
         },
+        {
+            label: "Ambient Lighting",
+            trailing: "›",
+            /* Toggle flips on/off in place without leaving this menu - onSelect (tap
+               anywhere else on the row) still drills into the opacity slider, same
+               independent-gestures-on-one-row pattern as Shader Upscaling above. */
+            toggle: {
+                checked: controller._ambientEnabled,
+                onChange: (checked) => {
+                    controller._setAmbientEnabled(checked);
+                    return null;
+                },
+            },
+            onSelect: () => openAmbientMenu(controller, anchor),
+        },
     ];
     if (controller._session?.chapters?.length) {
         items.push({ label: "Chapters", trailing: "›", onSelect: () => openChapterMenu(controller, anchor) });
@@ -888,6 +904,48 @@ function openShaderMenu(controller, anchor) {
         setShaderStrength(controller, Number(strengthInput.value) / 100);
     });
     panel.appendChild(strengthInput);
+
+    mountMenuPanel(controller, panel, anchor);
+
+    const onOutsideClick = (e) => {
+        if (panel.contains(e.target) || anchor.contains(e.target)) return;
+        closeInlineMenu(controller);
+    };
+    setTimeout(() => document.addEventListener("click", onOutsideClick), 0);
+    controller._inlineMenuCleanup = () => document.removeEventListener("click", onOutsideClick);
+}
+
+/* Same custom-panel pattern as openShaderMenu above (a continuous slider can't be
+   expressed as tappable menu rows) - simpler, since there's no auto-detected type to
+   show as read-only info here, just the one opacity control. */
+function openAmbientMenu(controller, anchor) {
+    closeInlineMenu(controller);
+    const panel = document.createElement("div");
+    Object.assign(panel.style, { ...menuAnchorPosition(anchor), ...MENU_PANEL_STYLE, padding: "14px", width: "240px" });
+
+    panel.appendChild(makeBackRow(() => openHamburgerMenu(controller, anchor)));
+
+    const opacityLabel = document.createElement("div");
+    opacityLabel.textContent = `Opacity: ${Math.round(controller._ambientOpacity * 100)}%`;
+    Object.assign(opacityLabel.style, { color: "rgba(255,255,255,0.7)", fontSize: "12px", padding: "0 0 4px" });
+    panel.appendChild(opacityLabel);
+
+    const opacityInput = document.createElement("input");
+    opacityInput.type = "range";
+    opacityInput.min = "0";
+    opacityInput.max = "100";
+    opacityInput.value = String(Math.round(controller._ambientOpacity * 100));
+    Object.assign(opacityInput.style, {
+        width: "100%",
+        accentColor: "#e5a00d",
+        cursor: "pointer",
+        boxSizing: "border-box",
+    });
+    opacityInput.addEventListener("input", () => {
+        opacityLabel.textContent = `Opacity: ${opacityInput.value}%`;
+        setAmbientOpacity(controller, Number(opacityInput.value) / 100);
+    });
+    panel.appendChild(opacityInput);
 
     mountMenuPanel(controller, panel, anchor);
 

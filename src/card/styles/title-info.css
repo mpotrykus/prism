@@ -56,7 +56,7 @@
 .title-info-body { padding: 0 32px 32px; margin-top: -64px; position: relative; z-index: 1; }
 .title-info-title { font-size: 26px; font-weight: 800; margin-bottom: 8px; }
 .title-info-meta { font-size: 13px; color: rgba(255,255,255,0.65); margin-bottom: 18px; }
-.title-info-meta span:not(:last-child)::after { content: "•"; margin-left: 10px; color: rgba(255,255,255,0.3); }
+.title-info-meta span:not(:last-child)::after { content: "•"; margin: 0 8px; color: rgba(255,255,255,0.3); }
 .title-info-actions { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; }
 .title-info-play {
   border: none; border-radius: 8px; padding: 11px 26px; font-size: 14px; font-weight: 700;
@@ -132,7 +132,7 @@
 .title-info-cast-avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .title-info-cast-avatar-fallback { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; color: rgba(255,255,255,0.45); }
 .title-info-cast-avatar-fallback svg { width: 28px; height: 28px; }
-.title-info-cast-name { font-size: 12px; color: rgba(255,255,255,0.85); line-height: 1.3; }
+.title-info-cast-name { font-size: 12px; color: rgba(255,255,255,0.85); line-height: 1.3; margin-bottom: 2px; }
 .title-info-cast-role { font-size: 11px; color: rgba(255,255,255,0.5); line-height: 1.3; }
 .title-info-season-select {
   background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.12); color: #fff;

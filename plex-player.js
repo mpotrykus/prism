@@ -29,6 +29,8 @@ import { buildStreamUrl } from "./src/player/core/stream-url.js";
 import { playNative, stopNative, pauseNative, resumeNative } from "./src/player/native-bridge.js";
 import { playWeb, attachSource, reloadWebSource, teardownWeb } from "./src/player/web-fallback.js";
 import { setShaderStrength, setShaderEnabled, updateShaderPipeline, ensureShaderPipeline, stopShaderLoop } from "./src/player/shader-pipeline.js";
+import { setAmbientEnabled, setAmbientOpacity, updateAmbientPipeline, stopAmbientLoop } from "./src/player/ambient-pipeline.js";
+import { storedAmbientEnabled, storedAmbientOpacity } from "./src/player/ui/shared.js";
 import {
     makeControlButton,
     registerControlButton,
@@ -78,6 +80,14 @@ class StreamingPlayerController {
         this._inlineMenuEl = null;
         this._inlineMenuAnchor = null;
         this._inlineMenuCleanup = null;
+        this._ambientEnabled = false;
+        this._ambientOpacity = 0.5;
+        this._ambientGlowContainer = null;
+        this._ambientGlowPanels = null;
+        this._ambientSampleCanvas = null;
+        this._ambientSampleCtx = null;
+        this._ambientLastSampleAt = 0;
+        this._ambientRafId = null;
         this._shaderType = "off";
         this._shaderEnabled = false;
         this._shaderStrength = 0;
@@ -150,6 +160,12 @@ class StreamingPlayerController {
         this._shaderEnabled = !!settings.upscale_enabled;
         this._shaderStrength = UPSCALE_STRENGTH_PRESETS[settings.upscale_strength || "medium"] ?? 0;
         this._shaderType = this._shaderEnabled && this._shaderStrength > 0 ? this._shaderAutoType : "off";
+        /* Unlike the shader fields above, ambient lighting has no per-video/genre
+           concern to resolve here - storedAmbientEnabled() is the whole answer, the
+           same on-disk source of truth the in-player toggle writes back to (see
+           ambient-pipeline.js's setAmbientEnabled). */
+        this._ambientEnabled = storedAmbientEnabled();
+        this._ambientOpacity = storedAmbientOpacity();
 
         this._pushedHistoryState = true;
         history.pushState({ prismPlayer: true }, "", location.href);
@@ -251,6 +267,22 @@ class StreamingPlayerController {
 
     _stopShaderLoop() {
         return stopShaderLoop(this);
+    }
+
+    _setAmbientEnabled(enabled) {
+        return setAmbientEnabled(this, enabled);
+    }
+
+    _setAmbientOpacity(opacity) {
+        return setAmbientOpacity(this, opacity);
+    }
+
+    _updateAmbientPipeline() {
+        return updateAmbientPipeline(this);
+    }
+
+    _stopAmbientLoop() {
+        return stopAmbientLoop(this);
     }
 
     _makeControlButton(opts) {

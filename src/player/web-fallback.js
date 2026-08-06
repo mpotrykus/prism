@@ -118,6 +118,10 @@ export function playWeb(controller, streamUrl, startOffsetMs) {
        the WebGL pipeline for that starting state, same as any other change made
        through the hamburger menu later in the session. */
     controller._updateShaderPipeline();
+    /* Same "already-resolved global default, just spin up the pipeline" reasoning as
+       the shader call above - controller._ambientEnabled was set from
+       storedAmbientEnabled() in play() before playWeb was called. */
+    controller._updateAmbientPipeline();
 
     /* Tapping the video itself toggles play/pause, matching every mainstream player -
        only when not zoomed in, since zoomed-in drag is already claimed by pan (see
@@ -209,6 +213,15 @@ export function teardownWeb(controller) {
     controller._shaderPrograms = null;
     controller._shaderQuadBuffer = null;
     controller._shaderTexture = null;
+    controller._stopAmbientLoop();
+    if (controller._ambientGlowContainer) {
+        controller._ambientGlowContainer.remove();
+        controller._ambientGlowContainer = null;
+    }
+    controller._ambientGlowPanels = null;
+    controller._ambientSampleCanvas = null;
+    controller._ambientSampleCtx = null;
+    controller._ambientSmoothed = null;
     controller._closeInlineMenu();
     clearTimeout(controller._controlsHideTimer);
     controller._controlsHideTimer = null;

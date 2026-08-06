@@ -36,7 +36,7 @@ API, no backend — so it's a fair feature benchmark, just not something we can 
 | Sleep timer | Yes | Yes — JS `setTimeout` on web/Xbox, native `Handler.postDelayed` on Android |
 | Video zoom / pan | Yes | Yes — click-cycle + drag on web, pinch/drag via `ScaleGestureDetector` on Android |
 | Refresh-rate matching | Yes (Windows/Android/tvOS) | No |
-| Ambient lighting / GLSL shaders | Yes | No |
+| Ambient lighting / GLSL shaders | Yes | Yes — on all three platforms. Web/Xbox: `ambient-pipeline.js` samples the `<video>` element into a tiny 2D canvas and paints four blurred edge-gradient panels behind a deliberately-shrunk video. Android: `AmbientLightSampler` (`PixelCopy` off `PlayerView`'s `SurfaceView`) + `AmbientGlowView`, since native playback can't reach the GL-effect pipeline's frames (see below). "Ambient Lighting" toggle in the hamburger/gear "more" menu, next to Shader Upscaling; the toggle itself is the persisted setting (localStorage on web/Xbox, `SharedPreferences` on Android), remembered for every subsequent video rather than reset per-session |
 | External player handoff with progress sync | Yes | No |
 | Watch-together / real-time sync | Yes | No |
 | Audio passthrough / downmix + boost | Yes | No |
@@ -61,11 +61,11 @@ API, no backend — so it's a fair feature benchmark, just not something we can 
 | Sleep timer | 🟡 plain `setTimeout` | 🟡 same | 🟡 same |
 | Video zoom / pan | 🟡 CSS transform on `<video>` | 🟡 same (web fallback) or native `PlayerView` scale | 🟡 CSS transform |
 | Refresh-rate matching | ⛔ not exposed to web content at all | 🟡 needs a native `Display.Mode` API added to `NativePlayerPlugin` | ⛔ no API surface via WebView2 today |
-| Ambient lighting / GLSL shaders | 🟡 canvas + WebGL sampling the `<video>` element | ⛔ native playback renders in a separate Activity — frames aren't reachable from JS canvas | 🟡 still `<video>`+hls.js, same as web |
+| Ambient lighting / GLSL shaders | ✅ 2D canvas edge-sampling the `<video>` element + blurred CSS gradient panels | ✅ `PixelCopy` off `PlayerView`'s `SurfaceView` (Media3's `GlShaderProgram` pipeline has no CPU readback path, so this reads the Surface's presented buffer directly instead) + a custom `AmbientGlowView` | ✅ same canvas approach as web (still `<video>`+hls.js on Xbox); GPU/perf on real Xbox hardware unverified |
 | External player handoff with progress sync | ⛔ no clean handoff from a browser tab | 🟡 Android `ACTION_VIEW` intent, existing `/:/timeline` reporting covers progress sync | ⛔ UWP process/app model doesn't support this |
 | Watch-together / real-time sync | ⛔ needs a signaling backend | ⛔ needs a signaling backend | ⛔ needs a signaling backend |
 | Audio passthrough / downmix + boost | ⛔ no passthrough from `<video>` | 🟡 Media3 audio processing | ⛔ still `<video>`, same limit as web |
-| Shader-based AI-style upscaling | ✅ WebGL canvas sampling `<video>` frames, same mechanism ambient lighting would use | ✅ `ExoPlayer.setVideoEffects()` + a custom `GlShaderProgram` running inside ExoPlayer's own native pipeline, sidestepping the wall that blocks ambient lighting on this platform | ✅ same WebGL approach as web (still `<video>`+hls.js on Xbox); GPU/perf on real Xbox hardware unverified |
+| Shader-based AI-style upscaling | ✅ WebGL canvas sampling `<video>` frames | ✅ `ExoPlayer.setVideoEffects()` + a custom `GlShaderProgram` running inside ExoPlayer's own native pipeline | ✅ same WebGL approach as web (still `<video>`+hls.js on Xbox); GPU/perf on real Xbox hardware unverified |
 
 **Not achievable on any platform today:** watch-together / real-time sync — needs a signaling layer
 between clients, which breaks Prism's "no backend" architecture invariant unless it can piggyback
@@ -75,11 +75,11 @@ on a Plex-native sync feature (unverified that one exists).
 
 The focused core set (speed, sleep timer, zoom/pan, skip intro/credits, chapters, quality picker,
 subtitle search) shipped across `plex-player.js`, `plex-netflix-card.js`, `settings.js`,
-`opensubtitles.js`, and the Android native plugin. Shader-based upscaling has since shipped on
-Android too (see its own note below). The four items below remain explicitly scoped out and
-unbuilt — kept here as the reference the moment any of them gets picked up again, since some of the
-reasoning (especially the Android ambient-lighting/shader split) isn't obvious from the table cells
-alone.
+`opensubtitles.js`, and the Android native plugin. Shader-based upscaling and ambient lighting have
+since shipped too (see their own notes below). The three items below remain explicitly scoped out
+and unbuilt — kept here as the reference the moment any of them gets picked up again, since some of
+the reasoning (especially the now-resolved Android ambient-lighting/shader split) isn't obvious from
+the table cells alone.
 
 **Picture-in-Picture** — feasible on web (`video.requestPictureInPicture()`, a standard API against
 the existing `<video>` element) and Android (standard `enterPictureInPictureMode`/
@@ -99,14 +99,39 @@ Xbox today. Feasible on Android but needs genuinely new native work: a `Display.
 originally-deferred items, this is the largest net-new native surface — the other two at least have
 adjacent code (PiP/zoom gestures, or an audio builder chain) to build from.
 
-**Ambient lighting** (a glow effect derived from the video's own colors) — feasible on web and Xbox
-via canvas + WebGL, sampling the `<video>` element's frames (`texImage2D` from the video element)
-each frame to drive a color-extraction/blur effect. Xbox reaches this "for free" since its WebView2
-shell has no native player bridge yet and still uses the same `<video>`+hls.js path as web — GPU/perf
-on real Xbox hardware is unverified, though. **Blocked on Android**: native playback runs in a
-separate `PlayerActivity`, entirely outside the WebView, so JS/canvas can never see those decoded
-frames without a whole new native frame-sampling bridge (capture frames natively, relay bitmaps
-across the Capacitor bridge to JS).
+**Ambient lighting** (a glow effect derived from the video's own colors) — **shipped on all three
+platforms.** A toggle in the hamburger/gear "more" menu, next to Shader Upscaling; unlike that
+toggle, this one has no per-video auto-detected type to reconcile against, so it doubles as the
+persisted setting itself — flipping it writes straight through to storage (localStorage on
+web/Xbox, `SharedPreferences` on Android) and every subsequent video starts from whatever was last
+chosen, rather than only ever being a Settings-modal default.
+
+Web/Xbox (`src/player/ambient-pipeline.js`): a small offscreen 2D canvas (`drawImage`+
+`getImageData`, not WebGL — there's no shader work here, just color averaging) samples the
+`<video>` element every ~150ms, averaging its four edge strips into RGB colors that drive four
+blurred CSS-gradient panels (`filter: blur(80px)`) sitting behind the video at a lower z-index.
+Same tainted-canvas `SecurityError` handling as the shader pipeline (disables itself rather than
+throwing every frame) and the same CORS invariant this repo documents elsewhere. Xbox reaches this
+"for free" since its WebView2 shell has no native player bridge yet and still uses the same
+`<video>`+hls.js path as web — GPU/perf on real Xbox hardware is unverified.
+
+**Resolved on Android**, previously the blocked leg: native playback's `GlShaderProgram` pipeline
+(the same one `ShaderUpscaleEffect` uses) has no CPU readback path wired up, so instead of extending
+that pipeline, `AmbientLightSampler` uses `PixelCopy.request(SurfaceView, Bitmap, ...)` — available
+since API 24 (this project's `minSdkVersion`) — to grab a tiny downscaled snapshot directly off
+`PlayerView.getVideoSurfaceView()`'s underlying `SurfaceView` on a ~200ms timer, independent of
+whether shader upscaling is also running (PixelCopy reads whatever was last presented to that
+Surface, post-effects). `AmbientGlowView`, a custom `View` mounted behind `PlayerView`, renders the
+same four-edge look as the web leg using `LinearGradient` shaders instead of CSS.
+
+**The same "no page around a fullscreen player for a glow to spill onto" problem exists on every
+platform** — a `<video>`/`PlayerView` that fills the whole screen leaves no margin for a glow to
+show in, unlike a real Ambilight TV's bezel-mounted LEDs lighting the wall beside it. Both legs
+solve it the same way: while ambient lighting is on, the video/PlayerView is deliberately scaled
+down (`AMBIENT_VIDEO_SCALE`/`PlayerActivity.AMBIENT_VIDEO_SCALE`, both `0.86f`) within its own
+fixed-size box, composed with (not replacing) the user's existing zoom/pinch scale — folded into
+`chrome.js`'s `applyZoomTransform` on the web leg and `PlayerUiHelper.applyZoomTransform` on
+Android — exposing a margin around the shrunk picture for the glow panels to actually be visible in.
 
 **Shader-based AI-style upscaling** (Anime4K/RAVU-style GLSL shaders) — raised when comparing
 against Plezy's mpv-based "shader" feature. Plezy's shaders are mpv's GLSL shader ecosystem
@@ -122,8 +147,9 @@ worth attempting.
 `ExoPlayer.setVideoEffects()` and configured from a "Shader Upscaling..." dialog on the gear menu
 (off by default — it costs a GPU pass every frame). `GlShaderProgram`/`BaseGlShaderProgram`
 (confirmed available since Media3 1.1.0; this project is on 1.10.1) runs inside ExoPlayer's own
-native decode pipeline, never touching the WebView/JS layer — exactly why this sidesteps the wall
-that blocks ambient lighting on Android. The shader itself is a single pass, not Anime4K's full
+native decode pipeline, never touching the WebView/JS layer — the same pipeline that turned out to
+have no CPU readback path for ambient lighting to reuse (see that section's own note on why
+`AmbientLightSampler` uses `PixelCopy` instead). The shader itself is a single pass, not Anime4K's full
 multi-pass CNN-approximation pipeline: hardware bilinear upscale to a display-capped resolution
 (`ShaderUpscaleEffect` reads the device's own `DisplayMetrics`, capped since this activity is locked
 `sensorLandscape`) combined with a Sobel-edge-gated unsharp mask, so only real line-art contours get
@@ -193,8 +219,7 @@ to fill the screen instead of upscaling in place. Fixed by computing a single sc
 by both axes (`Math.min(SCALE_FACTOR, min(maxW/inputW, maxH/inputH))`, floored at `1f`) and applying
 it uniformly to both dimensions.
 
-**Shipped on web/Xbox**, using the WebGL-canvas-sampling mechanism sketched above for ambient
-lighting: both `ShaderUpscaleShaderProgram` fragment shaders ported near-verbatim (WebGL1's
+**Shipped on web/Xbox**: both `ShaderUpscaleShaderProgram` fragment shaders ported near-verbatim (WebGL1's
 `attribute`/`varying`/`texture2D` GLSL happens to be source-compatible with the Android originals)
 into `plex-player.js`, running as a per-frame WebGL pass over the `<video>` element rather than
 inside ExoPlayer's native pipeline. `ShaderType`/`ShaderTuning`'s min/max tuning tables and the
@@ -217,8 +242,8 @@ directly. Two differences from the Android leg, both improvements rather than pa
   combination, `_renderShaderFrame`'s `texImage2D` throws a `SecurityError`, which is caught and
   turns the shader back off rather than spamming the console every animation frame.
 
-GPU/perf on real Xbox WebView2 hardware is still unverified, same caveat as the rest of this
-platform's shader/ambient-lighting story.
+GPU/perf on real Xbox WebView2 hardware is still unverified, same caveat as ambient lighting's own
+Xbox note above.
 
 **Frame-rate / motion interpolation** (raised alongside shader upscaling, since both get pitched as
 "AI-shader" video enhancement) — ruled out, not just deferred. `BaseGlShaderProgram`/`GlEffect`
@@ -241,7 +266,7 @@ building given how much worse it looks than what "interpolation" implies.
 Most of Plezy's UX-layer features — skip intro/credits, chapters, quality picker, multi-version
 switching, playback speed, sleep timer, zoom, subtitle search — have now shipped as ordinary
 additions to `plex-player.js`: more Plex API calls plus UI, not blocked by Prism's architecture.
-Shader-based AI-style upscaling has also shipped, on Android and now web/Xbox too. The remaining
-gaps are tied to native decoder/OS capabilities (HDR/Dolby Vision, PiP, audio passthrough,
-refresh-rate matching, ambient lighting, libass rendering) — see "Deferred features" above for the
+Shader-based AI-style upscaling and ambient lighting have also shipped, across all three platforms.
+The remaining gaps are tied to native decoder/OS capabilities (HDR/Dolby Vision, PiP, audio
+passthrough, refresh-rate matching, libass rendering) — see "Deferred features" above for the
 detailed per-item breakdown.
