@@ -42,3 +42,50 @@ export async function fetchQueuedTitle(plexUrl, plexToken, ratingKey) {
         genres: (meta.Genre || []).map((g) => (g.tag || "").trim()).filter(Boolean),
     };
 }
+
+/* Fetches display metadata (thumb/title/progress/watched) for every ratingKey in a
+   session's queue - used by the in-player episode/queue list overlay (chrome.js's
+   openEpisodeListOverlay) to render cards for the whole queue at once, unlike
+   fetchQueuedTitle above which resolves one adjacent title for an immediate title-nav
+   jump. Same per-item fetch idiom as title-info.js's _fetchShowEpisodeQueue
+   (Promise.all, no manual chunking - the browser's own per-origin connection cap
+   already throttles very long queues). A missing/failed item maps to null and is
+   filtered out rather than breaking the whole list. */
+export async function fetchQueueItemsMetadata(plexUrl, plexToken, ratingKeys) {
+    const results = await Promise.all(
+        ratingKeys.map(async (ratingKey) => {
+            try {
+                const url = new URL(`${plexUrl}/library/metadata/${ratingKey}`);
+                url.searchParams.set("X-Plex-Token", plexToken);
+                const res = await fetch(url, { headers: { Accept: "application/json" } });
+                if (!res.ok) return null;
+                const data = await res.json();
+                const meta = data?.MediaContainer?.Metadata?.[0];
+                return meta ? mapQueueItemMetadata(meta) : null;
+            } catch (e) {
+                return null;
+            }
+        })
+    );
+    return results.filter(Boolean);
+}
+
+/* Same progress/watched calculation as title-info.js's episode row rendering
+   (showSeason) - a fully-watched item has viewCount set and no in-progress offset. */
+function mapQueueItemMetadata(meta) {
+    const durationMs = meta.duration || 0;
+    const progress = durationMs ? Math.max(0, Math.min(1, (meta.viewOffset || 0) / durationMs)) : 0;
+    return {
+        ratingKey: meta.ratingKey,
+        title: meta.title || "",
+        index: meta.index ?? null,
+        seasonNumber: meta.parentIndex ?? null,
+        thumb: meta.thumb || meta.grandparentThumb || null,
+        summary: meta.summary || "",
+        progress,
+        watched: !!meta.viewCount && progress <= 0,
+        contentRating: meta.contentRating || null,
+        durationMs,
+        releaseDate: meta.originallyAvailableAt || null,
+    };
+}

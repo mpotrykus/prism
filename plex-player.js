@@ -61,6 +61,7 @@ import {
     updateSkipButton,
     playQueuedTitle,
 } from "./src/player/ui/chrome.js";
+import { openEpisodeListOverlay, closeEpisodeListOverlay } from "./src/player/ui/episode-list.js";
 
 const TIMELINE_PING_MS = 10000;
 const CLIENT_ID_KEY = "prism_plex_client_identifier";
@@ -94,6 +95,8 @@ class StreamingPlayerController {
         this._inlineMenuEl = null;
         this._inlineMenuAnchor = null;
         this._inlineMenuCleanup = null;
+        this._episodeListEl = null;
+        this._episodeListCache = null;
         this._bifIndex = null;
         this._ambientEnabled = false;
         this._ambientOpacity = 0.5;
@@ -474,6 +477,14 @@ class StreamingPlayerController {
 
     _openHamburgerMenu(anchor) {
         return openHamburgerMenu(this, anchor);
+    }
+
+    _openEpisodeListOverlay() {
+        return openEpisodeListOverlay(this);
+    }
+
+    _closeEpisodeListOverlay() {
+        return closeEpisodeListOverlay(this);
     }
 
     _applyZoomTransform() {

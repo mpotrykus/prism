@@ -162,6 +162,17 @@ export function skipIconMarkup(direction, { double = false } = {}) {
     return `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" xmlns="http://www.w3.org/2000/svg"><g${mirror}>${farTriangle}${nearTriangle}${bar}</g></svg>`;
 }
 
+/* Same currentColor-SVG reasoning as volumeIconMarkup above - three stacked list lines
+   plus a play triangle, marking this button as "browse the queue" rather than reusing
+   the hamburger's generic options glyph. */
+export function episodeListIconMarkup() {
+    const lines = [5, 11, 17]
+        .map((y) => `<rect x="1" y="${y - 1}" width="12" height="2" rx="1" fill="currentColor"/>`)
+        .join("");
+    const play = '<polygon points="17,8 17,16 23,12" fill="currentColor"/>';
+    return `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" xmlns="http://www.w3.org/2000/svg">${lines}${play}</svg>`;
+}
+
 /* Same currentColor-SVG reasoning as volumeIconMarkup/seekIconMarkup above - the
    standard four-corner-bracket "expand"/"contract" glyph pair, swapped on
    fullscreenchange rather than drawn once. */

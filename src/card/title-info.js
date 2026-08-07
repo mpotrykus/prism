@@ -45,7 +45,7 @@ export function bifIndexPath(media, mediaIndex) {
   return part?.indexes ? `/library/parts/${part.id}/indexes/sd` : null;
 }
 
-function formatRuntime(ms) {
+export function formatRuntime(ms) {
   const mins = Math.round(ms / 60000);
   const h = Math.floor(mins / 60);
   const m = mins % 60;

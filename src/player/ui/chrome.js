@@ -94,7 +94,7 @@ export function showControls(controller) {
    are meant to toggle play/pause or reshow the controls. */
 export function scheduleHideControls(controller) {
     clearTimeout(controller._controlsHideTimer);
-    if (controller._controlsHovering || controller._inlineMenuEl) return;
+    if (controller._controlsHovering || controller._inlineMenuEl || controller._episodeListEl) return;
     controller._controlsHideTimer = setTimeout(() => {
         controller._controlButtons.forEach((b) => {
             b.style.opacity = "0";
