@@ -67,9 +67,23 @@ public class PlayerActivity extends AppCompatActivity {
        controller._session directly. -1 (not 0) marks "absent" for the numeric extras
        since 0 is a valid season/episode number. */
     public static final String EXTRA_TITLE = "title";
+    /* The episode's own name, distinct from EXTRA_TITLE (the show's name for an episode -
+       see plex-netflix-card.js's _playItem, which sends the same two fields split the
+       same way). Absent for a movie, which has no second "episode name" on top of its
+       own title. */
+    public static final String EXTRA_EPISODE_TITLE = "episodeTitle";
     public static final String EXTRA_YEAR = "year";
     public static final String EXTRA_SEASON_NUMBER = "seasonNumber";
     public static final String EXTRA_EPISODE_NUMBER = "episodeNumber";
+    /* The ordered queue (a show's full episode order, or a playlist/collection's own
+       order) this title came from, if any - mirrors plex-player.js's session-level
+       queueRatingKeys/queueIndex. Only the count and current position travel here (see
+       NativePlayerPlugin.play) - PlayerUiHelper's title-prev/title-next buttons only need
+       them to decide whether "next" should grey out and whether "prev" should restart vs
+       jump back; the actual ratingKeys/metadata fetch for whichever adjacent title gets
+       requested stays on the JS side (see PlaybackListener.onTitleNavRequested). */
+    public static final String EXTRA_QUEUE_LENGTH = "queueLength";
+    public static final String EXTRA_QUEUE_INDEX = "queueIndex";
 
     private static final long PROGRESS_INTERVAL_MS = 1000L;
     static final long CONTROLS_HIDE_DELAY_MS = 4000L;
@@ -90,6 +104,7 @@ public class PlayerActivity extends AppCompatActivity {
         void onEnded();
         void onError(String message);
         void onStopped(long positionMs);
+        void onTitleNavRequested(int newIndex);
     }
 
     private static PlaybackListener listener;
@@ -217,9 +232,12 @@ public class PlayerActivity extends AppCompatActivity {
     boolean muted = false;
     VolumeIconView muteButton;
     String title = "";
+    String episodeTitle = "";
     int year = -1;
     int seasonNumber = -1;
     int episodeNumber = -1;
+    int queueLength = 0;
+    int queueIndex = -1;
     TextView timeRemainingText;
 
     /* Chrome that should fade in lockstep via setControlsVisible/showControlsTemporarily
@@ -261,9 +279,13 @@ public class PlayerActivity extends AppCompatActivity {
         statsOverlayEnabled = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(PREF_STATS_OVERLAY_ENABLED, false);
         title = getIntent().getStringExtra(EXTRA_TITLE);
         if (title == null) title = "";
+        episodeTitle = getIntent().getStringExtra(EXTRA_EPISODE_TITLE);
+        if (episodeTitle == null) episodeTitle = "";
         year = getIntent().getIntExtra(EXTRA_YEAR, -1);
         seasonNumber = getIntent().getIntExtra(EXTRA_SEASON_NUMBER, -1);
         episodeNumber = getIntent().getIntExtra(EXTRA_EPISODE_NUMBER, -1);
+        queueLength = getIntent().getIntExtra(EXTRA_QUEUE_LENGTH, 0);
+        queueIndex = getIntent().getIntExtra(EXTRA_QUEUE_INDEX, -1);
 
         if (url == null || url.isEmpty()) {
             notifyErrorAndFinish("Missing required extra: url");
@@ -1022,6 +1044,15 @@ public class PlayerActivity extends AppCompatActivity {
         }
     }
 
+    /* Called from PlayerUiHelper's title-nav button click handler, already on the UI
+       thread - unlike showSkipButton/hideSkipButton above (invoked from a Capacitor
+       plugin call, not guaranteed to arrive on it), there's no thread hop to make here. */
+    static void requestTitleNav(int newIndex) {
+        if (listener != null) {
+            listener.onTitleNavRequested(newIndex);
+        }
+    }
+
     /* Attaches a subtitle track by rebuilding the current MediaItem with the video URI
        unchanged plus a new subtitle config - the transcode session itself (the URL) is
        untouched, only the local MediaItem description changes. setMediaItem's resumeMs
@@ -1080,6 +1111,19 @@ public class PlayerActivity extends AppCompatActivity {
 
     public static void stopPlayback() {
         if (activeInstance != null) {
+            /* Suppress onDestroy()'s reportStoppedIfNeeded() below, same
+               terminal-state-before-finish() pattern notifyErrorAndFinish/the
+               STATE_ENDED handler already use - a JS-initiated stop already knows it
+               stopped this activity, so a redundant "stopped" event firing later during
+               async destruction is at best a no-op (nothing's listening any more, see
+               native-bridge.js's stopNative) and at worst - since the prev/next title
+               feature re-registers a fresh "stopped" listener for the NEXT title
+               immediately after removing this one - lands on that new listener instead
+               and gets misread as the next title's own unexpected stop, closing the
+               whole player. onActivityResult (see NativePlayerPlugin.onPlaybackActivityResult)
+               still fires the same regardless; only the PlaybackListener notification is
+               suppressed here. */
+            activeInstance.terminalStateReported = true;
             activeInstance.finish();
         }
     }

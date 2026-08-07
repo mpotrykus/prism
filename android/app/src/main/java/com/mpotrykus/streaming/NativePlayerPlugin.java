@@ -37,18 +37,24 @@ public class NativePlayerPlugin extends Plugin implements PlayerActivity.Playbac
            which never traveled through this plugin either. */
         String shaderType = call.getString("shaderType", "live_action");
         String title = call.getString("title", "");
+        String episodeTitle = call.getString("episodeTitle");
         Integer year = call.getInt("year");
         Integer seasonNumber = call.getInt("seasonNumber");
         Integer episodeNumber = call.getInt("episodeNumber");
+        Integer queueLength = call.getInt("queueLength");
+        Integer queueIndex = call.getInt("queueIndex");
 
         Intent intent = new Intent(getContext(), PlayerActivity.class);
         intent.putExtra(PlayerActivity.EXTRA_URL, url);
         intent.putExtra(PlayerActivity.EXTRA_START_POSITION_MS, startPositionMs);
         intent.putExtra(PlayerActivity.EXTRA_SHADER_TYPE, shaderType);
         intent.putExtra(PlayerActivity.EXTRA_TITLE, title);
+        if (episodeTitle != null && !episodeTitle.isEmpty()) intent.putExtra(PlayerActivity.EXTRA_EPISODE_TITLE, episodeTitle);
         if (year != null) intent.putExtra(PlayerActivity.EXTRA_YEAR, year);
         if (seasonNumber != null) intent.putExtra(PlayerActivity.EXTRA_SEASON_NUMBER, seasonNumber);
         if (episodeNumber != null) intent.putExtra(PlayerActivity.EXTRA_EPISODE_NUMBER, episodeNumber);
+        if (queueLength != null) intent.putExtra(PlayerActivity.EXTRA_QUEUE_LENGTH, queueLength);
+        if (queueIndex != null) intent.putExtra(PlayerActivity.EXTRA_QUEUE_INDEX, queueIndex);
         if (chapters != null) {
             intent.putExtra(PlayerActivity.EXTRA_CHAPTERS_JSON, chapters.toString());
         }
@@ -166,5 +172,12 @@ public class NativePlayerPlugin extends Plugin implements PlayerActivity.Playbac
         JSObject data = new JSObject();
         data.put("positionMs", positionMs);
         notifyListeners("stopped", data);
+    }
+
+    @Override
+    public void onTitleNavRequested(int newIndex) {
+        JSObject data = new JSObject();
+        data.put("index", newIndex);
+        notifyListeners("titleNav", data);
     }
 }

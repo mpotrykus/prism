@@ -55,6 +55,10 @@ final class PlayerUiHelper {
 
     private static final float[] PLAYBACK_RATES = {0.25f, 0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f, 4f, 8f};
     private static final int[] SLEEP_TIMER_PRESETS_MIN = {15, 30, 45, 60};
+    /* Same threshold as chrome.js's TITLE_PREV_RESTART_MS - how far into a title "prev"
+       still counts as "just started" (jump to the actual previous queued title) rather
+       than "restart this one from 0". */
+    private static final long TITLE_PREV_RESTART_MS = 3000;
 
     /* Buffering indicator - independent of fadingControls (same "contextual, not ambient
        chrome" reasoning as the skip button): it reflects actual ExoPlayer state, not user
@@ -347,9 +351,16 @@ final class PlayerUiHelper {
         activity.registerFadingControl(bar);
     }
 
+    /* Matches chrome.js's buildTransportBar subtitleParts exactly: episode name (when
+       present) ahead of "S# E#", joined with the same "  •  " separator, falling back to
+       just the year for a movie. */
     private static String buildSubtitle(PlayerActivity activity) {
         if (activity.seasonNumber >= 0 && activity.episodeNumber >= 0) {
-            return "S" + activity.seasonNumber + " E" + activity.episodeNumber;
+            String seasonEpisode = "S" + activity.seasonNumber + " E" + activity.episodeNumber;
+            if (!activity.episodeTitle.isEmpty()) {
+                return activity.episodeTitle + "  •  " + seasonEpisode;
+            }
+            return seasonEpisode;
         }
         if (activity.year >= 0) {
             return String.valueOf(activity.year);
@@ -358,15 +369,23 @@ final class PlayerUiHelper {
     }
 
     /* Play/pause flanked by back-5s/forward-5s seek buttons, chapter nav further out when
-       the session has chapters - matching chrome.js's buildCenterControls layout (which
-       lives inside the transport bar's own center cell, not a separate floating overlay
-       like this used to render). */
+       the session has chapters, and title nav (prev/next episode, playlist/collection
+       item, or just "restart this movie") further out still - matching chrome.js's
+       buildCenterControls layout (which lives inside the transport bar's own center cell,
+       not a separate floating overlay like this used to render). Title nav is always
+       shown, unlike chapter nav: prev is always a real action (restart, even with no
+       queue at all) and next just greys out rather than disappearing when there's nothing
+       queued after this title - see makeTitleSkipButton/seekToAdjacentTitle - so a movie
+       played on its own still gets both buttons, just with next disabled. */
     private static void buildCenterControlsRow(PlayerActivity activity, LinearLayout row, float density) {
         int gapPx = (int) (14 * density);
         int chapterSizePx = (int) (36 * density);
         int seekSizePx = (int) (44 * density);
         int playSizePx = (int) (60 * density);
         boolean hasChapters = !activity.chapters.isEmpty();
+        boolean nextTitleEnabled = activity.queueIndex >= 0 && activity.queueIndex < activity.queueLength - 1;
+
+        row.addView(makeTitleSkipButton(activity, false, true), marginEndParams(chapterSizePx, gapPx));
 
         if (hasChapters) {
             row.addView(makeChapterSkipButton(activity, false), marginEndParams(chapterSizePx, gapPx));
@@ -381,11 +400,13 @@ final class PlayerUiHelper {
         });
         row.addView(activity.playPauseButton, marginEndParams(playSizePx, gapPx));
 
-        row.addView(makeSeekButton(activity, true), marginEndParams(seekSizePx, hasChapters ? gapPx : 0));
+        row.addView(makeSeekButton(activity, true), marginEndParams(seekSizePx, gapPx));
 
         if (hasChapters) {
-            row.addView(makeChapterSkipButton(activity, true), new LinearLayout.LayoutParams(chapterSizePx, chapterSizePx));
+            row.addView(makeChapterSkipButton(activity, true), marginEndParams(chapterSizePx, gapPx));
         }
+
+        row.addView(makeTitleSkipButton(activity, true, nextTitleEnabled), new LinearLayout.LayoutParams(chapterSizePx, chapterSizePx));
     }
 
     private static LinearLayout.LayoutParams marginEndParams(int sizePx, int marginEndPx) {
@@ -451,6 +472,48 @@ final class PlayerUiHelper {
         } else {
             PlayerActivity.seek(previous != null ? previous.startTimeOffsetMs : 0);
         }
+    }
+
+    /* Reuses ChapterSkipIconView for the glyph - its forward/back triangle-plus-bar shape
+       already matches chrome.js's skipIconMarkup single-triangle (title) variant, so
+       there's no need for a second icon class just to draw the same shape at a different
+       size. enabled=false (only ever the "next" button, see buildCenterControlsRow) skips
+       attaching a click listener entirely and dims the glyph, mirroring makeTitleNavButton
+       on the web leg rather than hiding the button outright. */
+    private static View makeTitleSkipButton(PlayerActivity activity, boolean forward, boolean enabled) {
+        ChapterSkipIconView btn = new ChapterSkipIconView(activity, forward);
+        btn.setContentDescription(forward ? "Next title" : "Previous title");
+        btn.setAlpha(enabled ? 1f : 0.4f);
+        if (enabled) {
+            btn.setOnClickListener(v -> {
+                seekToAdjacentTitle(activity, forward);
+                showControlsTemporarily(activity);
+            });
+        }
+        return btn;
+    }
+
+    /* "Next" always jumps forward to the next queued title - only ever attached when
+       enabled (see makeTitleSkipButton), so index/queueLength are guaranteed to allow it.
+       "Prev" jumps back to the actual previous queued title only when one exists and
+       playback is still within TITLE_PREV_RESTART_MS of the start; otherwise it just
+       restarts the current title from 0, the same convention seekToAdjacentChapter above
+       uses for prev-track buttons. Either jump is reported back to JS as a bare index
+       (see PlayerActivity.requestTitleNav) rather than resolved here - the actual Plex
+       metadata fetch for whichever adjacent title gets requested belongs to
+       plex-player.js's fetchQueuedTitle/playQueuedTitle, one implementation shared with
+       the web leg instead of duplicated into Java. */
+    private static void seekToAdjacentTitle(PlayerActivity activity, boolean forward) {
+        if (forward) {
+            PlayerActivity.requestTitleNav(activity.queueIndex + 1);
+            return;
+        }
+        long position = activity.player != null ? activity.player.getCurrentPosition() : 0;
+        if (activity.queueIndex > 0 && position <= TITLE_PREV_RESTART_MS) {
+            PlayerActivity.requestTitleNav(activity.queueIndex - 1);
+            return;
+        }
+        PlayerActivity.seek(0);
     }
 
     private static void styleSeekBar(SeekBar seekBar, float density) {

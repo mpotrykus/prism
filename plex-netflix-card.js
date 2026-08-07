@@ -204,10 +204,6 @@ class PlexNetflixCard extends HTMLElement {
             </div>
           </div>
           <div class="nav-bottom">
-            <div class="nav-item nav-profile" title="Switch Profile" hidden tabindex="0">
-              <span class="nav-icon nav-profile-icon"></span>
-              <span class="nav-label nav-profile-label">Profile</span>
-            </div>
             <div class="nav-item nav-kids-toggle" title="Kids Mode" tabindex="0">
               <span class="nav-icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="8.7" cy="10" r="1.15" fill="currentColor"/><circle cx="15.3" cy="10" r="1.15" fill="currentColor"/><path d="M8 14.5c1 1.3 2.5 2 4 2s3-0.7 4-2" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></span>
               <span class="nav-label">Kids Mode</span>
@@ -235,6 +231,10 @@ class PlexNetflixCard extends HTMLElement {
             <div class="search-wrap">
               <button type="button" class="search-toggle"></button>
               <input class="search" type="text" placeholder="Search movies, shows, actors…" autocomplete="off" />
+            </div>
+            <div class="nav-item nav-profile" title="Switch Profile" hidden tabindex="0">
+              <span class="nav-icon nav-profile-icon"></span>
+              <span class="nav-label nav-profile-label">Profile</span>
             </div>
           </div>
           <div class="main">
@@ -743,6 +743,7 @@ class PlexNetflixCard extends HTMLElement {
            title (not the episode's) for episode items, which is what a subtitle search
            query needs to key off, not the individual episode title. */
         title: item.title,
+        episodeTitle: item.seasonNumber != null ? item.subtitle : null,
         year: item.year,
         seasonNumber: item.seasonNumber,
         episodeNumber: item.episodeNumber,

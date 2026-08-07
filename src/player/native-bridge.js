@@ -1,5 +1,6 @@
 import { registerPlugin } from "@capacitor/core";
 import { plexAssetUrl } from "./core/plex-asset-url.js";
+import { playQueuedTitle } from "./ui/chrome.js";
 
 const NativePlayer = registerPlugin("NativePlayer");
 
@@ -38,6 +39,18 @@ export async function playNative(controller, streamUrl, startOffsetMs) {
     controller._nativeListenerHandles.push(
         await NativePlayer.addListener("stopped", () => controller.stop())
     );
+    /* PlayerUiHelper's own title-prev/title-next buttons (mirroring chrome.js's
+       makeTitleNavButton) only need queueLength/queueIndex to decide whether to grey
+       "next" out and whether "prev" should restart vs jump back - the actual Plex
+       metadata fetch for whichever adjacent title gets requested stays here, reusing
+       chrome.js's playQueuedTitle rather than reimplementing that fetch-then-_switchTitle
+       sequence in Java. */
+    controller._nativeListenerHandles.push(
+        await NativePlayer.addListener("titleNav", ({ index }) => {
+            const queue = controller._session?.queueRatingKeys || [];
+            playQueuedTitle(controller, queue, index);
+        })
+    );
     await NativePlayer.play({
         url: streamUrl,
         startPositionMs: startOffsetMs,
@@ -75,9 +88,16 @@ export async function playNative(controller, streamUrl, startOffsetMs) {
         /* Title/season-episode-or-year, shown in the transport bar header - same fields
            web-fallback.js's buildTransportBar reads off controller._session directly. */
         title: controller._session.title || "",
+        episodeTitle: controller._session.episodeTitle || null,
         year: controller._session.year ?? null,
         seasonNumber: controller._session.seasonNumber ?? null,
         episodeNumber: controller._session.episodeNumber ?? null,
+        /* Only the count and current position travel over the bridge - the actual
+           ratingKeys never need to reach Java, since a title-nav tap is reported back as
+           a plain index (see the "titleNav" listener above) and resolved against this
+           module's own queueRatingKeys copy. */
+        queueLength: controller._session.queueRatingKeys?.length ?? 0,
+        queueIndex: controller._session.queueIndex ?? null,
     });
 }
 

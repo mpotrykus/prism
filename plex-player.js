@@ -201,6 +201,7 @@ class StreamingPlayerController {
             chapters: item.chapters || [],
             bifIndexPath: item.bifIndexPath || null,
             title: item.title || "",
+            episodeTitle: item.episodeTitle || null,
             year: item.year || null,
             seasonNumber: item.seasonNumber ?? null,
             episodeNumber: item.episodeNumber ?? null,

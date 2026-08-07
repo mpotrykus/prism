@@ -351,7 +351,7 @@ async function seekToAdjacentTitle(controller, direction, video) {
     video.currentTime = 0;
 }
 
-async function playQueuedTitle(controller, queue, newIndex) {
+export async function playQueuedTitle(controller, queue, newIndex) {
     const session = controller._session;
     if (!session) return;
     try {
@@ -497,13 +497,14 @@ export function buildTransportBar(controller, video) {
 
     const subtitleParts = [];
     if (session?.seasonNumber != null && session?.episodeNumber != null) {
+        if (session?.episodeTitle) subtitleParts.push(session.episodeTitle);
         subtitleParts.push(`S${session.seasonNumber} E${session.episodeNumber}`);
     } else if (session?.year) {
         subtitleParts.push(String(session.year));
     }
     if (subtitleParts.length) {
         const subLine = document.createElement("div");
-        subLine.textContent = subtitleParts.join("  ");
+        subLine.textContent = subtitleParts.join("  •  ");
         Object.assign(subLine.style, { color: "rgba(255,255,255,0.65)", fontSize: "13px", fontWeight: "600", fontFamily: '"Roboto", sans-serif', marginTop: "2px" });
         titleBlock.appendChild(subLine);
     }

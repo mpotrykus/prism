@@ -27,6 +27,15 @@ export async function fetchQueuedTitle(plexUrl, plexToken, ratingKey) {
         audioStreams: extractAudioStreams(meta.Media, 0),
         bifIndexPath: bifIndexPath(meta.Media, 0),
         title: meta.grandparentTitle || meta.title || "",
+        /* Only set for a genuine episode (grandparentTitle present) - same convention
+           plex-netflix-card.js's _playItem uses (episodeTitle: item.seasonNumber != null
+           ? item.subtitle : null), since meta.title IS already the whole title for a
+           movie, not a second "episode name" on top of it. Without this, chrome.js's
+           transport-bar subtitle (see buildTransportBar's subtitleParts) would silently
+           drop the episode's own name and show just "S# E#" for any title reached via
+           the title-nav prev/next buttons, unlike a title opened normally from the info
+           modal. */
+        episodeTitle: meta.grandparentTitle ? meta.title : null,
         year: meta.year || null,
         seasonNumber: meta.parentIndex ?? null,
         episodeNumber: meta.index ?? null,

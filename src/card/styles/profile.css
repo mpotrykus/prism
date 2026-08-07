@@ -1,64 +1,170 @@
-.nav-profile[hidden] { display: none; }
+.nav-profile[hidden] {
+    display: none;
+}
+
+
+/* Lives in the header now, not the sidenav - the sidenav's hover-to-reveal .nav-label
+   and horizontal padding don't apply here, it's just an icon button next to search. */
+
+.nav-profile {
+    padding: 0;
+}
+
+.nav-profile .nav-label {
+    display: none;
+}
+
 .nav-profile-avatar {
-  width: 22px; height: 22px; border-radius: 50%; overflow: hidden; flex: none;
-  display: flex; align-items: center; justify-content: center;
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    overflow: hidden;
+    flex: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
 }
-.nav-profile-avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+.nav-profile-avatar img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+
 .profile-overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(0,0,0,0.72);
-  backdrop-filter: blur(6px);
-  display: none;
-  align-items: center;
-  justify-content: center;
-  z-index: 100;
-  outline: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.72);
+    backdrop-filter: blur(6px);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+    outline: none;
 }
-.profile-overlay.open { display: flex; }
+
+.profile-overlay.open {
+    display: flex;
+}
+
 .profile-modal {
-  width: 360px;
-  max-width: 88vw;
-  max-height: 80vh;
-  overflow-y: auto;
-  background: #161619;
-  border: 1px solid rgba(255,255,255,0.08);
-  border-radius: 16px;
-  padding: 24px;
-  box-shadow: 0 24px 70px rgba(0,0,0,0.6);
+    width: 360px;
+    max-width: 88vw;
+    max-height: 80vh;
+    overflow-y: auto;
+    background: #161619;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 16px;
+    padding: 24px;
+    box-shadow: 0 24px 70px rgba(0, 0, 0, 0.6);
 }
-.profile-title { font-size: 15px; font-weight: 700; margin-bottom: 16px; text-align: center; }
-.profile-list { display: flex; flex-direction: column; gap: 10px; margin-bottom: 16px; }
+
+.profile-title {
+    font-size: 15px;
+    font-weight: 700;
+    margin-bottom: 16px;
+    text-align: center;
+}
+
+.profile-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-bottom: 16px;
+}
+
 .profile-row {
-  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
-  background: rgba(255,255,255,0.05); border-radius: 10px; padding: 10px 12px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 10px;
+    padding: 10px 12px;
 }
-.profile-row.active { background: rgba(229,160,13,0.12); }
-.profile-row.busy { opacity: 0.6; pointer-events: none; }
+
+.profile-row.active {
+    background: rgba(229, 160, 13, 0.12);
+}
+
+.profile-row.busy {
+    opacity: 0.6;
+    pointer-events: none;
+}
+
 .profile-avatar {
-  width: 34px; height: 34px; border-radius: 50%; overflow: hidden; flex: none;
-  display: flex; align-items: center; justify-content: center; color: rgba(255,255,255,0.6);
-  background: rgba(255,255,255,0.08);
+    width: 34px;
+    height: 34px;
+    border-radius: 50%;
+    overflow: hidden;
+    flex: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: rgba(255, 255, 255, 0.6);
+    background: rgba(255, 255, 255, 0.08);
 }
-.profile-avatar svg { width: 20px; height: 20px; }
-.profile-avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
-.profile-name { font-size: 14px; font-weight: 600; flex: 1 1 auto; min-width: 0; }
+
+.profile-avatar svg {
+    width: 20px;
+    height: 20px;
+}
+
+.profile-avatar img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+
+.profile-name {
+    font-size: 14px;
+    font-weight: 600;
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
 .profile-switch-btn {
-  border: none; border-radius: 8px; padding: 7px 14px; font-size: 12.5px; font-weight: 700;
-  cursor: pointer; background: rgba(255,255,255,0.1); color: #fff; white-space: nowrap;
+    border: none;
+    border-radius: 8px;
+    padding: 7px 14px;
+    font-size: 12.5px;
+    font-weight: 700;
+    cursor: pointer;
+    background: rgba(255, 255, 255, 0.1);
+    color: #fff;
+    white-space: nowrap;
 }
-.profile-switch-btn:hover { background: rgba(255,255,255,0.18); }
-.profile-switch-btn:disabled { opacity: 0.5; cursor: default; }
-.profile-row-status { flex: 1 0 100%; color: #ff6b6b; font-size: 11.5px; font-weight: 600; }
+
+.profile-switch-btn:hover {
+    background: rgba(255, 255, 255, 0.18);
+}
+
+.profile-switch-btn:disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+
+.profile-row-status {
+    flex: 1 0 100%;
+    color: #ff6b6b;
+    font-size: 11.5px;
+    font-weight: 600;
+}
+
 .profile-cancel {
-  width: 100%;
-  padding: 10px;
-  border-radius: 8px;
-  border: none;
-  background: transparent;
-  color: rgba(255,255,255,0.55);
-  font-size: 13px;
-  font-weight: 600;
-  cursor: pointer;
+    width: 100%;
+    padding: 10px;
+    border-radius: 8px;
+    border: none;
+    background: transparent;
+    color: rgba(255, 255, 255, 0.55);
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
 }
-.profile-cancel:hover { color: #fff; }
+
+.profile-cancel:hover {
+    color: #fff;
+}
