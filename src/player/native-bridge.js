@@ -1,4 +1,5 @@
 import { registerPlugin } from "@capacitor/core";
+import { plexAssetUrl } from "./core/plex-asset-url.js";
 
 const NativePlayer = registerPlugin("NativePlayer");
 
@@ -48,13 +49,21 @@ export async function playNative(controller, streamUrl, startOffsetMs) {
            immediate-persistence model as colorBoostEnabled/colorBoostStrength/
            colorBoostAuto, which never traveled through this bridge either. */
         shaderType: controller._shaderAutoType,
-        /* Native code only ever sees {title, startTimeOffsetMs} - it doesn't need to know
-           Plex's own Chapter field names, keeping that one Plex-protocol interpretation
-           here instead of duplicated into Java. */
+        /* Native code only ever sees {title, startTimeOffsetMs, thumbUrl} - it doesn't
+           need to know Plex's own Chapter field names, keeping that one Plex-protocol
+           interpretation here instead of duplicated into Java. thumbUrl is a full,
+           already-tokened URL (not a bare Plex path) since Java has no equivalent of
+           this module's session-scoped plexAssetUrl to finish building it itself. */
         chapters: (controller._session.chapters || []).map((c) => ({
             title: c.title || c.tag || "",
             startTimeOffsetMs: c.startTimeOffset ?? 0,
+            thumbUrl: plexAssetUrl(controller._session, c.thumb),
         })),
+        /* Full BIF trickplay index URL (see src/player/core/bif.js for the web
+           equivalent) - Java parses/fetches this itself (BifIndex.java) rather than
+           this bridge doing it and shipping frames over, since individual frames are
+           only needed on demand as the user drags, not all up front. */
+        bifUrl: plexAssetUrl(controller._session, controller._session.bifIndexPath),
         /* {id, label, selected} - PlayerActivity rebuilds the transcode URL itself when
            the user picks one (see switchAudioStream), it never needs the raw Plex Stream
            shape, just enough to preselect/checkmark the one already playing. */

@@ -3,11 +3,9 @@ package com.mpotrykus.streaming;
 import android.content.res.ColorStateList;
 import android.graphics.Color;
 import android.graphics.PorterDuff;
-import android.graphics.drawable.ClipDrawable;
 import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
-import android.graphics.drawable.LayerDrawable;
 import android.graphics.drawable.StateListDrawable;
 import android.text.TextUtils;
 import android.view.Gravity;
@@ -53,7 +51,6 @@ final class PlayerUiHelper {
     private static final int DIM_TEXT = Color.argb(166, 255, 255, 255);
     private static final int SUBTLE_TEXT = Color.argb(140, 255, 255, 255);
     private static final int VALUE_TEXT = Color.argb(102, 255, 255, 255);
-    private static final int TRACK_BG = Color.argb(76, 255, 255, 255);
     private static final int REMAINING_TEXT = Color.argb(191, 255, 255, 255);
 
     private static final float[] PLAYBACK_RATES = {0.25f, 0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f, 4f, 8f};
@@ -242,13 +239,27 @@ final class PlayerUiHelper {
         infoRow.addView(activity.timeRemainingText);
         bar.addView(infoRow);
 
+        /* FrameLayout so SegmentedSeekTrackView (added first, so it renders behind) and
+           transportSeekBar can occupy the exact same bounds - the SeekBar owns touch/
+           thumb, the View underneath owns 100% of the visible track. Explicit 24dp
+           height (rather than WRAP_CONTENT, which the SeekBar previously drove) matches
+           chrome.js's own explicit 24px hit-target bump on the web leg. */
+        FrameLayout seekWrap = new FrameLayout(activity);
+        LinearLayout.LayoutParams seekWrapParams =
+            new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, Math.round(24 * density));
+        seekWrapParams.topMargin = (int) (8 * density);
+        seekWrap.setLayoutParams(seekWrapParams);
+
+        activity.segmentedTrack = new SegmentedSeekTrackView(activity);
+        seekWrap.addView(activity.segmentedTrack, new FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
+        activity.segmentedTrack.setChapters(activity.chapters, 0L);
+
         activity.transportSeekBar = new SeekBar(activity);
         styleSeekBar(activity.transportSeekBar, density);
         activity.transportSeekBar.setMax(1000);
-        LinearLayout.LayoutParams seekParams =
-            new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        seekParams.topMargin = (int) (8 * density);
-        activity.transportSeekBar.setLayoutParams(seekParams);
+        seekWrap.addView(activity.transportSeekBar, new FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
         activity.transportSeekBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override
             public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
@@ -257,6 +268,8 @@ final class PlayerUiHelper {
                     if (duration != androidx.media3.common.C.TIME_UNSET && duration > 0) {
                         long previewMs = progress * duration / 1000;
                         activity.timeRemainingText.setText("-" + formatTimestamp(duration - previewMs));
+                        syncSegmentedTrack(activity, previewMs);
+                        showScrubPreview(activity, seekBar, progress, duration, density);
                     }
                 }
             }
@@ -270,6 +283,7 @@ final class PlayerUiHelper {
             @Override
             public void onStopTrackingTouch(SeekBar seekBar) {
                 activity.seekBarScrubbing = false;
+                hideScrubPreview(activity);
                 if (activity.player != null) {
                     long duration = activity.player.getDuration();
                     if (duration != androidx.media3.common.C.TIME_UNSET && duration > 0) {
@@ -278,7 +292,7 @@ final class PlayerUiHelper {
                 }
             }
         });
-        bar.addView(activity.transportSeekBar);
+        bar.addView(seekWrap);
 
         LinearLayout controlsRow = new LinearLayout(activity);
         controlsRow.setOrientation(LinearLayout.HORIZONTAL);
@@ -439,37 +453,13 @@ final class PlayerUiHelper {
         }
     }
 
-    /* Thin amber-filled track (matching chrome.js's scrub-bar CSS) built from a
-       LayerDrawable, the same android.R.id.background/progress convention the platform's
-       own progress_horizontal.xml uses - required for SeekBar to recognize which layer to
-       clip as playback advances. */
     private static void styleSeekBar(SeekBar seekBar, float density) {
-        int trackHeightPx = Math.max(2, Math.round(2 * density));
-
-        GradientDrawable trackBg = new GradientDrawable();
-        trackBg.setShape(GradientDrawable.RECTANGLE);
-        trackBg.setCornerRadius(trackHeightPx / 2f);
-        trackBg.setColor(TRACK_BG);
-
-        GradientDrawable progressShape = new GradientDrawable();
-        progressShape.setShape(GradientDrawable.RECTANGLE);
-        progressShape.setCornerRadius(trackHeightPx / 2f);
-        progressShape.setColor(ACCENT_COLOR);
-        ClipDrawable progressClip = new ClipDrawable(progressShape, Gravity.START, ClipDrawable.HORIZONTAL);
-
-        LayerDrawable layers = new LayerDrawable(new Drawable[]{trackBg, progressClip});
-        layers.setId(0, android.R.id.background);
-        layers.setId(1, android.R.id.progress);
-        /* A GradientDrawable stretches to fill whatever bounds it's assigned rather than
-           honoring setSize()'s intrinsic-size hint once actual (taller) bounds are given -
-           SeekBar always sizes itself well past this thin track for a comfortable touch
-           target, so without pinning each layer's height/gravity here the track visually
-           stretched to match the widget's full touch height instead of staying thin. */
-        layers.setLayerHeight(0, trackHeightPx);
-        layers.setLayerGravity(0, Gravity.CENTER_VERTICAL);
-        layers.setLayerHeight(1, trackHeightPx);
-        layers.setLayerGravity(1, Gravity.CENTER_VERTICAL);
-        seekBar.setProgressDrawable(layers);
+        /* The track itself is no longer drawn here at all - SegmentedSeekTrackView
+           (layered behind this SeekBar in a FrameLayout, see buildTransportBar) now
+           owns 100% of the visible track, played/buffered/unfilled and per-chapter
+           segments alike, so this SeekBar's own background/progress drawables just get
+           out of the way. It still owns touch handling and the thumb. */
+        seekBar.setProgressDrawable(new ColorDrawable(Color.TRANSPARENT));
 
         int thumbSizePx = Math.round(12 * density);
         GradientDrawable thumb = new GradientDrawable();
@@ -527,6 +517,9 @@ final class PlayerUiHelper {
         Boolean toggleChecked;
         Function<Boolean, String> onToggle;
         Runnable onSelect;
+        /* Only openChapterMenu sets this - every other caller leaves it null, so
+           makeMenuRowView's thumbnail block is a no-op for every other menu. */
+        String thumbUrl;
 
         MenuRow(String label) {
             this.label = label;
@@ -757,6 +750,7 @@ final class PlayerUiHelper {
         for (ChapterEntry chapter : activity.chapters) {
             String time = formatTimestamp(chapter.startTimeOffsetMs);
             MenuRow row = new MenuRow(chapter.title.isEmpty() ? time : time + "  " + chapter.title);
+            row.thumbUrl = chapter.thumbUrl;
             row.onSelect = () -> PlayerActivity.seek(chapter.startTimeOffsetMs);
             rows.add(row);
         }
@@ -1000,6 +994,31 @@ final class PlayerUiHelper {
         row.setPadding(padH, padV, padH, padV);
         row.setLayoutParams(new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
 
+        /* Only the Chapters menu sets item.thumbUrl - every other row (speed, sleep
+           timer, audio track...) leaves it null, so this is a no-op there. Hidden on
+           fetch failure rather than left showing a broken/empty image - a chapter's
+           thumb isn't guaranteed to exist just because the chapter itself does. */
+        if (item.thumbUrl != null) {
+            android.widget.ImageView thumb = new android.widget.ImageView(activity);
+            int thumbWidthPx = Math.round(64 * density);
+            int thumbHeightPx = Math.round(36 * density);
+            LinearLayout.LayoutParams thumbParams = new LinearLayout.LayoutParams(thumbWidthPx, thumbHeightPx);
+            thumbParams.setMarginEnd(Math.round(10 * density));
+            thumb.setLayoutParams(thumbParams);
+            thumb.setScaleType(android.widget.ImageView.ScaleType.CENTER_CROP);
+            GradientDrawable thumbBg = new GradientDrawable();
+            thumbBg.setColor(Color.argb(20, 255, 255, 255));
+            thumbBg.setCornerRadius(4f * density);
+            thumb.setBackground(thumbBg);
+            thumb.setClipToOutline(true);
+            row.addView(thumb);
+            String thumbUrl = item.thumbUrl;
+            PlexHttp.runAsync(() -> PlexHttp.fetchBitmapSync(thumbUrl), bitmap -> {
+                if (bitmap != null) thumb.setImageBitmap(bitmap);
+                else thumb.setVisibility(View.GONE);
+            });
+        }
+
         LinearLayout labelStack = new LinearLayout(activity);
         labelStack.setOrientation(LinearLayout.VERTICAL);
         labelStack.setLayoutParams(new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
@@ -1170,12 +1189,123 @@ final class PlayerUiHelper {
     }
 
     static void updateTransportUi(PlayerActivity activity, long positionMs, long durationMs) {
+        /* Skipped entirely while scrubbing, same as before - during a drag, onProgressChanged
+           (see buildTransportBar) already keeps transportSeekBar/timeRemainingText/
+           segmentedTrack synced to the live drag position, not the stale last-reported
+           real playback position this ~1s tick would otherwise fight it with. */
         if (activity.transportSeekBar == null || activity.seekBarScrubbing) return;
         if (durationMs > 0) {
             activity.transportSeekBar.setProgress((int) ((positionMs * 1000) / durationMs));
             if (activity.timeRemainingText != null) {
                 activity.timeRemainingText.setText("-" + formatTimestamp(Math.max(0, durationMs - positionMs)));
             }
+            if (activity.segmentedTrack != null && activity.player != null) {
+                activity.segmentedTrack.setChapters(activity.chapters, durationMs);
+                activity.segmentedTrack.setProgress(positionMs, activity.player.getBufferedPosition(), durationMs);
+            }
         }
+    }
+
+    private static void syncSegmentedTrack(PlayerActivity activity, long positionMs) {
+        if (activity.segmentedTrack == null || activity.player == null) return;
+        long duration = activity.player.getDuration();
+        if (duration == androidx.media3.common.C.TIME_UNSET || duration <= 0) return;
+        activity.segmentedTrack.setChapters(activity.chapters, duration);
+        activity.segmentedTrack.setProgress(positionMs, activity.player.getBufferedPosition(), duration);
+    }
+
+    /* Built lazily on first use rather than in buildTransportBar - most playback
+       sessions with no BIF data (or where the user never drags) never need it at all. */
+    private static void ensureScrubPreviewPopup(PlayerActivity activity, float density) {
+        if (activity.scrubPreviewPopup != null) return;
+
+        LinearLayout content = new LinearLayout(activity);
+        content.setOrientation(LinearLayout.VERTICAL);
+        content.setGravity(Gravity.CENTER_HORIZONTAL);
+
+        android.widget.ImageView image = new android.widget.ImageView(activity);
+        LinearLayout.LayoutParams imageParams =
+            new LinearLayout.LayoutParams(Math.round(160 * density), Math.round(90 * density));
+        image.setLayoutParams(imageParams);
+        image.setScaleType(android.widget.ImageView.ScaleType.CENTER_CROP);
+        GradientDrawable imageBg = new GradientDrawable();
+        imageBg.setColor(Color.BLACK);
+        imageBg.setCornerRadius(6f * density);
+        image.setBackground(imageBg);
+        image.setClipToOutline(true);
+        content.addView(image);
+        activity.scrubPreviewImageView = image;
+
+        TextView time = new TextView(activity);
+        time.setTextColor(Color.WHITE);
+        time.setTextSize(12);
+        int timePadH = Math.round(8 * density);
+        int timePadV = Math.round(3 * density);
+        time.setPadding(timePadH, timePadV, timePadH, timePadV);
+        GradientDrawable timeBg = new GradientDrawable();
+        timeBg.setColor(Color.argb(191, 0, 0, 0));
+        timeBg.setCornerRadius(4f * density);
+        time.setBackground(timeBg);
+        LinearLayout.LayoutParams timeParams =
+            new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        timeParams.topMargin = Math.round(6 * density);
+        time.setLayoutParams(timeParams);
+        content.addView(time);
+        activity.scrubPreviewTimeView = time;
+
+        PopupWindow popup = new PopupWindow(content, ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        popup.setTouchable(false);
+        popup.setOutsideTouchable(false);
+        popup.setBackgroundDrawable(null);
+        activity.scrubPreviewPopup = popup;
+    }
+
+    /* Time label always shown immediately; the image fills in once (a) a BIF index
+       exists for this session at all - most don't have one generated - and (b) the
+       frame nearest this position has been fetched, same "never worse than no preview"
+       fallback the web leg's tooltip uses. Frame fetches are debounced to roughly one
+       per real second of video scrubbed past, not one per onProgressChanged call - a
+       fast drag across a long movie can fire many of those a second. */
+    private static void showScrubPreview(PlayerActivity activity, SeekBar seekBar, int progress, long duration, float density) {
+        ensureScrubPreviewPopup(activity, density);
+        long timeMs = progress * duration / 1000;
+        activity.scrubPreviewTimeView.setText(formatTimestamp(timeMs));
+
+        View content = activity.scrubPreviewPopup.getContentView();
+        content.measure(View.MeasureSpec.UNSPECIFIED, View.MeasureSpec.UNSPECIFIED);
+        int measuredWidth = content.getMeasuredWidth();
+        int measuredHeight = content.getMeasuredHeight();
+
+        int[] loc = new int[2];
+        seekBar.getLocationOnScreen(loc);
+        float fraction = progress / 1000f;
+        int x = loc[0] + Math.round(fraction * seekBar.getWidth()) - measuredWidth / 2;
+        x = Math.max(loc[0], Math.min(loc[0] + seekBar.getWidth() - measuredWidth, x));
+        int y = loc[1] - measuredHeight - Math.round(10 * density);
+
+        if (!activity.scrubPreviewPopup.isShowing()) {
+            activity.scrubPreviewPopup.showAtLocation(seekBar, Gravity.NO_GRAVITY, x, y);
+        } else {
+            activity.scrubPreviewPopup.update(x, y, measuredWidth, measuredHeight);
+        }
+
+        if (activity.bifIndex == null) return;
+        if (activity.scrubPreviewLastTimeMs >= 0 && Math.abs(timeMs - activity.scrubPreviewLastTimeMs) < 1000) return;
+        activity.scrubPreviewLastTimeMs = timeMs;
+        BifIndex.Frame frame = activity.bifIndex.findNearestFrame(timeMs);
+        if (frame == null) return;
+        int requestId = ++activity.scrubPreviewRequestId;
+        activity.bifIndex.fetchFrameBitmap(frame, bitmap -> {
+            // A newer drag position may have won the race, or the drag may have ended.
+            if (requestId != activity.scrubPreviewRequestId || bitmap == null) return;
+            if (activity.scrubPreviewImageView != null) activity.scrubPreviewImageView.setImageBitmap(bitmap);
+        });
+    }
+
+    private static void hideScrubPreview(PlayerActivity activity) {
+        if (activity.scrubPreviewPopup != null && activity.scrubPreviewPopup.isShowing()) {
+            activity.scrubPreviewPopup.dismiss();
+        }
+        activity.scrubPreviewLastTimeMs = -1L;
     }
 }

@@ -6,6 +6,8 @@ import { setAmbientEnabled, setAmbientOpacity } from "../ambient-pipeline.js";
 import { reloadWebSource } from "../web-fallback.js";
 import { setNativePlaybackRate, setNativeSubtitle } from "../native-bridge.js";
 import { CONTROLS_HIDE_DELAY_MS, PLAYBACK_RATES, SLEEP_TIMER_PRESETS_MIN, ZOOM_LEVELS, VOLUME_STORAGE_KEY, storedVolume, volumeIconMarkup, seekIconMarkup } from "./shared.js";
+import { loadBifIndex, findNearestBifFrame, fetchBifFrameUrl } from "../core/bif.js";
+import { plexAssetUrl } from "../core/plex-asset-url.js";
 
 /* Fullscreen player chrome: the idle-fade control row, transport bar, every hamburger
    submenu, the subtitle search panel, and the skip-intro/credits button. All take the
@@ -285,6 +287,86 @@ export function formatTime(seconds) {
     return h > 0 ? `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}` : `${m}:${String(s).padStart(2, "0")}`;
 }
 
+const SEEK_FILLED_COLOR = "#e5a00d";
+const SEEK_BUFFERED_COLOR = "rgba(255,255,255,0.5)";
+const SEEK_UNFILLED_COLOR = "rgba(255,255,255,0.3)";
+
+/* Finds how far ahead of the current position is actually buffered - video.buffered
+   is a list of disjoint ranges (seeking around leaves gaps), so this deliberately
+   returns the end of whichever range currently contains the playhead rather than the
+   furthest point buffered anywhere, matching what "buffered ahead" visually means to a
+   viewer. Falls back to currentTime (i.e. nothing buffered ahead) if the playhead
+   isn't inside any known range yet. */
+function bufferedEndSeconds(video) {
+    const ranges = video.buffered;
+    for (let i = 0; i < ranges.length; i++) {
+        if (ranges.start(i) <= video.currentTime && video.currentTime <= ranges.end(i)) {
+            return ranges.end(i);
+        }
+    }
+    return video.currentTime;
+}
+
+/* One reusable "paint a range with up to 3 colors" gradient, shared by the plain
+   (no-chapter) track's --seek-buffered-pct CSS var and each per-chapter segment div
+   below - both are really the same problem (a [startPct, endPct] span with a played
+   breakpoint and a buffered breakpoint somewhere inside it), just at different scales.
+   Breakpoints outside [startPct, endPct] clamp to 0%/100%, which collapses that color's
+   stop-pair to zero width rather than needing a special case - CSS renders a zero-width
+   hard edge as simply invisible. */
+function threeColorGradient(startPct, endPct, playedAt, bufferedAt, before, middle, after) {
+    const span = endPct - startPct || 1;
+    const localPlayed = Math.min(100, Math.max(0, ((playedAt - startPct) / span) * 100));
+    const localBuffered = Math.min(100, Math.max(localPlayed, ((bufferedAt - startPct) / span) * 100));
+    return `linear-gradient(to right, ${before} ${localPlayed}%, ${middle} ${localPlayed}%, ${middle} ${localBuffered}%, ${after} ${localBuffered}%)`;
+}
+
+/* Segmented scrub track (Plezy-style): each chapter gets its own independently
+   rounded-pill DOM element instead of one continuous bar with straight-edged gaps cut
+   into it - a single CSS background can only ever paint one border-radius'd shape, so
+   getting 4 rounded corners per segment needs a real element per segment, layered
+   behind the (now track-transparent, see --segmented CSS above) range input. The gap
+   between two adjacent segments is split as a 2px inset on each side (4px total),
+   fixed-pixel rather than percentage so it looks consistent regardless of the bar's
+   actual rendered width - the same approach Plezy's BufferRangePainter uses on canvas.
+   Built once duration is known (see buildTransportBar's loadedmetadata/durationchange
+   handling); only the fill color of each segment is touched afterward, every tick. */
+function buildChapterSegments(layer, chapters, durationMs) {
+    layer.innerHTML = "";
+    if (!durationMs || !(chapters || []).length) return [];
+    const splits = chapters
+        .map((c) => ((c.startTimeOffset ?? 0) / durationMs) * 100)
+        .filter((f) => Number.isFinite(f) && f > 0.4 && f < 99.6)
+        .sort((a, b) => a - b);
+    const edges = [0, ...splits, 100];
+    const segments = [];
+    for (let i = 0; i < edges.length - 1; i++) {
+        const startPct = edges[i];
+        const endPct = edges[i + 1];
+        const leftGapPx = i > 0 ? 2 : 0;
+        const rightGapPx = i < edges.length - 2 ? 2 : 0;
+        const el = document.createElement("div");
+        Object.assign(el.style, {
+            position: "absolute",
+            top: "0",
+            bottom: "0",
+            left: `calc(${startPct}% + ${leftGapPx}px)`,
+            width: `calc(${endPct - startPct}% - ${leftGapPx + rightGapPx}px)`,
+            borderRadius: "999px",
+            background: SEEK_UNFILLED_COLOR,
+        });
+        layer.appendChild(el);
+        segments.push({ startPct, endPct, el });
+    }
+    return segments;
+}
+
+function paintChapterSegments(segments, pct, bufferedPct) {
+    for (const { startPct, endPct, el } of segments) {
+        el.style.background = threeColorGradient(startPct, endPct, pct, bufferedPct, SEEK_FILLED_COLOR, SEEK_BUFFERED_COLOR, SEEK_UNFILLED_COLOR);
+    }
+}
+
 /* Bottom transport bar: scrub bar and elapsed/total time - replaces the browser's native
    <video controls> chrome (disabled in playWeb) so the transport looks and behaves the
    same on every platform instead of whatever bar the host browser/OS ships. Registered
@@ -364,23 +446,41 @@ export function buildTransportBar(controller, video) {
                hand below instead of relying on accent-color. --seek-pct is written from
                JS (see buildTransportBar) wherever seek.value changes, since a plain CSS
                gradient can't otherwise express "amber up to the thumb, dim after it". */
+            /* The input's own box is the actual click/touch/drag hit target - a plain
+               3px-tall element (matching the visible track) was nearly impossible to
+               grab precisely. Bumped to 24px here while the track pseudo-elements below
+               stay explicitly 3px, which browsers vertically center within the taller
+               box by default - the same "invisible padding around a thin visual track"
+               trick most custom range sliders use. The thumb's -4.5px margin-top below
+               is calculated against the track's own 3px height, not this one, so it
+               still centers correctly. */
             .streaming-player-seek.streaming-player-seek--scrub {
                 -webkit-appearance: none;
                 appearance: none;
                 background: transparent;
-                height: 3px;
+                height: 24px;
             }
             .streaming-player-seek.streaming-player-seek--scrub::-webkit-slider-runnable-track {
                 height: 3px;
                 border-radius: 2px;
                 border: none;
-                background: linear-gradient(to right, #e5a00d var(--seek-pct, 0%), rgba(255,255,255,0.3) var(--seek-pct, 0%));
+                background: linear-gradient(to right, #e5a00d var(--seek-pct, 0%), rgba(255,255,255,0.5) var(--seek-pct, 0%), rgba(255,255,255,0.5) var(--seek-buffered-pct, var(--seek-pct, 0%)), rgba(255,255,255,0.3) var(--seek-buffered-pct, var(--seek-pct, 0%)));
             }
             .streaming-player-seek.streaming-player-seek--scrub::-moz-range-track {
                 height: 3px;
                 border-radius: 2px;
                 border: none;
-                background: linear-gradient(to right, #e5a00d var(--seek-pct, 0%), rgba(255,255,255,0.3) var(--seek-pct, 0%));
+                background: linear-gradient(to right, #e5a00d var(--seek-pct, 0%), rgba(255,255,255,0.5) var(--seek-pct, 0%), rgba(255,255,255,0.5) var(--seek-buffered-pct, var(--seek-pct, 0%)), rgba(255,255,255,0.3) var(--seek-buffered-pct, var(--seek-pct, 0%)));
+            }
+            /* When rendering real per-chapter segments (see buildSegmentLayout below),
+               those DOM divs sit behind the input and ARE the visible track - the
+               input's own native track paint has to get out of the way entirely rather
+               than showing through/behind them. */
+            .streaming-player-seek.streaming-player-seek--scrub.streaming-player-seek--segmented::-webkit-slider-runnable-track {
+                background: transparent;
+            }
+            .streaming-player-seek.streaming-player-seek--scrub.streaming-player-seek--segmented::-moz-range-track {
+                background: transparent;
             }
             .streaming-player-seek.streaming-player-seek--scrub::-webkit-slider-thumb {
                 -webkit-appearance: none;
@@ -407,11 +507,160 @@ export function buildTransportBar(controller, video) {
     seek.min = "0";
     seek.max = "1000";
     seek.value = "0";
-    Object.assign(seek.style, { flex: "1 1 auto", cursor: "pointer" });
+    /* position:relative is needed so the thumb paints above segmentLayer - a static
+       (non-positioned) element always paints below any positioned sibling regardless
+       of DOM order, so without this the absolutely-positioned segment divs covered
+       the range input's thumb even though seek is appended after them below. */
+    Object.assign(seek.style, { cursor: "pointer", width: "100%", display: "block", position: "relative", zIndex: "1" });
+
+    const chapters = controller._session?.chapters || [];
+    const seekWrap = document.createElement("div");
+    Object.assign(seekWrap.style, { position: "relative", flex: "1 1 auto", display: "flex", alignItems: "center" });
+    const segmentLayer = document.createElement("div");
+    Object.assign(segmentLayer.style, {
+        position: "absolute",
+        left: "0",
+        right: "0",
+        top: "50%",
+        height: "3px",
+        transform: "translateY(-50%)",
+        pointerEvents: "none",
+    });
+    if (chapters.length) seek.classList.add("streaming-player-seek--segmented");
+    seekWrap.appendChild(segmentLayer);
+    seekWrap.appendChild(seek);
+
+    /* Segment geometry only depends on duration, which is stable once known - built
+       once (guarded by segmentsDurationMs) rather than on every tick, unlike the color
+       repaint below which does need to run every tick as the playhead moves. */
+    let segments = [];
+    let segmentsDurationMs = 0;
+    const ensureSegments = () => {
+        const durationMs = (video.duration || 0) * 1000;
+        if (!durationMs || durationMs === segmentsDurationMs) return;
+        segmentsDurationMs = durationMs;
+        segments = buildChapterSegments(segmentLayer, chapters, durationMs);
+    };
+
     const syncSeekFill = () => {
-        seek.style.setProperty("--seek-pct", `${Number(seek.value) / 10}%`);
+        const pct = Number(seek.value) / 10;
+        seek.style.setProperty("--seek-pct", `${pct}%`);
+        const bufferedPct = video.duration ? (bufferedEndSeconds(video) / video.duration) * 100 : pct;
+        seek.style.setProperty("--seek-buffered-pct", `${bufferedPct}%`);
+        if (chapters.length) {
+            ensureSegments();
+            paintChapterSegments(segments, pct, bufferedPct);
+        }
     };
     syncSeekFill();
+    /* video.buffered updates independently of currentTime - e.g. the player keeps
+       loading ahead while paused, or a slow connection means the buffered edge lags
+       noticeably behind the playhead. timeupdate alone (below) wouldn't repaint for
+       either case. */
+    video.addEventListener("progress", syncSeekFill);
+
+    /* Scrub-preview tooltip (BIF trickplay thumbnails) - shown on hover AND while
+       dragging. Loads the index lazily/fire-and-forget rather than blocking the
+       transport bar on it; until it resolves (or if this session has no BIF data at
+       all - most don't have one generated) the tooltip still shows a time label with
+       no image, same "never worse than today" fallback the segmented track uses. */
+    const bifUrl = plexAssetUrl(controller._session, controller._session?.bifIndexPath);
+    let bifIndex = null;
+    let lastHoverClientX = null;
+    if (bifUrl) {
+        loadBifIndex(bifUrl).then((index) => {
+            bifIndex = index;
+            controller._bifIndex = index;
+            /* The index takes a couple of Range round-trips to load - if the user was
+               already hovering/dragging and had stopped moving the pointer before it
+               resolved, nothing would otherwise ever retry the frame lookup for that
+               position (only pointerenter/pointermove call showPreview, and a
+               stationary pointer fires neither). */
+            if (index && lastHoverClientX != null) showPreview(lastHoverClientX);
+        });
+    }
+
+    const previewTooltip = document.createElement("div");
+    Object.assign(previewTooltip.style, {
+        position: "absolute",
+        bottom: "calc(100% + 10px)",
+        display: "none",
+        flexDirection: "column",
+        alignItems: "center",
+        pointerEvents: "none",
+        transform: "translateX(-50%)",
+    });
+    const previewImg = document.createElement("img");
+    previewImg.alt = "";
+    Object.assign(previewImg.style, {
+        width: "160px",
+        height: "90px",
+        objectFit: "cover",
+        borderRadius: "6px",
+        display: "none",
+        background: "#000",
+        boxShadow: "0 4px 14px rgba(0,0,0,0.5)",
+    });
+    const previewTime = document.createElement("div");
+    Object.assign(previewTime.style, {
+        marginTop: "6px",
+        padding: "3px 8px",
+        borderRadius: "4px",
+        background: "rgba(0,0,0,0.75)",
+        color: "#fff",
+        fontSize: "12px",
+        fontFamily: '"Roboto", sans-serif',
+        fontVariantNumeric: "tabular-nums",
+    });
+    previewTooltip.appendChild(previewImg);
+    previewTooltip.appendChild(previewTime);
+    seekWrap.appendChild(previewTooltip);
+
+    let previewLastTimeMs = null;
+    let previewRequestId = 0;
+    const showPreview = (clientX) => {
+        if (!video.duration) return;
+        const rect = seekWrap.getBoundingClientRect();
+        const fraction = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));
+        const timeMs = fraction * video.duration * 1000;
+
+        previewTooltip.style.display = "flex";
+        const tooltipHalfWidth = 80;
+        previewTooltip.style.left = `${Math.min(rect.width - tooltipHalfWidth, Math.max(tooltipHalfWidth, fraction * rect.width))}px`;
+        previewTime.textContent = formatTime(timeMs / 1000);
+
+        /* Debounced to roughly one lookup per real second of video scrubbed past,
+           rather than one per pointermove event - a fast drag across a long movie can
+           fire dozens of move events a second, and each would otherwise trigger its
+           own Range fetch for a frame the user never actually paused on. */
+        if (!bifIndex || (previewLastTimeMs != null && Math.abs(timeMs - previewLastTimeMs) < 1000)) return;
+        previewLastTimeMs = timeMs;
+        const frame = findNearestBifFrame(bifIndex, timeMs);
+        if (!frame) return;
+        const requestId = ++previewRequestId;
+        fetchBifFrameUrl(bifIndex, frame).then((url) => {
+            if (requestId !== previewRequestId) return; // a newer hover position won the race
+            previewImg.src = url;
+            previewImg.style.display = "block";
+        });
+    };
+    const hidePreview = () => {
+        previewTooltip.style.display = "none";
+        previewImg.style.display = "none";
+        previewLastTimeMs = null;
+        lastHoverClientX = null;
+    };
+    seek.addEventListener("pointerenter", (e) => {
+        lastHoverClientX = e.clientX;
+        showPreview(e.clientX);
+    });
+    seek.addEventListener("pointermove", (e) => {
+        lastHoverClientX = e.clientX;
+        showPreview(e.clientX);
+    });
+    seek.addEventListener("pointerleave", () => {
+        if (!scrubbing) hidePreview();
+    });
 
     /* Scrubbing is tracked so the timeupdate-driven sync below doesn't fight the user's
        own drag - without it, every timeupdate tick would snap the thumb back to the
@@ -422,6 +671,7 @@ export function buildTransportBar(controller, video) {
     });
     const endScrub = () => {
         scrubbing = false;
+        hidePreview();
     };
     seek.addEventListener("pointerup", endScrub);
     seek.addEventListener("pointercancel", endScrub);
@@ -443,8 +693,14 @@ export function buildTransportBar(controller, video) {
         syncSeekFill();
         syncRemaining(video.currentTime);
     });
-    video.addEventListener("durationchange", () => syncRemaining(video.currentTime));
-    video.addEventListener("loadedmetadata", () => syncRemaining(video.currentTime));
+    video.addEventListener("durationchange", () => {
+        syncRemaining(video.currentTime);
+        syncSeekFill();
+    });
+    video.addEventListener("loadedmetadata", () => {
+        syncRemaining(video.currentTime);
+        syncSeekFill();
+    });
 
     const muteBtn = document.createElement("button");
     muteBtn.type = "button";
@@ -591,7 +847,7 @@ export function buildTransportBar(controller, video) {
     });
     video.addEventListener("volumechange", syncVolumeUi);
 
-    bar.appendChild(seek);
+    bar.appendChild(seekWrap);
 
     /* Three-cell row: play/pause (+ chapter nav, when the session has chapters) always
        centered, mute pinned to the far right - filled in by buildCenterControls, called
@@ -1117,21 +1373,25 @@ function openAmbientMenu(controller, anchor) {
 }
 
 /* Reuses openInlineMenu (same scrollable tap-to-pick list as the speed/sleep-timer
-   presets) rather than a bespoke list UI - title + timestamp only, no thumbnails, per
-   this feature's scope. Only offered from the hamburger menu when the session actually
-   has chapters (see openHamburgerMenu), so there's never an empty list. */
+   presets) rather than a bespoke list UI - each row's thumb comes from Plex's own
+   per-chapter thumb path (see chapterThumbUrl), not a separately-fetched preview. Only
+   offered from the hamburger menu when the session actually has chapters (see
+   openHamburgerMenu), so there's never an empty list. */
 function openChapterMenu(controller, anchor) {
+    const session = controller._session;
     openInlineMenu(controller, {
         anchor,
         onBack: () => openHamburgerMenu(controller, anchor),
-        items: (controller._session?.chapters || []).map((chapter) => ({
+        items: (session?.chapters || []).map((chapter) => ({
             label: chapterLabel(chapter),
+            thumb: plexAssetUrl(session, chapter.thumb),
             onSelect: () => {
                 if (controller._videoEl) controller._videoEl.currentTime = (chapter.startTimeOffset ?? 0) / 1000;
             },
         })),
     });
 }
+
 
 function chapterLabel(chapter) {
     const time = formatTime((chapter.startTimeOffset ?? 0) / 1000);
@@ -1215,6 +1475,27 @@ export function openInlineMenu(controller, { anchor, items, onBack }) {
             fontSize: "14px",
             fontWeight: "500",
         });
+        /* Only the Chapters menu sets item.thumb today - every other openInlineMenu
+           caller (speed, sleep timer, audio track...) leaves it undefined, so this is a
+           no-op there. Hidden on error rather than left to show a broken-image icon -
+           Plex's chapterImages endpoint isn't guaranteed pre-generated for every chapter. */
+        if (item.thumb) {
+            const thumb = document.createElement("img");
+            thumb.src = item.thumb;
+            thumb.loading = "lazy";
+            thumb.alt = "";
+            Object.assign(thumb.style, {
+                width: "64px",
+                height: "36px",
+                borderRadius: "4px",
+                objectFit: "cover",
+                flex: "0 0 auto",
+                background: "rgba(255,255,255,0.08)",
+            });
+            thumb.addEventListener("error", () => thumb.remove());
+            row.appendChild(thumb);
+        }
+
         /* Current value (Playback Speed's "1x", Audio Track's stream label, etc.) renders
            as its own smaller/dimmer line under the row's title instead of an inline
            "(value)" suffix - keeps the title itself the same weight/size across every

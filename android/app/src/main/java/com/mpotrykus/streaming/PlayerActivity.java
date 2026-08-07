@@ -50,6 +50,10 @@ public class PlayerActivity extends AppCompatActivity {
     public static final String EXTRA_START_POSITION_MS = "startPositionMs";
     public static final String EXTRA_CHAPTERS_JSON = "chaptersJson";
     public static final String EXTRA_AUDIO_STREAMS_JSON = "audioStreamsJson";
+    /* Full, already-tokened BIF trickplay index URL (see native-bridge.js's
+       plexAssetUrl) - fetched/parsed here via BifIndex, not shipped as pre-decoded
+       frames, since only the frame nearest wherever the user drags to is ever needed. */
+    public static final String EXTRA_BIF_URL = "bifUrl";
     /* Resolved once in plex-player.js from detectShaderType's genre check rather than
        re-implemented here - one Plex-genre interpretation shared by both platforms
        instead of duplicated in Java. shaderEnabled/upscaleStrength/upscaleAuto below are
@@ -189,6 +193,20 @@ public class PlayerActivity extends AppCompatActivity {
     SeekBar transportSeekBar;
     boolean seekBarScrubbing = false;
     ProgressBar loadingSpinner;
+    /* Purely visual, drawn behind transportSeekBar - see SegmentedSeekTrackView's own
+       header comment. */
+    SegmentedSeekTrackView segmentedTrack;
+    /* Loaded fire-and-forget in onCreate (see BifIndex.load below) - null until it
+       resolves, or forever if this session has no BIF data/the fetch fails, at which
+       point the scrub-preview popup just shows a time label with no image. */
+    BifIndex bifIndex;
+    PopupWindow scrubPreviewPopup;
+    android.widget.ImageView scrubPreviewImageView;
+    TextView scrubPreviewTimeView;
+    /* -1 sentinel for "never shown a preview frame yet this drag" - 0 is a valid real
+       timestamp (the very start of the video), so it can't double as that sentinel. */
+    long scrubPreviewLastTimeMs = -1L;
+    int scrubPreviewRequestId = 0;
 
     /* PlayPauseIconView, ChapterSkipIconView, ChapterEntry, AudioStreamEntry now live in
        their own files - see PlayerUiHelper.java for the transport-bar/menu/chapter-skip
@@ -223,6 +241,10 @@ public class PlayerActivity extends AppCompatActivity {
         long startPositionMs = getIntent().getLongExtra(EXTRA_START_POSITION_MS, 0L);
         parseChapters(getIntent().getStringExtra(EXTRA_CHAPTERS_JSON));
         parseAudioStreams(getIntent().getStringExtra(EXTRA_AUDIO_STREAMS_JSON));
+        String bifUrl = getIntent().getStringExtra(EXTRA_BIF_URL);
+        if (bifUrl != null && !bifUrl.isEmpty()) {
+            BifIndex.load(bifUrl, index -> bifIndex = index);
+        }
         detectedShaderType = parseShaderType(getIntent().getStringExtra(EXTRA_SHADER_TYPE));
         upscaleStrength = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getFloat(PREF_UPSCALE_STRENGTH, 0.65f);
         shaderEnabled = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(PREF_UPSCALE_ENABLED, false);
@@ -493,7 +515,8 @@ public class PlayerActivity extends AppCompatActivity {
             org.json.JSONArray arr = new org.json.JSONArray(json);
             for (int i = 0; i < arr.length(); i++) {
                 org.json.JSONObject obj = arr.getJSONObject(i);
-                chapters.add(new ChapterEntry(obj.optString("title", ""), obj.optLong("startTimeOffsetMs", 0)));
+                String thumbUrl = obj.has("thumbUrl") && !obj.isNull("thumbUrl") ? obj.optString("thumbUrl", null) : null;
+                chapters.add(new ChapterEntry(obj.optString("title", ""), obj.optLong("startTimeOffsetMs", 0), thumbUrl));
             }
         } catch (org.json.JSONException e) {
             // malformed chapter data - show no chapters rather than crash

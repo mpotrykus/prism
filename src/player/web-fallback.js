@@ -1,6 +1,7 @@
 import Hls from "hls.js";
 import { ZOOM_LEVELS, storedVolume } from "./ui/shared.js";
 import { updateContentAnalysis } from "./content-analysis.js";
+import { releaseBifIndex } from "./core/bif.js";
 
 /* <video>+hls.js fallback path - used everywhere WebView2/Chrome/Xbox/Android-web has
    no native player available (see native-bridge.js for the Android/ExoPlayer leg).
@@ -269,6 +270,10 @@ export function teardownWeb(controller) {
     if (controller._subtitleTrackUrl) {
         URL.revokeObjectURL(controller._subtitleTrackUrl);
         controller._subtitleTrackUrl = null;
+    }
+    if (controller._bifIndex) {
+        releaseBifIndex(controller._bifIndex);
+        controller._bifIndex = null;
     }
     if (controller._videoEl) {
         controller._videoEl.pause();

@@ -15,7 +15,7 @@
    contrast/saturation moved, as their own independent toggle. */
 export const SHADER_TYPES = {
   anime4k: {
-    label: "Anime",
+    label: "Animation",
     useCas: false,
     min: { scale: 1.8, sharpen: 1.8, kernel: 1.5 },
     max: { scale: 2.4, sharpen: 3.8, kernel: 2.8 },

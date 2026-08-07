@@ -29,6 +29,7 @@ public class NativePlayerPlugin extends Plugin implements PlayerActivity.Playbac
         long startPositionMs = call.getLong("startPositionMs", 0L);
         JSArray chapters = call.getArray("chapters");
         JSArray audioStreams = call.getArray("audioStreams");
+        String bifUrl = call.getString("bifUrl");
         /* shaderEnabled/upscaleStrength/upscaleAuto are NOT read from the call here any
            more - PlayerActivity now owns them as its own SharedPreferences-persisted
            state (see that class's PREF_UPSCALE_ENABLED and friends), same immediate-
@@ -50,6 +51,9 @@ public class NativePlayerPlugin extends Plugin implements PlayerActivity.Playbac
         if (episodeNumber != null) intent.putExtra(PlayerActivity.EXTRA_EPISODE_NUMBER, episodeNumber);
         if (chapters != null) {
             intent.putExtra(PlayerActivity.EXTRA_CHAPTERS_JSON, chapters.toString());
+        }
+        if (bifUrl != null && !bifUrl.isEmpty()) {
+            intent.putExtra(PlayerActivity.EXTRA_BIF_URL, bifUrl);
         }
         if (audioStreams != null) {
             intent.putExtra(PlayerActivity.EXTRA_AUDIO_STREAMS_JSON, audioStreams.toString());

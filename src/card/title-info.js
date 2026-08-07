@@ -29,6 +29,21 @@ function extractAudioStreams(media, mediaIndex) {
     }));
 }
 
+/* Plex's Media[].Part[].Indexes carries the BIF trickplay index path (used for the
+   player's scrub-preview thumbnail, see src/player/core/bif.js) when one's been
+   generated for this part - same per-version/per-part shape as extractAudioStreams
+   above, since a multi-version item could have generated one for some versions and not
+   others. */
+function bifIndexPath(media, mediaIndex) {
+  const part = media?.[mediaIndex]?.Part?.[0];
+  /* Plex's JSON conversion lowercases XML attributes but keeps child-element names
+     capitalized as authored (Chapter/Marker/Stream/Media) - "indexes" is an attribute
+     on Part, hence the lowercase i here despite every neighboring field being
+     capitalized. Confirmed against a real response, not assumed - a PowerShell check
+     of this same field is case-insensitive and would silently pass either way. */
+  return part?.indexes ? `/library/parts/${part.id}/indexes/sd` : null;
+}
+
 function formatRuntime(ms) {
   const mins = Math.round(ms / 60000);
   const h = Math.floor(mins / 60);
@@ -204,7 +219,7 @@ export class TitleInfoController {
        like every other item type here. */
     const metaPath = item.type === "playlist" ? `/playlists/${ratingKey}` : `/library/metadata/${ratingKey}`;
     try {
-      const data = await this._ctx.plexFetch(metaPath);
+      const data = await this._ctx.plexFetch(metaPath, { includeChapters: 1 });
       const meta = data?.MediaContainer?.Metadata?.[0];
       if (meta && this._item === item) this._renderDetail(meta);
     } catch (e) {
@@ -317,7 +332,7 @@ export class TitleInfoController {
 
       const showSeason = async (seasonRatingKey, focusEpisodeRatingKey) => {
         list.innerHTML = '<div class="title-info-loading">Loading episodes…</div>';
-        const epData = await this._ctx.plexFetch(`/library/metadata/${seasonRatingKey}/children`);
+        const epData = await this._ctx.plexFetch(`/library/metadata/${seasonRatingKey}/children`, { includeChapters: 1 });
         if (this._item?.ratingKey !== showRatingKey) return;
         const episodes = epData?.MediaContainer?.Metadata || [];
         list.innerHTML = episodes
@@ -354,6 +369,7 @@ export class TitleInfoController {
               markers: ep.Marker || [],
               chapters: ep.Chapter || [],
               audioStreams: extractAudioStreams(ep.Media, 0),
+              bifIndexPath: bifIndexPath(ep.Media, 0),
             });
           });
         });
@@ -471,6 +487,7 @@ export class TitleInfoController {
       mediaIndex,
       qualityCapKbps: this._qualityCapKbps,
       audioStreams: extractAudioStreams(this._media, mediaIndex),
+      bifIndexPath: bifIndexPath(this._media, mediaIndex),
     });
   }
 
@@ -479,7 +496,7 @@ export class TitleInfoController {
      resuming from the show modal's Play button seeks to the right spot. */
   async _playEpisodeByRatingKey(ratingKey) {
     try {
-      const data = await this._ctx.plexFetch(`/library/metadata/${ratingKey}`);
+      const data = await this._ctx.plexFetch(`/library/metadata/${ratingKey}`, { includeChapters: 1 });
       const meta = data?.MediaContainer?.Metadata?.[0];
       if (!meta) return;
       await this._ctx.onPlayItem(this._ctx.mapItem(meta, true), {
@@ -489,6 +506,7 @@ export class TitleInfoController {
         markers: meta.Marker || [],
         chapters: meta.Chapter || [],
         audioStreams: extractAudioStreams(meta.Media, 0),
+        bifIndexPath: bifIndexPath(meta.Media, 0),
       });
     } catch (e) {
       // best-effort - Play simply won't respond if this fails

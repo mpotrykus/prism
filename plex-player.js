@@ -90,6 +90,7 @@ class StreamingPlayerController {
         this._inlineMenuEl = null;
         this._inlineMenuAnchor = null;
         this._inlineMenuCleanup = null;
+        this._bifIndex = null;
         this._ambientEnabled = false;
         this._ambientOpacity = 0.5;
         this._ambientGlowContainer = null;
@@ -164,6 +165,7 @@ class StreamingPlayerController {
             state: "playing",
             markers: item.markers || [],
             chapters: item.chapters || [],
+            bifIndexPath: item.bifIndexPath || null,
             title: item.title || "",
             year: item.year || null,
             seasonNumber: item.seasonNumber ?? null,
