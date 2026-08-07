@@ -47,21 +47,32 @@ export function playWeb(controller, streamUrl, startOffsetMs) {
         background: "#000",
         zIndex: "10000",
     });
+    /* _switchTitle's teardown-then-rebegin (see plex-player.js) replaces controller._videoEl
+       with a fresh element, but the outgoing one's own listeners stay attached - hls.js's
+       destroy() clears the old video's src and calls load() on it, which fires this browser's
+       'error' event asynchronously, landing after the new title has already started playing.
+       Every listener below has to check it's still the current element before acting on the
+       controller, or that stray event on the torn-down video kills the title switch it wasn't
+       even about. */
     video.addEventListener("timeupdate", () => {
-        if (!controller._session) return;
+        if (controller._videoEl !== video || !controller._session) return;
         controller._session.lastTimeMs = Math.round(video.currentTime * 1000);
         if (video.duration) controller._session.durationMs = Math.round(video.duration * 1000);
         const marker = controller._activeMarkerAt(controller._session.lastTimeMs);
         if (marker !== controller._activeSkipMarker) controller._updateSkipButton(marker);
     });
-    video.addEventListener("ended", () => controller.stop());
+    video.addEventListener("ended", () => {
+        if (controller._videoEl !== video) return;
+        controller.stop();
+    });
     video.addEventListener("pause", () => {
-        if (controller._session) controller._session.state = "paused";
+        if (controller._videoEl === video && controller._session) controller._session.state = "paused";
     });
     video.addEventListener("play", () => {
-        if (controller._session) controller._session.state = "playing";
+        if (controller._videoEl === video && controller._session) controller._session.state = "playing";
     });
     video.addEventListener("error", () => {
+        if (controller._videoEl !== video) return;
         const err = video.error;
         console.error("StreamingPlayer: <video> error -", err?.code, err?.message);
         controller.stop();
