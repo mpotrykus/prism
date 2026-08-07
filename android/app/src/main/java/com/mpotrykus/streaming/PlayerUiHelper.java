@@ -8,7 +8,9 @@ import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.StateListDrawable;
 import android.text.TextUtils;
+import android.view.GestureDetector;
 import android.view.Gravity;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.FrameLayout;
@@ -107,6 +109,86 @@ final class PlayerUiHelper {
         btn.setOnClickListener(v -> showPlayerMenu(activity, v));
         activity.root.addView(btn);
         activity.registerFadingControl(btn);
+    }
+
+    /* Touch-only affordance - only ever built when activity.hasTouchscreen (see the
+       onCreate call site), since a remote/D-pad-driven device has no touch input to lock
+       in the first place. Sits immediately left of the hamburger menu button above: same
+       40dp box, same 24dp top margin, offset by menu's own 24dp margin + 40dp width + 4dp
+       gap (68dp) - the same 44dp-per-button stacking chrome.js's registerControlButton
+       uses for its own corner control row on the web leg. */
+    static void buildLockButton(PlayerActivity activity, float density) {
+        LockIconView btn = new LockIconView(activity);
+        btn.setContentDescription("Lock touch controls");
+        btn.setOnClickListener(v -> activity.setTouchLocked(true));
+        FrameLayout.LayoutParams params = new FrameLayout.LayoutParams((int) (40 * density), (int) (40 * density));
+        params.gravity = Gravity.TOP | Gravity.END;
+        params.setMargins(0, (int) (24 * density), (int) (68 * density), 0);
+        btn.setLayoutParams(params);
+        activity.root.addView(btn);
+        activity.registerFadingControl(btn);
+    }
+
+    /* Full-screen, added last in onCreate so it sits on top of every other view in z-order
+       (root is a plain FrameLayout - child order is stacking order) - that's what lets it
+       intercept every touch ahead of playerView's own tap/double-tap/fling/pinch
+       GestureDetector and every button underneath once locked, rather than needing a
+       locked-check threaded through each of those separately. Built once, toggled
+       VISIBLE/GONE by setTouchLocked rather than added/removed from the view tree per
+       lock/unlock cycle. A tap surfaces the "long-press to unlock" message; the overlay's
+       own GestureDetector.onLongPress is the only way out. */
+    static void buildLockOverlay(PlayerActivity activity, float density) {
+        FrameLayout overlay = new FrameLayout(activity);
+        overlay.setVisibility(View.GONE);
+
+        TextView message = new TextView(activity);
+        message.setText("Long-press to unlock");
+        message.setTextColor(Color.WHITE);
+        message.setTextSize(14);
+        GradientDrawable messageBg = new GradientDrawable();
+        messageBg.setColor(Color.argb(191, 0, 0, 0));
+        messageBg.setCornerRadius(20 * density);
+        message.setBackground(messageBg);
+        int padH = (int) (18 * density);
+        int padV = (int) (12 * density);
+        message.setPadding(padH, padV, padH, padV);
+        message.setVisibility(View.GONE);
+        FrameLayout.LayoutParams messageParams =
+            new FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT);
+        messageParams.gravity = Gravity.CENTER;
+        message.setLayoutParams(messageParams);
+        overlay.addView(message);
+
+        GestureDetector detector = new GestureDetector(activity, new GestureDetector.SimpleOnGestureListener() {
+            @Override
+            public boolean onDown(MotionEvent e) {
+                return true;
+            }
+
+            @Override
+            public boolean onSingleTapConfirmed(MotionEvent e) {
+                activity.showLockMessage();
+                return true;
+            }
+
+            @Override
+            public void onLongPress(MotionEvent e) {
+                activity.setTouchLocked(false);
+            }
+        });
+        /* Always returns true - this overlay is the only touch consumer once visible,
+           same "every event in the gesture, not just its start" reasoning
+           PlayerActivity's own playerView touch listener uses. */
+        overlay.setOnTouchListener((v, event) -> {
+            detector.onTouchEvent(event);
+            return true;
+        });
+
+        overlay.setLayoutParams(new FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
+        activity.root.addView(overlay);
+        activity.lockOverlay = overlay;
+        activity.lockMessageView = message;
     }
 
     /* "Performance Overlay" gear-menu toggle - a small monospace stats readout, added

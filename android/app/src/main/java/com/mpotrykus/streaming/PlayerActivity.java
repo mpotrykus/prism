@@ -90,6 +90,9 @@ public class PlayerActivity extends AppCompatActivity {
 
     private static final long PROGRESS_INTERVAL_MS = 1000L;
     static final long CONTROLS_HIDE_DELAY_MS = 4000L;
+    /* How long the overlay's "Long-press to unlock" message stays up after a tap while
+       touch is locked - see setTouchLocked/showLockMessage. */
+    private static final long LOCK_MESSAGE_HIDE_DELAY_MS = 1800L;
     /* Same step the back-5s/forward-5s transport buttons use - see
        PlayerUiHelper.makeSeekButton. Only reachable via the double-tap gesture below on
        devices that report a touchscreen (see hasTouchscreen); Fire TV/remote-driven
@@ -221,6 +224,15 @@ public class PlayerActivity extends AppCompatActivity {
     final Handler controlsFadeHandler = new Handler(Looper.getMainLooper());
     final Runnable controlsFadeRunnable = () -> setControlsVisible(false);
     boolean controlsVisible = true;
+    /* Touch-only lock (see hasTouchscreen gate at the buildLockButton/buildLockOverlay
+       call sites in onCreate) - see setTouchLocked for what actually toggles. */
+    boolean touchLocked = false;
+    FrameLayout lockOverlay;
+    TextView lockMessageView;
+    final Handler lockMessageHandler = new Handler(Looper.getMainLooper());
+    final Runnable hideLockMessageRunnable = () -> {
+        if (lockMessageView != null) lockMessageView.setVisibility(View.GONE);
+    };
     PlayPauseIconView playPauseButton;
     SeekBar transportSeekBar;
     boolean seekBarScrubbing = false;
@@ -347,11 +359,20 @@ public class PlayerActivity extends AppCompatActivity {
         float density = getResources().getDisplayMetrics().density;
         PlayerUiHelper.buildCloseButton(this, density);
         PlayerUiHelper.buildMenuButton(this, density);
+        if (hasTouchscreen) {
+            PlayerUiHelper.buildLockButton(this, density);
+        }
         PlayerUiHelper.buildStatsOverlay(this, density);
 
         buildLoadingSpinner();
         buildTransportBar(density);
         PlayerUiHelper.buildFloatingPlaybackControls(this, density);
+
+        /* Added last (see buildLockOverlay's own header comment for why z-order matters
+           here), after every other view root will ever contain at startup. */
+        if (hasTouchscreen) {
+            PlayerUiHelper.buildLockOverlay(this, density);
+        }
 
         setContentView(root);
 
@@ -1351,8 +1372,45 @@ public class PlayerActivity extends AppCompatActivity {
         }
     }
 
+    /* Toggled by the lock button (locked=true) and the lock overlay's own long-press
+       gesture (locked=false) - see PlayerUiHelper.buildLockButton/buildLockOverlay.
+       Locking forces every fading control (including the lock button itself) hidden via
+       the same setControlsVisible lockstep-fade the inactivity timer uses, then reveals
+       the overlay on top of everything to intercept all further touches; unlocking
+       reverses both and briefly reveals the chrome again, same as any other action that
+       calls showControlsTemporarily. */
+    void setTouchLocked(boolean locked) {
+        if (touchLocked == locked) return;
+        touchLocked = locked;
+        if (locked) {
+            controlsFadeHandler.removeCallbacks(controlsFadeRunnable);
+            setControlsVisible(false);
+            if (lockOverlay != null) lockOverlay.setVisibility(View.VISIBLE);
+        } else {
+            lockMessageHandler.removeCallbacks(hideLockMessageRunnable);
+            if (lockMessageView != null) lockMessageView.setVisibility(View.GONE);
+            if (lockOverlay != null) lockOverlay.setVisibility(View.GONE);
+            showControlsTemporarily();
+        }
+    }
+
+    /* Called from the lock overlay's onSingleTapConfirmed - re-shown (timer restarted)
+       on every tap rather than left to run out from the first one, so repeated taps keep
+       the hint up instead of it flickering off mid-read. */
+    void showLockMessage() {
+        if (lockMessageView == null) return;
+        lockMessageView.setVisibility(View.VISIBLE);
+        lockMessageHandler.removeCallbacks(hideLockMessageRunnable);
+        lockMessageHandler.postDelayed(hideLockMessageRunnable, LOCK_MESSAGE_HIDE_DELAY_MS);
+    }
+
     @Override
     public void onBackPressed() {
+        /* Touch is locked specifically so an in-pocket/accidental press can't do
+           anything - the back button (itself a touch/soft-nav-bar target) is no
+           exception, same as every other control the lock overlay already sits on top
+           of and intercepts. */
+        if (touchLocked) return;
         reportStoppedIfNeeded();
         super.onBackPressed();
     }
@@ -1378,6 +1436,7 @@ public class PlayerActivity extends AppCompatActivity {
         }
         sleepTimerHandler.removeCallbacksAndMessages(null);
         controlsFadeHandler.removeCallbacksAndMessages(null);
+        lockMessageHandler.removeCallbacksAndMessages(null);
         if (menuPopup != null) {
             menuPopup.dismiss();
             menuPopup = null;
