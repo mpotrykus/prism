@@ -91,6 +91,18 @@ final class AmbientLightSampler {
         capture.stop();
     }
 
+    /* Unlike start()/stop() (which deliberately keep the EMA state across a toggle, see
+       smoothedTop's own comment), a title switch needs the OPPOSITE behavior - the next
+       sample is a different video entirely, not a continuation of the same scene, so
+       blending it against the outgoing title's lingering colors would just read as a slow
+       fade from the old title's glow into the new one's. Setting this flag is enough:
+       smoothZones already seeds (rather than blends) every zone whenever
+       smoothingInitialized is false, so the very next sample snaps straight to the new
+       title's real colors instead of easing into them. */
+    void resetSmoothing() {
+        smoothingInitialized = false;
+    }
+
     private void processBitmap(Bitmap bitmap) {
         bitmap.getPixels(pixels, 0, SAMPLE_W, 0, 0, SAMPLE_W, SAMPLE_H);
         int edgeRows = Math.max(1, Math.round(SAMPLE_H * EDGE_FRACTION));

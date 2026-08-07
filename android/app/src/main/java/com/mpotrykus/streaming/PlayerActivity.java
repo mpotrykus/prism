@@ -1202,6 +1202,22 @@ public class PlayerActivity extends AppCompatActivity {
            whole - a fresh title starting playback hasn't hit any of those yet. */
         terminalStateReported = false;
 
+        /* Ambient lighting otherwise keeps showing the outgoing title's last-sampled
+           colors on screen for as long as the new title takes to buffer its first real
+           frame, then slowly eases (via AmbientLightSampler's own EMA smoothing) from
+           that stale color into the new one - reading as an unwanted lingering fade
+           rather than an instant switch. Clearing the glow view's own displayed colors
+           right away, on top of resetSmoothing() below, makes the switch itself instant;
+           resetSmoothing() is what keeps the *next* real sample from re-fading back in
+           from zero once it arrives. */
+        if (ambientGlowView != null) {
+            int[] noZones = new int[0];
+            ambientGlowView.setColors(noZones, noZones, noZones, noZones);
+        }
+        if (ambientSampler != null) {
+            ambientSampler.resetSmoothing();
+        }
+
         parseChapters(chaptersJson);
         parseAudioStreams(audioStreamsJson);
         bifIndex = null;
