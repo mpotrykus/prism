@@ -17,7 +17,12 @@ export async function plexFetch(card, path, params = {}) {
   url.searchParams.set("X-Plex-Token", card._config.plex_token);
   const res = await fetch(url, { headers: { Accept: "application/json" } });
   if (!res.ok) throw new Error(`Plex ${path} -> HTTP ${res.status}`);
-  return res.json();
+  /* Action endpoints like /:/scrobble and /:/unscrobble respond 200 with an empty body,
+     not JSON - res.json() throws on that (SyntaxError: Unexpected end of JSON input),
+     which every caller's catch block then swallows as if the action itself had failed
+     even though Plex already applied it server-side. */
+  const text = await res.text();
+  return text ? JSON.parse(text) : null;
 }
 
 /* "home"/"search" (or any unrecognized view) fall through to null, meaning "no single
@@ -33,7 +38,7 @@ export function sectionsForView(card, view) {
   return section ? [section] : card._config.sections;
 }
 
-async function fetchOnDeckRaw(card) {
+export async function fetchOnDeckRaw(card) {
   try {
     const data = await plexFetch(card, "/library/onDeck");
     return data?.MediaContainer?.Metadata || [];

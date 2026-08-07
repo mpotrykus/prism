@@ -23,6 +23,13 @@ export function mapItem(m, withProgress, { plexImageUrl, episodeFallbackGenres =
   const art = plexImageUrl(m.art || m.grandparentArt || thumbPath);
   const title = m.grandparentTitle || m.title || "Untitled";
   const subtitle = m.grandparentTitle ? m.title : m.year ? String(m.year) : "";
+  /* A show/season has no viewOffset/viewCount of its own the way a movie or episode
+     does - Plex's own "watched" checkmark for one means every episode has been seen
+     (viewedLeafCount === leafCount). The container's viewCount field is really a rough
+     tally of episode-view events, not a completion signal (e.g. 4 of a 7-episode
+     season watched can still read viewCount: 4, which a bare "viewCount > 0" check
+     would wrongly read as fully watched). */
+  const isShowLike = m.type === "show" || m.type === "season";
   const item = {
     ratingKey: m.ratingKey,
     key: m.key,
@@ -37,6 +44,8 @@ export function mapItem(m, withProgress, { plexImageUrl, episodeFallbackGenres =
     seasonNumber: m.parentIndex,
     episodeNumber: m.index,
     viewCount: m.viewCount || 0,
+    watched: isShowLike ? m.leafCount > 0 && m.viewedLeafCount === m.leafCount : (m.viewCount || 0) > 0,
+    hasHistory: isShowLike ? (m.viewedLeafCount || 0) > 0 : (m.viewCount || 0) > 0,
     genres: m.Genre?.length ? m.Genre.map((g) => (g.tag || "").trim()).filter(Boolean) : m.type === "episode" ? episodeFallbackGenres || [] : [],
   };
   if (withProgress && m.duration) {

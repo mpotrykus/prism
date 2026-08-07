@@ -52,6 +52,20 @@ export function formatRuntime(ms) {
   return h ? `${h}h ${m}m` : `${m}m`;
 }
 
+/* Raw-meta equivalents of logic/catalog.js's mapItem watched/hasHistory fields, for the
+   detail fetches here that hand this a raw Plex response object rather than an
+   already-mapped item - a show/season has no viewOffset/viewCount of its own the way a
+   movie or episode does (see mapItem's comment), so its own "fully watched"/"has any
+   history" both key off viewedLeafCount/leafCount instead. */
+function isFullyWatched(meta) {
+  if (meta.type === "show" || meta.type === "season") return meta.leafCount > 0 && meta.viewedLeafCount === meta.leafCount;
+  return (meta.viewCount || 0) > 0;
+}
+function hasAnyHistory(meta) {
+  if (meta.type === "show" || meta.type === "season") return (meta.viewedLeafCount || 0) > 0;
+  return (meta.viewOffset || 0) > 0 || (meta.viewCount || 0) > 0;
+}
+
 /* The title-info detail overlay (cast/seasons-episodes/collection-playlist items/
    similar titles) and the quality picker nested inside it - kept as one controller
    since the quality picker reads/writes the currently-open title's own media list and
@@ -73,6 +87,8 @@ export class TitleInfoController {
     this._titleEl = shadowRoot.querySelector(".title-info-title");
     this._metaEl = shadowRoot.querySelector(".title-info-meta");
     this._playBtn = shadowRoot.querySelector(".title-info-play");
+    this._restartBtn = shadowRoot.querySelector(".title-info-restart-btn");
+    this._unwatchBtn = shadowRoot.querySelector(".title-info-unwatch-btn");
     this._watchlistBtn = shadowRoot.querySelector(".title-info-watchlist-btn");
     this._qualityBtn = shadowRoot.querySelector(".title-info-quality-btn");
     this._summaryEl = shadowRoot.querySelector(".title-info-summary");
@@ -91,6 +107,7 @@ export class TitleInfoController {
     this._source = null;
     this._duration = null;
     this._viewOffset = 0;
+    this._viewCount = 0;
     this._markers = [];
     this._chapters = [];
     this._media = [];
@@ -127,6 +144,15 @@ export class TitleInfoController {
     this._qualityOverlay.classList.remove("open");
   }
 
+  /* Play/Resume + the Restart/mark-unwatched pair share one on/off switch - "has this
+     been started or finished before" - rather than three separately-derived booleans
+     that could drift out of sync with each other. */
+  _updatePlayHistoryUI(hasHistory) {
+    this._playBtn.textContent = hasHistory ? "▶ Resume" : "▶ Play";
+    this._restartBtn.hidden = !hasHistory;
+    this._unwatchBtn.hidden = !hasHistory;
+  }
+
   openQualityPicker() {
     this._renderQualityPicker();
     this._qualityOverlay.classList.add("open");
@@ -154,7 +180,13 @@ export class TitleInfoController {
       art: item.art,
     };
     await this.open(showItem, source);
-    if (this._item === showItem) this._resumeEpisodeKey = item.ratingKey;
+    if (this._item === showItem) {
+      this._resumeEpisodeKey = item.ratingKey;
+      /* The show container's own meta has no viewOffset (see _playEpisodeByRatingKey's
+         comment) - use the resumed episode's own progress/hasHistory, already known from
+         the click that led here, instead. */
+      this._updatePlayHistoryUI(!!(item.progress > 0 || item.hasHistory));
+    }
   }
 
   /* Opens instantly from whatever's already known about the item (title/image, via the
@@ -185,6 +217,7 @@ export class TitleInfoController {
     this._qualityBtn.hidden = true;
     this._progressEl.hidden = !(item.progress > 0);
     this._progressBar.style.width = `${Math.round((item.progress || 0) * 100)}%`;
+    this._updatePlayHistoryUI(!!(item.progress > 0 || item.hasHistory));
     const art = item.art || item.image || "";
     this._artEl.style.backgroundImage = art ? `url('${art}')` : "none";
     this._modal.style.setProperty("--title-info-bg", art ? `url('${art}')` : "none");
@@ -281,10 +314,12 @@ export class TitleInfoController {
   _renderDetail(meta) {
     this._duration = meta.duration || null;
     this._viewOffset = meta.viewOffset || 0;
+    this._viewCount = meta.viewCount || 0;
     this._markers = meta.Marker || [];
     this._chapters = meta.Chapter || [];
     this._media = meta.Media || [];
     this._qualityBtn.hidden = !this._media.length;
+    this._updatePlayHistoryUI(hasAnyHistory(meta));
     /* Refines the possibly-truncated Genre list mapItem saw at row-click time (Plex list
        endpoints cap it to ~2 tags) with this fetch's full, untruncated list, so shader
        auto-detection (plex-player.js's detectShaderType) sees every genre tag, not just
@@ -421,7 +456,7 @@ export class TitleInfoController {
     this._episodesEl.innerHTML = rawItems
       .map((m) => {
         const mapped = this._ctx.mapItem(m, true);
-        const watched = !!mapped.viewCount && !(mapped.progress > 0);
+        const watched = mapped.watched && !(mapped.progress > 0);
         return `
       <div class="title-info-episode" data-rating-key="${mapped.ratingKey}">
         <div class="title-info-episode-thumb">
@@ -498,9 +533,9 @@ export class TitleInfoController {
     }
   }
 
-  async _playCurrentItem() {
+  async _playCurrentItem({ restart = false } = {}) {
     if (this._resumeEpisodeKey) {
-      return this._playEpisodeByRatingKey(this._resumeEpisodeKey);
+      return this._playEpisodeByRatingKey(this._resumeEpisodeKey, { restart });
     }
     const item = this._item;
     if (!item) return;
@@ -523,7 +558,7 @@ export class TitleInfoController {
         : {};
     await this._ctx.onPlayItem(item, {
       durationMs: this._duration,
-      startOffsetMs: this._viewOffset,
+      startOffsetMs: restart ? 0 : this._viewOffset,
       source: this._source,
       markers: this._markers,
       chapters: this._chapters,
@@ -561,7 +596,7 @@ export class TitleInfoController {
   /* Fetches the episode's own fresh duration/viewOffset (the show-level modal's
      _duration/_viewOffset are always null/0 - shows don't carry those fields) so
      resuming from the show modal's Play button seeks to the right spot. */
-  async _playEpisodeByRatingKey(ratingKey) {
+  async _playEpisodeByRatingKey(ratingKey, { restart = false } = {}) {
     const showRatingKey = this._item?.ratingKey;
     try {
       const [data, queueRatingKeys] = await Promise.all([
@@ -573,7 +608,7 @@ export class TitleInfoController {
       const queueIndex = queueRatingKeys.findIndex((k) => String(k) === String(meta.ratingKey));
       await this._ctx.onPlayItem(this._ctx.mapItem(meta, true), {
         durationMs: meta.duration || null,
-        startOffsetMs: meta.viewOffset || 0,
+        startOffsetMs: restart ? 0 : meta.viewOffset || 0,
         source: "local",
         markers: meta.Marker || [],
         chapters: meta.Chapter || [],
@@ -620,14 +655,87 @@ export class TitleInfoController {
     }
   }
 
+  /* Plex's own "mark unwatched" action (/:/unscrobble) - the same GET-with-query-token
+     shape plexFetch already uses for reads, since Plex's scrobble endpoints take no body.
+     Targets the resumed episode's own ratingKey when this modal stands in for one (see
+     openForEpisode) rather than the show container's, since that's the item that
+     actually carries the watch history being cleared. */
+  async _markUnwatched() {
+    const item = this._item;
+    const ratingKey = this._resumeEpisodeKey || item?.ratingKey;
+    if (!ratingKey || this._unwatchBtn.dataset.busy) return;
+    this._unwatchBtn.dataset.busy = "1";
+    this._unwatchBtn.classList.add("busy");
+    try {
+      await this._ctx.plexFetch("/:/unscrobble", { key: ratingKey, identifier: "com.plexapp.plugins.library" });
+      this._viewOffset = 0;
+      this._viewCount = 0;
+      this._progressEl.hidden = true;
+      this._progressBar.style.width = "0%";
+      this._updatePlayHistoryUI(false);
+      /* Clearing history here can drop this item out of Continue Watching, and - when
+         this modal stands in for a resumed episode - can flip its show's own poster
+         badge from "Watched" back off (unwatching any one episode makes "every episode
+         watched" false, so no extra fetch is needed to know the show's new state is
+         false). Both rows/posters live on the card, not this controller, so they're
+         refreshed via the same collaborator the card passes in rather than this
+         reaching into card state. */
+      this._ctx.onPlayHistoryMutated?.(item?.ratingKey, false);
+    } catch (e) {
+      this._unwatchBtn.classList.add("error");
+      setTimeout(() => this._unwatchBtn.classList.remove("error"), 1500);
+    } finally {
+      this._unwatchBtn.classList.remove("busy");
+      delete this._unwatchBtn.dataset.busy;
+    }
+  }
+
+  /* This modal stays open (behind the full-screen player) for as long as playback runs -
+     nothing closes it when Play/Resume/Restart hands off to plex-player.js. Without this,
+     its own timeline/Play-Resume-Restart state stays frozen at whatever it was when
+     playback started, stale until the modal is closed and reopened. Re-fetches whichever
+     ratingKey this modal actually stands in for (the resumed episode, if any - see
+     openForEpisode) rather than assuming it's still the top-level item. */
+  async _refreshAfterPlayback() {
+    if (!this.isOpen()) return;
+    const showRatingKey = this._resumeEpisodeKey ? this._item?.ratingKey : null;
+    const ratingKey = this._resumeEpisodeKey || this._item?.ratingKey;
+    if (!ratingKey) return;
+    try {
+      const data = await this._ctx.plexFetch(`/library/metadata/${ratingKey}`);
+      const meta = data?.MediaContainer?.Metadata?.[0];
+      if (!meta || (this._resumeEpisodeKey || this._item?.ratingKey) !== ratingKey) return;
+      this._viewOffset = meta.viewOffset || 0;
+      this._viewCount = meta.viewCount || 0;
+      const progress = meta.duration ? Math.max(0, Math.min(1, this._viewOffset / meta.duration)) : 0;
+      this._progressEl.hidden = progress <= 0;
+      this._progressBar.style.width = `${Math.round(progress * 100)}%`;
+      this._updatePlayHistoryUI(hasAnyHistory(meta));
+      /* A poster's "Watched" badge belongs to the container shown in rows (a show's own
+         poster), not to the leaf episode ratingKey just fetched above - watching more of
+         one episode can newly complete the whole show, which needs the show's own
+         viewedLeafCount/leafCount, not this episode's. */
+      if (showRatingKey) {
+        const showData = await this._ctx.plexFetch(`/library/metadata/${showRatingKey}`);
+        const showMeta = showData?.MediaContainer?.Metadata?.[0];
+        if (showMeta) this._ctx.onPlayHistoryMutated?.(showRatingKey, isFullyWatched(showMeta));
+      } else {
+        this._ctx.onPlayHistoryMutated?.(ratingKey, isFullyWatched(meta));
+      }
+    } catch (e) {
+      // best-effort - the modal just keeps showing its pre-playback state on failure
+    }
+  }
+
   _wire() {
+    window.addEventListener("streaming-player-close", () => this._refreshAfterPlayback());
     this._closeBtn.addEventListener("click", () => this.close());
     this._overlay.addEventListener("click", (e) => {
       if (e.target === this._overlay) this.close();
     });
     this._nav = wireLinearNav(
       this._shadowRoot,
-      ".title-info-close, .title-info-play, .title-info-watchlist-btn, .title-info-quality-btn, .title-info-season-select, .title-info-episode, .title-info-similar-item",
+      ".title-info-close, .title-info-play, .title-info-restart-btn, .title-info-unwatch-btn, .title-info-watchlist-btn, .title-info-quality-btn, .title-info-season-select, .title-info-episode, .title-info-similar-item",
       { orientation: "vertical", onBack: () => this.close() }
     );
     this._watchlistBtn.addEventListener("click", (e) => {
@@ -647,6 +755,11 @@ export class TitleInfoController {
       if (this._watchlistBtn.classList.contains("added")) this._watchlistBtn.textContent = "✓";
     });
     this._playBtn.addEventListener("click", () => this._playCurrentItem());
+    this._restartBtn.addEventListener("click", () => this._playCurrentItem({ restart: true }));
+    this._unwatchBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      this._markUnwatched();
+    });
     this._qualityBtn.addEventListener("click", (e) => {
       e.stopPropagation();
       this.openQualityPicker();

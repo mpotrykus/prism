@@ -315,7 +315,12 @@ class StreamingPlayerController {
             this._pingTimer = null;
         }
         if (this._session) {
-            this._reportTimeline("stopped");
+            /* Awaited (unlike the periodic pings during playback) so Plex's own
+               viewOffset/viewCount are committed before streaming-player-close fires below -
+               listeners that refetch metadata on that event (e.g. title-info.js's own-item
+               refresh, the card's Continue Watching row refresh) would otherwise race the
+               fire-and-forget ping and read the pre-stop position. */
+            await this._reportTimeline("stopped");
             if (Capacitor.isNativePlatform() && Capacitor.getPlatform() === "android") {
                 await stopNative(this);
             } else {
@@ -531,7 +536,7 @@ class StreamingPlayerController {
 
     _reportTimeline(state) {
         const s = this._session;
-        if (!s) return;
+        if (!s) return Promise.resolve();
         const url = new URL(`${s.plexUrl}/:/timeline`);
         url.searchParams.set("ratingKey", s.ratingKey);
         url.searchParams.set("key", s.key);
@@ -540,9 +545,11 @@ class StreamingPlayerController {
         url.searchParams.set("duration", String(s.durationMs || 0));
         url.searchParams.set("X-Plex-Client-Identifier", clientIdentifier());
         url.searchParams.set("X-Plex-Token", s.plexToken);
-        /* Fire-and-forget: a dropped timeline ping just means Plex's own "continue
-           watching" progress is briefly stale, not a playback failure worth surfacing. */
-        fetch(url, { method: "GET" }).catch(() => {});
+        /* A dropped ping just means Plex's own "continue watching" progress is briefly
+           stale, not a playback failure worth surfacing - callers that don't await this
+           (every periodic ping during playback) still get that fire-and-forget behavior,
+           since the returned promise already swallows its own rejection. */
+        return fetch(url, { method: "GET" }).catch(() => {});
     }
 }
 

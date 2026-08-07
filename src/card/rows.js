@@ -85,6 +85,11 @@ export function buildPoster(item, source, { glow = true, landscape = false, item
   const el = document.createElement("div");
   el.className = landscape ? "poster landscape poster-anim-in" : "poster poster-anim-in";
   el.tabIndex = 0;
+  /* Lets a watch-state change (mark unwatched, playback ending) find and live-patch
+     every rendered copy of this title's poster (the same title can legitimately appear
+     in more than one row at once - see the comment above) without needing a full
+     _renderCurrentView() re-render, which would also reset the hero trailer. */
+  if (item.ratingKey != null) el.dataset.ratingKey = item.ratingKey;
   if (itemIndex != null) el.style.animationDelay = `${Math.min(itemIndex, 8) * 30}ms`;
   const src = landscape ? item.art || item.image : item.image;
   if (glow) el.style.setProperty("--img", `url('${src}')`);
@@ -100,7 +105,7 @@ export function buildPoster(item, source, { glow = true, landscape = false, item
           : ""
       }
       ${
-        item.viewCount > 0 && !(item.progress > 0)
+        item.watched && !(item.progress > 0)
           ? `<div class="watched-badge" title="Watched">${WATCHED_ICON_SVG}</div>`
           : ""
       }
@@ -156,6 +161,7 @@ export function buildRowSection(row, landscape, rowIndex, ctx) {
   section.className = "row-section row-anim-in";
   section.style.animationDelay = `${Math.min(rowIndex, 8) * 45}ms`;
   if (row.source === "watchlist") section.dataset.rowKey = "watchlist";
+  if (row.title === "Continue Watching") section.dataset.rowKey = "on-deck";
   const h = document.createElement("div");
   h.className = "row-title";
   h.textContent = row.title;

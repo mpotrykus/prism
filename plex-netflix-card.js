@@ -28,7 +28,7 @@ import { renderMoreSheet } from "./src/card/more-sheet.js";
 import { fetchHomeProfiles, renderProfileNav, renderProfileList, switchToUser } from "./src/card/profile.js";
 import { TitleInfoController } from "./src/card/title-info.js";
 import { HeroController } from "./src/card/hero.js";
-import { plexFetch, loadAll, sectionForView, sectionsForView, fetchWatchlistRaw } from "./src/card/data.js";
+import { plexFetch, loadAll, sectionForView, sectionsForView, fetchWatchlistRaw, fetchOnDeckRaw } from "./src/card/data.js";
 import { onSearchInput, exitSearch, renderSearchPage } from "./src/card/search-page.js";
 import { wireNavItem, renderNavSections, wireHomeNav } from "./src/card/nav.js";
 
@@ -301,6 +301,8 @@ class PlexNetflixCard extends HTMLElement {
             <div class="title-info-meta"></div>
             <div class="title-info-actions">
               <button type="button" class="title-info-play">▶ Play</button>
+              <button type="button" class="title-info-restart-btn" hidden>↺ Restart</button>
+              <button type="button" class="title-info-unwatch-btn" aria-label="Mark as unwatched" hidden>${WATCHED_ICON_SVG}</button>
               <button type="button" class="title-info-watchlist-btn" aria-label="Add to My List">+</button>
               <button type="button" class="title-info-quality-btn" aria-label="Quality" hidden>⚙</button>
             </div>
@@ -356,6 +358,7 @@ class PlexNetflixCard extends HTMLElement {
       onAddToWatchlist: (item, btnEl) => this._addToWatchlist(item, btnEl),
       onRemoveFromWatchlist: (item, btnEl) => this._removeFromWatchlist(item, btnEl),
       onPlayItem: (item, opts) => this._playItem(item, opts),
+      onPlayHistoryMutated: (ratingKey, watched) => this._onPlayHistoryMutated(ratingKey, watched),
     });
     this._hero = new HeroController(this.shadowRoot, {
       escape: (s) => this._escape(s),
@@ -373,6 +376,12 @@ class PlexNetflixCard extends HTMLElement {
       isBlockedGenreName: (name) => this._isBlockedGenreName(name),
       passesKidsMode: (m) => this._passesKidsMode(m),
     });
+
+    /* Continue Watching membership can change from any playback session, not just one
+       that started from the title-info modal (e.g. an episode row's direct-play click) -
+       a single card-level listener covers every path, rather than each of them having to
+       remember to call _onPlayHistoryMutated itself. */
+    window.addEventListener("streaming-player-close", () => this._onPlayHistoryMutated());
 
     /* Dynamic (per-library) nav items are already wired inside _renderNavSections,
        called above - only Home is static and needs wiring here. */
@@ -607,6 +616,68 @@ class PlexNetflixCard extends HTMLElement {
     );
     if (anchor) this._rowsEl.insertBefore(newSection, anchor);
     else this._rowsEl.appendChild(newSection);
+  }
+
+  /* Rebuilds just the "Continue Watching" row - same _renderCurrentView-avoidance
+     reasoning as _refreshWatchlistRow. Always the first row when present (see
+     _renderCurrentView), so there's no nth-cycling landscape calc or anchor search
+     needed for the insert case, unlike the watchlist row. */
+  _refreshOnDeckRow() {
+    const view = this._currentView || "home";
+    const sectionFilters = SECTION_TYPE_FILTERS[this._sectionForView(view)?.type];
+    const onDeckFilter = sectionFilters ? (m) => m.type === sectionFilters.onDeck : () => true;
+    const onDeck = (this._onDeckRaw || [])
+      .filter(onDeckFilter)
+      .filter((m) => this._passesKidsMode(m))
+      .map((m) => this._mapItem(m, true));
+
+    const existing = this._rowsEl.querySelector('[data-row-key="on-deck"]');
+    if (!onDeck.length) {
+      if (existing) existing.remove();
+      return;
+    }
+
+    const rowIndex = existing ? Array.from(this._rowsEl.children).indexOf(existing) : 0;
+    const newSection = this._buildRowSection({ title: "Continue Watching", items: onDeck, source: "local", landscape: true }, true, rowIndex);
+
+    if (existing) existing.replaceWith(newSection);
+    else this._rowsEl.insertBefore(newSection, this._rowsEl.firstChild);
+  }
+
+  /* Refetches on-deck data from Plex after anything that changes a title's watch
+     history from within an already-rendered view (restart/mark-unwatched via the
+     title-info modal, or any playback session ending - see the streaming-player-close
+     listener in _build) - Plex is the only source of truth for which titles currently
+     qualify for Continue Watching. ratingKey/watched are optional - only title-info.js's
+     own calls know which title's own "Watched" badge to live-patch; the plain
+     streaming-player-close listener below doesn't know which title played and just
+     refreshes on-deck. */
+  async _onPlayHistoryMutated(ratingKey, watched) {
+    if (ratingKey != null && watched != null) this._patchWatchedBadge(ratingKey, watched);
+    this._onDeckRaw = await fetchOnDeckRaw(this);
+    this._refreshOnDeckRow();
+  }
+
+  /* Live-updates every rendered copy of this title's poster (the same title can appear
+     in more than one row at once - see rows.js) instead of a full _renderCurrentView(),
+     which would also reset the hero trailer (see _refreshWatchlistRow's comment) - the
+     underlying raw row caches stay stale until the next full reload, a known gap rather
+     than something worth a wholesale re-architecture for right now. */
+  _patchWatchedBadge(ratingKey, watched) {
+    this._rowsEl.querySelectorAll(`.poster[data-rating-key="${ratingKey}"] .card`).forEach((cardEl) => {
+      const hasProgress = !!cardEl.querySelector(".progress");
+      const shouldShow = watched && !hasProgress;
+      let badge = cardEl.querySelector(".watched-badge");
+      if (shouldShow && !badge) {
+        badge = document.createElement("div");
+        badge.className = "watched-badge";
+        badge.title = "Watched";
+        badge.innerHTML = WATCHED_ICON_SVG;
+        cardEl.appendChild(badge);
+      } else if (!shouldShow && badge) {
+        badge.remove();
+      }
+    });
   }
 
   _getCollectionsRowForView(sections) {
