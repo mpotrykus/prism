@@ -1,11 +1,13 @@
 package com.mpotrykus.streaming;
 
+import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
+import android.view.GestureDetector;
 import android.view.MotionEvent;
 import android.view.ScaleGestureDetector;
 import android.view.View;
@@ -87,7 +89,16 @@ public class PlayerActivity extends AppCompatActivity {
 
     private static final long PROGRESS_INTERVAL_MS = 1000L;
     static final long CONTROLS_HIDE_DELAY_MS = 4000L;
-    private static final float TAP_SLOP_DP = 8f;
+    /* Same step the back-5s/forward-5s transport buttons use - see
+       PlayerUiHelper.makeSeekButton. Only reachable via the double-tap gesture below on
+       devices that report a touchscreen (see hasTouchscreen); Fire TV/remote-driven
+       devices have no touch input to trigger it at all, so they keep those buttons
+       instead - see buildCenterControlsRow. */
+    private static final long SEEK_STEP_MS = 5000L;
+    /* Minimum horizontal travel (on top of GestureDetector's own fling-velocity
+       threshold) before a swipe counts as a deliberate title-change gesture - see
+       tapGestureDetector's onFling. */
+    private static final float SWIPE_MIN_DISTANCE_DP = 80f;
     private static final String PREFS_NAME = "prism_player_prefs";
     private static final String PREF_AMBIENT_ENABLED = "ambient_lighting_enabled";
     private static final String PREF_AMBIENT_OPACITY = "ambient_lighting_opacity";
@@ -136,6 +147,11 @@ public class PlayerActivity extends AppCompatActivity {
     private float panStartX;
     private float panStartY;
     private boolean isPanning = false;
+    /* Read by PlayerUiHelper.buildCenterControlsRow to decide whether the back-5s/
+       forward-5s transport buttons are worth building at all - a device with no
+       touchscreen (Fire TV/remote-driven) has no way to produce the double-tap gesture
+       that replaces them on touch devices, so it needs to keep the buttons instead. */
+    boolean hasTouchscreen;
     FrameLayout root;
     TextView skipButton;
     long skipButtonSeekToMs;
@@ -229,8 +245,6 @@ public class PlayerActivity extends AppCompatActivity {
     final List<ChapterEntry> chapters = new ArrayList<>();
     final List<AudioStreamEntry> audioStreams = new ArrayList<>();
     private String currentUrl;
-    boolean muted = false;
-    VolumeIconView muteButton;
     String title = "";
     String episodeTitle = "";
     int year = -1;
@@ -321,6 +335,8 @@ public class PlayerActivity extends AppCompatActivity {
         root.addView(playerView, new FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
 
+        hasTouchscreen = getPackageManager().hasSystemFeature(PackageManager.FEATURE_TOUCHSCREEN);
+
         float density = getResources().getDisplayMetrics().density;
         PlayerUiHelper.buildCloseButton(this, density);
         PlayerUiHelper.buildMenuButton(this, density);
@@ -328,6 +344,7 @@ public class PlayerActivity extends AppCompatActivity {
 
         buildLoadingSpinner();
         buildTransportBar(density);
+        PlayerUiHelper.buildFloatingPlaybackControls(this, density);
 
         setContentView(root);
 
@@ -338,8 +355,8 @@ public class PlayerActivity extends AppCompatActivity {
            controller is disabled, and returning false on ACTION_DOWN (as an earlier version
            of this listener did whenever not zoomed, to let PlayerView's own now-removed
            tap-to-show-controls handling see the event) stops Android from delivering the
-           rest of that gesture to this listener at all - ACTION_UP, where the tap-to-toggle
-           logic below lives, would simply never arrive. */
+           rest of that gesture to this listener at all - both this detector and
+           tapGestureDetector below need every event in a gesture, not just its start. */
         ScaleGestureDetector scaleDetector = new ScaleGestureDetector(this, new ScaleGestureDetector.SimpleOnScaleGestureListener() {
             @Override
             public boolean onScale(ScaleGestureDetector detector) {
@@ -352,8 +369,70 @@ public class PlayerActivity extends AppCompatActivity {
                 return true;
             }
         });
+        /* Tap classification (single tap play/pauses, double tap seeks) is handed to
+           GestureDetector rather than a hand-rolled slop check - firing on every tap-up
+           directly would also fire once per half of a double-tap, toggling playback on
+           then off again while the seek fires in between. onSingleTapConfirmed only fires
+           once Android's own double-tap timeout has passed with no second tap, which
+           avoids that. This is inert on a device with no touchscreen (see hasTouchscreen)
+           since no MotionEvents ever reach it there - Fire TV/remote-driven devices use
+           the real play/pause and seek buttons instead, navigated via D-pad focus (see
+           buildCenterControlsRow), never this listener. */
+        GestureDetector tapGestureDetector = new GestureDetector(this, new GestureDetector.SimpleOnGestureListener() {
+            @Override
+            public boolean onDown(MotionEvent e) {
+                return true;
+            }
+
+            /* First tap on a hidden transport bar just reveals it, same as tapping used
+               to unconditionally do before double-tap-seek/swipe-title-nav needed tap
+               classification at all (see the comment above this detector) - only a tap
+               while it's already showing falls through to the transport bar's own
+               play/pause button action. Avoids the video pausing/resuming "by surprise"
+               the moment someone taps just to bring the controls up. */
+            @Override
+            public boolean onSingleTapConfirmed(MotionEvent e) {
+                if (!controlsVisible) {
+                    showControlsTemporarily();
+                    return true;
+                }
+                if (player != null) player.setPlayWhenReady(!player.getPlayWhenReady());
+                showControlsTemporarily();
+                return true;
+            }
+
+            /* Left half rewinds, right half fast-forwards - same 5s step the transport
+               bar's back-5s/forward-5s buttons use (see PlayerUiHelper.makeSeekButton). */
+            @Override
+            public boolean onDoubleTap(MotionEvent e) {
+                seekByOffset(e.getX() < playerView.getWidth() / 2f ? -SEEK_STEP_MS : SEEK_STEP_MS);
+                return true;
+            }
+
+            /* Swipe left advances to the next queued title, swipe right goes back - same
+               convention as swiping through a photo/stories carousel (content advances
+               leftward). Requires the swipe to be both long enough and predominantly
+               horizontal, on top of GestureDetector's own built-in fling-velocity
+               threshold, so a mostly-vertical drag or a slow/short one doesn't
+               misfire - there's no dedicated "pan" gesture on this surface today
+               (zoomScale > 1f's manual drag-to-pan is the only other one), but this still
+               guards against it in case that ever changes. */
+            @Override
+            public boolean onFling(MotionEvent e1, MotionEvent e2, float velocityX, float velocityY) {
+                if (e1 == null || zoomScale > 1f) return false;
+                float dx = e2.getX() - e1.getX();
+                float dy = e2.getY() - e1.getY();
+                if (Math.abs(dx) < SWIPE_MIN_DISTANCE_DP * density || Math.abs(dx) < Math.abs(dy) * 2f) return false;
+                boolean forward = dx < 0;
+                if (forward && (queueIndex < 0 || queueIndex >= queueLength - 1)) return false;
+                PlayerUiHelper.seekToAdjacentTitle(PlayerActivity.this, forward);
+                showControlsTemporarily();
+                return true;
+            }
+        });
         playerView.setOnTouchListener((v, event) -> {
             scaleDetector.onTouchEvent(event);
+            tapGestureDetector.onTouchEvent(event);
             switch (event.getActionMasked()) {
                 case MotionEvent.ACTION_DOWN:
                     dragStartRawX = event.getRawX();
@@ -372,16 +451,6 @@ public class PlayerActivity extends AppCompatActivity {
                     }
                     break;
                 case MotionEvent.ACTION_UP:
-                    if (!isPanning) {
-                        float dx = event.getRawX() - dragStartRawX;
-                        float dy = event.getRawY() - dragStartRawY;
-                        float slopPx = TAP_SLOP_DP * density;
-                        if (Math.abs(dx) < slopPx && Math.abs(dy) < slopPx) {
-                            toggleControls();
-                        }
-                    }
-                    isPanning = false;
-                    break;
                 case MotionEvent.ACTION_CANCEL:
                     isPanning = false;
                     break;
@@ -510,16 +579,27 @@ public class PlayerActivity extends AppCompatActivity {
         PlayerUiHelper.buildTransportBar(this, density);
     }
 
-    private void toggleControls() {
-        PlayerUiHelper.toggleControls(this);
-    }
-
     private void showControlsTemporarily() {
         PlayerUiHelper.showControlsTemporarily(this);
     }
 
     private void setControlsVisible(boolean visible) {
         PlayerUiHelper.setControlsVisible(this, visible);
+    }
+
+    /* Same clamp-to-[0, duration] behavior as PlayerUiHelper.makeSeekButton's click
+       handler - showControlsTemporarily afterward is what lets the user see the new
+       position reflected on the transport bar/scrub track, same as a button tap does. */
+    private void seekByOffset(long deltaMs) {
+        if (player == null) return;
+        long duration = player.getDuration();
+        long target = player.getCurrentPosition() + deltaMs;
+        target = Math.max(0, target);
+        if (duration != C.TIME_UNSET && duration > 0) {
+            target = Math.min(duration, target);
+        }
+        seek(target);
+        showControlsTemporarily();
     }
 
     private void showPlayerMenu(View anchor) {

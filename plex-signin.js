@@ -2,6 +2,7 @@
    at boot (see app.js) - blocking until a server is connected - while everything else
    configurable (libraries, trailers, AI rows, kids mode, display) lives in Settings. */
 import { wireLinearNav, focusAfterPaint } from "./focus-nav.js";
+import { isRemoteDrivenDevice } from "./input-mode.js";
 import * as StreamingPlexAuth from "./plex-auth.js";
 import { loadPlain, savePlain } from "./settings.js";
 import { hasSecrets, loadSecrets, saveSecrets } from "./vault.js";
@@ -72,21 +73,14 @@ class StreamingPlexSigninModal extends HTMLElement {
   /* Fire TV (Silk browser) and the Xbox WebView2 shell are remote/gamepad-only - there's no
      pointer at all, so opening a second browser tab for Plex's full sign-in form means typing
      a username/password with a D-pad, which is exactly the unintuitive flow this branches
-     around. Both are matched by UA (same convention as _isAndroid() in plex-netflix-card.js);
-     `pointer: none` is the CSS spec's own signal for "no pointing device" and catches any other
-     remote-driven browser that doesn't match either UA pattern. */
-  _isRemoteDrivenDevice() {
-    const ua = navigator.userAgent || "";
-    if (/Xbox/i.test(ua)) return true;
-    if (/AFT[A-Z0-9]|Fire TV/i.test(ua)) return true;
-    if (window.matchMedia && window.matchMedia("(pointer: none)").matches) return true;
-    return false;
-  }
+     around. See input-mode.js's isRemoteDrivenDevice() for how that's detected - shared with
+     the touch/gesture input-mode tracking, since both need the same "is there a pointer at
+     all" answer. */
 
   /* Two branches share the same PIN (plex.tv/api/v2/pins) and the same pollPin() loop -
      only how the code gets in front of the user differs. Touch/mouse devices get the
      familiar browser-popup sign-in; remote/gamepad-only devices (see
-     _isRemoteDrivenDevice()) instead just display the raw code and point the user at
+     isRemoteDrivenDevice()) instead just display the raw code and point the user at
      plex.tv/link on a device that actually has a keyboard. The popup, when used, is opened
      synchronously here, before any await, so browsers don't treat it as an unrequested
      pop-up - its location is set once the auth URL is ready. */
@@ -100,7 +94,7 @@ class StreamingPlexSigninModal extends HTMLElement {
     btn.disabled = true;
     statusEl.className = "status signin-status";
 
-    const remote = this._isRemoteDrivenDevice();
+    const remote = isRemoteDrivenDevice();
     statusEl.textContent = remote ? "Requesting a sign-in code…" : "Opening Plex sign-in…";
     const authWindow = remote ? null : window.open("about:blank", "_blank");
     try {

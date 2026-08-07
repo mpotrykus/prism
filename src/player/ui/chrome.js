@@ -287,7 +287,7 @@ function seekToAdjacentChapter(controller, direction, video) {
     }
 }
 
-const TITLE_PREV_RESTART_MS = 3000;
+const TITLE_PREV_RESTART_MS = 10000;
 
 /* Always rendered, unlike chapter nav - "restart this title from the beginning" is a
    valid action whether or not there's a queue at all (a standalone movie included), so

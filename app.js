@@ -1,4 +1,5 @@
 import { loadFull, isConfigured } from "./settings.js";
+import "./input-mode.js";
 
 (async function () {
   if ("serviceWorker" in navigator) {

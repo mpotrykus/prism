@@ -58,7 +58,7 @@ final class PlayerUiHelper {
     /* Same threshold as chrome.js's TITLE_PREV_RESTART_MS - how far into a title "prev"
        still counts as "just started" (jump to the actual previous queued title) rather
        than "restart this one from 0". */
-    private static final long TITLE_PREV_RESTART_MS = 3000;
+    private static final long TITLE_PREV_RESTART_MS = 10000;
 
     /* Buffering indicator - independent of fadingControls (same "contextual, not ambient
        chrome" reasoning as the skip button): it reflects actual ExoPlayer state, not user
@@ -323,22 +323,11 @@ final class PlayerUiHelper {
         buildCenterControlsRow(activity, centerCell, density);
         controlsRow.addView(centerCell);
 
-        LinearLayout rightCell = new LinearLayout(activity);
-        rightCell.setOrientation(LinearLayout.HORIZONTAL);
-        rightCell.setGravity(Gravity.CENTER_VERTICAL | Gravity.END);
-        rightCell.setLayoutParams(new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
-
-        activity.muteButton = new VolumeIconView(activity);
-        activity.muteButton.setContentDescription("Mute");
-        activity.muteButton.setLayoutParams(new LinearLayout.LayoutParams((int) (26 * density), (int) (26 * density)));
-        activity.muteButton.setOnClickListener(v -> {
-            activity.muted = !activity.muted;
-            if (activity.player != null) activity.player.setVolume(activity.muted ? 0f : 1f);
-            activity.muteButton.setMuted(activity.muted);
-            activity.muteButton.setContentDescription(activity.muted ? "Unmute" : "Mute");
-            showControlsTemporarily(activity);
-        });
-        rightCell.addView(activity.muteButton);
+        /* Empty but not removed - this flex-weight-1 spacer is what balances leftCell so
+           centerCell actually centers within controlsRow, even with no mute button (or
+           anything else) to put in it any more. */
+        View rightCell = new View(activity);
+        rightCell.setLayoutParams(new LinearLayout.LayoutParams(0, 0, 1f));
         controlsRow.addView(rightCell);
 
         bar.addView(controlsRow);
@@ -368,45 +357,94 @@ final class PlayerUiHelper {
         return "";
     }
 
-    /* Play/pause flanked by back-5s/forward-5s seek buttons, chapter nav further out when
-       the session has chapters, and title nav (prev/next episode, playlist/collection
-       item, or just "restart this movie") further out still - matching chrome.js's
-       buildCenterControls layout (which lives inside the transport bar's own center cell,
-       not a separate floating overlay like this used to render). Title nav is always
-       shown, unlike chapter nav: prev is always a real action (restart, even with no
-       queue at all) and next just greys out rather than disappearing when there's nothing
-       queued after this title - see makeTitleSkipButton/seekToAdjacentTitle - so a movie
-       played on its own still gets both buttons, just with next disabled. */
+    /* Back-5s/forward-5s seek buttons flanking a gap where play/pause used to sit, with
+       chapter nav further out when the session has chapters - play/pause and title nav
+       (prev/next episode, playlist/collection item, or just "restart this movie") now
+       live in their own floating overlay mid-screen instead (see
+       buildFloatingPlaybackControls), the "separate floating center-controls overlay"
+       an earlier version of this transport bar's own header comment mentions replacing -
+       this brings a piece of that back for the two most important controls specifically,
+       while seek/chapter (secondary, and touch devices never see them anyway - see below)
+       stay put in the bottom bar.
+
+       Both button pairs here are skipped on a device that reports a touchscreen
+       (activity.hasTouchscreen, see PlayerActivity.onCreate): double-tap left/right on the
+       video surface does the same 5s seek instead (see PlayerActivity's
+       tapGestureDetector). Chapter nav has no gesture replacement of its own yet - it's
+       just hidden on touch, reachable instead via the Chapters entry in the hamburger menu
+       (see openChapterMenu). Fire TV/remote-driven devices report no touchscreen and have
+       no way to produce that gesture, so they keep both button pairs - reachable the same
+       way every other button in this row is, via Android's default D-pad focus
+       navigation, no extra code needed. */
     private static void buildCenterControlsRow(PlayerActivity activity, LinearLayout row, float density) {
         int gapPx = (int) (14 * density);
         int chapterSizePx = (int) (36 * density);
         int seekSizePx = (int) (44 * density);
-        int playSizePx = (int) (60 * density);
-        boolean hasChapters = !activity.chapters.isEmpty();
-        boolean nextTitleEnabled = activity.queueIndex >= 0 && activity.queueIndex < activity.queueLength - 1;
+        boolean showSeekButtons = !activity.hasTouchscreen;
+        boolean showChapterButtons = !activity.chapters.isEmpty() && !activity.hasTouchscreen;
 
-        row.addView(makeTitleSkipButton(activity, false, true), marginEndParams(chapterSizePx, gapPx));
-
-        if (hasChapters) {
+        if (showChapterButtons) {
             row.addView(makeChapterSkipButton(activity, false), marginEndParams(chapterSizePx, gapPx));
         }
 
-        row.addView(makeSeekButton(activity, false), marginEndParams(seekSizePx, gapPx));
+        if (showSeekButtons) {
+            row.addView(makeSeekButton(activity, false), marginEndParams(seekSizePx, gapPx));
+        }
+
+        if (showSeekButtons) {
+            row.addView(makeSeekButton(activity, true), marginEndParams(seekSizePx, gapPx));
+        }
+
+        if (showChapterButtons) {
+            row.addView(makeChapterSkipButton(activity, true), marginEndParams(chapterSizePx, gapPx));
+        }
+    }
+
+    /* Play/pause and title nav (prev/next episode, playlist/collection item, or just
+       "restart this movie"), floating mid-screen rather than tucked into the bottom
+       transport bar - the two controls worth a big, unmissable hit target front and
+       center, same reasoning most streaming apps' TV UIs use. Title nav is always shown
+       on a non-touch device, unlike chapter nav: prev is always a real action (restart,
+       even with no queue at all) and next just greys out rather than disappearing when
+       there's nothing queued after this title - see makeTitleSkipButton/
+       seekToAdjacentTitle - so a movie played on its own still gets both buttons, just
+       with next disabled. Title nav is skipped entirely on a touchscreen device (see
+       buildCenterControlsRow's header comment) since swipe left/right on the video
+       surface already covers it there (see PlayerActivity's tapGestureDetector) - only
+       play/pause, which has no gesture equivalent, is unconditional. Registered as one
+       fading control (not per-button) like every other chrome group - see
+       registerFadingControl. */
+    static void buildFloatingPlaybackControls(PlayerActivity activity, float density) {
+        int gapPx = (int) (14 * density);
+        int chapterSizePx = (int) (36 * density);
+        int playSizePx = (int) (60 * density);
+        boolean showTitleButtons = !activity.hasTouchscreen;
+        boolean nextTitleEnabled = activity.queueIndex >= 0 && activity.queueIndex < activity.queueLength - 1;
+
+        LinearLayout row = new LinearLayout(activity);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER);
+
+        if (showTitleButtons) {
+            row.addView(makeTitleSkipButton(activity, false, true), marginEndParams(chapterSizePx, gapPx));
+        }
 
         activity.playPauseButton = new PlayPauseIconView(activity);
         activity.playPauseButton.setOnClickListener(v -> {
             if (activity.player != null) activity.player.setPlayWhenReady(!activity.player.getPlayWhenReady());
             showControlsTemporarily(activity);
         });
-        row.addView(activity.playPauseButton, marginEndParams(playSizePx, gapPx));
+        row.addView(activity.playPauseButton, showTitleButtons ? marginEndParams(playSizePx, gapPx) : new LinearLayout.LayoutParams(playSizePx, playSizePx));
 
-        row.addView(makeSeekButton(activity, true), marginEndParams(seekSizePx, gapPx));
-
-        if (hasChapters) {
-            row.addView(makeChapterSkipButton(activity, true), marginEndParams(chapterSizePx, gapPx));
+        if (showTitleButtons) {
+            row.addView(makeTitleSkipButton(activity, true, nextTitleEnabled), new LinearLayout.LayoutParams(chapterSizePx, chapterSizePx));
         }
 
-        row.addView(makeTitleSkipButton(activity, true, nextTitleEnabled), new LinearLayout.LayoutParams(chapterSizePx, chapterSizePx));
+        FrameLayout.LayoutParams rowParams = new FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT);
+        rowParams.gravity = Gravity.CENTER;
+        row.setLayoutParams(rowParams);
+        activity.root.addView(row);
+        activity.registerFadingControl(row);
     }
 
     private static LinearLayout.LayoutParams marginEndParams(int sizePx, int marginEndPx) {
@@ -493,17 +531,20 @@ final class PlayerUiHelper {
         return btn;
     }
 
-    /* "Next" always jumps forward to the next queued title - only ever attached when
-       enabled (see makeTitleSkipButton), so index/queueLength are guaranteed to allow it.
-       "Prev" jumps back to the actual previous queued title only when one exists and
-       playback is still within TITLE_PREV_RESTART_MS of the start; otherwise it just
-       restarts the current title from 0, the same convention seekToAdjacentChapter above
-       uses for prev-track buttons. Either jump is reported back to JS as a bare index
-       (see PlayerActivity.requestTitleNav) rather than resolved here - the actual Plex
-       metadata fetch for whichever adjacent title gets requested belongs to
-       plex-player.js's fetchQueuedTitle/playQueuedTitle, one implementation shared with
-       the web leg instead of duplicated into Java. */
-    private static void seekToAdjacentTitle(PlayerActivity activity, boolean forward) {
+    /* "Next" always jumps forward to the next queued title - only ever called with
+       forward=true when that's actually possible (see makeTitleSkipButton's enabled
+       check, and PlayerActivity's own queueIndex/queueLength guard before calling this
+       from a left-swipe). "Prev" jumps back to the actual previous queued title only when
+       one exists and playback is still within TITLE_PREV_RESTART_MS of the start;
+       otherwise it just restarts the current title from 0, the same convention
+       seekToAdjacentChapter above uses for prev-track buttons. Either jump is reported
+       back to JS as a bare index (see PlayerActivity.requestTitleNav) rather than
+       resolved here - the actual Plex metadata fetch for whichever adjacent title gets
+       requested belongs to plex-player.js's fetchQueuedTitle/playQueuedTitle, one
+       implementation shared with the web leg instead of duplicated into Java. Package-
+       private (not private) since PlayerActivity's swipe-to-change-title gesture calls
+       this directly too, not just makeTitleSkipButton. */
+    static void seekToAdjacentTitle(PlayerActivity activity, boolean forward) {
         if (forward) {
             PlayerActivity.requestTitleNav(activity.queueIndex + 1);
             return;
@@ -533,15 +574,6 @@ final class PlayerUiHelper {
         seekBar.setThumbOffset(0);
         seekBar.setPadding(0, 0, 0, 0);
         seekBar.setSplitTrack(false);
-    }
-
-    static void toggleControls(PlayerActivity activity) {
-        if (activity.controlsVisible) {
-            setControlsVisible(activity, false);
-            activity.controlsFadeHandler.removeCallbacks(activity.controlsFadeRunnable);
-        } else {
-            showControlsTemporarily(activity);
-        }
     }
 
     static void showControlsTemporarily(PlayerActivity activity) {
