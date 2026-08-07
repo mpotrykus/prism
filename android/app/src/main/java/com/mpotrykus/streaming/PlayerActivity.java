@@ -121,6 +121,7 @@ public class PlayerActivity extends AppCompatActivity {
         void onError(String message);
         void onStopped(long positionMs);
         void onTitleNavRequested(int newIndex);
+        void onEpisodeListRequested();
     }
 
     private static PlaybackListener listener;
@@ -230,6 +231,17 @@ public class PlayerActivity extends AppCompatActivity {
        leaked, the same "shared session state lives on the activity" reasoning every
        other package-private field here follows. */
     PopupWindow menuPopup;
+    /* The Episodes bottom sheet (see PlayerUiHelper.openEpisodeListMenu/closeEpisodeListMenu) -
+       added directly into root rather than a PopupWindow like menuPopup above, since a
+       PopupWindow is a separate WindowManager window that doesn't inherit this Activity's
+       own layoutInDisplayCutoutMode=always - confirmed on a real device (dumpsys window)
+       that a full-width PopupWindow's frame was still being clipped to the display's
+       cutout-safe area even though the Activity's own window correctly spans edge-to-edge,
+       and PopupWindow exposes no public API to opt a popup's window into that same
+       cutout-mode flag. Adding straight into root sidesteps the whole problem - it's the
+       same window as the video/transport bar, which already renders edge-to-edge. */
+    View episodeListScrim;
+    View episodeListSheet;
     final Handler controlsFadeHandler = new Handler(Looper.getMainLooper());
     final Runnable controlsFadeRunnable = () -> setControlsVisible(false);
     boolean controlsVisible = true;
@@ -371,8 +383,18 @@ public class PlayerActivity extends AppCompatActivity {
         float density = getResources().getDisplayMetrics().density;
         PlayerUiHelper.buildCloseButton(this, density);
         PlayerUiHelper.buildMenuButton(this, density);
+        /* Each top-right button after the hamburger claims the next 44dp slot outward -
+           same per-button stacking chrome.js's registerControlButton computes for its own
+           corner control row - rather than hardcoding every button's margin against a
+           fixed neighbor, since which buttons exist (Episodes; Lock) varies per session. */
+        int nextRightSlotDp = 68;
+        if (queueLength > 1) {
+            PlayerUiHelper.buildEpisodesButton(this, density, nextRightSlotDp);
+            nextRightSlotDp += 44;
+        }
         if (hasTouchscreen) {
-            PlayerUiHelper.buildLockButton(this, density);
+            PlayerUiHelper.buildLockButton(this, density, nextRightSlotDp);
+            nextRightSlotDp += 44;
         }
         PlayerUiHelper.buildStatsOverlay(this, density);
 
@@ -1212,6 +1234,68 @@ public class PlayerActivity extends AppCompatActivity {
         }
     }
 
+    /* Called from PlayerUiHelper's Episodes button click handler, already on the UI
+       thread - same "no thread hop needed" reasoning as requestTitleNav above. JS has no
+       episode data to send back yet at this point (see showEpisodeList below, arriving
+       asynchronously once JS resolves the Plex fetch) - this only reports that the user
+       asked to see the queue. */
+    static void requestEpisodeList() {
+        if (listener != null) {
+            listener.onEpisodeListRequested();
+        }
+    }
+
+    /* Bridge entry point for NativePlayerPlugin.showEpisodeList - the asynchronous
+       response to requestEpisodeList above. Same runOnUiThread reasoning as loadTitle
+       below: a Capacitor plugin call isn't guaranteed to arrive on the UI thread, and
+       this ends up building/showing a PopupWindow (see PlayerUiHelper.openEpisodeListMenu). */
+    public static void showEpisodeList(String episodesJson) {
+        if (activeInstance != null) {
+            activeInstance.runOnUiThread(() -> activeInstance.showEpisodeListInternal(episodesJson));
+        }
+    }
+
+    private void showEpisodeListInternal(String episodesJson) {
+        List<EpisodeEntry> episodes = parseEpisodeList(episodesJson);
+        if (!episodes.isEmpty()) {
+            PlayerUiHelper.openEpisodeListMenu(this, episodes);
+        } else {
+            /* Otherwise the loading placeholder shown on tap (see
+               PlayerUiHelper.showEpisodeListLoading) would just spin forever - an empty
+               result means the fetch resolved but found nothing (or failed) rather than
+               never resolving, so this is reachable, not just defensive. */
+            PlayerUiHelper.closeEpisodeListMenu(this);
+        }
+    }
+
+    /* Same org.json.JSONArray/optString parsing idiom as parseChapters/parseAudioStreams
+       below - the queue's Plex metadata is already resolved and formatted in JS
+       (episode-list.js's formatEpisodeListItem), this just rebuilds it into Java objects. */
+    private static List<EpisodeEntry> parseEpisodeList(String json) {
+        List<EpisodeEntry> episodes = new ArrayList<>();
+        if (json == null) return episodes;
+        try {
+            org.json.JSONArray arr = new org.json.JSONArray(json);
+            for (int i = 0; i < arr.length(); i++) {
+                org.json.JSONObject obj = arr.getJSONObject(i);
+                String thumbUrl = obj.has("thumbUrl") && !obj.isNull("thumbUrl") ? obj.optString("thumbUrl", null) : null;
+                episodes.add(new EpisodeEntry(
+                    obj.optInt("index", -1),
+                    obj.optString("ratingKey", ""),
+                    obj.optString("title", ""),
+                    obj.optString("subtitle", ""),
+                    obj.optString("summary", ""),
+                    thumbUrl,
+                    (float) obj.optDouble("progress", 0),
+                    obj.optBoolean("watched", false),
+                    obj.optBoolean("current", false)));
+            }
+        } catch (org.json.JSONException e) {
+            // malformed episode-list data - show nothing rather than crash
+        }
+        return episodes;
+    }
+
     /* Bridge entry point for NativePlayerPlugin.switchTitle - unlike play()/the Intent-
        based cold start, this never launches a new Activity, so there's no
        startActivityForResult/onPlaybackActivityResult round trip to resolve against; the
@@ -1247,6 +1331,7 @@ public class PlayerActivity extends AppCompatActivity {
             menuPopup.dismiss();
             menuPopup = null;
         }
+        PlayerUiHelper.closeEpisodeListMenu(this);
         hideSkipButtonInternal();
         zoomScale = 1f;
         panX = 0f;
@@ -1474,6 +1559,7 @@ public class PlayerActivity extends AppCompatActivity {
             menuPopup.dismiss();
             menuPopup = null;
         }
+        PlayerUiHelper.closeEpisodeListMenu(this);
         reportStoppedIfNeeded();
         if (player != null) {
             player.release();

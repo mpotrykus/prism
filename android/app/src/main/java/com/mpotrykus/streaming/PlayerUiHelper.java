@@ -61,6 +61,12 @@ final class PlayerUiHelper {
        still counts as "just started" (jump to the actual previous queued title) rather
        than "restart this one from 0". */
     private static final long TITLE_PREV_RESTART_MS = 10000;
+    private static final int EPISODE_CARD_WIDTH_DP = 160;
+    /* Approximates one real row of makeEpisodeCardView cards at EPISODE_CARD_WIDTH_DP
+       (16:9 thumb + title + subtitle + summary + paddings) so showEpisodeListLoading's
+       placeholder doesn't visibly resize once openEpisodeListMenu replaces it with the
+       real cards. */
+    private static final int EPISODE_LOADING_HEIGHT_DP = 200;
 
     /* Buffering indicator - independent of fadingControls (same "contextual, not ambient
        chrome" reasoning as the skip button): it reflects actual ExoPlayer state, not user
@@ -113,18 +119,50 @@ final class PlayerUiHelper {
 
     /* Touch-only affordance - only ever built when activity.hasTouchscreen (see the
        onCreate call site), since a remote/D-pad-driven device has no touch input to lock
-       in the first place. Sits immediately left of the hamburger menu button above: same
-       40dp box, same 24dp top margin, offset by menu's own 24dp margin + 40dp width + 4dp
-       gap (68dp) - the same 44dp-per-button stacking chrome.js's registerControlButton
-       uses for its own corner control row on the web leg. */
-    static void buildLockButton(PlayerActivity activity, float density) {
+       in the first place. marginDp is computed by the caller (onCreate) rather than
+       hardcoded here - the same 44dp-per-button stacking chrome.js's registerControlButton
+       uses for its own corner control row on the web leg, needed since this button no
+       longer always sits immediately left of the hamburger (the Episodes button, when
+       present, takes that slot instead - see buildEpisodesButton/onCreate). */
+    static void buildLockButton(PlayerActivity activity, float density, int marginDp) {
         LockIconView btn = new LockIconView(activity);
         btn.setContentDescription("Lock touch controls");
         btn.setOnClickListener(v -> activity.setTouchLocked(true));
         FrameLayout.LayoutParams params = new FrameLayout.LayoutParams((int) (40 * density), (int) (40 * density));
         params.gravity = Gravity.TOP | Gravity.END;
-        params.setMargins(0, (int) (24 * density), (int) (68 * density), 0);
+        params.setMargins(0, (int) (24 * density), (int) (marginDp * density), 0);
         btn.setLayoutParams(params);
+        activity.root.addView(btn);
+        activity.registerFadingControl(btn);
+    }
+
+    /* Only built when there's an actual queue to browse (activity.queueLength > 1,
+       mirroring web-fallback.js's queueRatingKeys.length > 1 gate on episode-list.js's own
+       button) - same "never an empty/dead affordance" rule the Chapters/Audio Track rows
+       already follow. Takes the slot immediately left of the hamburger (marginDp computed
+       by onCreate) since it's the next-most-common action after the options menu. Tapping
+       it has no Plex data to show yet - it just asks JS for the queue (requestEpisodeList,
+       mirroring seekToAdjacentTitle's own "report a bare request, let JS resolve the Plex
+       side" split) and PlayerUiHelper.openEpisodeListMenu renders whatever comes back. */
+    static void buildEpisodesButton(PlayerActivity activity, float density, int marginDp) {
+        /* Drawn via EpisodeListIconView (mirrors src/player/ui/shared.js's
+           episodeListIconMarkup() exactly) rather than a text glyph like the other top
+           buttons here - no single font character matches that icon, and this keeps the
+           button visually identical to its web counterpart instead of an unrelated glyph. */
+        EpisodeListIconView btn = new EpisodeListIconView(activity);
+        btn.setContentDescription("Episodes");
+        FrameLayout.LayoutParams params = new FrameLayout.LayoutParams((int) (40 * density), (int) (40 * density));
+        params.gravity = Gravity.TOP | Gravity.END;
+        params.setMargins(0, (int) (24 * density), (int) (marginDp * density), 0);
+        btn.setLayoutParams(params);
+        btn.setOnClickListener(v -> {
+            /* Shown right away rather than waiting for the round trip below to resolve -
+               episode-list.js's queue fetch is a real per-episode Plex round-trip on the
+               first open of a given queue, not instant, and a bare tap with no feedback
+               at all reads as broken while that's in flight. */
+            showEpisodeListLoading(activity);
+            PlayerActivity.requestEpisodeList();
+        });
         activity.root.addView(btn);
         activity.registerFadingControl(btn);
     }
@@ -950,6 +988,372 @@ final class PlayerUiHelper {
             rows.add(row);
         }
         openMenuPanel(activity, anchor, rows, () -> showPlayerMenu(activity, anchor));
+    }
+
+    /* Native counterpart to episode-list.js's openEpisodeListOverlay - matches the web
+       version's own layout now: a horizontally-scrolling row of cards (thumbnail on top,
+       text below) with fade-edge scroll arrows, rather than the vertical list this
+       started as. Added straight into activity.root (like the transport bar/loading
+       spinner) instead of a PopupWindow - confirmed on a real device via dumpsys window
+       that a full-width PopupWindow's frame gets clipped ~94px short of the true left
+       edge, because a PopupWindow is a separate WindowManager window that doesn't inherit
+       this Activity's own layoutInDisplayCutoutMode=always, and PopupWindow exposes no
+       public API to opt a popup's window into that same flag. root's window already
+       renders edge-to-edge correctly (the video/transport bar prove it), so adding here
+       sidesteps the whole inset problem instead of fighting it. Called only once episode
+       data has actually arrived - there's nothing to show before then. */
+    static void openEpisodeListMenu(PlayerActivity activity, List<EpisodeEntry> episodes) {
+        float density = activity.getResources().getDisplayMetrics().density;
+        closeEpisodeListMenu(activity);
+        dismissMenuPopup(activity);
+
+        View scrim = buildEpisodeSheetScrim(activity);
+        LinearLayout content = buildEpisodeSheetContainer(activity, density);
+        content.addView(buildEpisodeSheetHeader(activity, density));
+
+        /* Horizontal card row + fade-edge scroll arrows, mirroring episode-list.js's
+           scrollWrap/buildQueueScrollArrow exactly - a FrameLayout stacking the
+           HorizontalScrollView under two edge-anchored arrow buttons, rather than a
+           RecyclerView, matching the plain-Views-only convention every other menu in this
+           file already follows. */
+        FrameLayout scrollWrap = new FrameLayout(activity);
+        scrollWrap.setLayoutParams(new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        int cardWidthPx = Math.round(EPISODE_CARD_WIDTH_DP * density);
+        int arrowWidthPx = Math.round(40 * density);
+
+        LinearLayout row = new LinearLayout(activity);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+
+        android.widget.HorizontalScrollView scroll = new android.widget.HorizontalScrollView(activity);
+        scroll.setHorizontalScrollBarEnabled(false);
+        scroll.setLayoutParams(new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT));
+        /* clipToPadding(false) lets the first/last card scroll fully into this padded
+           region instead of being clipped at the padding boundary - the padding itself
+           only exists to keep resting cards clear of the arrow buttons overlaid on top,
+           same reasoning episode-list.js's own scroll padding comment gives. */
+        scroll.setClipToPadding(false);
+        int scrollPadH = Math.round(6 * density) + arrowWidthPx;
+        int scrollPadV = Math.round(12 * density);
+        scroll.setPadding(scrollPadH, scrollPadV, scrollPadH, scrollPadV);
+        scroll.addView(row, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        View currentCard = null;
+        for (EpisodeEntry episode : episodes) {
+            View card = makeEpisodeCardView(activity, density, episode, cardWidthPx);
+            row.addView(card);
+            if (episode.current) currentCard = card;
+        }
+        scrollWrap.addView(scroll);
+
+        View leftArrow = makeEpisodeScrollArrow(activity, density, true, scroll, arrowWidthPx);
+        View rightArrow = makeEpisodeScrollArrow(activity, density, false, scroll, arrowWidthPx);
+        scrollWrap.addView(leftArrow);
+        scrollWrap.addView(rightArrow);
+        content.addView(scrollWrap);
+
+        /* Same "visible only while there's somewhere left to scroll" rule as the web
+           overlay's arrows - canScrollHorizontally already accounts for this view's
+           current scroll position vs its content width, so there's no manual
+           scrollWidth/clientWidth bookkeeping to keep in sync by hand. */
+        Runnable updateArrows = () -> {
+            leftArrow.setAlpha(scroll.canScrollHorizontally(-1) ? 1f : 0f);
+            leftArrow.setClickable(scroll.canScrollHorizontally(-1));
+            rightArrow.setAlpha(scroll.canScrollHorizontally(1) ? 1f : 0f);
+            rightArrow.setClickable(scroll.canScrollHorizontally(1));
+        };
+        scroll.setOnScrollChangeListener((v, x, y, oldX, oldY) -> updateArrows.run());
+
+        View finalCurrentCard = currentCard;
+        scroll.post(() -> {
+            updateArrows.run();
+            /* Same "scroll the current episode into view, centered" behavior as
+               episode-list.js's currentCard.scrollIntoView({inline:"center"}) - has to
+               wait for layout (post) since getLeft()/getWidth() are only meaningful once
+               the row has actually been measured/positioned. */
+            if (finalCurrentCard != null) {
+                int target = finalCurrentCard.getLeft() - (scroll.getWidth() / 2 - finalCurrentCard.getWidth() / 2);
+                scroll.scrollTo(Math.max(0, target), 0);
+            }
+        });
+
+        activity.root.addView(scrim);
+        activity.root.addView(content);
+        activity.episodeListScrim = scrim;
+        activity.episodeListSheet = content;
+        activity.controlsFadeHandler.removeCallbacks(activity.controlsFadeRunnable);
+        setControlsVisible(activity, true);
+    }
+
+    /* Shown immediately on the Episodes button tap (see buildEpisodesButton), before JS
+       has resolved the actual queue metadata (episode-list.js's getQueueItems/
+       formatEpisodeListItem - a real Plex round-trip per episode on the first open of a
+       given queue, not instant). openEpisodeListMenu replaces this with the real content
+       once PlayerActivity.showEpisodeList arrives (both start with closeEpisodeListMenu,
+       so whichever is currently showing gets torn down cleanly first). Sized to
+       EPISODE_LOADING_HEIGHT_DP, chosen to approximate a real single row of
+       makeEpisodeCardView's cards (thumb+title+subtitle+summary+paddings) so the sheet
+       doesn't visibly resize once the real cards replace this placeholder. */
+    static void showEpisodeListLoading(PlayerActivity activity) {
+        float density = activity.getResources().getDisplayMetrics().density;
+        closeEpisodeListMenu(activity);
+        dismissMenuPopup(activity);
+
+        View scrim = buildEpisodeSheetScrim(activity);
+        LinearLayout content = buildEpisodeSheetContainer(activity, density);
+        content.addView(buildEpisodeSheetHeader(activity, density));
+
+        FrameLayout placeholder = new FrameLayout(activity);
+        placeholder.setLayoutParams(new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, Math.round(EPISODE_LOADING_HEIGHT_DP * density)));
+
+        /* Same amber-tinted indeterminate spinner as buildLoadingSpinner's buffering
+           indicator, not a new style of its own. */
+        ProgressBar spinner = new ProgressBar(activity, null, android.R.attr.progressBarStyleLarge);
+        spinner.getIndeterminateDrawable().setColorFilter(ACCENT_COLOR, PorterDuff.Mode.SRC_IN);
+        FrameLayout.LayoutParams spinnerParams = new FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT);
+        spinnerParams.gravity = Gravity.CENTER;
+        spinner.setLayoutParams(spinnerParams);
+        placeholder.addView(spinner);
+        content.addView(placeholder);
+
+        activity.root.addView(scrim);
+        activity.root.addView(content);
+        activity.episodeListScrim = scrim;
+        activity.episodeListSheet = content;
+        activity.controlsFadeHandler.removeCallbacks(activity.controlsFadeRunnable);
+        setControlsVisible(activity, true);
+    }
+
+    private static View buildEpisodeSheetScrim(PlayerActivity activity) {
+        View scrim = new View(activity);
+        scrim.setBackgroundColor(Color.TRANSPARENT);
+        scrim.setLayoutParams(new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
+        scrim.setOnClickListener(v -> closeEpisodeListMenu(activity));
+        return scrim;
+    }
+
+    private static LinearLayout buildEpisodeSheetContainer(PlayerActivity activity, float density) {
+        LinearLayout content = new LinearLayout(activity);
+        content.setOrientation(LinearLayout.VERTICAL);
+        content.setBackground(episodeSheetGradient());
+        /* Full width, unlike the max-width-on-tablets cap tried earlier - now that this
+           is a horizontal card row (not a vertical list whose rows would otherwise
+           stretch uncomfortably wide), there's no wide-row legibility problem to guard
+           against. */
+        FrameLayout.LayoutParams contentParams = new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT);
+        contentParams.gravity = Gravity.BOTTOM;
+        content.setLayoutParams(contentParams);
+        return content;
+    }
+
+    private static LinearLayout buildEpisodeSheetHeader(PlayerActivity activity, float density) {
+        LinearLayout header = new LinearLayout(activity);
+        header.setOrientation(LinearLayout.HORIZONTAL);
+        header.setGravity(Gravity.CENTER_VERTICAL);
+        int headerPadH = Math.round(16 * density);
+        int headerPadV = Math.round(12 * density);
+        header.setPadding(headerPadH, headerPadV, headerPadH, headerPadV);
+
+        TextView heading = new TextView(activity);
+        /* Same seasonNumber-present check episode-list.js/buildTransportBar use to
+           decide "Episodes" vs "Up Next" wording. */
+        heading.setText(activity.seasonNumber >= 0 ? "Episodes" : "Up Next");
+        heading.setTextColor(Color.WHITE);
+        heading.setTextSize(16);
+        heading.setTypeface(heading.getTypeface(), android.graphics.Typeface.BOLD);
+        heading.setLayoutParams(new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        header.addView(heading);
+
+        TextView closeBtn = new TextView(activity);
+        closeBtn.setText("✕");
+        closeBtn.setTextColor(Color.WHITE);
+        closeBtn.setTextSize(16);
+        int closePad = Math.round(6 * density);
+        closeBtn.setPadding(closePad, closePad, closePad, closePad);
+        closeBtn.setOnClickListener(v -> closeEpisodeListMenu(activity));
+        header.addView(closeBtn);
+        return header;
+    }
+
+    /* Row/card taps and the close button/scrim above all funnel through here rather than
+       each removing views directly, so there's one place that stays in sync with
+       activity's own episodeListScrim/episodeListSheet bookkeeping - same reasoning
+       dismissMenuPopup exists alongside the options-menu PopupWindow. */
+    static void closeEpisodeListMenu(PlayerActivity activity) {
+        if (activity.episodeListSheet != null) {
+            activity.root.removeView(activity.episodeListSheet);
+            activity.episodeListSheet = null;
+        }
+        if (activity.episodeListScrim != null) {
+            activity.root.removeView(activity.episodeListScrim);
+            activity.episodeListScrim = null;
+            showControlsTemporarily(activity);
+        }
+    }
+
+    /* Same fade-upward-into-the-video scrim as episode-list.js's own panel background
+       ("linear-gradient(to top, rgba(0,0,0,0.92) 0%, rgba(0,0,0,0.88) 55%, rgba(0,0,0,0.5)
+       85%, transparent 100%)") - GradientDrawable's plain color-array constructor only
+       supports evenly-spaced stops (no arbitrary percentages like the CSS version), same
+       approximation buildTransportBar's own 3-stop gradient already makes for its
+       equivalent fade, so this follows that same established precedent rather than
+       reaching for a custom Shader just for closer-to-exact stop positions. */
+    private static Drawable episodeSheetGradient() {
+        return new GradientDrawable(GradientDrawable.Orientation.BOTTOM_TOP, new int[]{
+            Color.argb(235, 0, 0, 0),
+            Color.argb(224, 0, 0, 0),
+            Color.argb(128, 0, 0, 0),
+            Color.argb(0, 0, 0, 0),
+        });
+    }
+
+    /* Same "Scroll left"/"Scroll right" fade-edge idea as episode-list.js's
+       buildQueueScrollArrow - a gradient-scrim chevron button anchored to one edge of the
+       scroll area, faded in/out based on scroll position rather than always visible. */
+    private static View makeEpisodeScrollArrow(PlayerActivity activity, float density, boolean left, android.widget.HorizontalScrollView scroll, int widthPx) {
+        TextView btn = new TextView(activity);
+        btn.setText(left ? "‹" : "›");
+        btn.setTextColor(Color.WHITE);
+        btn.setTextSize(22);
+        btn.setGravity(Gravity.CENTER);
+        btn.setAlpha(0f);
+        FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(widthPx, FrameLayout.LayoutParams.MATCH_PARENT);
+        params.gravity = (left ? Gravity.START : Gravity.END) | Gravity.CENTER_VERTICAL;
+        btn.setLayoutParams(params);
+        GradientDrawable bg = new GradientDrawable(
+            left ? GradientDrawable.Orientation.LEFT_RIGHT : GradientDrawable.Orientation.RIGHT_LEFT,
+            new int[]{Color.argb(230, 10, 10, 12), Color.argb(0, 10, 10, 12)});
+        btn.setBackground(bg);
+        btn.setOnClickListener(v -> scroll.smoothScrollBy(Math.round(scroll.getWidth() * 0.9f) * (left ? -1 : 1), 0));
+        return btn;
+    }
+
+    /* One card of the episode row above - a thumbnail (with a watched badge or progress
+       bar overlaid, mutually exclusive) above a title/subtitle/summary text stack, both
+       matching episode-list.js's buildEpisodeCard exactly (same fields, same mutual-
+       exclusivity, same amber current-item border). */
+    private static View makeEpisodeCardView(PlayerActivity activity, float density, EpisodeEntry item, int cardWidthPx) {
+        LinearLayout card = new LinearLayout(activity);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setBackground(rowPressBackground());
+        int cardPad = Math.round(4 * density);
+        card.setPadding(cardPad, cardPad, cardPad, cardPad);
+        LinearLayout.LayoutParams cardParams = new LinearLayout.LayoutParams(cardWidthPx, LinearLayout.LayoutParams.WRAP_CONTENT);
+        cardParams.setMarginEnd(Math.round(14 * density));
+        card.setLayoutParams(cardParams);
+
+        FrameLayout thumbFrame = new FrameLayout(activity);
+        int thumbWidthPx = cardWidthPx - cardPad * 2;
+        int thumbHeightPx = Math.round(thumbWidthPx * 9f / 16f);
+        LinearLayout.LayoutParams thumbFrameParams = new LinearLayout.LayoutParams(thumbWidthPx, thumbHeightPx);
+        thumbFrameParams.bottomMargin = Math.round(6 * density);
+        thumbFrame.setLayoutParams(thumbFrameParams);
+
+        android.widget.ImageView thumb = new android.widget.ImageView(activity);
+        thumb.setLayoutParams(new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
+        thumb.setScaleType(android.widget.ImageView.ScaleType.CENTER_CROP);
+        GradientDrawable thumbBg = new GradientDrawable();
+        thumbBg.setColor(Color.argb(20, 255, 255, 255));
+        thumbBg.setCornerRadius(6f * density);
+        if (item.current) {
+            thumbBg.setStroke(Math.round(2 * density), ACCENT_COLOR);
+        }
+        thumb.setBackground(thumbBg);
+        thumb.setClipToOutline(true);
+        thumbFrame.addView(thumb);
+        if (item.thumbUrl != null) {
+            String thumbUrl = item.thumbUrl;
+            PlexHttp.runAsync(() -> PlexHttp.fetchBitmapSync(thumbUrl), bitmap -> {
+                if (bitmap != null) thumb.setImageBitmap(bitmap);
+            });
+        }
+
+        /* Same dark-circle/amber-checkmark badge vs. amber progress-bar-along-the-bottom-
+           edge, mutually exclusive, as episode-list.js's buildEpisodeCard. */
+        if (item.watched) {
+            TextView badge = new TextView(activity);
+            badge.setText("✓");
+            badge.setTextColor(ACCENT_COLOR);
+            badge.setTextSize(10);
+            badge.setGravity(Gravity.CENTER);
+            int badgeSizePx = Math.round(18 * density);
+            FrameLayout.LayoutParams badgeParams = new FrameLayout.LayoutParams(badgeSizePx, badgeSizePx);
+            badgeParams.gravity = Gravity.TOP | Gravity.START;
+            badgeParams.setMargins(Math.round(4 * density), Math.round(4 * density), 0, 0);
+            badge.setLayoutParams(badgeParams);
+            GradientDrawable badgeBg = new GradientDrawable();
+            badgeBg.setShape(GradientDrawable.OVAL);
+            badgeBg.setColor(Color.argb(179, 20, 20, 24));
+            badge.setBackground(badgeBg);
+            thumbFrame.addView(badge);
+        } else if (item.progress > 0) {
+            View track = new View(activity);
+            track.setBackgroundColor(Color.argb(77, 255, 255, 255));
+            int trackHeightPx = Math.round(3 * density);
+            FrameLayout.LayoutParams trackParams = new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, trackHeightPx);
+            trackParams.gravity = Gravity.BOTTOM;
+            track.setLayoutParams(trackParams);
+            thumbFrame.addView(track);
+
+            View bar = new View(activity);
+            bar.setBackgroundColor(ACCENT_COLOR);
+            int barWidthPx = Math.round(thumbWidthPx * Math.max(0f, Math.min(1f, item.progress)));
+            FrameLayout.LayoutParams barParams = new FrameLayout.LayoutParams(barWidthPx, trackHeightPx);
+            barParams.gravity = Gravity.BOTTOM | Gravity.START;
+            bar.setLayoutParams(barParams);
+            thumbFrame.addView(bar);
+        }
+
+        card.addView(thumbFrame);
+
+        TextView title = new TextView(activity);
+        title.setText(item.title);
+        title.setTextColor(Color.WHITE);
+        title.setTextSize(13);
+        title.setTypeface(title.getTypeface(), android.graphics.Typeface.BOLD);
+        title.setMaxLines(1);
+        title.setEllipsize(TextUtils.TruncateAt.END);
+        card.addView(title);
+
+        if (item.subtitle != null && !item.subtitle.isEmpty()) {
+            TextView subtitle = new TextView(activity);
+            subtitle.setText(item.subtitle);
+            subtitle.setTextColor(VALUE_TEXT);
+            subtitle.setTextSize(10);
+            LinearLayout.LayoutParams subtitleParams =
+                new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+            subtitleParams.topMargin = Math.round(2 * density);
+            subtitle.setLayoutParams(subtitleParams);
+            card.addView(subtitle);
+        }
+
+        if (item.summary != null && !item.summary.isEmpty()) {
+            TextView summary = new TextView(activity);
+            summary.setText(item.summary);
+            summary.setTextColor(SUBTLE_TEXT);
+            summary.setTextSize(10);
+            summary.setMaxLines(3);
+            summary.setEllipsize(TextUtils.TruncateAt.END);
+            LinearLayout.LayoutParams summaryParams =
+                new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+            summaryParams.topMargin = Math.round(4 * density);
+            summary.setLayoutParams(summaryParams);
+            card.addView(summary);
+        }
+
+        /* Reuses the exact same round trip title-prev/title-next already use
+           (PlayerActivity.requestTitleNav -> JS's "titleNav" listener ->
+           chrome.js's playQueuedTitle) rather than a new event type - that function
+           already accepts an arbitrary queue index, not just the adjacent one. Tapping
+           the current episode just dismisses, matching episode-list.js's own onSelect. */
+        card.setOnClickListener(v -> {
+            closeEpisodeListMenu(activity);
+            if (!item.current) {
+                PlayerActivity.requestTitleNav(item.index);
+            }
+        });
+
+        return card;
     }
 
     /* No more manual Off/Anime4K/Live-Action picker - detectedShaderType came from

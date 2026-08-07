@@ -1,6 +1,7 @@
 import { registerPlugin } from "@capacitor/core";
 import { plexAssetUrl } from "./core/plex-asset-url.js";
 import { playQueuedTitle } from "./ui/chrome.js";
+import { getQueueItems, formatEpisodeListItem } from "./ui/episode-list.js";
 
 const NativePlayer = registerPlugin("NativePlayer");
 
@@ -54,6 +55,22 @@ export async function playNative(controller, streamUrl, startOffsetMs) {
         await NativePlayer.addListener("titleNav", ({ index }) => {
             const queue = controller._session?.queueRatingKeys || [];
             playQueuedTitle(controller, queue, index);
+        })
+    );
+    /* PlayerUiHelper's Episodes button (native-side equivalent of episode-list.js's
+       overlay) has no Plex metadata of its own to show yet when tapped - it only reports
+       "the user wants to see the queue" back here, same "native reports a bare request/
+       index, JS resolves the actual Plex data" split as titleNav above. Reuses
+       episode-list.js's own fetch+cache (getQueueItems) and display formatting
+       (formatEpisodeListItem) rather than re-deriving either in Java, so the native list
+       renders identical text/thumbnails to the web overlay. */
+    controller._nativeListenerHandles.push(
+        await NativePlayer.addListener("episodeListRequested", async () => {
+            const session = controller._session;
+            const queue = session?.queueRatingKeys || [];
+            if (!queue.length) return;
+            const items = await getQueueItems(controller, session, queue);
+            await NativePlayer.showEpisodeList({ items: items.map((item) => formatEpisodeListItem(session, item)) });
         })
     );
     await NativePlayer.play(buildPlaybackPayload(controller, streamUrl, startOffsetMs));

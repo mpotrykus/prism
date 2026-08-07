@@ -180,6 +180,18 @@ public class NativePlayerPlugin extends Plugin implements PlayerActivity.Playbac
         call.resolve();
     }
 
+    /* Counterpart to onEpisodeListRequested below - JS resolves the queue's Plex
+       metadata itself (episode-list.js's getQueueItems/formatEpisodeListItem, shared
+       with the web overlay) and hands this pre-formatted JSON blob over to render, same
+       "JS interprets Plex's protocol once, Java just renders it" split chapters/
+       audioStreams already use (see parsePlaybackParams above). */
+    @PluginMethod
+    public void showEpisodeList(PluginCall call) {
+        JSArray items = call.getArray("items");
+        PlayerActivity.showEpisodeList(items != null ? items.toString() : null);
+        call.resolve();
+    }
+
     @PluginMethod
     public void setSubtitle(PluginCall call) {
         String url = call.getString("url");
@@ -225,5 +237,15 @@ public class NativePlayerPlugin extends Plugin implements PlayerActivity.Playbac
         JSObject data = new JSObject();
         data.put("index", newIndex);
         notifyListeners("titleNav", data);
+    }
+
+    /* PlayerUiHelper's Episodes button has no Plex metadata to show yet when tapped -
+       this just reports "the user wants to see the queue" back to JS, which resolves
+       the actual episode list and calls showEpisodeList() above with the result. Empty
+       payload, unlike onTitleNavRequested's index - JS already has its own queueRatingKeys/
+       session copy, nothing needs to travel with the request itself. */
+    @Override
+    public void onEpisodeListRequested() {
+        notifyListeners("episodeListRequested", new JSObject());
     }
 }

@@ -15,6 +15,23 @@ import { formatRuntime } from "../../card/title-info.js";
 
 const ACCENT_COLOR = "#e5a00d";
 const SCROLL_CLASS = "streaming-player-episode-scroll";
+const SPINNER_STYLE_ID = "streaming-player-episode-spinner-style";
+/* Approximates one real row of buildEpisodeCard's cards (135px thumb + title + subtitle +
+   summary + the 8px flex gaps between them) so the loading spinner's placeholder doesn't
+   visibly resize once the real cards replace it - same idea as PlayerUiHelper.java's
+   EPISODE_LOADING_HEIGHT_DP on the native leg. */
+const EPISODE_CARD_HEIGHT_PX = 230;
+
+/* Same @keyframes-injection idiom chrome.js's buildLoadingSpinner uses for the main
+   buffering indicator - a separate keyframe/id rather than reusing that one directly, so
+   this file doesn't depend on chrome.js having already run first to guarantee it exists. */
+function ensureSpinnerStyle() {
+    if (document.getElementById(SPINNER_STYLE_ID)) return;
+    const style = document.createElement("style");
+    style.id = SPINNER_STYLE_ID;
+    style.textContent = "@keyframes streaming-episode-spin { to { transform: rotate(360deg); } }";
+    document.head.appendChild(style);
+}
 
 /* Same scrollbar-hiding approach as chrome.js's MENU_SCROLL_CLASS - scrollbar-width for
    Firefox, ::-webkit-scrollbar for everything Chromium-based, neither reachable via an
@@ -168,9 +185,26 @@ export async function openEpisodeListOverlay(controller) {
        which are absolutely positioned flush against scrollWrap's own true edges - without
        this, the first/last card would render underneath them. */
     Object.assign(scroll.style, { display: "flex", gap: "14px", overflowX: "auto", overflowY: "hidden", padding: "4px 54px" });
+    ensureSpinnerStyle();
     const loading = document.createElement("div");
-    loading.textContent = "Loading…";
-    Object.assign(loading.style, { color: "rgba(255,255,255,0.6)", fontSize: "13px" });
+    Object.assign(loading.style, {
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        flex: "1 1 auto",
+        width: "100%",
+        height: `${EPISODE_CARD_HEIGHT_PX}px`,
+    });
+    const spinner = document.createElement("div");
+    Object.assign(spinner.style, {
+        width: "36px",
+        height: "36px",
+        borderRadius: "50%",
+        border: "3px solid rgba(255,255,255,0.25)",
+        borderTopColor: ACCENT_COLOR,
+        animation: "streaming-episode-spin 0.8s linear infinite",
+    });
+    loading.appendChild(spinner);
     scroll.appendChild(loading);
 
     const scrollWrap = document.createElement("div");
@@ -210,19 +244,19 @@ export async function openEpisodeListOverlay(controller) {
 
     let currentCard = null;
     items.forEach((item) => {
-        const isCurrent = String(item.ratingKey) === String(session.ratingKey);
-        const card = buildEpisodeCard(session, item, isCurrent, () => {
-            if (isCurrent) {
+        const formatted = formatEpisodeListItem(session, item);
+        const card = buildEpisodeCard(formatted, () => {
+            if (formatted.current) {
                 closeEpisodeListOverlay(controller);
                 return;
             }
-            const index = queueRatingKeys.findIndex((k) => String(k) === String(item.ratingKey));
+            const index = queueRatingKeys.findIndex((k) => String(k) === formatted.ratingKey);
             if (index < 0) return;
             closeEpisodeListOverlay(controller);
             playQueuedTitle(controller, queueRatingKeys, index);
         });
         scroll.appendChild(card);
-        if (isCurrent) currentCard = card;
+        if (formatted.current) currentCard = card;
     });
 
     if (currentCard) currentCard.scrollIntoView({ inline: "center", block: "nearest" });
@@ -242,8 +276,10 @@ export function closeEpisodeListOverlay(controller) {
 /* Cached per queue (reference-equality on queueRatingKeys, which threads unchanged
    through playQueuedTitle/_prepareSession across a title switch within the same show/
    collection - see plex-player.js) so reopening the list after navigating a few
-   episodes normally doesn't refetch the whole queue's metadata each time. */
-function getQueueItems(controller, session, queueRatingKeys) {
+   episodes normally doesn't refetch the whole queue's metadata each time. Exported so
+   native-bridge.js's "episodeListRequested" listener can share the same fetch+cache
+   instead of re-fetching independently for Android's native episode list. */
+export function getQueueItems(controller, session, queueRatingKeys) {
     if (controller._episodeListCache?.queueRatingKeys === queueRatingKeys) {
         return controller._episodeListCache.promise;
     }
@@ -263,7 +299,36 @@ function formatReleaseDate(dateStr) {
     return date.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
 }
 
-function buildEpisodeCard(session, item, isCurrent, onSelect) {
+/* Shapes one raw fetchQueueItemsMetadata result into exactly what a row/card needs to
+   display - the "S1 E1 - Title" / "TV-14 • 44m • Nov 15, 2004" formatting used to live
+   inline in buildEpisodeCard below; pulled out and exported so Android's native episode
+   list (native-bridge.js's "episodeListRequested" listener) renders identical text
+   instead of re-deriving its own formatting in Java from raw fields. thumbUrl is
+   resolved here (not left as a bare Plex path) for the same reason chapters/audioStreams
+   already cross the native bridge pre-resolved - Java has no equivalent of this module's
+   session-scoped plexAssetUrl to finish building it itself. */
+export function formatEpisodeListItem(session, item) {
+    const subtitleParts = [];
+    if (item.contentRating) subtitleParts.push(item.contentRating);
+    if (item.durationMs) subtitleParts.push(formatRuntime(item.durationMs));
+    const releaseDate = formatReleaseDate(item.releaseDate);
+    if (releaseDate) subtitleParts.push(releaseDate);
+
+    return {
+        index: item.index,
+        ratingKey: String(item.ratingKey),
+        title: item.seasonNumber != null && item.index != null ? `S${item.seasonNumber} E${item.index} - ${item.title}` : item.title,
+        /* Same "  •  " join buildTransportBar's own subtitleParts uses (chrome.js). */
+        subtitle: subtitleParts.join("  •  "),
+        summary: item.summary || "",
+        thumbUrl: plexAssetUrl(session, item.thumb),
+        progress: item.progress,
+        watched: item.watched,
+        current: String(item.ratingKey) === String(session.ratingKey),
+    };
+}
+
+function buildEpisodeCard(item, onSelect) {
     const card = document.createElement("button");
     card.type = "button";
     Object.assign(card.style, {
@@ -289,15 +354,14 @@ function buildEpisodeCard(session, item, isCurrent, onSelect) {
         overflow: "hidden",
         background: "rgba(255,255,255,0.08)",
         boxSizing: "border-box",
-        border: isCurrent ? `2px solid ${ACCENT_COLOR}` : "2px solid transparent",
+        border: item.current ? `2px solid ${ACCENT_COLOR}` : "2px solid transparent",
     });
 
     const img = document.createElement("img");
     img.loading = "lazy";
     img.alt = "";
     Object.assign(img.style, { width: "100%", height: "100%", objectFit: "cover", display: "block" });
-    const thumbUrl = plexAssetUrl(session, item.thumb);
-    if (thumbUrl) img.src = thumbUrl;
+    if (item.thumbUrl) img.src = item.thumbUrl;
     thumbWrap.appendChild(img);
 
     if (item.watched) {
@@ -350,21 +414,13 @@ function buildEpisodeCard(session, item, isCurrent, onSelect) {
     card.appendChild(thumbWrap);
 
     const title = document.createElement("div");
-    title.textContent = item.seasonNumber != null && item.index != null ? `S${item.seasonNumber} E${item.index} - ${item.title}` : item.title;
+    title.textContent = item.title;
     Object.assign(title.style, { color: "#fff", fontSize: "13px", fontWeight: "700", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" });
     card.appendChild(title);
 
-    const subtitleParts = [];
-    if (item.contentRating) subtitleParts.push(item.contentRating);
-    if (item.durationMs) subtitleParts.push(formatRuntime(item.durationMs));
-    const releaseDate = formatReleaseDate(item.releaseDate);
-    if (releaseDate) subtitleParts.push(releaseDate);
-    if (subtitleParts.length) {
+    if (item.subtitle) {
         const subtitle = document.createElement("div");
-        /* Same "  •  " join buildTransportBar's own subtitleParts uses (chrome.js) -
-           this file has no shared separator CSS to fall back on (see the shadow-DOM
-           note on buildQueueScrollArrow above), so it's spelled out here too. */
-        subtitle.textContent = subtitleParts.join("  •  ");
+        subtitle.textContent = item.subtitle;
         Object.assign(subtitle.style, { color: "rgba(255,255,255,0.45)", fontSize: "11px", fontWeight: "600" });
         card.appendChild(subtitle);
     }
