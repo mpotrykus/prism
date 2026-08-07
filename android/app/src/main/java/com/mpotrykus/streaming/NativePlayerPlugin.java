@@ -19,50 +19,75 @@ public class NativePlayerPlugin extends Plugin implements PlayerActivity.Playbac
         PlayerActivity.setListener(this);
     }
 
-    @PluginMethod
-    public void play(PluginCall call) {
-        String url = call.getString("url");
-        if (url == null || url.isEmpty()) {
-            call.reject("Missing required parameter: url");
-            return;
-        }
-        long startPositionMs = call.getLong("startPositionMs", 0L);
-        JSArray chapters = call.getArray("chapters");
-        JSArray audioStreams = call.getArray("audioStreams");
-        String bifUrl = call.getString("bifUrl");
+    /* {url, startPositionMs, shaderType, title, ...} fields both play() and
+       switchTitle() below pull off the call the same way - shared so a future field
+       added to one Java-side consumer doesn't silently go missing from the other. */
+    private static final class PlaybackParams {
+        String url;
+        long startPositionMs;
+        JSArray chapters;
+        JSArray audioStreams;
+        String bifUrl;
+        String shaderType;
+        String title;
+        String episodeTitle;
+        Integer year;
+        Integer seasonNumber;
+        Integer episodeNumber;
+        Integer queueLength;
+        Integer queueIndex;
+    }
+
+    private static PlaybackParams parsePlaybackParams(PluginCall call) {
+        PlaybackParams p = new PlaybackParams();
+        p.url = call.getString("url");
+        p.startPositionMs = call.getLong("startPositionMs", 0L);
+        p.chapters = call.getArray("chapters");
+        p.audioStreams = call.getArray("audioStreams");
+        p.bifUrl = call.getString("bifUrl");
         /* shaderEnabled/upscaleStrength/upscaleAuto are NOT read from the call here any
            more - PlayerActivity now owns them as its own SharedPreferences-persisted
            state (see that class's PREF_UPSCALE_ENABLED and friends), same immediate-
            persistence model as colorBoostEnabled/colorBoostStrength/colorBoostAuto,
            which never traveled through this plugin either. */
-        String shaderType = call.getString("shaderType", "live_action");
-        String title = call.getString("title", "");
-        String episodeTitle = call.getString("episodeTitle");
-        Integer year = call.getInt("year");
-        Integer seasonNumber = call.getInt("seasonNumber");
-        Integer episodeNumber = call.getInt("episodeNumber");
-        Integer queueLength = call.getInt("queueLength");
-        Integer queueIndex = call.getInt("queueIndex");
+        p.shaderType = call.getString("shaderType", "live_action");
+        p.title = call.getString("title", "");
+        p.episodeTitle = call.getString("episodeTitle");
+        p.year = call.getInt("year");
+        p.seasonNumber = call.getInt("seasonNumber");
+        p.episodeNumber = call.getInt("episodeNumber");
+        p.queueLength = call.getInt("queueLength");
+        p.queueIndex = call.getInt("queueIndex");
+        return p;
+    }
+
+    @PluginMethod
+    public void play(PluginCall call) {
+        PlaybackParams p = parsePlaybackParams(call);
+        if (p.url == null || p.url.isEmpty()) {
+            call.reject("Missing required parameter: url");
+            return;
+        }
 
         Intent intent = new Intent(getContext(), PlayerActivity.class);
-        intent.putExtra(PlayerActivity.EXTRA_URL, url);
-        intent.putExtra(PlayerActivity.EXTRA_START_POSITION_MS, startPositionMs);
-        intent.putExtra(PlayerActivity.EXTRA_SHADER_TYPE, shaderType);
-        intent.putExtra(PlayerActivity.EXTRA_TITLE, title);
-        if (episodeTitle != null && !episodeTitle.isEmpty()) intent.putExtra(PlayerActivity.EXTRA_EPISODE_TITLE, episodeTitle);
-        if (year != null) intent.putExtra(PlayerActivity.EXTRA_YEAR, year);
-        if (seasonNumber != null) intent.putExtra(PlayerActivity.EXTRA_SEASON_NUMBER, seasonNumber);
-        if (episodeNumber != null) intent.putExtra(PlayerActivity.EXTRA_EPISODE_NUMBER, episodeNumber);
-        if (queueLength != null) intent.putExtra(PlayerActivity.EXTRA_QUEUE_LENGTH, queueLength);
-        if (queueIndex != null) intent.putExtra(PlayerActivity.EXTRA_QUEUE_INDEX, queueIndex);
-        if (chapters != null) {
-            intent.putExtra(PlayerActivity.EXTRA_CHAPTERS_JSON, chapters.toString());
+        intent.putExtra(PlayerActivity.EXTRA_URL, p.url);
+        intent.putExtra(PlayerActivity.EXTRA_START_POSITION_MS, p.startPositionMs);
+        intent.putExtra(PlayerActivity.EXTRA_SHADER_TYPE, p.shaderType);
+        intent.putExtra(PlayerActivity.EXTRA_TITLE, p.title);
+        if (p.episodeTitle != null && !p.episodeTitle.isEmpty()) intent.putExtra(PlayerActivity.EXTRA_EPISODE_TITLE, p.episodeTitle);
+        if (p.year != null) intent.putExtra(PlayerActivity.EXTRA_YEAR, p.year);
+        if (p.seasonNumber != null) intent.putExtra(PlayerActivity.EXTRA_SEASON_NUMBER, p.seasonNumber);
+        if (p.episodeNumber != null) intent.putExtra(PlayerActivity.EXTRA_EPISODE_NUMBER, p.episodeNumber);
+        if (p.queueLength != null) intent.putExtra(PlayerActivity.EXTRA_QUEUE_LENGTH, p.queueLength);
+        if (p.queueIndex != null) intent.putExtra(PlayerActivity.EXTRA_QUEUE_INDEX, p.queueIndex);
+        if (p.chapters != null) {
+            intent.putExtra(PlayerActivity.EXTRA_CHAPTERS_JSON, p.chapters.toString());
         }
-        if (bifUrl != null && !bifUrl.isEmpty()) {
-            intent.putExtra(PlayerActivity.EXTRA_BIF_URL, bifUrl);
+        if (p.bifUrl != null && !p.bifUrl.isEmpty()) {
+            intent.putExtra(PlayerActivity.EXTRA_BIF_URL, p.bifUrl);
         }
-        if (audioStreams != null) {
-            intent.putExtra(PlayerActivity.EXTRA_AUDIO_STREAMS_JSON, audioStreams.toString());
+        if (p.audioStreams != null) {
+            intent.putExtra(PlayerActivity.EXTRA_AUDIO_STREAMS_JSON, p.audioStreams.toString());
         }
 
         startActivityForResult(call, intent, "onPlaybackActivityResult");
@@ -73,6 +98,27 @@ public class NativePlayerPlugin extends Plugin implements PlayerActivity.Playbac
         if (call == null) {
             return;
         }
+        call.resolve();
+    }
+
+    /* In-place counterpart to play() above - swaps PlayerActivity's currently playing
+       title without finish()-ing/relaunching it (see PlayerActivity.loadTitle's own
+       header comment for why that matters: a fresh Activity per title made prev/next
+       visibly swipe the whole window out and back in). Resolves immediately rather than
+       via startActivityForResult/onPlaybackActivityResult - there's no new Activity
+       result to wait on since none launches. */
+    @PluginMethod
+    public void switchTitle(PluginCall call) {
+        PlaybackParams p = parsePlaybackParams(call);
+        if (p.url == null || p.url.isEmpty()) {
+            call.reject("Missing required parameter: url");
+            return;
+        }
+        PlayerActivity.loadTitle(p.url, p.startPositionMs, p.shaderType, p.title, p.episodeTitle,
+            p.year, p.seasonNumber, p.episodeNumber, p.queueLength, p.queueIndex,
+            p.chapters != null ? p.chapters.toString() : null,
+            p.bifUrl,
+            p.audioStreams != null ? p.audioStreams.toString() : null);
         call.resolve();
     }
 

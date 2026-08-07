@@ -338,6 +338,10 @@ final class PlayerUiHelper {
         bar.setLayoutParams(barParams);
         activity.root.addView(bar);
         activity.registerFadingControl(bar);
+        /* Kept on the activity (not just a local var) so PlayerActivity.applyTitleSwitch
+           can remove and rebuild this bar wholesale for the next title instead of
+           reaching into its title/subtitle/chapter-button internals piecemeal. */
+        activity.transportBarView = bar;
     }
 
     /* Matches chrome.js's buildTransportBar subtitleParts exactly: episode name (when
@@ -445,6 +449,10 @@ final class PlayerUiHelper {
         row.setLayoutParams(rowParams);
         activity.root.addView(row);
         activity.registerFadingControl(row);
+        /* Same reasoning as transportBarView above - lets applyTitleSwitch rebuild this
+           row wholesale (its next-title-enabled state depends on the new queueIndex/
+           queueLength) instead of reaching into it after the fact. */
+        activity.floatingControlsView = row;
     }
 
     private static LinearLayout.LayoutParams marginEndParams(int sizePx, int marginEndPx) {

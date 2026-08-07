@@ -13,6 +13,7 @@ import android.view.ScaleGestureDetector;
 import android.view.View;
 import android.view.WindowManager;
 import android.widget.FrameLayout;
+import android.widget.LinearLayout;
 import android.widget.PopupWindow;
 import android.widget.ProgressBar;
 import android.widget.SeekBar;
@@ -253,6 +254,12 @@ public class PlayerActivity extends AppCompatActivity {
     int queueLength = 0;
     int queueIndex = -1;
     TextView timeRemainingText;
+    /* Rebuilt wholesale by applyTitleSwitch on a title change (their per-title state -
+       title/subtitle text, chapter-skip button visibility, next-title-enabled - is
+       cheaper to tear down and rebuild via the same PlayerUiHelper builder methods
+       onCreate already uses than to reach into piecemeal). */
+    LinearLayout transportBarView;
+    LinearLayout floatingControlsView;
 
     /* Chrome that should fade in lockstep via setControlsVisible/showControlsTemporarily
        rather than each new button running its own independent inactivity timer that
@@ -458,14 +465,7 @@ public class PlayerActivity extends AppCompatActivity {
             return true;
         });
 
-        DefaultHttpDataSource.Factory httpDataSourceFactory = new DefaultHttpDataSource.Factory();
-        DefaultMediaSourceFactory mediaSourceFactory = new DefaultMediaSourceFactory(this).setDataSourceFactory(httpDataSourceFactory);
-
-        player = new ExoPlayer.Builder(this).setMediaSourceFactory(mediaSourceFactory).build();
-        playerView.setPlayer(player);
-        /* setVideoEffects() must be called at least once before prepare() even to apply an
-           empty (no-op) list - see ExoPlayer's javadoc on the method. */
-        applyVideoEffects();
+        createPlayer();
 
         /* getVideoSurfaceView() is only valid once setPlayer() has attached PlayerView's
            internal content view - see AmbientLightSampler's own header comment for why
@@ -501,6 +501,43 @@ public class PlayerActivity extends AppCompatActivity {
             });
         updateContentAnalysis();
 
+        currentUrl = url;
+        MediaItem mediaItem = MediaItem.fromUri(Uri.parse(url));
+        player.setMediaItem(mediaItem);
+        if (startPositionMs > 0) {
+            player.seekTo(startPositionMs);
+        }
+        player.setPlayWhenReady(true);
+        player.prepare();
+
+        startProgressLoop();
+        showControlsTemporarily();
+    }
+
+    /* Builds a fresh ExoPlayer instance and attaches it to playerView - split out of
+       onCreate so applyTitleSwitch can rebuild the player for a title switch too rather
+       than reusing the same instance across a stop()+setMediaItem()+prepare() cycle.
+       Confirmed on a real device that reusing one instance across a title switch left
+       ExoPlayer wedged in STATE_BUFFERING forever with no manifest request for the new
+       title ever going out, regardless of whether setVideoEffects() was involved -
+       something about replacing a live HLS load's MediaItem on an already-prepared
+       player leaves its loader stuck, not just a video-effects-pipeline quirk. A fresh
+       instance per title sidesteps whatever internal state that reuse was tripping over.
+       playerView's own SurfaceView (and therefore ambientSampler/contentSampler, both
+       built once against playerView.getVideoSurfaceView() in onCreate) is untouched by
+       this - PlayerView.setPlayer() only rebinds which Player renders into its existing
+       surface, it doesn't recreate the surface itself. */
+    private void createPlayer() {
+        if (player != null) {
+            player.release();
+        }
+        DefaultHttpDataSource.Factory httpDataSourceFactory = new DefaultHttpDataSource.Factory();
+        DefaultMediaSourceFactory mediaSourceFactory = new DefaultMediaSourceFactory(this).setDataSourceFactory(httpDataSourceFactory);
+        player = new ExoPlayer.Builder(this).setMediaSourceFactory(mediaSourceFactory).build();
+        playerView.setPlayer(player);
+        /* setVideoEffects() must be called at least once before prepare() even to apply an
+           empty (no-op) list - see ExoPlayer's javadoc on the method. */
+        applyVideoEffects();
         player.addListener(
             new Player.Listener() {
                 @Override
@@ -552,18 +589,6 @@ public class PlayerActivity extends AppCompatActivity {
                 }
             }
         );
-
-        currentUrl = url;
-        MediaItem mediaItem = MediaItem.fromUri(Uri.parse(url));
-        player.setMediaItem(mediaItem);
-        if (startPositionMs > 0) {
-            player.seekTo(startPositionMs);
-        }
-        player.setPlayWhenReady(true);
-        player.prepare();
-
-        startProgressLoop();
-        showControlsTemporarily();
     }
 
     /* Buffering indicator - independent of fadingControls (same "contextual, not ambient
@@ -1131,6 +1156,108 @@ public class PlayerActivity extends AppCompatActivity {
         if (listener != null) {
             listener.onTitleNavRequested(newIndex);
         }
+    }
+
+    /* Bridge entry point for NativePlayerPlugin.switchTitle - unlike play()/the Intent-
+       based cold start, this never launches a new Activity, so there's no
+       startActivityForResult/onPlaybackActivityResult round trip to resolve against; the
+       plugin call resolves as soon as this returns. runOnUiThread since, like
+       showSkipButton/hideSkipButton, a Capacitor plugin call isn't guaranteed to arrive
+       on the UI thread and applyTitleSwitch mutates views (rebuilds the transport bar/
+       floating controls) as well as calling into ExoPlayer. */
+    public static void loadTitle(String url, long startPositionMs, String shaderType, String title,
+            String episodeTitle, Integer year, Integer seasonNumber, Integer episodeNumber,
+            Integer queueLength, Integer queueIndex, String chaptersJson, String bifUrl, String audioStreamsJson) {
+        if (activeInstance != null) {
+            activeInstance.runOnUiThread(() -> activeInstance.applyTitleSwitch(url, startPositionMs, shaderType,
+                title, episodeTitle, year, seasonNumber, episodeNumber, queueLength, queueIndex,
+                chaptersJson, bifUrl, audioStreamsJson));
+        }
+    }
+
+    /* Swaps the currently playing title in place - same Activity instance, same
+       ExoPlayer, same ambient/shader GL pipeline - instead of finish()-ing and letting
+       NativePlayerPlugin.play() relaunch a fresh PlayerActivity for the next title. That
+       relaunch is what used to make title-prev/title-next (both the on-screen buttons
+       and the swipe gesture, see PlayerUiHelper.seekToAdjacentTitle) visibly swipe the
+       whole window out and back in for what should read as one continuous player.
+       Mirrors the per-title subset of onCreate's own setup - everything NOT tied to the
+       Activity/PlayerView/ExoPlayer instance itself (which onCreate builds once and this
+       reuses unchanged). */
+    void applyTitleSwitch(String url, long startPositionMs, String shaderTypeName, String newTitle,
+            String newEpisodeTitle, Integer newYear, Integer newSeasonNumber, Integer newEpisodeNumber,
+            Integer newQueueLength, Integer newQueueIndex, String chaptersJson, String bifUrl, String audioStreamsJson) {
+        if (player == null) return;
+
+        if (menuPopup != null) {
+            menuPopup.dismiss();
+            menuPopup = null;
+        }
+        hideSkipButtonInternal();
+        zoomScale = 1f;
+        panX = 0f;
+        panY = 0f;
+        applyZoomTransform(playerView);
+        /* This title's own terminal state (ended/error/stopped), not the session as a
+           whole - a fresh title starting playback hasn't hit any of those yet. */
+        terminalStateReported = false;
+
+        parseChapters(chaptersJson);
+        parseAudioStreams(audioStreamsJson);
+        bifIndex = null;
+        if (bifUrl != null && !bifUrl.isEmpty()) {
+            BifIndex.load(bifUrl, index -> bifIndex = index);
+        }
+        detectedShaderType = parseShaderType(shaderTypeName);
+        shaderType = resolveShaderType();
+
+        title = newTitle != null ? newTitle : "";
+        episodeTitle = newEpisodeTitle != null ? newEpisodeTitle : "";
+        year = newYear != null ? newYear : -1;
+        seasonNumber = newSeasonNumber != null ? newSeasonNumber : -1;
+        episodeNumber = newEpisodeNumber != null ? newEpisodeNumber : -1;
+        queueLength = newQueueLength != null ? newQueueLength : 0;
+        queueIndex = newQueueIndex != null ? newQueueIndex : -1;
+
+        /* Rebuilt wholesale rather than mutated in place - their per-title state (title/
+           subtitle text, chapter-skip button visibility, next-title-enabled) is exactly
+           what PlayerUiHelper's own builder methods already compute from the fields just
+           set above, so reusing them here is cheaper and less error-prone than a second,
+           partial "update in place" code path that could drift from onCreate's. */
+        float density = getResources().getDisplayMetrics().density;
+        if (transportBarView != null) {
+            root.removeView(transportBarView);
+            fadingControls.remove(transportBarView);
+        }
+        if (floatingControlsView != null) {
+            root.removeView(floatingControlsView);
+            fadingControls.remove(floatingControlsView);
+        }
+        buildTransportBar(density);
+        PlayerUiHelper.buildFloatingPlaybackControls(this, density);
+
+        /* The outgoing title's HLS segment loader is very likely still mid-fetch at the
+           exact moment a title switch lands (the user can tap next/prev at any point in
+           playback, not just at a segment boundary). Confirmed on a real device that
+           reusing this same ExoPlayer instance across a switch - whether via stop()+
+           setMediaItem()+prepare(), with or without a setVideoEffects() call anywhere in
+           that sequence - leaves it wedged in STATE_BUFFERING forever, with no manifest
+           request for the new title ever going out and no error callback either.
+           createPlayer() releases this instance and builds a fresh one instead (same
+           playerView/surface, ambientSampler/contentSampler, and shader pipeline - see
+           its own header comment for why those are untouched by this), sidestepping
+           whatever internal state that reuse was tripping over. */
+        createPlayer();
+        currentUrl = url;
+        MediaItem mediaItem = MediaItem.fromUri(Uri.parse(url));
+        player.setMediaItem(mediaItem);
+        if (startPositionMs > 0) {
+            player.seekTo(startPositionMs);
+        }
+        player.setPlayWhenReady(true);
+        player.prepare();
+
+        showControlsTemporarily();
     }
 
     /* Attaches a subtitle track by rebuilding the current MediaItem with the video URI

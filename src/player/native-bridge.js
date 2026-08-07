@@ -51,7 +51,15 @@ export async function playNative(controller, streamUrl, startOffsetMs) {
             playQueuedTitle(controller, queue, index);
         })
     );
-    await NativePlayer.play({
+    await NativePlayer.play(buildPlaybackPayload(controller, streamUrl, startOffsetMs));
+}
+
+/* The {url, shaderType, chapters, bifUrl, audioStreams, title/episodeTitle/year/
+   seasonNumber/episodeNumber, queueLength/queueIndex} shape both a cold play() and an
+   in-place switchTitle() send over the bridge - shared so the two never drift apart on
+   what Java expects a title's metadata to look like. */
+function buildPlaybackPayload(controller, streamUrl, startOffsetMs) {
+    return {
         url: streamUrl,
         startPositionMs: startOffsetMs,
         /* PlayerActivity only ever sees the already-detected type (never "off") - it
@@ -98,7 +106,18 @@ export async function playNative(controller, streamUrl, startOffsetMs) {
            module's own queueRatingKeys copy. */
         queueLength: controller._session.queueRatingKeys?.length ?? 0,
         queueIndex: controller._session.queueIndex ?? null,
-    });
+    };
+}
+
+/* Swaps the currently playing title in PlayerActivity in place - no Intent, no
+   startActivityForResult, same running Activity/ExoPlayer instance - rather than a full
+   stop()+play() (finish() the Activity, launch a fresh one), which is what used to make
+   title-prev/title-next visibly swipe the whole window out and back in for what should
+   read as one continuous player. No listener re-registration needed here: PlayerActivity
+   stays alive the whole time, so the progress/ended/error/stopped/titleNav listeners
+   playNative already wired up above keep firing for the new title too. */
+export async function switchNative(controller, streamUrl, startOffsetMs) {
+    await NativePlayer.switchTitle(buildPlaybackPayload(controller, streamUrl, startOffsetMs));
 }
 
 export async function stopNative(controller) {

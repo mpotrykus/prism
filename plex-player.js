@@ -26,7 +26,7 @@ import { registerNavHandler } from "./focus-nav.js";
 import { lockScroll, unlockScroll } from "./scroll-lock.js";
 import { detectShaderType } from "./src/player/shader/shaders.js";
 import { buildStreamUrl } from "./src/player/core/stream-url.js";
-import { playNative, stopNative, pauseNative, resumeNative } from "./src/player/native-bridge.js";
+import { playNative, switchNative, stopNative, pauseNative, resumeNative } from "./src/player/native-bridge.js";
 import { playWeb, attachSource, reloadWebSource, teardownWeb } from "./src/player/web-fallback.js";
 import { setShaderStrength, setColorBoostStrength, updateShaderPipeline, ensureShaderPipeline, stopShaderLoop } from "./src/player/shader-pipeline.js";
 import { setAmbientEnabled, setAmbientOpacity, updateAmbientPipeline, stopAmbientLoop } from "./src/player/ambient-pipeline.js";
@@ -168,13 +168,51 @@ class StreamingPlayerController {
        it, so calling play() again here would wrongly push a second history entry (and
        have stop()'s history.back() unwind the first one instead). Used by the title-nav
        prev/next buttons (see chrome.js's seekToAdjacentTitle) to jump to an adjacent
-       queued title mid-session. */
+       queued title mid-session.
+
+       Android native takes its own path (_switchTitleNative) rather than this
+       teardown-then-rebegin one - _teardownMedia's stopNative finish()es the running
+       PlayerActivity, and _beginSession's _playNative would then launch a fresh one for
+       the next title, a visible swipe-out/in Activity transition for what should read as
+       one continuous player staying on screen. */
     async _switchTitle(item) {
+        if (Capacitor.isNativePlatform() && Capacitor.getPlatform() === "android") {
+            await this._switchTitleNative(item);
+            return;
+        }
         await this._teardownMedia();
         await this._beginSession(item);
     }
 
+    async _switchTitleNative(item) {
+        if (this._pingTimer) {
+            clearInterval(this._pingTimer);
+            this._pingTimer = null;
+        }
+        if (this._session) this._reportTimeline("stopped");
+        const { streamUrl, startOffsetMs } = this._prepareSession(item);
+        await this._switchNative(streamUrl, startOffsetMs);
+        this._reportTimeline("playing");
+        this._pingTimer = setInterval(() => this._reportTimeline(this._session?.state || "playing"), TIMELINE_PING_MS);
+    }
+
     async _beginSession(item) {
+        const { streamUrl, startOffsetMs } = this._prepareSession(item);
+        if (Capacitor.isNativePlatform() && Capacitor.getPlatform() === "android") {
+            await this._playNative(streamUrl, startOffsetMs);
+        } else {
+            this._playWeb(streamUrl, startOffsetMs);
+        }
+        this._reportTimeline("playing");
+        this._pingTimer = setInterval(() => this._reportTimeline(this._session?.state || "playing"), TIMELINE_PING_MS);
+    }
+
+    /* The session-state build shared by a cold _beginSession and an in-place
+       _switchTitleNative - everything about resolving `item` into `this._session` plus
+       the per-video shader/ambient/color-boost/stats-overlay state, with no opinion on
+       how playback actually gets started (native Activity launch, native in-place swap,
+       or the <video>+hls.js fallback each handle that themselves). */
+    _prepareSession(item) {
         const { ratingKey, plexUrl, plexToken } = item;
         const key = item.key || `/library/metadata/${ratingKey}`;
         const sessionId = crypto.randomUUID();
@@ -248,13 +286,7 @@ class StreamingPlayerController {
         this._autoColorBoostStrength = null;
         this._statsOverlayEnabled = storedStatsOverlayEnabled();
 
-        if (Capacitor.isNativePlatform() && Capacitor.getPlatform() === "android") {
-            await this._playNative(streamUrl, startOffsetMs);
-        } else {
-            this._playWeb(streamUrl, startOffsetMs);
-        }
-        this._reportTimeline("playing");
-        this._pingTimer = setInterval(() => this._reportTimeline(this._session?.state || "playing"), TIMELINE_PING_MS);
+        return { streamUrl, startOffsetMs };
     }
 
     async stop() {
@@ -315,6 +347,10 @@ class StreamingPlayerController {
 
     _playNative(streamUrl, startOffsetMs) {
         return playNative(this, streamUrl, startOffsetMs);
+    }
+
+    _switchNative(streamUrl, startOffsetMs) {
+        return switchNative(this, streamUrl, startOffsetMs);
     }
 
     _playWeb(streamUrl, startOffsetMs) {
