@@ -1,4 +1,5 @@
 import { wireLinearNav, registerNavHandler, focusAfterPaint } from "../../focus-nav.js";
+import { lockScroll, unlockScroll } from "../../scroll-lock.js";
 import { paintWatchlistButton } from "./watchlist.js";
 import { WATCHED_ICON_SVG } from "./rows.js";
 import { PROFILE_ICON_SVG } from "./profile.js";
@@ -18,7 +19,7 @@ const QUALITY_CAP_PRESETS = [
    Audio Track menu, which stays hidden entirely when there's nothing to switch between
    (see plex-player.js's _openHamburgerMenu), so an item with only one audio stream (or
    no Stream data at all) just yields an empty list here rather than an error. */
-function extractAudioStreams(media, mediaIndex) {
+export function extractAudioStreams(media, mediaIndex) {
   const streams = media?.[mediaIndex]?.Part?.[0]?.Stream || [];
   return streams
     .filter((s) => s.streamType === 2)
@@ -34,7 +35,7 @@ function extractAudioStreams(media, mediaIndex) {
    generated for this part - same per-version/per-part shape as extractAudioStreams
    above, since a multi-version item could have generated one for some versions and not
    others. */
-function bifIndexPath(media, mediaIndex) {
+export function bifIndexPath(media, mediaIndex) {
   const part = media?.[mediaIndex]?.Part?.[0];
   /* Plex's JSON conversion lowercases XML attributes but keeps child-element names
      capitalized as authored (Chapter/Marker/Stream/Media) - "indexes" is an attribute
@@ -97,6 +98,8 @@ export class TitleInfoController {
     this._qualityCapKbps = null;
     this._pendingEpisodeFocus = null;
     this._resumeEpisodeKey = null;
+    this._flatQueueContext = null;
+    this._episodeQueueCache = null;
 
     this._wire();
   }
@@ -114,6 +117,7 @@ export class TitleInfoController {
   }
 
   close() {
+    if (this.isOpen()) unlockScroll();
     this._overlay.classList.remove("open");
     this._item = null;
   }
@@ -161,11 +165,12 @@ export class TitleInfoController {
      detail fetch and leaves Play falling back to the Discover deep link. An episode
      (e.g. from Continue Watching) redirects to its show's info instead of a standalone
      episode modal - see openForEpisode. */
-  async open(item, source) {
+  async open(item, source, { flatQueueContext = null } = {}) {
     if (item.type === "episode" && item.showKey) {
       return this.openForEpisode(item, source);
     }
     this._resumeEpisodeKey = null;
+    this._flatQueueContext = flatQueueContext;
     this._item = item;
     this._source = source;
     this._duration = null;
@@ -194,6 +199,11 @@ export class TitleInfoController {
     if (canWatchlist) {
       paintWatchlistButton(this._watchlistBtn, this._ctx.isInWatchlist(item));
     }
+    /* Re-opening for a different item (e.g. clicking a "More Like This" card) while
+       already open must not lock scroll a second time - only the matching close() call
+       unlocks it once, so a second lock here would leave the counter permanently off by
+       one. */
+    if (!this.isOpen()) lockScroll();
     this._overlay.classList.add("open");
     /* Focusing the overlay shell itself (tabindex="-1", just so a click outside it can
        still blur out of whatever was focused before) would leave document.activeElement
@@ -359,9 +369,11 @@ export class TitleInfoController {
           })
           .join("");
         list.querySelectorAll(".title-info-episode").forEach((row) => {
-          row.addEventListener("click", () => {
+          row.addEventListener("click", async () => {
             const ep = episodes.find((e) => String(e.ratingKey) === row.dataset.ratingKey);
             if (!ep) return;
+            const queueRatingKeys = await this._getShowEpisodeQueue(showRatingKey);
+            const queueIndex = queueRatingKeys.findIndex((k) => String(k) === String(ep.ratingKey));
             this._ctx.onPlayItem(this._ctx.mapItem(ep, true), {
               durationMs: ep.duration || null,
               startOffsetMs: ep.viewOffset || 0,
@@ -370,6 +382,7 @@ export class TitleInfoController {
               chapters: ep.Chapter || [],
               audioStreams: extractAudioStreams(ep.Media, 0),
               bifIndexPath: bifIndexPath(ep.Media, 0),
+              ...(queueIndex >= 0 ? { queueRatingKeys, queueIndex } : {}),
             });
           });
         });
@@ -425,7 +438,18 @@ export class TitleInfoController {
       })
       .join("");
     this._episodesEl.querySelectorAll(".title-info-episode").forEach((row, i) => {
-      row.addEventListener("click", () => this.open(this._ctx.mapItem(rawItems[i], false), "local"));
+      row.addEventListener("click", () => {
+        const mapped = this._ctx.mapItem(rawItems[i], false);
+        /* Only movies/episodes are ever directly playable from this flat list (a show or
+           collection row just opens its own info instead, per the comment above) - the
+           queue context only matters, and is only kept, for the types the player could
+           actually use it for. */
+        const flatQueueContext =
+          mapped.type === "movie" || mapped.type === "episode"
+            ? { ratingKeys: rawItems.map((m) => m.ratingKey), index: i }
+            : null;
+        this.open(mapped, "local", { flatQueueContext });
+      });
     });
   }
 
@@ -478,6 +502,15 @@ export class TitleInfoController {
     const item = this._item;
     if (!item) return;
     const mediaIndex = this._selectedMediaIndex || 0;
+    /* Only attaches the flat playlist/collection queue captured on the row click that
+       led here (see _renderFlatItems) when it still actually matches what's playing -
+       reopening this same modal via some other route (e.g. a "More Like This" card) in
+       between would otherwise leave a stale queue pointing at the wrong item. */
+    const flat = this._flatQueueContext;
+    const queue =
+      flat && String(flat.ratingKeys[flat.index]) === String(item.ratingKey)
+        ? { queueRatingKeys: flat.ratingKeys, queueIndex: flat.index }
+        : {};
     await this._ctx.onPlayItem(item, {
       durationMs: this._duration,
       startOffsetMs: this._viewOffset,
@@ -488,17 +521,46 @@ export class TitleInfoController {
       qualityCapKbps: this._qualityCapKbps,
       audioStreams: extractAudioStreams(this._media, mediaIndex),
       bifIndexPath: bifIndexPath(this._media, mediaIndex),
+      ...queue,
     });
+  }
+
+  /* Full show-wide episode order (every season flattened, ratingKeys only) so the
+     player's title-prev/title-next buttons can cross season boundaries, not just
+     whichever single season _loadSeasons currently has fetched. Cached per show for as
+     long as this modal stays open on that show, so clicking through several episodes in
+     a row doesn't re-fetch every season's children on each Play press. */
+  _getShowEpisodeQueue(showRatingKey) {
+    if (this._episodeQueueCache?.showRatingKey === showRatingKey) return this._episodeQueueCache.promise;
+    const promise = this._fetchShowEpisodeQueue(showRatingKey);
+    this._episodeQueueCache = { showRatingKey, promise };
+    return promise;
+  }
+
+  async _fetchShowEpisodeQueue(showRatingKey) {
+    try {
+      const data = await this._ctx.plexFetch(`/library/metadata/${showRatingKey}/children`);
+      const seasons = (data?.MediaContainer?.Metadata || []).filter((s) => s.index != null);
+      const perSeason = await Promise.all(seasons.map((s) => this._ctx.plexFetch(`/library/metadata/${s.ratingKey}/children`)));
+      return perSeason.flatMap((d) => d?.MediaContainer?.Metadata || []).map((ep) => ep.ratingKey);
+    } catch (e) {
+      return [];
+    }
   }
 
   /* Fetches the episode's own fresh duration/viewOffset (the show-level modal's
      _duration/_viewOffset are always null/0 - shows don't carry those fields) so
      resuming from the show modal's Play button seeks to the right spot. */
   async _playEpisodeByRatingKey(ratingKey) {
+    const showRatingKey = this._item?.ratingKey;
     try {
-      const data = await this._ctx.plexFetch(`/library/metadata/${ratingKey}`, { includeChapters: 1 });
+      const [data, queueRatingKeys] = await Promise.all([
+        this._ctx.plexFetch(`/library/metadata/${ratingKey}`, { includeChapters: 1 }),
+        showRatingKey ? this._getShowEpisodeQueue(showRatingKey) : Promise.resolve([]),
+      ]);
       const meta = data?.MediaContainer?.Metadata?.[0];
       if (!meta) return;
+      const queueIndex = queueRatingKeys.findIndex((k) => String(k) === String(meta.ratingKey));
       await this._ctx.onPlayItem(this._ctx.mapItem(meta, true), {
         durationMs: meta.duration || null,
         startOffsetMs: meta.viewOffset || 0,
@@ -507,6 +569,7 @@ export class TitleInfoController {
         chapters: meta.Chapter || [],
         audioStreams: extractAudioStreams(meta.Media, 0),
         bifIndexPath: bifIndexPath(meta.Media, 0),
+        ...(queueIndex >= 0 ? { queueRatingKeys, queueIndex } : {}),
       });
     } catch (e) {
       // best-effort - Play simply won't respond if this fails

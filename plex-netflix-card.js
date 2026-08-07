@@ -723,7 +723,7 @@ class PlexNetflixCard extends HTMLElement {
      Plex web player) when playback fails to start - e.g. a watchlist item with no local
      ratingKey, which player.play rejects by design. Shared by the title-info modal's
      Play button and the episode list's direct-play rows. */
-  async _playItem(item, { durationMs = null, startOffsetMs = 0, source, markers = [], chapters = [], mediaIndex = 0, qualityCapKbps = null, audioStreams = [], bifIndexPath = null } = {}) {
+  async _playItem(item, { durationMs = null, startOffsetMs = 0, source, markers = [], chapters = [], mediaIndex = 0, qualityCapKbps = null, audioStreams = [], bifIndexPath = null, queueRatingKeys = null, queueIndex = null } = {}) {
     try {
       await player.play({
         ratingKey: item.ratingKey,
@@ -749,6 +749,12 @@ class PlexNetflixCard extends HTMLElement {
         /* Drives plex-player.js's shader auto-detection (anime vs. live-action) - see
            _mapItem/_renderTitleInfoDetail for where this gets resolved. */
         genres: item.genres || [],
+        /* The ordered list of sibling ratingKeys (a show's full episode order, or a
+           playlist/collection's own order) this item came from, if any - see
+           title-info.js's _getShowEpisodeQueue/_flatQueueContext. Powers the player's
+           title-prev/title-next buttons (src/player/ui/chrome.js). */
+        queueRatingKeys,
+        queueIndex,
       });
       return;
     } catch (e) {

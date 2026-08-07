@@ -254,6 +254,17 @@ export function teardownWeb(controller) {
     controller._controlsHovering = false;
     controller._controlButtons.forEach((b) => b.remove());
     controller._controlButtons = [];
+    if (controller._fullscreenChangeHandler) {
+        document.removeEventListener("fullscreenchange", controller._fullscreenChangeHandler);
+        document.removeEventListener("webkitfullscreenchange", controller._fullscreenChangeHandler);
+        controller._fullscreenChangeHandler = null;
+    }
+    /* The fullscreen button (chrome.js) requests fullscreen on document.documentElement,
+       not a player-scoped container - leaving the player without exiting fullscreen first
+       would strand the whole app fullscreen behind the now-gone player chrome. */
+    if (document.fullscreenElement || document.webkitFullscreenElement) {
+        (document.exitFullscreen || document.webkitExitFullscreen)?.call(document);
+    }
     if (controller._skipBtnEl) {
         controller._skipBtnEl.remove();
         controller._skipBtnEl = null;

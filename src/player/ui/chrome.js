@@ -5,9 +5,10 @@ import { setShaderStrength, setColorBoostStrength, upscaleModeOf, setUpscaleMode
 import { setAmbientEnabled, setAmbientOpacity } from "../ambient-pipeline.js";
 import { reloadWebSource } from "../web-fallback.js";
 import { setNativePlaybackRate, setNativeSubtitle } from "../native-bridge.js";
-import { CONTROLS_HIDE_DELAY_MS, PLAYBACK_RATES, SLEEP_TIMER_PRESETS_MIN, ZOOM_LEVELS, VOLUME_STORAGE_KEY, storedVolume, volumeIconMarkup, seekIconMarkup } from "./shared.js";
+import { CONTROLS_HIDE_DELAY_MS, PLAYBACK_RATES, SLEEP_TIMER_PRESETS_MIN, ZOOM_LEVELS, VOLUME_STORAGE_KEY, storedVolume, volumeIconMarkup, seekIconMarkup, skipIconMarkup, fullscreenIconMarkup } from "./shared.js";
 import { loadBifIndex, findNearestBifFrame, fetchBifFrameUrl } from "../core/bif.js";
 import { plexAssetUrl } from "../core/plex-asset-url.js";
+import { fetchQueuedTitle } from "../core/title-fetch.js";
 
 /* Fullscreen player chrome: the idle-fade control row, transport bar, every hamburger
    submenu, the subtitle search panel, and the skip-intro/credits button. All take the
@@ -153,12 +154,19 @@ export function buildLoadingSpinner(controller, video) {
 /* Play/pause flanked by back-5s/forward-5s seek buttons (matching HBO's own transport
    row) with chapter nav further out on each side, only when the session actually has
    chapters - same "never an empty/dead affordance" rule the hamburger's Chapters entry
-   follows. Appended into the bottom transport bar's own center cell (built first, see
-   buildTransportBar) rather than floating mid-screen, matching a premium-streaming-app
-   transport row instead of a YouTube-style center overlay. */
+   follows - and title nav (prev/next episode, playlist/collection item, or just "play
+   this movie from the start") further out still. Title nav is always shown, unlike
+   chapter nav: prev is always a real action (restart, even with no queue at all) and
+   next disables itself rather than disappearing when there's nothing queued after this
+   title (see makeTitleNavButton) - a movie played on its own still gets both buttons,
+   just with next greyed out. Appended into the bottom transport bar's own center cell
+   (built first, see buildTransportBar) rather than floating mid-screen, matching a
+   premium-streaming-app transport row instead of a YouTube-style center overlay. */
 export function buildCenterControls(controller, video) {
     const row = controller._centerControlsSlot;
     if (!row) return null;
+
+    row.appendChild(makeTitleNavButton(controller, "prev", video));
 
     const chapters = controller._session?.chapters || [];
     if (chapters.length) row.appendChild(makeChapterNavButton(controller, "prev", video));
@@ -197,6 +205,7 @@ export function buildCenterControls(controller, video) {
     row.appendChild(makeSeekButton(controller, "forward", video));
 
     if (chapters.length) row.appendChild(makeChapterNavButton(controller, "next", video));
+    row.appendChild(makeTitleNavButton(controller, "next", video));
 
     return row;
 }
@@ -233,7 +242,7 @@ function makeChapterNavButton(controller, direction, video) {
     const btn = document.createElement("button");
     btn.type = "button";
     btn.setAttribute("aria-label", direction === "prev" ? "Previous chapter" : "Next chapter");
-    btn.textContent = direction === "prev" ? "⏮" : "⏭";
+    btn.innerHTML = skipIconMarkup(direction, { double: true });
     Object.assign(btn.style, {
         width: "26px",
         height: "26px",
@@ -244,7 +253,6 @@ function makeChapterNavButton(controller, direction, video) {
         border: "none",
         background: "transparent",
         color: "#fff",
-        fontSize: "15px",
         cursor: "pointer",
         padding: "0",
     });
@@ -276,6 +284,90 @@ function seekToAdjacentChapter(controller, direction, video) {
         video.currentTime = (current.startTimeOffset ?? 0) / 1000;
     } else {
         video.currentTime = (previous?.startTimeOffset ?? 0) / 1000;
+    }
+}
+
+const TITLE_PREV_RESTART_MS = 3000;
+
+/* Always rendered, unlike chapter nav - "restart this title from the beginning" is a
+   valid action whether or not there's a queue at all (a standalone movie included), so
+   prev is never disabled. Next is the only one that ever greys out: skipping forward has
+   no equivalent "restart" fallback, so it's a real dead end whenever there's no next
+   queued title (see plex-player.js's queueRatingKeys/queueIndex) - shown disabled rather
+   than hidden so a movie's transport row still reads as symmetric with an episode's. */
+function makeTitleNavButton(controller, direction, video) {
+    const session = controller._session;
+    const queue = session?.queueRatingKeys || [];
+    const index = session?.queueIndex ?? -1;
+    const enabled = direction === "prev" || (index >= 0 && index < queue.length - 1);
+
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.setAttribute("aria-label", direction === "prev" ? "Previous title" : "Next title");
+    btn.innerHTML = skipIconMarkup(direction, { double: false });
+    Object.assign(btn.style, {
+        width: "26px",
+        height: "26px",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        borderRadius: "0",
+        border: "none",
+        background: "transparent",
+        color: enabled ? "#fff" : "#666",
+        cursor: enabled ? "pointer" : "default",
+        padding: "0",
+    });
+    btn.disabled = !enabled;
+    if (enabled) btn.addEventListener("click", () => seekToAdjacentTitle(controller, direction, video));
+    return btn;
+}
+
+/* "Previous" restarts the current title once more than a few seconds into it, jumping to
+   the actual previous queued title only when one exists and playback is still near the
+   start - same convention as seekToAdjacentChapter above, except prev is always enabled
+   here (see makeTitleNavButton), so a title with no previous queued entry (or no queue at
+   all - any standalone movie) still restarts from 0 rather than doing nothing. "Next"
+   always jumps forward - there's no equivalent restart concept for it, so it's simply
+   disabled when there's nowhere to jump to. Both directions that do jump fetch the
+   adjacent title's fresh metadata (the queue only ever carries ratingKeys) and hand off
+   to the controller's own mid-session _switchTitle rather than a cold-start play(), so
+   the pushed history entry and hero-trailer open/close events stay scoped to the whole
+   player, not each title. */
+async function seekToAdjacentTitle(controller, direction, video) {
+    const session = controller._session;
+    const queue = session?.queueRatingKeys || [];
+    const index = session?.queueIndex ?? -1;
+    if (direction === "next") {
+        if (index < 0 || index >= queue.length - 1) return;
+        await playQueuedTitle(controller, queue, index + 1);
+        return;
+    }
+    const position = (video.currentTime || 0) * 1000;
+    if (index > 0 && position <= TITLE_PREV_RESTART_MS) {
+        await playQueuedTitle(controller, queue, index - 1);
+        return;
+    }
+    video.currentTime = 0;
+}
+
+async function playQueuedTitle(controller, queue, newIndex) {
+    const session = controller._session;
+    if (!session) return;
+    try {
+        const meta = await fetchQueuedTitle(session.plexUrl, session.plexToken, queue[newIndex]);
+        if (!meta) return;
+        await controller._switchTitle({
+            ...meta,
+            plexUrl: session.plexUrl,
+            plexToken: session.plexToken,
+            startOffsetMs: 0,
+            qualityCapKbps: session.qualityCapKbps,
+            queueRatingKeys: queue,
+            queueIndex: newIndex,
+        });
+    } catch (e) {
+        // best-effort - the title-nav button simply won't respond if this fails
     }
 }
 
@@ -847,6 +939,51 @@ export function buildTransportBar(controller, video) {
     });
     video.addEventListener("volumechange", syncVolumeUi);
 
+    /* Not rendered at all when the host has no Fullscreen API (Xbox WebView2 already
+       runs the whole shell fullscreen, with no chrome to hide) - same "never an empty/
+       dead affordance" rule the hamburger's Chapters entry follows. */
+    const fullscreenSupported = document.fullscreenEnabled || document.webkitFullscreenEnabled;
+    let fullscreenBtn = null;
+    if (fullscreenSupported) {
+        fullscreenBtn = document.createElement("button");
+        fullscreenBtn.type = "button";
+        Object.assign(fullscreenBtn.style, {
+            flex: "0 0 auto",
+            width: "28px",
+            height: "28px",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            border: "none",
+            background: "transparent",
+            color: "#fff",
+            cursor: "pointer",
+            padding: "0",
+        });
+        const isFullscreen = () => !!(document.fullscreenElement || document.webkitFullscreenElement);
+        const syncFullscreenUi = () => {
+            const active = isFullscreen();
+            fullscreenBtn.innerHTML = fullscreenIconMarkup(active);
+            fullscreenBtn.setAttribute("aria-label", active ? "Exit fullscreen" : "Enter fullscreen");
+        };
+        syncFullscreenUi();
+        fullscreenBtn.addEventListener("click", () => {
+            if (isFullscreen()) {
+                (document.exitFullscreen || document.webkitExitFullscreen).call(document);
+            } else {
+                const el = document.documentElement;
+                (el.requestFullscreen || el.webkitRequestFullscreen).call(el);
+            }
+        });
+        /* Listener lives on `document`, outside this bar's own DOM subtree, so it can't
+           be cleaned up just by removing the bar (see teardownWeb's _controlButtons
+           sweep) - stashed on the controller so teardownWeb can remove it explicitly,
+           same reasoning as every other cross-cutting resource cleaned up there. */
+        controller._fullscreenChangeHandler = syncFullscreenUi;
+        document.addEventListener("fullscreenchange", syncFullscreenUi);
+        document.addEventListener("webkitfullscreenchange", syncFullscreenUi);
+    }
+
     bar.appendChild(seekWrap);
 
     /* Three-cell row: play/pause (+ chapter nav, when the session has chapters) always
@@ -868,6 +1005,7 @@ export function buildTransportBar(controller, video) {
     controller._centerControlsSlot = centerCell;
 
     rightCell.appendChild(muteBtn);
+    if (fullscreenBtn) rightCell.appendChild(fullscreenBtn);
     document.body.appendChild(bar);
     registerControlButton(controller, bar, { anchor: false });
     return bar;

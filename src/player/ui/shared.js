@@ -136,3 +136,28 @@ export function seekIconMarkup(direction) {
     const label = `<text x="12" y="16.5" font-size="7.5" font-weight="700" text-anchor="middle" font-family="Roboto, sans-serif" fill="currentColor">5</text>`;
     return `<svg viewBox="-6 -6 36 36" width="26" height="26" fill="none" xmlns="http://www.w3.org/2000/svg">${arc}${arrow}${label}</svg>`;
 }
+
+/* Same currentColor-SVG reasoning as volumeIconMarkup/seekIconMarkup above, and shared
+   by both the chapter-nav and title-nav buttons (see chrome.js's makeChapterNavButton/
+   makeTitleNavButton) so the two read as one consistent icon family instead of two
+   differently-rendered "⏮"/"⏭"-style glyphs - only the triangle count (double for
+   chapter, single for title) tells them apart. Built once in the "next" (rightward)
+   orientation and mirrored via an SVG transform for "prev", so the two directions can't
+   drift out of sync with each other. */
+export function skipIconMarkup(direction, { double = false } = {}) {
+    const bar = '<rect x="16.6" y="5" width="2.2" height="14" rx="0.6" fill="currentColor"/>';
+    const nearTriangle = '<polygon points="8,5 8,19 16.2,12" fill="currentColor"/>';
+    const farTriangle = double ? '<polygon points="0.4,5 0.4,19 8.6,12" fill="currentColor"/>' : "";
+    const mirror = direction === "prev" ? ' transform="translate(24,0) scale(-1,1)"' : "";
+    return `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" xmlns="http://www.w3.org/2000/svg"><g${mirror}>${farTriangle}${nearTriangle}${bar}</g></svg>`;
+}
+
+/* Same currentColor-SVG reasoning as volumeIconMarkup/seekIconMarkup above - the
+   standard four-corner-bracket "expand"/"contract" glyph pair, swapped on
+   fullscreenchange rather than drawn once. */
+export function fullscreenIconMarkup(isFullscreen) {
+    const path = isFullscreen
+        ? "M5 16h3v3h2v-5H5v2zm3-8H5v2h5V5H8v3zm6 11h2v-3h3v-2h-5v5zm2-11V5h-2v5h5V8h-3z"
+        : "M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z";
+    return `<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path d="${path}"/></svg>`;
+}

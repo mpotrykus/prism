@@ -23,6 +23,7 @@
    reaching into the shared control-row/menu chrome) keeps working unchanged. */
 import { Capacitor } from "@capacitor/core";
 import { registerNavHandler } from "./focus-nav.js";
+import { lockScroll, unlockScroll } from "./scroll-lock.js";
 import { detectShaderType } from "./src/player/shader/shaders.js";
 import { buildStreamUrl } from "./src/player/core/stream-url.js";
 import { playNative, stopNative, pauseNative, resumeNative } from "./src/player/native-bridge.js";
@@ -142,6 +143,39 @@ class StreamingPlayerController {
         }
         await this.stop();
 
+        this._pushedHistoryState = true;
+        history.pushState({ prismPlayer: true }, "", location.href);
+        window.addEventListener("popstate", this._onPopState);
+        /* The card's hero trailer (video/YouTube iframe) has no idea playback started
+           elsewhere on the page - it isn't paused just because a full-screen video now
+           covers it. Decoupled via a window event (same pattern as the rest of the app's
+           cross-component wiring) rather than reaching into the card's internals directly. */
+        window.dispatchEvent(new CustomEvent("streaming-player-open"));
+
+        /* The player itself is a position:fixed overlay, not a real replacement for the
+           card underneath it - the card's own content (taller than one viewport, see
+           host-reset.css's --hero-h) still leaves <html> scrollable behind it otherwise,
+           showing a scrollbar and letting wheel/touch input scroll the hidden page while
+           the player is up. Unlocked in _stopInternal. */
+        lockScroll();
+
+        await this._beginSession(item);
+    }
+
+    /* Tears down whatever's currently playing and starts a new title in its place
+       without touching the pushed history entry or the hero-trailer open/close events -
+       those belong to the player overlay's own lifecycle, not to any one title inside
+       it, so calling play() again here would wrongly push a second history entry (and
+       have stop()'s history.back() unwind the first one instead). Used by the title-nav
+       prev/next buttons (see chrome.js's seekToAdjacentTitle) to jump to an adjacent
+       queued title mid-session. */
+    async _switchTitle(item) {
+        await this._teardownMedia();
+        await this._beginSession(item);
+    }
+
+    async _beginSession(item) {
+        const { ratingKey, plexUrl, plexToken } = item;
         const key = item.key || `/library/metadata/${ratingKey}`;
         const sessionId = crypto.randomUUID();
         const startOffsetMs = item.startOffsetMs || 0;
@@ -174,6 +208,12 @@ class StreamingPlayerController {
             qualityCapKbps: item.qualityCapKbps ?? null,
             audioStreams,
             audioStreamId: audioStreams.find((s) => s.selected)?.id ?? null,
+            /* Ordered sibling ratingKeys (a show's full episode order, or a playlist/
+               collection's own order) this title came from, if any - see title-info.js's
+               _getShowEpisodeQueue/_flatQueueContext. Powers the title-prev/title-next
+               buttons in src/player/ui/chrome.js; null/absent means "no title nav". */
+            queueRatingKeys: item.queueRatingKeys || null,
+            queueIndex: item.queueIndex ?? null,
         };
         this._activeSkipMarker = null;
 
@@ -207,15 +247,6 @@ class StreamingPlayerController {
         this._autoColorBoostStrength = null;
         this._statsOverlayEnabled = storedStatsOverlayEnabled();
 
-        this._pushedHistoryState = true;
-        history.pushState({ prismPlayer: true }, "", location.href);
-        window.addEventListener("popstate", this._onPopState);
-        /* The card's hero trailer (video/YouTube iframe) has no idea playback started
-           elsewhere on the page - it isn't paused just because a full-screen video now
-           covers it. Decoupled via a window event (same pattern as the rest of the app's
-           cross-component wiring) rather than reaching into the card's internals directly. */
-        window.dispatchEvent(new CustomEvent("streaming-player-open"));
-
         if (Capacitor.isNativePlatform() && Capacitor.getPlatform() === "android") {
             await this._playNative(streamUrl, startOffsetMs);
         } else {
@@ -233,13 +264,15 @@ class StreamingPlayerController {
         this._stopInternal({ viaHistoryPop: true });
     }
 
-    async _stopInternal({ viaHistoryPop }) {
+    /* The media/chrome teardown shared by a full stop() and a mid-session title switch -
+       everything EXCEPT the sleep timer and the overlay-level scroll-lock/open-close
+       event, which belong to the player session as a whole rather than to whichever
+       title happens to be playing inside it right now (see _switchTitle/_stopInternal). */
+    async _teardownMedia() {
         if (this._pingTimer) {
             clearInterval(this._pingTimer);
             this._pingTimer = null;
         }
-        clearTimeout(this._sleepTimer);
-        this._sleepTimer = null;
         if (this._session) {
             this._reportTimeline("stopped");
             if (Capacitor.isNativePlatform() && Capacitor.getPlatform() === "android") {
@@ -248,6 +281,16 @@ class StreamingPlayerController {
                 this._teardownWeb();
             }
             this._session = null;
+        }
+    }
+
+    async _stopInternal({ viaHistoryPop }) {
+        clearTimeout(this._sleepTimer);
+        this._sleepTimer = null;
+        const wasPlaying = !!this._session;
+        await this._teardownMedia();
+        if (wasPlaying) {
+            unlockScroll();
             window.dispatchEvent(new CustomEvent("streaming-player-close"));
         }
         if (this._pushedHistoryState) {
