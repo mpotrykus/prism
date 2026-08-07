@@ -94,6 +94,7 @@ export class TitleInfoController {
     this._markers = [];
     this._chapters = [];
     this._media = [];
+    this._flatItems = null;
     this._selectedMediaIndex = 0;
     this._qualityCapKbps = null;
     this._pendingEpisodeFocus = null;
@@ -178,6 +179,7 @@ export class TitleInfoController {
     this._markers = [];
     this._chapters = [];
     this._media = [];
+    this._flatItems = null;
     this._selectedMediaIndex = 0;
     this._qualityCapKbps = null;
     this._qualityBtn.hidden = true;
@@ -415,6 +417,7 @@ export class TitleInfoController {
      rows aren't playable segments the way a show's episodes are. */
   _renderFlatItems(rawItems, ratingKey) {
     if (!rawItems.length || this._item?.ratingKey !== ratingKey) return;
+    this._flatItems = rawItems;
     this._episodesEl.innerHTML = rawItems
       .map((m) => {
         const mapped = this._ctx.mapItem(m, true);
@@ -501,6 +504,13 @@ export class TitleInfoController {
     }
     const item = this._item;
     if (!item) return;
+    /* Collections/playlists have no Media[] of their own - "Play" on one starts its
+       first directly-playable child instead (movies/episodes; shows still require
+       picking an episode), with the rest of the flat list attached as a queue so
+       title-next/prev walks through it exactly like clicking each row by hand would. */
+    if (item.type === "collection" || item.type === "playlist") {
+      return this._playFirstFlatItem();
+    }
     const mediaIndex = this._selectedMediaIndex || 0;
     /* Only attaches the flat playlist/collection queue captured on the row click that
        led here (see _renderFlatItems) when it still actually matches what's playing -
@@ -570,6 +580,40 @@ export class TitleInfoController {
         audioStreams: extractAudioStreams(meta.Media, 0),
         bifIndexPath: bifIndexPath(meta.Media, 0),
         ...(queueIndex >= 0 ? { queueRatingKeys, queueIndex } : {}),
+      });
+    } catch (e) {
+      // best-effort - Play simply won't respond if this fails
+    }
+  }
+
+  /* Mirrors _playEpisodeByRatingKey's approach for a collection/playlist's own Play
+     button: the flat children list rendered by _renderFlatItems is already ordered and
+     cached in _flatItems, so this picks the first entry that's actually a directly-
+     playable type (a collection of shows, e.g., has none - that's a no-op, same as a
+     collection with no children) and fetches its full metadata for duration/markers/
+     chapters/audio before handing off, same as any other direct play. */
+  async _playFirstFlatItem() {
+    const ratingKey = this._item?.ratingKey;
+    const rawItems = this._flatItems || [];
+    const index = rawItems.findIndex((m) => {
+      const mapped = this._ctx.mapItem(m, false);
+      return mapped.type === "movie" || mapped.type === "episode";
+    });
+    if (index < 0) return;
+    try {
+      const data = await this._ctx.plexFetch(`/library/metadata/${rawItems[index].ratingKey}`, { includeChapters: 1 });
+      const meta = data?.MediaContainer?.Metadata?.[0];
+      if (!meta || this._item?.ratingKey !== ratingKey) return;
+      await this._ctx.onPlayItem(this._ctx.mapItem(meta, true), {
+        durationMs: meta.duration || null,
+        startOffsetMs: meta.viewOffset || 0,
+        source: this._source,
+        markers: meta.Marker || [],
+        chapters: meta.Chapter || [],
+        audioStreams: extractAudioStreams(meta.Media, 0),
+        bifIndexPath: bifIndexPath(meta.Media, 0),
+        queueRatingKeys: rawItems.map((m) => m.ratingKey),
+        queueIndex: index,
       });
     } catch (e) {
       // best-effort - Play simply won't respond if this fails
