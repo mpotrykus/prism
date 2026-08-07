@@ -63,7 +63,7 @@ export function playWeb(controller, streamUrl, startOffsetMs) {
     });
     video.addEventListener("ended", () => {
         if (controller._videoEl !== video) return;
-        controller.stop();
+        controller._handlePlaybackEnded();
     });
     video.addEventListener("pause", () => {
         if (controller._videoEl === video && controller._session) controller._session.state = "paused";

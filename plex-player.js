@@ -41,6 +41,8 @@ import {
     storedColorBoostStrength,
     storedColorBoostAuto,
     storedStatsOverlayEnabled,
+    storedAutoPlayEnabled,
+    AUTO_PLAY_STORAGE_KEY,
 } from "./src/player/ui/shared.js";
 import {
     makeControlButton,
@@ -57,6 +59,7 @@ import {
     activeMarkerAt,
     skipLabelFor,
     updateSkipButton,
+    playQueuedTitle,
 } from "./src/player/ui/chrome.js";
 
 const TIMELINE_PING_MS = 10000;
@@ -125,6 +128,7 @@ class StreamingPlayerController {
         this._statsOverlayEnabled = false;
         this._statsOverlayEl = null;
         this._statsOverlayIntervalId = null;
+        this._autoPlayEnabled = false;
         this._onPopState = this._onPopState.bind(this);
         /* A player has no sidenav/rows to navigate - the only D-pad/gamepad action it
            needs is an exit, same effect as the visible close button. Registered once,
@@ -285,6 +289,7 @@ class StreamingPlayerController {
         this._colorBoostAuto = storedColorBoostAuto();
         this._autoColorBoostStrength = null;
         this._statsOverlayEnabled = storedStatsOverlayEnabled();
+        this._autoPlayEnabled = storedAutoPlayEnabled();
 
         return { streamUrl, startOffsetMs };
     }
@@ -407,6 +412,32 @@ class StreamingPlayerController {
 
     _updateAmbientPipeline() {
         return updateAmbientPipeline(this);
+    }
+
+    /* Same "toggle IS the persisted setting" immediate-persistence model as
+       _setStatsOverlayEnabled - no pipeline/DOM to rebuild, just the flag itself, read
+       back by _handlePlaybackEnded below whenever a title actually finishes. */
+    _setAutoPlayEnabled(enabled) {
+        this._autoPlayEnabled = enabled;
+        localStorage.setItem(AUTO_PLAY_STORAGE_KEY, enabled ? "1" : "0");
+    }
+
+    /* Used by web-fallback.js's <video> "ended" listener - advances to the next queued
+       title exactly like the title-next button (chrome.js's seekToAdjacentTitle) when
+       Auto-Play is on and one exists, falling back to the normal stop() otherwise.
+       Android's native-bridge.js doesn't go through this: PlayerActivity's own
+       STATE_ENDED handler makes the same decision natively, before its own finish()
+       call, using its own SharedPreferences-persisted autoPlayEnabled flag - see that
+       file's "ended" listener comment for why this can't be decided reactively in JS
+       there. */
+    async _handlePlaybackEnded() {
+        const queue = this._session?.queueRatingKeys || [];
+        const index = this._session?.queueIndex ?? -1;
+        if (this._autoPlayEnabled && index >= 0 && index < queue.length - 1) {
+            await playQueuedTitle(this, queue, index + 1);
+            return;
+        }
+        await this.stop();
     }
 
     _stopAmbientLoop() {

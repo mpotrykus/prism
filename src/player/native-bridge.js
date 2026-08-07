@@ -27,6 +27,11 @@ export async function playNative(controller, streamUrl, startOffsetMs) {
             }
         })
     );
+    /* Unlike web-fallback.js's <video> "ended" listener, this never has to decide
+       whether to auto-advance itself - PlayerActivity's own STATE_ENDED handler already
+       does that check natively (autoPlayEnabled + queue) before finish()ing, since by
+       the time an "ended" event reaches JS the Activity may already be gone. This only
+       ever fires once that native check has already resolved to "really stop". */
     controller._nativeListenerHandles.push(
         await NativePlayer.addListener("ended", () => controller.stop())
     );

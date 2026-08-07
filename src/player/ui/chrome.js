@@ -1139,6 +1139,21 @@ export function openHamburgerMenu(controller, anchor) {
         },
         { label: "Zoom", value: `${zoomLevel}x`, trailing: "›", onSelect: () => openZoomMenu(controller, anchor) },
         {
+            label: "Auto-Play",
+            value: controller._autoPlayEnabled ? "On" : null,
+            /* No trailing chevron - same plain on/off toggle as Performance Overlay
+               below, nothing to drill into (advancing to whatever's next in the queue
+               is the whole feature, no strength/opacity to tune). */
+            toggle: {
+                checked: controller._autoPlayEnabled,
+                onChange: (checked) => {
+                    controller._setAutoPlayEnabled(checked);
+                    return checked ? "On" : null;
+                },
+            },
+            onSelect: () => {},
+        },
+        {
             /* No inline toggle any more - Auto/On/Off is a 3-way mode, not a boolean, so
                it needs the panel's own segmented control (see openShaderMenu) rather than
                a switch that fits this row. Same chevron-only, drill-in-to-change pattern

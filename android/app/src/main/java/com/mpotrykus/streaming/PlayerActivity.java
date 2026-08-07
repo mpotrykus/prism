@@ -113,6 +113,7 @@ public class PlayerActivity extends AppCompatActivity {
     private static final String PREF_COLOR_BOOST_STRENGTH = "color_boost_strength";
     private static final String PREF_COLOR_BOOST_AUTO = "color_boost_auto";
     private static final String PREF_STATS_OVERLAY_ENABLED = "stats_overlay_enabled";
+    private static final String PREF_AUTO_PLAY_ENABLED = "auto_play_enabled";
 
     public interface PlaybackListener {
         void onProgress(long positionMs, long durationMs);
@@ -207,6 +208,14 @@ public class PlayerActivity extends AppCompatActivity {
        readout has no per-video/genre concern to reconcile either. Read view, not player
        state - see PlayerUiHelper.buildStatsOverlay/updateStatsOverlay. */
     boolean statsOverlayEnabled = false;
+    /* Same immediate-persistence model as statsOverlayEnabled above - see
+       setAutoPlayEnabled. Read by the STATE_ENDED handler below to decide whether to
+       advance to the next queued title instead of finish()ing, same queueIndex/
+       queueLength check makeTitleSkipButton's enabled state (and chrome.js's
+       seekToAdjacentTitle) already use for the next-title button. Defaults to true
+       (unlike every other toggle here) - onCreate's SharedPreferences read below shares
+       that same default for a user who's never touched this setting at all. */
+    boolean autoPlayEnabled = true;
     TextView statsOverlayText;
     PlayerView playerView;
     AmbientGlowView ambientGlowView;
@@ -310,6 +319,9 @@ public class PlayerActivity extends AppCompatActivity {
         colorBoostStrength = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getFloat(PREF_COLOR_BOOST_STRENGTH, 0.5f);
         colorBoostAuto = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(PREF_COLOR_BOOST_AUTO, false);
         statsOverlayEnabled = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(PREF_STATS_OVERLAY_ENABLED, false);
+        /* Defaults to on (unlike every other toggle here, which defaults off) - see
+           shared.js's storedAutoPlayEnabled for why. */
+        autoPlayEnabled = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(PREF_AUTO_PLAY_ENABLED, true);
         title = getIntent().getStringExtra(EXTRA_TITLE);
         if (title == null) title = "";
         episodeTitle = getIntent().getStringExtra(EXTRA_EPISODE_TITLE);
@@ -567,6 +579,19 @@ public class PlayerActivity extends AppCompatActivity {
                         loadingSpinner.setVisibility(state == Player.STATE_BUFFERING ? View.VISIBLE : View.GONE);
                     }
                     if (state == Player.STATE_ENDED) {
+                        /* Same queueIndex/queueLength check the next-title button uses
+                           (see PlayerUiHelper.buildFloatingPlaybackControls) - decided
+                           natively, before finish() below, rather than deferred to JS's
+                           "ended" listener: by the time that event reached JS this
+                           Activity would already be gone, too late to switchTitle() into
+                           it. requestTitleNav reuses the exact same JS round-trip
+                           (titleNav event -> playQueuedTitle -> switchNative) the button
+                           and swipe gesture already use, so this reads as one continuous
+                           player rather than a close-and-relaunch. */
+                        if (autoPlayEnabled && queueIndex >= 0 && queueIndex < queueLength - 1) {
+                            requestTitleNav(queueIndex + 1);
+                            return;
+                        }
                         stopProgressLoop();
                         terminalStateReported = true;
                         if (listener != null) {
@@ -997,6 +1022,14 @@ public class PlayerActivity extends AppCompatActivity {
             statsOverlayText.setVisibility(enabled ? View.VISIBLE : View.GONE);
         }
         PlayerUiHelper.updateStatsOverlay(this);
+    }
+
+    /* Same "toggle IS the persisted setting" immediate-persistence model as
+       setStatsOverlayEnabled above - no view to update, just the flag itself, read back
+       by the STATE_ENDED handler whenever a title actually finishes. */
+    void setAutoPlayEnabled(boolean enabled) {
+        autoPlayEnabled = enabled;
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().putBoolean(PREF_AUTO_PLAY_ENABLED, enabled).apply();
     }
 
     /* player.getVideoSize()/onVideoSizeChanged never resolve past 0x0 for the entire

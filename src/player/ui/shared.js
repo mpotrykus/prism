@@ -12,6 +12,7 @@ export const COLOR_BOOST_STORAGE_KEY = "prism_player_color_boost_enabled";
 export const COLOR_BOOST_STRENGTH_STORAGE_KEY = "prism_player_color_boost_strength";
 export const COLOR_BOOST_AUTO_STORAGE_KEY = "prism_player_color_boost_auto";
 export const STATS_OVERLAY_STORAGE_KEY = "prism_player_stats_overlay_enabled";
+export const AUTO_PLAY_STORAGE_KEY = "prism_player_auto_play_enabled";
 
 export function storedVolume() {
     const raw = Number(localStorage.getItem(VOLUME_STORAGE_KEY));
@@ -92,6 +93,15 @@ export function storedColorBoostAuto() {
    per-video/genre concern to reconcile either. */
 export function storedStatsOverlayEnabled() {
     return localStorage.getItem(STATS_OVERLAY_STORAGE_KEY) === "1";
+}
+
+/* Same immediate-persistence model as storedStatsOverlayEnabled - no per-video/genre
+   concern, whatever this was last toggled to is what every subsequent session starts
+   from. Defaults to on (unlike every other toggle here, which defaults off) for a user
+   who's never touched this setting at all - a bare-missing key, not an explicit "0". */
+export function storedAutoPlayEnabled() {
+    const stored = localStorage.getItem(AUTO_PLAY_STORAGE_KEY);
+    return stored === null ? true : stored === "1";
 }
 
 /* Drawn as an inline SVG using currentColor rather than a "🔊"/"🔉"/"🔇" emoji glyph -

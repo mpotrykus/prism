@@ -727,6 +727,16 @@ final class PlayerUiHelper {
         sleepRow.onSelect = () -> openSleepMenu(activity, anchor);
         rows.add(sleepRow);
 
+        MenuRow autoPlayRow = new MenuRow("Auto-Play");
+        autoPlayRow.toggleChecked = activity.autoPlayEnabled;
+        /* No chevron/onSelect - same plain on/off row as Performance Overlay below,
+           nothing to drill into. */
+        autoPlayRow.onToggle = (checked) -> {
+            activity.setAutoPlayEnabled(checked);
+            return null;
+        };
+        rows.add(autoPlayRow);
+
         /* No inline toggle any more - Auto/On/Off is a 3-way mode, not a boolean, so it
            needs the panel's own segmented control (see openShaderPanel) rather than a
            SwitchCompat that fits this row. Same chevron-only, drill-in-to-change pattern
