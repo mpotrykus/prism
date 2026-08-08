@@ -158,4 +158,17 @@ final class QualityAbrMonitor {
     private boolean withinCooldown() {
         return System.currentTimeMillis() - lastSwitchAt < COOLDOWN_MS;
     }
+
+    /* Package-private summary for PlayerUiHelper's Performance Overlay - mirrors the web
+       leg's stats-overlay.js abrDebugLine so both platforms surface the same shape of
+       "why hasn't/has it switched" info. Null whenever the web leg's line would also be
+       hidden (auto quality off / monitor not running). */
+    String debugLine() {
+        if (!running) return null;
+        if (smoothedBandwidthKbps == null) return "ABR: measuring bandwidth...";
+        long cooldownLeftMs = COOLDOWN_MS - (System.currentTimeMillis() - lastSwitchAt);
+        String cooldown = cooldownLeftMs > 0 ? "cooldown " + (long) Math.ceil(cooldownLeftMs / 1000.0) + "s" : "ready";
+        return "ABR: " + Math.round(smoothedBandwidthKbps) + "kbps, down " + downgradeStreak + "/" + DOWNGRADE_CONFIRM_TICKS
+            + ", stable " + stableStreak + "/" + STABILITY_WINDOW_TICKS + ", " + cooldown;
+    }
 }

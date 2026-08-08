@@ -115,13 +115,12 @@ export function storedAutoPlayEnabled() {
     return stored === null ? true : stored === "1";
 }
 
-/* Same "defaults on for a never-touched user" reasoning as storedAutoPlayEnabled above -
-   Auto Quality only ever reacts to real degradation (see core/abr.js), so there's no
-   downside to it running from a user's very first session the way there would be for a
-   toggle with a real behavior tradeoff. */
+/* Unlike storedAutoPlayEnabled, this does NOT default on for a never-touched user -
+   every Auto Quality step (up or down) is a real server-side transcode restart (see
+   core/abr.js), not a free/seamless adjustment, so a user who's never opted in
+   shouldn't have Plex silently re-transcoding their stream. */
 export function storedAutoQualityEnabled() {
-    const stored = localStorage.getItem(AUTO_QUALITY_STORAGE_KEY);
-    return stored === null ? true : stored === "1";
+    return localStorage.getItem(AUTO_QUALITY_STORAGE_KEY) === "1";
 }
 
 /* Drawn as an inline SVG using currentColor rather than a "🔊"/"🔉"/"🔇" emoji glyph -

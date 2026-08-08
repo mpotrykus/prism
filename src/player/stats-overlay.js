@@ -1,5 +1,6 @@
 import { SHADER_TYPES } from "./shader/shaders.js";
 import { STATS_OVERLAY_STORAGE_KEY } from "./ui/shared.js";
+import { COOLDOWN_MS, DOWNGRADE_CONFIRM_TICKS, STABILITY_WINDOW_TICKS } from "./core/abr.js";
 
 /* "Performance Overlay" hamburger-menu toggle - a small monospace stats readout pinned
    to the top-left corner, same "toggle IS the persisted setting" immediate-persistence
@@ -90,18 +91,80 @@ function qualityCapStatusLine(controller) {
     return `${label}${controller._autoQualityEnabled ? " (auto)" : ""}`;
 }
 
+/* <video> exposes no direct fps reading - approximated from getVideoPlaybackQuality's
+   monotonic frame counter across two ticks (STATS_UPDATE_INTERVAL_MS apart), same
+   "derive it from what the browser does give us" approach as the dropped-frames line
+   below. Returns null on the first tick and right after a title switch resets the
+   counter (negative delta) - self-corrects the following tick rather than showing a
+   garbage spike. */
+function sampleFrameRate(controller, quality) {
+    const now = performance.now();
+    const prev = controller._statsOverlayFpsSample;
+    controller._statsOverlayFpsSample = { totalFrames: quality.totalVideoFrames, at: now };
+    if (!prev) return null;
+    const deltaFrames = quality.totalVideoFrames - prev.totalFrames;
+    const deltaSeconds = (now - prev.at) / 1000;
+    if (deltaFrames <= 0 || deltaSeconds <= 0) return null;
+    return deltaFrames / deltaSeconds;
+}
+
+function resolutionLine(controller, video, quality) {
+    const fps = quality ? sampleFrameRate(controller, quality) : null;
+    const fpsPart = fps ? ` @ ${fps.toFixed(1)}fps` : "";
+    return `${video.videoWidth || 0}x${video.videoHeight || 0}${fpsPart}`;
+}
+
+/* Only meaningful on the hls.js path abr.js actually drives - see updateAbrMonitor. */
+function abrDebugLine(controller) {
+    if (!controller._autoQualityEnabled || !controller._hls) return null;
+    if (!controller._abrHasRealSample) return "ABR: measuring bandwidth...";
+    const bandwidthKbps = Math.round(controller._hls.bandwidthEstimate / 1000);
+    const cooldownLeftMs = COOLDOWN_MS - (Date.now() - controller._abrLastSwitchAt);
+    const cooldown = cooldownLeftMs > 0 ? `cooldown ${Math.ceil(cooldownLeftMs / 1000)}s` : "ready";
+    return `ABR: ${bandwidthKbps}kbps, down ${controller._abrDowngradeStreak}/${DOWNGRADE_CONFIRM_TICKS}, stable ${controller._abrStableStreak}/${STABILITY_WINDOW_TICKS}, ${cooldown}`;
+}
+
+/* Plex's source-track label, not necessarily what's actually being decoded - Plex often
+   downmixes/transcodes audio for HLS delivery, and there's no <video>-level API to read
+   the real post-transcode codec/channel layout the way Android's Format can (see
+   PlayerUiHelper.updateStatsOverlay's Audio line). Labeled "(source)" so this doesn't
+   read as more precise than it is. */
+function audioStatusLine(controller) {
+    const streams = controller._session?.audioStreams;
+    if (!streams?.length) return null;
+    const streamId = controller._session.audioStreamId;
+    const current = (streamId != null && streams.find((s) => s.id === streamId)) || streams.find((s) => s.selected) || streams[0];
+    return `Audio: ${current.label} (source)`;
+}
+
+/* Seconds buffered ahead of the playhead - the range containing currentTime, not just
+   buffered.end(buffered.length - 1), since a seek can leave an earlier, no-longer-
+   relevant range in the TimeRanges list. */
+function bufferHealthLine(video) {
+    const buffered = video.buffered;
+    for (let i = 0; i < buffered.length; i++) {
+        if (video.currentTime >= buffered.start(i) && video.currentTime <= buffered.end(i)) {
+            return `Buffer: ${(buffered.end(i) - video.currentTime).toFixed(1)}s`;
+        }
+    }
+    return null;
+}
+
 export function renderStatsOverlayFrame(controller) {
     const el = controller._statsOverlayEl;
     const video = controller._videoEl;
     if (!el || !video) return;
     const quality = typeof video.getVideoPlaybackQuality === "function" ? video.getVideoPlaybackQuality() : null;
     const lines = [
-        `${video.videoWidth || 0}x${video.videoHeight || 0}`,
+        resolutionLine(controller, video, quality),
         "HDR: n/a (browser)",
+        quality ? `Dropped frames: ${quality.droppedVideoFrames}/${quality.totalVideoFrames}` : null,
+        audioStatusLine(controller),
         `Shader Upscaling: ${shaderStatusLine(controller)}`,
         `Color Boost: ${colorBoostStatusLine(controller)}`,
         `Quality cap: ${qualityCapStatusLine(controller)}`,
-        quality ? `Dropped frames: ${quality.droppedVideoFrames}/${quality.totalVideoFrames}` : null,
+        abrDebugLine(controller),
+        bufferHealthLine(video),
     ].filter(Boolean);
     el.textContent = lines.join("\n");
 }

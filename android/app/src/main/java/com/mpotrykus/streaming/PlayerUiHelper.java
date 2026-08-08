@@ -22,9 +22,12 @@ import android.widget.SeekBar;
 import android.widget.TextView;
 import androidx.annotation.OptIn;
 import androidx.appcompat.widget.SwitchCompat;
+import androidx.media3.common.C;
 import androidx.media3.common.ColorInfo;
 import androidx.media3.common.Format;
+import androidx.media3.common.MimeTypes;
 import androidx.media3.common.util.UnstableApi;
+import androidx.media3.exoplayer.DecoderCounters;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Consumer;
@@ -239,12 +242,12 @@ final class PlayerUiHelper {
     /* "Performance Overlay" gear-menu toggle - a small monospace stats readout, added
        here (not lazily on first toggle like the shader canvas/ambient glow) since it's
        cheap to build and this keeps every corner overlay's construction in one place.
-       Positioned below the close/menu buttons' own top row (24dp margin, 40dp tall) so
-       it doesn't overlap them, still the "upper left corner" the toggle is named for.
-       Independent of fadingControls - same "contextual, not ambient chrome" reasoning as
-       the buffering spinner, since a debug overlay should stay visible even once the
-       rest of the chrome fades from inactivity, not disappear right when you're trying
-       to read it. */
+       Same 24dp/24dp top-left margin as the close button (see buildCloseButton) - this
+       TextView isn't clickable so it doesn't steal the close button's touches even
+       though it visually sits on top of it. Independent of fadingControls - same
+       "contextual, not ambient chrome" reasoning as the buffering spinner, since a debug
+       overlay should stay visible even once the rest of the chrome fades from
+       inactivity, not disappear right when you're trying to read it. */
     static void buildStatsOverlay(PlayerActivity activity, float density) {
         TextView text = new TextView(activity);
         text.setTypeface(android.graphics.Typeface.MONOSPACE);
@@ -260,7 +263,7 @@ final class PlayerUiHelper {
         FrameLayout.LayoutParams params =
             new FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT);
         params.gravity = Gravity.TOP | Gravity.START;
-        params.setMargins((int) (24 * density), (int) (80 * density), 0, 0);
+        params.setMargins((int) (24 * density), (int) (24 * density), 0, 0);
         text.setLayoutParams(params);
         text.setVisibility(activity.statsOverlayEnabled ? View.VISIBLE : View.GONE);
         activity.root.addView(text);
@@ -278,31 +281,132 @@ final class PlayerUiHelper {
         if (text == null || !activity.statsOverlayEnabled) return;
 
         Format format = activity.selectedVideoFormat();
-        StringBuilder sb = new StringBuilder();
-        sb.append(format != null && format.width > 0 ? format.width + "x" + format.height : "? x ?").append('\n');
+        ColorInfo colorInfo = format != null ? format.colorInfo : null;
+        StringBuilder resolutionLine = new StringBuilder();
+        resolutionLine.append(format != null && format.width > 0 ? format.width + "x" + format.height : "? x ?");
+        if (format != null && format.frameRate != Format.NO_VALUE && format.frameRate > 0) {
+            resolutionLine.append(" @ ").append(formatFps(format.frameRate)).append("fps");
+        }
+        if (colorInfo != null) {
+            resolutionLine.append(" (").append(colorSpaceLabel(colorInfo.colorSpace)).append(')');
+        }
 
         boolean hdr = activity.isHdrContent();
-        sb.append("HDR: ").append(hdr ? "yes" : "no");
-        ColorInfo colorInfo = format != null ? format.colorInfo : null;
+        StringBuilder hdrLine = new StringBuilder("HDR: ").append(hdr ? "yes" : "no");
         if (colorInfo != null) {
-            sb.append(" (space=").append(colorInfo.colorSpace)
-                .append(" transfer=").append(colorInfo.colorTransfer).append(')');
+            hdrLine.append(" (").append(colorTransferLabel(colorInfo.colorTransfer)).append(')');
         }
-        sb.append('\n');
+
+        /* Web leg's dropped-frames line reads getVideoPlaybackQuality() straight off the
+           <video> element - DecoderCounters is ExoPlayer's equivalent, but unlike that
+           browser API its fields are only synced to the app thread on demand. */
+        String droppedFramesLine = null;
+        if (activity.player != null) {
+            DecoderCounters counters = activity.player.getVideoDecoderCounters();
+            if (counters != null) {
+                counters.ensureUpdated();
+                int totalFrames = counters.renderedOutputBufferCount + counters.droppedBufferCount;
+                droppedFramesLine = "Dropped frames: " + counters.droppedBufferCount + "/" + totalFrames;
+            }
+        }
+
+        Format audioFormat = activity.selectedAudioFormat();
+        String audioLine = null;
+        if (audioFormat != null) {
+            StringBuilder line = new StringBuilder("Audio: ").append(audioCodecLabel(audioFormat.sampleMimeType));
+            if (audioFormat.channelCount != Format.NO_VALUE && audioFormat.channelCount > 0) {
+                line.append(' ').append(audioFormat.channelCount).append("ch");
+            }
+            if (audioFormat.sampleRate != Format.NO_VALUE && audioFormat.sampleRate > 0) {
+                line.append(' ').append(audioFormat.sampleRate).append("Hz");
+            }
+            audioLine = line.toString();
+        }
 
         float shownUpscaleStrength = activity.upscaleAuto ? activity.autoUpscaleStrength : activity.upscaleStrength;
-        sb.append("Shader Upscaling: ").append(activity.shaderType == ShaderType.OFF
+        String shaderLine = "Shader Upscaling: " + (activity.shaderType == ShaderType.OFF
             ? "off"
             : activity.shaderType.label + " @ " + Math.round(shownUpscaleStrength * 100) + "%"
-                + (activity.upscaleAuto ? " (auto)" : "")).append('\n');
+                + (activity.upscaleAuto ? " (auto)" : ""));
         float shownColorBoostStrength = activity.colorBoostAuto ? activity.autoColorBoostStrength : activity.colorBoostStrength;
-        sb.append("Color Boost: ").append(activity.colorBoostEnabled
+        String colorBoostLine = "Color Boost: " + (activity.colorBoostEnabled
             ? Math.round(shownColorBoostStrength * 100) + "%" + (activity.colorBoostAuto ? " (auto)" : "")
-            : "off").append('\n');
-        sb.append("Quality cap: ").append(activity.qualityCapKbps != null ? activity.qualityCapKbps + " kbps" : "original")
-            .append(activity.autoQualityEnabled ? " (auto)" : "");
+            : "off");
 
+        String qualityCapLine = "Quality cap: " + (activity.qualityCapKbps != null ? activity.qualityCapKbps + " kbps" : "original")
+            + (activity.autoQualityEnabled ? " (auto)" : "");
+        String abrLine = activity.abrMonitor != null ? activity.abrMonitor.debugLine() : null;
+        String bufferLine = activity.player != null
+            ? "Buffer: " + (activity.player.getTotalBufferedDuration() / 1000f) + "s"
+            : null;
+
+        StringBuilder sb = new StringBuilder();
+        sb.append(resolutionLine).append('\n').append(hdrLine);
+        if (droppedFramesLine != null) sb.append('\n').append(droppedFramesLine);
+        if (audioLine != null) sb.append('\n').append(audioLine);
+        sb.append('\n').append(shaderLine).append('\n').append(colorBoostLine).append('\n').append(qualityCapLine);
+        if (abrLine != null) sb.append('\n').append(abrLine);
+        if (bufferLine != null) sb.append('\n').append(bufferLine);
         text.setText(sb.toString());
+    }
+
+    /* Rounds to a whole number when the source is already one (24, 30, 60) but keeps
+       3-decimal precision otherwise - the common fractional NTSC rates (23.976, 29.97,
+       59.94) are only meaningfully different from their whole-number neighbors at that
+       precision, and collapsing them to one decimal (as the web leg's empirically-
+       sampled fps line does) would make 23.976 and 24 print identically. */
+    private static String formatFps(float fps) {
+        int rounded = Math.round(fps);
+        return rounded == fps ? String.valueOf(rounded) : String.valueOf(Math.round(fps * 1000f) / 1000f);
+    }
+
+    /* C.ColorSpace only has these three values (see androidx.media3.common.C) - no
+       @IntDef-backed name() to call, so this is a plain lookup rather than reflection. */
+    private static String colorSpaceLabel(int colorSpace) {
+        switch (colorSpace) {
+            case C.COLOR_SPACE_BT601: return "bt601";
+            case C.COLOR_SPACE_BT709: return "bt709";
+            case C.COLOR_SPACE_BT2020: return "bt2020";
+            default: return "unknown(" + colorSpace + ")";
+        }
+    }
+
+    /* Only the transfer functions isHdrContent() itself checks for (ST2084/HLG) plus the
+       common SDR ones get a name - anything else falls back to the raw int rather than
+       guessing a label for a curve this app doesn't otherwise care about. */
+    private static String colorTransferLabel(int colorTransfer) {
+        switch (colorTransfer) {
+            case C.COLOR_TRANSFER_SDR: return "sdr";
+            case C.COLOR_TRANSFER_ST2084: return "pq";
+            case C.COLOR_TRANSFER_HLG: return "hlg";
+            case C.COLOR_TRANSFER_LINEAR: return "linear";
+            case C.COLOR_TRANSFER_SRGB: return "srgb";
+            case C.COLOR_TRANSFER_GAMMA_2_2: return "gamma2.2";
+            default: return "unknown(" + colorTransfer + ")";
+        }
+    }
+
+    /* MimeTypes.AUDIO_* constants are already human-readable-ish ("audio/eac3") - this
+       just shortens the common ones to their plain codec name; anything not listed falls
+       back to the mime type's own subtype rather than an opaque "unknown(...)", since
+       unlike the int color constants above, the mime string itself is still legible. */
+    private static String audioCodecLabel(String mimeType) {
+        if (mimeType == null) return "unknown";
+        if (mimeType.equals(MimeTypes.AUDIO_AAC)) return "aac";
+        if (mimeType.equals(MimeTypes.AUDIO_AC3)) return "ac3";
+        if (mimeType.equals(MimeTypes.AUDIO_E_AC3)) return "eac3";
+        if (mimeType.equals(MimeTypes.AUDIO_E_AC3_JOC)) return "eac3-joc (atmos)";
+        if (mimeType.equals(MimeTypes.AUDIO_AC4)) return "ac4";
+        if (mimeType.equals(MimeTypes.AUDIO_TRUEHD)) return "truehd";
+        if (mimeType.equals(MimeTypes.AUDIO_DTS)) return "dts";
+        if (mimeType.equals(MimeTypes.AUDIO_DTS_HD)) return "dts-hd";
+        if (mimeType.equals(MimeTypes.AUDIO_DTS_EXPRESS)) return "dts-express";
+        if (mimeType.equals(MimeTypes.AUDIO_DTS_X)) return "dts-x";
+        if (mimeType.equals(MimeTypes.AUDIO_OPUS)) return "opus";
+        if (mimeType.equals(MimeTypes.AUDIO_FLAC)) return "flac";
+        if (mimeType.equals(MimeTypes.AUDIO_RAW)) return "pcm";
+        if (mimeType.equals(MimeTypes.AUDIO_MPEG)) return "mp3";
+        return mimeType.startsWith("audio/") ? mimeType.substring("audio/".length()) : mimeType;
     }
 
     private static TextView makeTopIconButton(PlayerActivity activity, String glyph, String contentDescription, float density) {

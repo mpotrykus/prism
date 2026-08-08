@@ -926,6 +926,19 @@ public class PlayerActivity extends AppCompatActivity {
         return null;
     }
 
+    /* Audio counterpart to selectedVideoFormat() above, same package-private access for
+       PlayerUiHelper's stats overlay Audio line - not read anywhere else yet. */
+    Format selectedAudioFormat() {
+        if (player == null) return null;
+        for (Tracks.Group group : player.getCurrentTracks().getGroups()) {
+            if (group.getType() != C.TRACK_TYPE_AUDIO) continue;
+            for (int i = 0; i < group.length; i++) {
+                if (group.isTrackSelected(i)) return group.getTrackFormat(i);
+            }
+        }
+        return null;
+    }
+
     /* Automatic, not a user-facing toggle - real HDR-mastered sources (wide BT.2020 gamut or a
        PQ/HLG transfer function) skip this GL effects pass entirely rather than composing an
        SDR-tuned contrast/saturation/sharpen boost on top of it, the same reasoning Plezy's own
