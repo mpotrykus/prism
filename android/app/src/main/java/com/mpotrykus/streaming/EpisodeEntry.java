@@ -7,7 +7,11 @@ package com.mpotrykus.streaming;
    thumbUrl is already a full, tokened URL (see native-bridge.js's plexAssetUrl) - this
    class never needs to know Plex's base URL/token either. */
 class EpisodeEntry {
+    /* index is Plex's season-relative episode number (already baked into title's "S1 E5"
+       text) - NOT a queue position. queueIndex is the position in queueRatingKeys and is
+       what requestTitleNav needs; conflating the two sends nav to the wrong item. */
     final int index;
+    final int queueIndex;
     final String ratingKey;
     final String title;
     final String subtitle;
@@ -17,9 +21,10 @@ class EpisodeEntry {
     final boolean watched;
     final boolean current;
 
-    EpisodeEntry(int index, String ratingKey, String title, String subtitle, String summary,
+    EpisodeEntry(int index, int queueIndex, String ratingKey, String title, String subtitle, String summary,
             String thumbUrl, float progress, boolean watched, boolean current) {
         this.index = index;
+        this.queueIndex = queueIndex;
         this.ratingKey = ratingKey;
         this.title = title;
         this.subtitle = subtitle;

@@ -70,7 +70,16 @@ export async function playNative(controller, streamUrl, startOffsetMs) {
             const queue = session?.queueRatingKeys || [];
             if (!queue.length) return;
             const items = await getQueueItems(controller, session, queue);
-            await NativePlayer.showEpisodeList({ items: items.map((item) => formatEpisodeListItem(session, item)) });
+            /* formatted.index is Plex's season-relative episode number (for "S1 E5"
+               display text), NOT a position in queue - titleNav below expects the
+               latter, so it's resolved here the same ratingKey-lookup way
+               episode-list.js's own onSelect does, rather than trusting formatted.index. */
+            await NativePlayer.showEpisodeList({
+                items: items.map((item) => ({
+                    ...formatEpisodeListItem(session, item),
+                    queueIndex: queue.findIndex((k) => String(k) === String(item.ratingKey)),
+                })),
+            });
         })
     );
     await NativePlayer.play(buildPlaybackPayload(controller, streamUrl, startOffsetMs));

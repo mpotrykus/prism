@@ -61,12 +61,19 @@ final class PlayerUiHelper {
        still counts as "just started" (jump to the actual previous queued title) rather
        than "restart this one from 0". */
     private static final long TITLE_PREV_RESTART_MS = 10000;
-    private static final int EPISODE_CARD_WIDTH_DP = 160;
-    /* Approximates one real row of makeEpisodeCardView cards at EPISODE_CARD_WIDTH_DP
-       (16:9 thumb + title + subtitle + summary + paddings) so showEpisodeListLoading's
-       placeholder doesn't visibly resize once openEpisodeListMenu replaces it with the
-       real cards. */
-    private static final int EPISODE_LOADING_HEIGHT_DP = 200;
+    /* Card width is a fraction of window width, not a flat constant - a flat dp value
+       sized right for a phone in landscape reads as tiny on a tablet's much wider window.
+       0.22f/160dp/260dp were picked so a ~730dp-wide phone landscape window still lands
+       on the old fixed 160dp card size, while wider tablet windows scale up instead of
+       leaving the row looking small. */
+    private static final float EPISODE_CARD_WIDTH_FRACTION = 0.22f;
+    private static final int EPISODE_CARD_MIN_WIDTH_DP = 160;
+    private static final int EPISODE_CARD_MAX_WIDTH_DP = 260;
+    /* The part of makeEpisodeCardView's card height that doesn't scale with card width -
+       title + subtitle + summary + the gaps/padding below the thumb. Combined with the
+       (width-dependent) 16:9 thumb height to size showEpisodeListLoading's placeholder so
+       it doesn't visibly resize once openEpisodeListMenu replaces it with real cards. */
+    private static final int EPISODE_CARD_TEXT_STACK_DP = 114;
 
     /* Buffering indicator - independent of fadingControls (same "contextual, not ambient
        chrome" reasoning as the skip button): it reflects actual ExoPlayer state, not user
@@ -990,6 +997,25 @@ final class PlayerUiHelper {
         openMenuPanel(activity, anchor, rows, () -> showPlayerMenu(activity, anchor));
     }
 
+    /* Window width, not the activity's own view width - called before the sheet (and thus
+       any view to measure) exists yet for showEpisodeListLoading's placeholder. */
+    private static int episodeCardWidthPx(PlayerActivity activity, float density) {
+        float windowWidthDp = activity.getResources().getDisplayMetrics().widthPixels / density;
+        float cardWidthDp = Math.max(EPISODE_CARD_MIN_WIDTH_DP,
+            Math.min(EPISODE_CARD_MAX_WIDTH_DP, windowWidthDp * EPISODE_CARD_WIDTH_FRACTION));
+        return Math.round(cardWidthDp * density);
+    }
+
+    /* Mirrors makeEpisodeCardView's own thumb sizing (cardPad + 16:9) so the loading
+       placeholder's height lines up with the real cards it's approximating. */
+    private static int episodeCardHeightPx(PlayerActivity activity, float density) {
+        int cardWidthPx = episodeCardWidthPx(activity, density);
+        int cardPad = Math.round(4 * density);
+        int thumbWidthPx = cardWidthPx - cardPad * 2;
+        int thumbHeightPx = Math.round(thumbWidthPx * 9f / 16f);
+        return thumbHeightPx + Math.round(EPISODE_CARD_TEXT_STACK_DP * density);
+    }
+
     /* Native counterpart to episode-list.js's openEpisodeListOverlay - matches the web
        version's own layout now: a horizontally-scrolling row of cards (thumbnail on top,
        text below) with fade-edge scroll arrows, rather than the vertical list this
@@ -1019,7 +1045,7 @@ final class PlayerUiHelper {
         FrameLayout scrollWrap = new FrameLayout(activity);
         scrollWrap.setLayoutParams(new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
 
-        int cardWidthPx = Math.round(EPISODE_CARD_WIDTH_DP * density);
+        int cardWidthPx = episodeCardWidthPx(activity, density);
         int arrowWidthPx = Math.round(40 * density);
 
         LinearLayout row = new LinearLayout(activity);
@@ -1090,10 +1116,9 @@ final class PlayerUiHelper {
        formatEpisodeListItem - a real Plex round-trip per episode on the first open of a
        given queue, not instant). openEpisodeListMenu replaces this with the real content
        once PlayerActivity.showEpisodeList arrives (both start with closeEpisodeListMenu,
-       so whichever is currently showing gets torn down cleanly first). Sized to
-       EPISODE_LOADING_HEIGHT_DP, chosen to approximate a real single row of
-       makeEpisodeCardView's cards (thumb+title+subtitle+summary+paddings) so the sheet
-       doesn't visibly resize once the real cards replace this placeholder. */
+       so whichever is currently showing gets torn down cleanly first). Height is derived
+       from the same window-width-based card size openEpisodeListMenu will use, so the
+       sheet doesn't visibly resize once the real cards replace this placeholder. */
     static void showEpisodeListLoading(PlayerActivity activity) {
         float density = activity.getResources().getDisplayMetrics().density;
         closeEpisodeListMenu(activity);
@@ -1104,7 +1129,7 @@ final class PlayerUiHelper {
         content.addView(buildEpisodeSheetHeader(activity, density));
 
         FrameLayout placeholder = new FrameLayout(activity);
-        placeholder.setLayoutParams(new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, Math.round(EPISODE_LOADING_HEIGHT_DP * density)));
+        placeholder.setLayoutParams(new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, episodeCardHeightPx(activity, density)));
 
         /* Same amber-tinted indeterminate spinner as buildLoadingSpinner's buffering
            indicator, not a new style of its own. */
@@ -1349,7 +1374,7 @@ final class PlayerUiHelper {
         card.setOnClickListener(v -> {
             closeEpisodeListMenu(activity);
             if (!item.current) {
-                PlayerActivity.requestTitleNav(item.index);
+                PlayerActivity.requestTitleNav(item.queueIndex);
             }
         });
 

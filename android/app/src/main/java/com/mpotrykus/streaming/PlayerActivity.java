@@ -1281,6 +1281,7 @@ public class PlayerActivity extends AppCompatActivity {
                 String thumbUrl = obj.has("thumbUrl") && !obj.isNull("thumbUrl") ? obj.optString("thumbUrl", null) : null;
                 episodes.add(new EpisodeEntry(
                     obj.optInt("index", -1),
+                    obj.optInt("queueIndex", -1),
                     obj.optString("ratingKey", ""),
                     obj.optString("title", ""),
                     obj.optString("subtitle", ""),
