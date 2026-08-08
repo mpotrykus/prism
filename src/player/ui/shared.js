@@ -2,6 +2,16 @@ export const CONTROLS_HIDE_DELAY_MS = 1000;
 export const PLAYBACK_RATES = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 4, 8];
 export const SLEEP_TIMER_PRESETS_MIN = [15, 30, 45, 60];
 export const ZOOM_LEVELS = [1, 1.25, 1.5, 2];
+/* kbps: null means "no cap" (Original) - matched against the selected quality cap by
+   identity in chrome.js's openQualityCapMenu, so keep it null rather than 0 or a
+   sentinel number. */
+export const QUALITY_CAP_PRESETS = [
+    { label: "Original", kbps: null },
+    { label: "1080p (20 Mbps)", kbps: 20000 },
+    { label: "720p (10 Mbps)", kbps: 10000 },
+    { label: "480p (4 Mbps)", kbps: 4000 },
+    { label: "360p (2 Mbps)", kbps: 2000 },
+];
 export const VOLUME_STORAGE_KEY = "prism_player_volume";
 export const AMBIENT_STORAGE_KEY = "prism_player_ambient_enabled";
 export const AMBIENT_OPACITY_STORAGE_KEY = "prism_player_ambient_opacity";
@@ -13,6 +23,7 @@ export const COLOR_BOOST_STRENGTH_STORAGE_KEY = "prism_player_color_boost_streng
 export const COLOR_BOOST_AUTO_STORAGE_KEY = "prism_player_color_boost_auto";
 export const STATS_OVERLAY_STORAGE_KEY = "prism_player_stats_overlay_enabled";
 export const AUTO_PLAY_STORAGE_KEY = "prism_player_auto_play_enabled";
+export const AUTO_QUALITY_STORAGE_KEY = "prism_player_auto_quality_enabled";
 
 export function storedVolume() {
     const raw = Number(localStorage.getItem(VOLUME_STORAGE_KEY));
@@ -101,6 +112,15 @@ export function storedStatsOverlayEnabled() {
    who's never touched this setting at all - a bare-missing key, not an explicit "0". */
 export function storedAutoPlayEnabled() {
     const stored = localStorage.getItem(AUTO_PLAY_STORAGE_KEY);
+    return stored === null ? true : stored === "1";
+}
+
+/* Same "defaults on for a never-touched user" reasoning as storedAutoPlayEnabled above -
+   Auto Quality only ever reacts to real degradation (see core/abr.js), so there's no
+   downside to it running from a user's very first session the way there would be for a
+   toggle with a real behavior tradeoff. */
+export function storedAutoQualityEnabled() {
+    const stored = localStorage.getItem(AUTO_QUALITY_STORAGE_KEY);
     return stored === null ? true : stored === "1";
 }
 

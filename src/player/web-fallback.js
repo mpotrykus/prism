@@ -4,6 +4,7 @@ import { updateContentAnalysis } from "./content-analysis.js";
 import { releaseBifIndex } from "./core/bif.js";
 import { episodeListIconMarkup } from "./ui/shared.js";
 import { closeEpisodeListOverlay } from "./ui/episode-list.js";
+import { updateAbrMonitor, stopAbrLoop, notifyStall, notifyReload } from "./core/abr.js";
 
 /* <video>+hls.js fallback path - used everywhere WebView2/Chrome/Xbox/Android-web has
    no native player available (see native-bridge.js for the Android/ExoPlayer leg).
@@ -164,6 +165,11 @@ export function playWeb(controller, streamUrl, startOffsetMs) {
        the calls above - controller._upscaleAuto/_colorBoostAuto were set from
        storedUpscaleAuto()/storedColorBoostAuto() in play() before playWeb was called. */
     updateContentAnalysis(controller);
+    /* Same "already-resolved global default, just spin up the pipeline" reasoning as
+       the calls above - controller._autoQualityEnabled was set from
+       storedAutoQualityEnabled() in play() before playWeb was called. No-ops on the
+       native-HLS branch above (controller._hls stays null there) - see core/abr.js. */
+    updateAbrMonitor(controller);
 
     /* Tapping the video itself toggles play/pause, matching every mainstream player -
        only when not zoomed in, since zoomed-in drag is already claimed by pan (see
@@ -197,6 +203,19 @@ export function attachSource(controller, video, streamUrl) {
         hls.on(Hls.Events.ERROR, (event, data) => {
             console.error("StreamingPlayer: hls.js error -", data.type, data.details, data.fatal ? "(fatal)" : "");
             if (data.fatal) controller.stop();
+            /* Non-fatal buffer-stall - the Auto Quality signal that the current cap is
+               too high for the real connection right now (see core/abr.js's notifyStall).
+               Fatal errors above already stop() the whole session, so this branch only
+               ever matters for the non-fatal case. */
+            else if (data.details === Hls.ErrorDetails.BUFFER_STALLED_ERROR) notifyStall(controller);
+        });
+        /* hls.js's own bandwidthEstimate starts at a synthetic default before any real
+           fragment has loaded (see core/abr.js's evaluateAbrTick) - reset the "do we have
+           a real sample yet" flag on every fresh instance, flip it once a fragment
+           actually finishes. */
+        controller._abrHasRealSample = false;
+        hls.on(Hls.Events.FRAG_LOADED, () => {
+            controller._abrHasRealSample = true;
         });
         hls.loadSource(streamUrl);
         hls.attachMedia(video);
@@ -216,32 +235,49 @@ export function attachSource(controller, video, streamUrl) {
     }
 }
 
-/* Restarts the Plex transcode session with a new audioStreamID, resuming at the
-   current position - Plex bakes the selected audio stream into the HLS transcode at
-   session start, so there's no way to switch tracks without re-requesting the
-   playlist. A fresh session id avoids Plex reusing/confusing the just-abandoned
-   transcode session's own state. */
-export function reloadWebSource(controller, newStreamId) {
+/* Restarts the Plex transcode session with a new audioStreamID/mediaIndex/
+   qualityCapKbps, resuming at the current position - Plex bakes the selected audio
+   stream, version, and bitrate cap into the HLS transcode at session start, so
+   there's no way to change any of them without re-requesting the playlist. A fresh
+   session id avoids Plex reusing/confusing the just-abandoned transcode session's own
+   state. Shared by chrome.js's Audio Track/Video Quality menus - only the override
+   actually being changed is passed, everything else falls back to the current
+   session value. qualityCapKbps needs its own `in` check (unlike the others): null is
+   a valid explicit override (Quality Cap's "Original" option), so `??`-against-
+   undefined would wrongly treat "clear the cap" the same as "don't touch it". */
+export function reloadWebSource(controller, overrides = {}) {
     const video = controller._videoEl;
     const s = controller._session;
     if (!video || !s) return;
     const offsetMs = Math.round((video.currentTime || 0) * 1000);
+    const nextMediaIndex = overrides.mediaIndex ?? s.mediaIndex;
+    const nextQualityCapKbps = "qualityCapKbps" in overrides ? overrides.qualityCapKbps : s.qualityCapKbps;
+    const nextAudioStreamID = overrides.audioStreamID ?? s.audioStreamId;
     const streamUrl = controller._buildStreamUrl({
         plexUrl: s.plexUrl,
         plexToken: s.plexToken,
         key: s.key,
         sessionId: crypto.randomUUID(),
         startOffsetMs: offsetMs,
-        mediaIndex: s.mediaIndex,
-        qualityCapKbps: s.qualityCapKbps,
-        audioStreamID: newStreamId,
+        mediaIndex: nextMediaIndex,
+        qualityCapKbps: nextQualityCapKbps,
+        audioStreamID: nextAudioStreamID,
     });
     attachSource(controller, video, streamUrl);
     video.currentTime = offsetMs / 1000;
-    s.audioStreamId = newStreamId;
+    s.mediaIndex = nextMediaIndex;
+    s.qualityCapKbps = nextQualityCapKbps;
+    s.audioStreamId = nextAudioStreamID;
+    /* A fresh transcode session means whatever Auto Quality streak/cooldown state was
+       building against the old one no longer applies - see core/abr.js's notifyReload.
+       Also re-checks whether the monitor should be running at all, since attachSource
+       above just replaced controller._hls with a fresh instance. */
+    notifyReload(controller);
+    updateAbrMonitor(controller);
 }
 
 export function teardownWeb(controller) {
+    stopAbrLoop(controller);
     if (controller._hls) {
         controller._hls.destroy();
         controller._hls = null;

@@ -36,7 +36,10 @@ import androidx.media3.common.util.UnstableApi;
 import androidx.media3.common.Effect;
 import androidx.media3.datasource.DefaultHttpDataSource;
 import androidx.media3.exoplayer.ExoPlayer;
+import androidx.media3.exoplayer.analytics.AnalyticsListener;
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory;
+import androidx.media3.exoplayer.source.LoadEventInfo;
+import androidx.media3.exoplayer.source.MediaLoadData;
 import androidx.media3.ui.AspectRatioFrameLayout;
 import androidx.media3.ui.PlayerView;
 import java.util.ArrayList;
@@ -53,6 +56,15 @@ public class PlayerActivity extends AppCompatActivity {
     public static final String EXTRA_START_POSITION_MS = "startPositionMs";
     public static final String EXTRA_CHAPTERS_JSON = "chaptersJson";
     public static final String EXTRA_AUDIO_STREAMS_JSON = "audioStreamsJson";
+    /* {mediaIndex, label} per Plex Media[] entry (see native-bridge.js's
+       buildPlaybackPayload) plus the currently-selected index/cap - feeds
+       PlayerUiHelper's Video Quality menu the same way EXTRA_AUDIO_STREAMS_JSON/
+       currentAudioStreamId feed its Audio Track menu. qualityCapKbps has no intent-
+       extra default worth using (0 would read as a real cap, not "no cap"), so it's
+       read as a boxed Integer via hasExtra/getIntExtra instead - see onCreate. */
+    public static final String EXTRA_MEDIA_VERSIONS_JSON = "mediaVersionsJson";
+    public static final String EXTRA_CURRENT_MEDIA_INDEX = "currentMediaIndex";
+    public static final String EXTRA_QUALITY_CAP_KBPS = "qualityCapKbps";
     /* Full, already-tokened BIF trickplay index URL (see native-bridge.js's
        plexAssetUrl) - fetched/parsed here via BifIndex, not shipped as pre-decoded
        frames, since only the frame nearest wherever the user drags to is ever needed. */
@@ -114,6 +126,7 @@ public class PlayerActivity extends AppCompatActivity {
     private static final String PREF_COLOR_BOOST_AUTO = "color_boost_auto";
     private static final String PREF_STATS_OVERLAY_ENABLED = "stats_overlay_enabled";
     private static final String PREF_AUTO_PLAY_ENABLED = "auto_play_enabled";
+    private static final String PREF_AUTO_QUALITY_ENABLED = "auto_quality_enabled";
 
     public interface PlaybackListener {
         void onProgress(long positionMs, long durationMs);
@@ -217,6 +230,16 @@ public class PlayerActivity extends AppCompatActivity {
        (unlike every other toggle here) - onCreate's SharedPreferences read below shares
        that same default for a user who's never touched this setting at all. */
     boolean autoPlayEnabled = true;
+    /* Same "defaults on for a never-touched user" reasoning as autoPlayEnabled above -
+       Auto Quality only ever reacts to real degradation (see QualityAbrMonitor), so
+       there's no downside to it running from a user's very first session. */
+    boolean autoQualityEnabled = true;
+    QualityAbrMonitor abrMonitor;
+    /* A fresh player's own initial buffering (before the first STATE_READY) isn't a real
+       stall - reset to false at the top of createPlayer() so the ABR monitor's
+       notifyStall isn't fed a false positive on cold start or right after a title
+       switch/quality-cap reload, all of which rebuild the player from scratch. */
+    boolean everStartedPlaying = false;
     TextView statsOverlayText;
     PlayerView playerView;
     AmbientGlowView ambientGlowView;
@@ -278,6 +301,12 @@ public class PlayerActivity extends AppCompatActivity {
        code that uses them. */
     final List<ChapterEntry> chapters = new ArrayList<>();
     final List<AudioStreamEntry> audioStreams = new ArrayList<>();
+    final List<MediaVersionEntry> mediaVersions = new ArrayList<>();
+    int currentMediaIndex = 0;
+    /* null means "no cap" (Plex's own "Original") - same convention shared.js's
+       QUALITY_CAP_PRESETS uses on the web leg, kept as a boxed Integer rather than a
+       primitive so "never set"/"explicitly cleared" both read the same way. */
+    Integer qualityCapKbps;
     private String currentUrl;
     String title = "";
     String episodeTitle = "";
@@ -313,6 +342,9 @@ public class PlayerActivity extends AppCompatActivity {
         long startPositionMs = getIntent().getLongExtra(EXTRA_START_POSITION_MS, 0L);
         parseChapters(getIntent().getStringExtra(EXTRA_CHAPTERS_JSON));
         parseAudioStreams(getIntent().getStringExtra(EXTRA_AUDIO_STREAMS_JSON));
+        parseMediaVersions(getIntent().getStringExtra(EXTRA_MEDIA_VERSIONS_JSON));
+        currentMediaIndex = getIntent().getIntExtra(EXTRA_CURRENT_MEDIA_INDEX, 0);
+        qualityCapKbps = getIntent().hasExtra(EXTRA_QUALITY_CAP_KBPS) ? getIntent().getIntExtra(EXTRA_QUALITY_CAP_KBPS, 0) : null;
         String bifUrl = getIntent().getStringExtra(EXTRA_BIF_URL);
         if (bifUrl != null && !bifUrl.isEmpty()) {
             BifIndex.load(bifUrl, index -> bifIndex = index);
@@ -334,6 +366,9 @@ public class PlayerActivity extends AppCompatActivity {
         /* Defaults to on (unlike every other toggle here, which defaults off) - see
            shared.js's storedAutoPlayEnabled for why. */
         autoPlayEnabled = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(PREF_AUTO_PLAY_ENABLED, true);
+        /* Same "defaults on" reasoning as autoPlayEnabled above - see shared.js's
+           storedAutoQualityEnabled for why. */
+        autoQualityEnabled = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(PREF_AUTO_QUALITY_ENABLED, true);
         title = getIntent().getStringExtra(EXTRA_TITLE);
         if (title == null) title = "";
         episodeTitle = getIntent().getStringExtra(EXTRA_EPISODE_TITLE);
@@ -556,6 +591,22 @@ public class PlayerActivity extends AppCompatActivity {
             });
         updateContentAnalysis();
 
+        /* Built here (after createPlayer() already ran once above) rather than earlier -
+           see createPlayer()'s own null-checks on this field for why that ordering is
+           safe regardless. */
+        abrMonitor = new QualityAbrMonitor(new QualityAbrMonitor.Listener() {
+            @Override
+            public Integer currentQualityCapKbps() {
+                return qualityCapKbps;
+            }
+
+            @Override
+            public void switchQualityCap(Integer kbps) {
+                PlayerActivity.this.switchQualityCap(kbps);
+            }
+        });
+        updateAbrMonitor();
+
         currentUrl = url;
         MediaItem mediaItem = MediaItem.fromUri(Uri.parse(url));
         player.setMediaItem(mediaItem);
@@ -586,6 +637,7 @@ public class PlayerActivity extends AppCompatActivity {
         if (player != null) {
             player.release();
         }
+        everStartedPlaying = false;
         DefaultHttpDataSource.Factory httpDataSourceFactory = new DefaultHttpDataSource.Factory();
         DefaultMediaSourceFactory mediaSourceFactory = new DefaultMediaSourceFactory(this).setDataSourceFactory(httpDataSourceFactory);
         player = new ExoPlayer.Builder(this).setMediaSourceFactory(mediaSourceFactory).build();
@@ -593,12 +645,42 @@ public class PlayerActivity extends AppCompatActivity {
         /* setVideoEffects() must be called at least once before prepare() even to apply an
            empty (no-op) list - see ExoPlayer's javadoc on the method. */
         applyVideoEffects();
+        /* Feeds QualityAbrMonitor's own bandwidth estimate - ExoPlayer's built-in
+           DefaultBandwidthMeter only updates from TransferListener callbacks that the
+           bare DefaultHttpDataSource.Factory above never wires up, so onLoadCompleted
+           (unambiguous public API, no DataSource.Factory changes needed) stands in as
+           the real signal instead. abrMonitor may still be null here on the very first
+           createPlayer() call in onCreate (constructed afterward, alongside
+           ambientSampler/contentSampler) - null-checked since this listener keeps firing
+           for the lifetime of this player instance, long after that field is set. */
+        player.addAnalyticsListener(new AnalyticsListener() {
+            @Override
+            public void onLoadCompleted(EventTime eventTime, LoadEventInfo loadEventInfo, MediaLoadData mediaLoadData) {
+                if (abrMonitor != null && mediaLoadData.dataType == C.DATA_TYPE_MEDIA) {
+                    abrMonitor.onSegmentLoadCompleted(loadEventInfo.bytesLoaded, loadEventInfo.loadDurationMs);
+                }
+            }
+        });
         player.addListener(
             new Player.Listener() {
                 @Override
                 public void onPlaybackStateChanged(int state) {
                     if (loadingSpinner != null) {
                         loadingSpinner.setVisibility(state == Player.STATE_BUFFERING ? View.VISIBLE : View.GONE);
+                    }
+                    /* A fresh player's own first buffer-up (cold start, title switch, or
+                       any switchQualityCap/switchMediaVersion/switchAudioStream/
+                       applySubtitle reload) isn't a real network stall - everStartedPlaying
+                       only flips true once this instance has actually reached STATE_READY
+                       once, so this can't fire on that initial buffering. Beyond that,
+                       abrMonitor.notifyStall() is itself cooldown-gated (see that class),
+                       which is what actually absorbs the buffering our own reload calls
+                       cause without a stall being double-counted. */
+                    if (state == Player.STATE_BUFFERING && everStartedPlaying && abrMonitor != null) {
+                        abrMonitor.notifyStall();
+                    }
+                    if (state == Player.STATE_READY) {
+                        everStartedPlaying = true;
                     }
                     if (state == Player.STATE_ENDED) {
                         /* Same queueIndex/queueLength check the next-title button uses
@@ -733,6 +815,20 @@ public class PlayerActivity extends AppCompatActivity {
             }
         } catch (org.json.JSONException e) {
             // malformed audio-stream data - show no Audio Track entry rather than crash
+        }
+    }
+
+    private void parseMediaVersions(String json) {
+        mediaVersions.clear();
+        if (json == null) return;
+        try {
+            org.json.JSONArray arr = new org.json.JSONArray(json);
+            for (int i = 0; i < arr.length(); i++) {
+                org.json.JSONObject obj = arr.getJSONObject(i);
+                mediaVersions.add(new MediaVersionEntry(obj.optInt("mediaIndex", i), obj.optString("label", "Version " + (i + 1))));
+            }
+        } catch (org.json.JSONException e) {
+            // malformed media-version data - show no Version entry rather than crash
         }
     }
 
@@ -1054,6 +1150,27 @@ public class PlayerActivity extends AppCompatActivity {
         getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().putBoolean(PREF_AUTO_PLAY_ENABLED, enabled).apply();
     }
 
+    /* Same "toggle IS the persisted setting" immediate-persistence model as
+       setAutoPlayEnabled above - see PlayerUiHelper's Quality Cap menu (the "Auto" row,
+       and each explicit preset row disabling this). */
+    void setAutoQualityEnabled(boolean enabled) {
+        autoQualityEnabled = enabled;
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().putBoolean(PREF_AUTO_QUALITY_ENABLED, enabled).apply();
+        updateAbrMonitor();
+    }
+
+    /* Starts/stops QualityAbrMonitor's own tick loop based on the persisted toggle -
+       mirrors updateContentAnalysis above. Called on construction and every time the
+       toggle flips. */
+    private void updateAbrMonitor() {
+        if (abrMonitor == null) return;
+        if (autoQualityEnabled) {
+            abrMonitor.start();
+        } else {
+            abrMonitor.stop();
+        }
+    }
+
     /* player.getVideoSize()/onVideoSizeChanged never resolve past 0x0 for the entire
        playback session once applyVideoEffects() has attached any effects list to this
        player - confirmed via logcat on real hardware, even minutes into playback with
@@ -1306,11 +1423,12 @@ public class PlayerActivity extends AppCompatActivity {
        floating controls) as well as calling into ExoPlayer. */
     public static void loadTitle(String url, long startPositionMs, String shaderType, String title,
             String episodeTitle, Integer year, Integer seasonNumber, Integer episodeNumber,
-            Integer queueLength, Integer queueIndex, String chaptersJson, String bifUrl, String audioStreamsJson) {
+            Integer queueLength, Integer queueIndex, String chaptersJson, String bifUrl, String audioStreamsJson,
+            String mediaVersionsJson, Integer currentMediaIndex, Integer qualityCapKbps) {
         if (activeInstance != null) {
             activeInstance.runOnUiThread(() -> activeInstance.applyTitleSwitch(url, startPositionMs, shaderType,
                 title, episodeTitle, year, seasonNumber, episodeNumber, queueLength, queueIndex,
-                chaptersJson, bifUrl, audioStreamsJson));
+                chaptersJson, bifUrl, audioStreamsJson, mediaVersionsJson, currentMediaIndex, qualityCapKbps));
         }
     }
 
@@ -1325,7 +1443,8 @@ public class PlayerActivity extends AppCompatActivity {
        reuses unchanged). */
     void applyTitleSwitch(String url, long startPositionMs, String shaderTypeName, String newTitle,
             String newEpisodeTitle, Integer newYear, Integer newSeasonNumber, Integer newEpisodeNumber,
-            Integer newQueueLength, Integer newQueueIndex, String chaptersJson, String bifUrl, String audioStreamsJson) {
+            Integer newQueueLength, Integer newQueueIndex, String chaptersJson, String bifUrl, String audioStreamsJson,
+            String mediaVersionsJson, Integer newCurrentMediaIndex, Integer newQualityCapKbps) {
         if (player == null) return;
 
         if (menuPopup != null) {
@@ -1360,6 +1479,9 @@ public class PlayerActivity extends AppCompatActivity {
 
         parseChapters(chaptersJson);
         parseAudioStreams(audioStreamsJson);
+        parseMediaVersions(mediaVersionsJson);
+        currentMediaIndex = newCurrentMediaIndex != null ? newCurrentMediaIndex : 0;
+        qualityCapKbps = newQualityCapKbps;
         bifIndex = null;
         if (bifUrl != null && !bifUrl.isEmpty()) {
             BifIndex.load(bifUrl, index -> bifIndex = index);
@@ -1404,6 +1526,7 @@ public class PlayerActivity extends AppCompatActivity {
            its own header comment for why those are untouched by this), sidestepping
            whatever internal state that reuse was tripping over. */
         createPlayer();
+        if (abrMonitor != null) abrMonitor.notifyReload();
         currentUrl = url;
         MediaItem mediaItem = MediaItem.fromUri(Uri.parse(url));
         player.setMediaItem(mediaItem);
@@ -1441,6 +1564,7 @@ public class PlayerActivity extends AppCompatActivity {
             .build();
         player.setMediaItem(newItem, resumeMs);
         player.prepare();
+        if (abrMonitor != null) abrMonitor.notifyReload();
     }
 
     /* Plex bakes the selected audio stream into the HLS transcode at session start, so
@@ -1470,6 +1594,61 @@ public class PlayerActivity extends AppCompatActivity {
         MediaItem newItem = new MediaItem.Builder().setUri(Uri.parse(currentUrl)).build();
         player.setMediaItem(newItem, resumeMs);
         player.prepare();
+        if (abrMonitor != null) abrMonitor.notifyReload();
+    }
+
+    /* Same "rebuild the transcode URL, resume in place" mechanism as switchAudioStream
+       above - Plex bakes the selected Media[] entry into the transcode at session
+       start via the mediaIndex param, so switching versions means re-requesting the
+       same path with a new one, a fresh session id, and an offset resuming where
+       playback left off. Called from PlayerUiHelper's Video Quality > Version menu. */
+    void switchMediaVersion(int mediaIndex) {
+        if (player == null || currentUrl == null) return;
+        long resumeMs = player.getCurrentPosition();
+        Uri oldUri = Uri.parse(currentUrl);
+        Uri.Builder builder = oldUri.buildUpon().clearQuery();
+        for (String name : oldUri.getQueryParameterNames()) {
+            if (name.equals("mediaIndex") || name.equals("offset") || name.equals("session")) continue;
+            for (String value : oldUri.getQueryParameters(name)) {
+                builder.appendQueryParameter(name, value);
+            }
+        }
+        builder.appendQueryParameter("mediaIndex", String.valueOf(mediaIndex));
+        builder.appendQueryParameter("offset", String.valueOf(resumeMs / 1000));
+        builder.appendQueryParameter("session", java.util.UUID.randomUUID().toString());
+        currentUrl = builder.build().toString();
+        currentMediaIndex = mediaIndex;
+        MediaItem newItem = new MediaItem.Builder().setUri(Uri.parse(currentUrl)).build();
+        player.setMediaItem(newItem, resumeMs);
+        player.prepare();
+        if (abrMonitor != null) abrMonitor.notifyReload();
+    }
+
+    /* Same mechanism again for the bitrate cap (Plex's maxVideoBitrate param) - a null
+       kbps (Quality Cap's "Original" option) means the param is dropped entirely
+       rather than sent as some sentinel value, matching stream-url.js's
+       buildStreamUrl on the web leg. Called from PlayerUiHelper's Video Quality >
+       Quality Cap menu. */
+    void switchQualityCap(Integer kbps) {
+        if (player == null || currentUrl == null) return;
+        long resumeMs = player.getCurrentPosition();
+        Uri oldUri = Uri.parse(currentUrl);
+        Uri.Builder builder = oldUri.buildUpon().clearQuery();
+        for (String name : oldUri.getQueryParameterNames()) {
+            if (name.equals("maxVideoBitrate") || name.equals("offset") || name.equals("session")) continue;
+            for (String value : oldUri.getQueryParameters(name)) {
+                builder.appendQueryParameter(name, value);
+            }
+        }
+        if (kbps != null) builder.appendQueryParameter("maxVideoBitrate", String.valueOf(kbps));
+        builder.appendQueryParameter("offset", String.valueOf(resumeMs / 1000));
+        builder.appendQueryParameter("session", java.util.UUID.randomUUID().toString());
+        currentUrl = builder.build().toString();
+        qualityCapKbps = kbps;
+        MediaItem newItem = new MediaItem.Builder().setUri(Uri.parse(currentUrl)).build();
+        player.setMediaItem(newItem, resumeMs);
+        player.prepare();
+        if (abrMonitor != null) abrMonitor.notifyReload();
     }
 
     public static void stopPlayback() {
@@ -1552,6 +1731,9 @@ public class PlayerActivity extends AppCompatActivity {
         }
         if (contentSampler != null) {
             contentSampler.stop();
+        }
+        if (abrMonitor != null) {
+            abrMonitor.stop();
         }
         sleepTimerHandler.removeCallbacksAndMessages(null);
         controlsFadeHandler.removeCallbacksAndMessages(null);

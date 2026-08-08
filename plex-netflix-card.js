@@ -237,7 +237,6 @@ class PlexNetflixCard extends HTMLElement {
               <button type="button" class="title-info-restart-btn" hidden>↺ Restart</button>
               <button type="button" class="title-info-unwatch-btn" aria-label="Mark as unwatched" hidden>${WATCHED_ICON_SVG}</button>
               <button type="button" class="title-info-watchlist-btn" aria-label="Add to My List">+</button>
-              <button type="button" class="title-info-quality-btn" aria-label="Quality" hidden>⚙</button>
             </div>
             <div class="title-info-summary"></div>
             <div class="title-info-episodes"></div>
@@ -250,16 +249,6 @@ class PlexNetflixCard extends HTMLElement {
               <div class="title-info-similar"></div>
             </div>
           </div>
-        </div>
-      </div>
-      <div class="quality-picker-overlay" tabindex="-1">
-        <div class="quality-picker-modal">
-          <div class="quality-picker-title">Quality</div>
-          <div class="quality-picker-section-title">Version</div>
-          <div class="quality-picker-versions"></div>
-          <div class="quality-picker-section-title">Quality Cap</div>
-          <div class="quality-picker-caps"></div>
-          <button type="button" class="quality-picker-done">Done</button>
         </div>
       </div>
     `;
@@ -345,12 +334,10 @@ class PlexNetflixCard extends HTMLElement {
        Android hardware-back handling (goBack()-if-possible, else exit the app) - without
        this, none of these overlays have a browser history entry to go back to, so every
        one of them just fell straight through to exiting the app. Ordered by overlay
-       z-index (highest first) since more than one can theoretically be open at once
-       (e.g. quality-picker over title-info). */
+       z-index (highest first) since more than one can theoretically be open at once. */
     App.addListener("backButton", () => {
       const settingsModal = document.querySelector("streaming-settings-modal");
-      if (this._titleInfo.isQualityPickerOpen()) this._titleInfo.closeQualityPicker();
-      else if (this._titleInfo.isOpen()) this._titleInfo.close();
+      if (this._titleInfo.isOpen()) this._titleInfo.close();
       else if (this._pin.isOpen()) this._pin.cancel();
       else if (this._profileOverlay.classList.contains("open")) this._closeProfileOverlay();
       else if (this._moreOverlay.classList.contains("open")) this._closeMoreSheet();
@@ -703,7 +690,7 @@ class PlexNetflixCard extends HTMLElement {
      Plex web player) when playback fails to start - e.g. a watchlist item with no local
      ratingKey, which player.play rejects by design. Shared by the title-info modal's
      Play button and the episode list's direct-play rows. */
-  async _playItem(item, { durationMs = null, startOffsetMs = 0, source, markers = [], chapters = [], mediaIndex = 0, qualityCapKbps = null, audioStreams = [], bifIndexPath = null, queueRatingKeys = null, queueIndex = null } = {}) {
+  async _playItem(item, { durationMs = null, startOffsetMs = 0, source, markers = [], chapters = [], mediaIndex = 0, mediaVersions = [], audioStreams = [], bifIndexPath = null, queueRatingKeys = null, queueIndex = null } = {}) {
     try {
       await player.play({
         ratingKey: item.ratingKey,
@@ -716,7 +703,7 @@ class PlexNetflixCard extends HTMLElement {
         markers,
         chapters,
         mediaIndex,
-        qualityCapKbps,
+        mediaVersions,
         audioStreams,
         bifIndexPath,
         /* Already produced by _mapItem for every call site - title is the show's own

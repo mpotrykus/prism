@@ -42,12 +42,14 @@ import {
     storedColorBoostAuto,
     storedStatsOverlayEnabled,
     storedAutoPlayEnabled,
+    storedAutoQualityEnabled,
     AUTO_PLAY_STORAGE_KEY,
 } from "./src/player/ui/shared.js";
 import {
     makeControlButton,
     registerControlButton,
     showControls,
+    hideControls,
     scheduleHideControls,
     buildLoadingSpinner,
     buildCenterControls,
@@ -132,6 +134,12 @@ class StreamingPlayerController {
         this._statsOverlayEl = null;
         this._statsOverlayIntervalId = null;
         this._autoPlayEnabled = false;
+        this._autoQualityEnabled = false;
+        this._abrIntervalId = null;
+        this._abrLastSwitchAt = 0;
+        this._abrDowngradeStreak = 0;
+        this._abrStableStreak = 0;
+        this._abrHasRealSample = false;
         this._onPopState = this._onPopState.bind(this);
         /* A player has no sidenav/rows to navigate - the only D-pad/gamepad action it
            needs is an exit, same effect as the visible close button. Registered once,
@@ -252,6 +260,11 @@ class StreamingPlayerController {
             episodeNumber: item.episodeNumber ?? null,
             mediaIndex: item.mediaIndex || 0,
             qualityCapKbps: item.qualityCapKbps ?? null,
+            /* {mediaIndex, label} per Plex Media[] entry (see title-info.js's
+               extractMediaVersions) - feeds chrome.js's in-player "Video Quality"
+               menu's Version submenu, only shown there when this has more than one
+               entry. */
+            mediaVersions: item.mediaVersions || [],
             audioStreams,
             audioStreamId: audioStreams.find((s) => s.selected)?.id ?? null,
             /* Ordered sibling ratingKeys (a show's full episode order, or a playlist/
@@ -293,6 +306,15 @@ class StreamingPlayerController {
         this._autoColorBoostStrength = null;
         this._statsOverlayEnabled = storedStatsOverlayEnabled();
         this._autoPlayEnabled = storedAutoPlayEnabled();
+        /* No per-video/genre concern to resolve either - see core/abr.js. Reset every
+           session's own bookkeeping (not just the flag) since a brand-new transcode
+           session has no relationship to whatever streak/cooldown state the previous
+           title's monitor left behind. */
+        this._autoQualityEnabled = storedAutoQualityEnabled();
+        this._abrLastSwitchAt = 0;
+        this._abrDowngradeStreak = 0;
+        this._abrStableStreak = 0;
+        this._abrHasRealSample = false;
 
         return { streamUrl, startOffsetMs };
     }
@@ -374,8 +396,8 @@ class StreamingPlayerController {
         return attachSource(this, video, streamUrl);
     }
 
-    _reloadWebSource(newStreamId) {
-        return reloadWebSource(this, newStreamId);
+    _reloadWebSource(overrides) {
+        return reloadWebSource(this, overrides);
     }
 
     _teardownWeb() {
@@ -462,6 +484,10 @@ class StreamingPlayerController {
 
     _showControls() {
         return showControls(this);
+    }
+
+    _hideControls() {
+        return hideControls(this);
     }
 
     _scheduleHideControls() {

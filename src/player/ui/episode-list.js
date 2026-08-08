@@ -222,7 +222,7 @@ export async function openEpisodeListOverlay(controller) {
     document.body.appendChild(scrim);
     document.body.appendChild(panel);
     controller._episodeListEl = { scrim, panel };
-    controller._showControls();
+    controller._hideControls();
     requestAnimationFrame(() => {
         panel.style.opacity = "1";
         panel.style.transform = "translateY(0)";
@@ -270,7 +270,7 @@ export function closeEpisodeListOverlay(controller) {
     controller._episodeListEl.scrim.remove();
     controller._episodeListEl.panel.remove();
     controller._episodeListEl = null;
-    controller._scheduleHideControls();
+    controller._showControls();
 }
 
 /* Cached per queue (reference-equality on queueRatingKeys, which threads unchanged

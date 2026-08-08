@@ -84,6 +84,12 @@ function colorBoostStatusLine(controller) {
     return `${Math.round(strength * 100)}%${controller._colorBoostAuto ? " (auto)" : ""}`;
 }
 
+function qualityCapStatusLine(controller) {
+    const capKbps = controller._session?.qualityCapKbps;
+    const label = capKbps ? `${capKbps} kbps` : "original";
+    return `${label}${controller._autoQualityEnabled ? " (auto)" : ""}`;
+}
+
 export function renderStatsOverlayFrame(controller) {
     const el = controller._statsOverlayEl;
     const video = controller._videoEl;
@@ -94,7 +100,7 @@ export function renderStatsOverlayFrame(controller) {
         "HDR: n/a (browser)",
         `Shader Upscaling: ${shaderStatusLine(controller)}`,
         `Color Boost: ${colorBoostStatusLine(controller)}`,
-        `Quality cap: ${controller._session?.qualityCapKbps ? controller._session.qualityCapKbps + " kbps" : "original"}`,
+        `Quality cap: ${qualityCapStatusLine(controller)}`,
         quality ? `Dropped frames: ${quality.droppedVideoFrames}/${quality.totalVideoFrames}` : null,
     ].filter(Boolean);
     el.textContent = lines.join("\n");

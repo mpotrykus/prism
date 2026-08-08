@@ -18,12 +18,9 @@
 .title-info-restart-btn:focus-visible,
 .title-info-unwatch-btn:focus-visible,
 .title-info-watchlist-btn:focus-visible,
-.title-info-quality-btn:focus-visible,
 .title-info-episode:focus-visible,
 .title-info-similar-item:focus-visible,
 .title-info-season-select:focus-visible,
-.quality-picker-option:focus-visible,
-.quality-picker-done:focus-visible,
 .more-sheet-item:focus-visible,
 .more-sheet-cancel:focus-visible {
   outline: 2px solid #e5a00d;

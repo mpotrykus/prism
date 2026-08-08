@@ -4,8 +4,9 @@ import { SHADER_TYPES } from "../shader/shaders.js";
 import { setShaderStrength, setColorBoostStrength, upscaleModeOf, setUpscaleMode, colorBoostModeOf, setColorBoostMode } from "../shader-pipeline.js";
 import { setAmbientEnabled, setAmbientOpacity } from "../ambient-pipeline.js";
 import { reloadWebSource } from "../web-fallback.js";
+import { setAutoQualityEnabled } from "../core/abr.js";
 import { setNativePlaybackRate, setNativeSubtitle } from "../native-bridge.js";
-import { CONTROLS_HIDE_DELAY_MS, PLAYBACK_RATES, SLEEP_TIMER_PRESETS_MIN, ZOOM_LEVELS, VOLUME_STORAGE_KEY, storedVolume, volumeIconMarkup, seekIconMarkup, skipIconMarkup, fullscreenIconMarkup } from "./shared.js";
+import { CONTROLS_HIDE_DELAY_MS, PLAYBACK_RATES, SLEEP_TIMER_PRESETS_MIN, ZOOM_LEVELS, QUALITY_CAP_PRESETS, VOLUME_STORAGE_KEY, storedVolume, volumeIconMarkup, seekIconMarkup, skipIconMarkup, fullscreenIconMarkup } from "./shared.js";
 import { loadBifIndex, findNearestBifFrame, fetchBifFrameUrl } from "../core/bif.js";
 import { plexAssetUrl } from "../core/plex-asset-url.js";
 import { fetchQueuedTitle } from "../core/title-fetch.js";
@@ -86,6 +87,18 @@ export function showControls(controller) {
         b.style.pointerEvents = "auto";
     });
     scheduleHideControls(controller);
+}
+
+/* Used instead of scheduleHideControls's delayed fade when the episode list overlay
+   opens - that overlay is a full-width bottom sheet occupying the same screen real
+   estate as the transport bar, so the corner buttons/transport bar need to disappear
+   immediately rather than linger underneath it until the idle timer catches up. */
+export function hideControls(controller) {
+    clearTimeout(controller._controlsHideTimer);
+    controller._controlButtons.forEach((b) => {
+        b.style.opacity = "0";
+        b.style.pointerEvents = "none";
+    });
 }
 
 /* pointerEvents is toggled alongside opacity, not just opacity alone - a faded-out
@@ -1210,8 +1223,86 @@ export function openHamburgerMenu(controller, anchor) {
         const current = controller._session.audioStreams.find((s) => s.id === controller._session.audioStreamId);
         items.push({ label: "Audio Track", value: current?.label || null, trailing: "›", onSelect: () => openAudioMenu(controller, anchor) });
     }
+    /* Replaces the old pre-play "Quality" picker on the title-info modal (see that
+       file's own header comment) - Version/Quality Cap both change what's actually
+       being decoded, so they belong to an active session, not a choice made before one
+       exists. Always shown (unlike Audio Track/Chapters, gated on there being more than
+       one option) since Quality Cap always has at least "Original" to show. */
+    items.push({ label: "Video Quality", value: qualityCapMenuLabel(controller), trailing: "›", onSelect: () => openVideoQualityMenu(controller, anchor) });
     items.push({ label: "Subtitles", trailing: "›", onSelect: () => openSubtitleSearch(controller, anchor) });
     openInlineMenu(controller, { anchor, items });
+}
+
+/* "Auto (720p (10 Mbps))" while Auto Quality is actively adjusting the cap, else the
+   plain preset label - same "(Auto)" convention shaderRowLabel uses for Shader Upscaling.
+   Shared by the top-level "Video Quality" row and this submenu's "Quality Cap" row so the
+   two never show a different answer for the same state. */
+function qualityCapMenuLabel(controller) {
+    const label = QUALITY_CAP_PRESETS.find((p) => (p.kbps ?? null) === (controller._session?.qualityCapKbps ?? null))?.label || null;
+    return controller._autoQualityEnabled ? `Auto (${label})` : label;
+}
+
+/* Sub-menu for the Video Quality row above - Version (only shown when this item
+   actually has more than one Media[] entry, same "never an empty/dead affordance"
+   rule Chapters/Audio Track follow) and Quality Cap, each drilling one level further
+   in rather than both living on this one panel, matching how Playback Speed/Sleep
+   Timer/Zoom already drill from the top-level hamburger menu. */
+function openVideoQualityMenu(controller, anchor) {
+    const session = controller._session;
+    const versions = session?.mediaVersions || [];
+    const items = [];
+    if (versions.length > 1) {
+        const current = versions.find((v) => v.mediaIndex === session.mediaIndex);
+        items.push({ label: "Version", value: current?.label || null, trailing: "›", onSelect: () => openVersionMenu(controller, anchor) });
+    }
+    items.push({ label: "Quality Cap", value: qualityCapMenuLabel(controller), trailing: "›", onSelect: () => openQualityCapMenu(controller, anchor) });
+    openInlineMenu(controller, { anchor, onBack: () => openHamburgerMenu(controller, anchor), items });
+}
+
+function openVersionMenu(controller, anchor) {
+    const session = controller._session;
+    const versions = session?.mediaVersions || [];
+    openInlineMenu(controller, {
+        anchor,
+        onBack: () => openVideoQualityMenu(controller, anchor),
+        items: versions.map((v) => ({
+            label: `${v.label}${v.mediaIndex === session.mediaIndex ? "  ✓" : ""}`,
+            onSelect: () => reloadWebSource(controller, { mediaIndex: v.mediaIndex }),
+        })),
+    });
+}
+
+function openQualityCapMenu(controller, anchor) {
+    const session = controller._session;
+    const current = session?.qualityCapKbps ?? null;
+    const autoOn = controller._autoQualityEnabled;
+    /* No bandwidth signal exists on the native-HLS <video> branch (controller._hls is
+       null there, see web-fallback.js's attachSource) - Auto Quality has nothing to
+       evaluate against, so this row is shown but not selectable rather than silently
+       doing nothing behind a checked toggle. The persisted flag itself is untouched
+       either way, so it still takes effect on a future session/device that does use
+       hls.js. */
+    const autoAvailable = !!controller._hls;
+    const autoRow = autoAvailable
+        ? {
+              label: `Auto${autoOn ? "  ✓" : ""}`,
+              onSelect: () => setAutoQualityEnabled(controller, true),
+          }
+        : { label: "Auto (unavailable)", onSelect: () => {} };
+    openInlineMenu(controller, {
+        anchor,
+        onBack: () => openVideoQualityMenu(controller, anchor),
+        items: [
+            autoRow,
+            ...QUALITY_CAP_PRESETS.map((preset) => ({
+                label: `${preset.label}${!autoOn && (preset.kbps ?? null) === current ? "  ✓" : ""}`,
+                onSelect: () => {
+                    setAutoQualityEnabled(controller, false);
+                    reloadWebSource(controller, { qualityCapKbps: preset.kbps });
+                },
+            })),
+        ],
+    });
 }
 
 function openAudioMenu(controller, anchor) {
@@ -1222,7 +1313,7 @@ function openAudioMenu(controller, anchor) {
         onBack: () => openHamburgerMenu(controller, anchor),
         items: streams.map((stream) => ({
             label: `${stream.label}${stream.id === current ? "  ✓" : ""}`,
-            onSelect: () => reloadWebSource(controller, stream.id),
+            onSelect: () => reloadWebSource(controller, { audioStreamID: stream.id }),
         })),
     });
 }

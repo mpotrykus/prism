@@ -1,18 +1,8 @@
-import { wireLinearNav, registerNavHandler, focusAfterPaint } from "../../focus-nav.js";
+import { wireLinearNav, registerNavHandler } from "../../focus-nav.js";
 import { lockScroll, unlockScroll } from "../../scroll-lock.js";
 import { paintWatchlistButton } from "./watchlist.js";
 import { WATCHED_ICON_SVG } from "./rows.js";
 import { PROFILE_ICON_SVG } from "./profile.js";
-
-/* kbps: null means "no cap" (Original) - matched against the selected quality cap by
-   identity in _renderQualityPicker, so keep it null rather than 0 or a sentinel number. */
-const QUALITY_CAP_PRESETS = [
-  { label: "Original", kbps: null },
-  { label: "1080p (20 Mbps)", kbps: 20000 },
-  { label: "720p (10 Mbps)", kbps: 10000 },
-  { label: "480p (4 Mbps)", kbps: 4000 },
-  { label: "360p (2 Mbps)", kbps: 2000 },
-];
 
 /* Plex's Media[].Part[].Stream[] carries every stream on a version (video/audio/
    subtitle, distinguished by streamType - 2 is audio). Only surfaced for the player's
@@ -28,6 +18,22 @@ export function extractAudioStreams(media, mediaIndex) {
       label: s.extendedDisplayTitle || s.displayTitle || s.languageCode || "Unknown",
       selected: !!s.selected,
     }));
+}
+
+/* Plex's Media[] describes every version this item has (e.g. a 4K remux alongside a
+   1080p encode) - reduced here to {mediaIndex, label} for the player's in-session
+   Video Quality menu (see chrome.js's openVersionMenu), the same "resolve Plex's
+   protocol once, hand the player a plain list" split extractAudioStreams above
+   follows. Resolution/codec/bitrate field names are unverified against a real
+   multi-version item - see this feature's own open risks. */
+export function extractMediaVersions(media) {
+  return (media || []).map((m, i) => {
+    const parts = [];
+    if (m.videoResolution) parts.push(String(m.videoResolution));
+    if (m.videoCodec) parts.push(m.videoCodec.toUpperCase());
+    if (m.bitrate) parts.push(`${(m.bitrate / 1000).toFixed(1)} Mbps`);
+    return { mediaIndex: i, label: parts.join(" · ") || `Version ${i + 1}` };
+  });
 }
 
 /* Plex's Media[].Part[].Indexes carries the BIF trickplay index path (used for the
@@ -66,10 +72,12 @@ function hasAnyHistory(meta) {
   return (meta.viewOffset || 0) > 0 || (meta.viewCount || 0) > 0;
 }
 
-/* The title-info detail overlay (cast/seasons-episodes/collection-playlist items/
-   similar titles) and the quality picker nested inside it - kept as one controller
-   since the quality picker reads/writes the currently-open title's own media list and
-   selected version/quality-cap state directly, not through any separate interface.
+/* The title-info detail overlay: cast/seasons-episodes/collection-playlist items/
+   similar titles, plus the Play/Restart/mark-unwatched/watchlist actions. Version and
+   quality-cap selection used to live in a picker nested inside this modal - that's now
+   an in-player "Video Quality" menu (see chrome.js's openVideoQualityMenu) fed by this
+   item's Media[] list, since it changes what's actually decoded, not what gets
+   requested before playback starts.
    ctx: { escape, plexFetch, plexImageUrl, mapItem, isInWatchlist, onAddToWatchlist,
    onRemoveFromWatchlist, onPlayItem } - the card's own collaborators, passed in
    explicitly rather than this reaching into card state. */
@@ -90,18 +98,12 @@ export class TitleInfoController {
     this._restartBtn = shadowRoot.querySelector(".title-info-restart-btn");
     this._unwatchBtn = shadowRoot.querySelector(".title-info-unwatch-btn");
     this._watchlistBtn = shadowRoot.querySelector(".title-info-watchlist-btn");
-    this._qualityBtn = shadowRoot.querySelector(".title-info-quality-btn");
     this._summaryEl = shadowRoot.querySelector(".title-info-summary");
     this._episodesEl = shadowRoot.querySelector(".title-info-episodes");
     this._castWrap = shadowRoot.querySelector(".title-info-cast-wrap");
     this._castEl = shadowRoot.querySelector(".title-info-cast");
     this._similarWrap = shadowRoot.querySelector(".title-info-similar-wrap");
     this._similarEl = shadowRoot.querySelector(".title-info-similar");
-
-    this._qualityOverlay = shadowRoot.querySelector(".quality-picker-overlay");
-    this._qualityVersionsEl = shadowRoot.querySelector(".quality-picker-versions");
-    this._qualityCapsEl = shadowRoot.querySelector(".quality-picker-caps");
-    this._qualityDoneBtn = shadowRoot.querySelector(".quality-picker-done");
 
     this._item = null;
     this._source = null;
@@ -112,8 +114,6 @@ export class TitleInfoController {
     this._chapters = [];
     this._media = [];
     this._flatItems = null;
-    this._selectedMediaIndex = 0;
-    this._qualityCapKbps = null;
     this._pendingEpisodeFocus = null;
     this._resumeEpisodeKey = null;
     this._flatQueueContext = null;
@@ -130,18 +130,10 @@ export class TitleInfoController {
     return this._overlay.classList.contains("open");
   }
 
-  isQualityPickerOpen() {
-    return this._qualityOverlay.classList.contains("open");
-  }
-
   close() {
     if (this.isOpen()) unlockScroll();
     this._overlay.classList.remove("open");
     this._item = null;
-  }
-
-  closeQualityPicker() {
-    this._qualityOverlay.classList.remove("open");
   }
 
   /* Play/Resume + the Restart/mark-unwatched pair share one on/off switch - "has this
@@ -151,12 +143,6 @@ export class TitleInfoController {
     this._playBtn.textContent = hasHistory ? "▶ Resume" : "▶ Play";
     this._restartBtn.hidden = !hasHistory;
     this._unwatchBtn.hidden = !hasHistory;
-  }
-
-  openQualityPicker() {
-    this._renderQualityPicker();
-    this._qualityOverlay.classList.add("open");
-    focusAfterPaint(this._qualityDoneBtn);
   }
 
   /* Redirects an episode click to the parent show's info modal, landing on the season/
@@ -212,9 +198,6 @@ export class TitleInfoController {
     this._chapters = [];
     this._media = [];
     this._flatItems = null;
-    this._selectedMediaIndex = 0;
-    this._qualityCapKbps = null;
-    this._qualityBtn.hidden = true;
     this._progressEl.hidden = !(item.progress > 0);
     this._progressBar.style.width = `${Math.round((item.progress || 0) * 100)}%`;
     this._updatePlayHistoryUI(!!(item.progress > 0 || item.hasHistory));
@@ -272,45 +255,6 @@ export class TitleInfoController {
     }
   }
 
-  /* Version rows describe whatever Plex's Media[] actually reports (resolution/codec/
-     bitrate field names unverified against a real multi-version item - see this
-     phase's open risks); Quality Cap rows are the fixed QUALITY_CAP_PRESETS list.
-     Re-rendered on every selection so the "selected" highlight stays in sync without a
-     separate diffing step. */
-  _renderQualityPicker() {
-    const media = this._media || [];
-    this._qualityVersionsEl.innerHTML = media.length
-      ? media
-          .map((m, i) => {
-            const parts = [];
-            if (m.videoResolution) parts.push(String(m.videoResolution));
-            if (m.videoCodec) parts.push(m.videoCodec.toUpperCase());
-            if (m.bitrate) parts.push(`${(m.bitrate / 1000).toFixed(1)} Mbps`);
-            const label = parts.join(" · ") || `Version ${i + 1}`;
-            const selected = (this._selectedMediaIndex || 0) === i;
-            return `<button type="button" class="quality-picker-option${selected ? " selected" : ""}" data-media-index="${i}">${this._ctx.escape(label)}</button>`;
-          })
-          .join("")
-      : `<div class="title-info-loading">Only one version available</div>`;
-    this._qualityVersionsEl.querySelectorAll(".quality-picker-option").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        this._selectedMediaIndex = Number(btn.dataset.mediaIndex);
-        this._renderQualityPicker();
-      });
-    });
-
-    this._qualityCapsEl.innerHTML = QUALITY_CAP_PRESETS.map((preset) => {
-      const selected = (this._qualityCapKbps ?? null) === preset.kbps;
-      return `<button type="button" class="quality-picker-option${selected ? " selected" : ""}" data-kbps="${preset.kbps ?? ""}">${this._ctx.escape(preset.label)}</button>`;
-    }).join("");
-    this._qualityCapsEl.querySelectorAll(".quality-picker-option").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        this._qualityCapKbps = btn.dataset.kbps ? Number(btn.dataset.kbps) : null;
-        this._renderQualityPicker();
-      });
-    });
-  }
-
   _renderDetail(meta) {
     this._duration = meta.duration || null;
     this._viewOffset = meta.viewOffset || 0;
@@ -318,7 +262,6 @@ export class TitleInfoController {
     this._markers = meta.Marker || [];
     this._chapters = meta.Chapter || [];
     this._media = meta.Media || [];
-    this._qualityBtn.hidden = !this._media.length;
     this._updatePlayHistoryUI(hasAnyHistory(meta));
     /* Refines the possibly-truncated Genre list mapItem saw at row-click time (Plex list
        endpoints cap it to ~2 tags) with this fetch's full, untruncated list, so shader
@@ -427,7 +370,6 @@ export class TitleInfoController {
           const row = list.querySelector(`[data-rating-key="${focusEpisodeRatingKey}"]`);
           if (row) {
             row.classList.add("current");
-            row.scrollIntoView({ block: "center" });
           }
         }
       };
@@ -546,7 +488,10 @@ export class TitleInfoController {
     if (item.type === "collection" || item.type === "playlist") {
       return this._playFirstFlatItem();
     }
-    const mediaIndex = this._selectedMediaIndex || 0;
+    /* Always starts on the first Media[] entry with no cap - Version/Quality Cap are
+       now an in-player "Video Quality" menu (see chrome.js's openVideoQualityMenu) fed
+       by mediaVersions below, not a pre-play choice made here. */
+    const mediaIndex = 0;
     /* Only attaches the flat playlist/collection queue captured on the row click that
        led here (see _renderFlatItems) when it still actually matches what's playing -
        reopening this same modal via some other route (e.g. a "More Like This" card) in
@@ -563,7 +508,7 @@ export class TitleInfoController {
       markers: this._markers,
       chapters: this._chapters,
       mediaIndex,
-      qualityCapKbps: this._qualityCapKbps,
+      mediaVersions: extractMediaVersions(this._media),
       audioStreams: extractAudioStreams(this._media, mediaIndex),
       bifIndexPath: bifIndexPath(this._media, mediaIndex),
       ...queue,
@@ -612,6 +557,7 @@ export class TitleInfoController {
         source: "local",
         markers: meta.Marker || [],
         chapters: meta.Chapter || [],
+        mediaVersions: extractMediaVersions(meta.Media),
         audioStreams: extractAudioStreams(meta.Media, 0),
         bifIndexPath: bifIndexPath(meta.Media, 0),
         ...(queueIndex >= 0 ? { queueRatingKeys, queueIndex } : {}),
@@ -645,6 +591,7 @@ export class TitleInfoController {
         source: this._source,
         markers: meta.Marker || [],
         chapters: meta.Chapter || [],
+        mediaVersions: extractMediaVersions(meta.Media),
         audioStreams: extractAudioStreams(meta.Media, 0),
         bifIndexPath: bifIndexPath(meta.Media, 0),
         queueRatingKeys: rawItems.map((m) => m.ratingKey),
@@ -735,7 +682,7 @@ export class TitleInfoController {
     });
     this._nav = wireLinearNav(
       this._shadowRoot,
-      ".title-info-close, .title-info-play, .title-info-restart-btn, .title-info-unwatch-btn, .title-info-watchlist-btn, .title-info-quality-btn, .title-info-season-select, .title-info-episode, .title-info-similar-item",
+      ".title-info-close, .title-info-play, .title-info-restart-btn, .title-info-unwatch-btn, .title-info-watchlist-btn, .title-info-season-select, .title-info-episode, .title-info-similar-item",
       { orientation: "vertical", onBack: () => this.close() }
     );
     this._watchlistBtn.addEventListener("click", (e) => {
@@ -759,18 +706,6 @@ export class TitleInfoController {
     this._unwatchBtn.addEventListener("click", (e) => {
       e.stopPropagation();
       this._markUnwatched();
-    });
-    this._qualityBtn.addEventListener("click", (e) => {
-      e.stopPropagation();
-      this.openQualityPicker();
-    });
-    this._qualityOverlay.addEventListener("click", (e) => {
-      if (e.target === this._qualityOverlay) this.closeQualityPicker();
-    });
-    this._qualityDoneBtn.addEventListener("click", () => this.closeQualityPicker());
-    wireLinearNav(this._shadowRoot, ".quality-picker-option, .quality-picker-done", {
-      orientation: "vertical",
-      onBack: () => this.closeQualityPicker(),
     });
   }
 }

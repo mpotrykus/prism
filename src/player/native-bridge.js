@@ -124,6 +124,18 @@ function buildPlaybackPayload(controller, streamUrl, startOffsetMs) {
             label: s.label || "Unknown",
             selected: !!s.selected,
         })),
+        /* {mediaIndex, label} per Plex Media[] entry (see title-info.js's
+           extractMediaVersions) plus the currently-selected index/cap - PlayerUiHelper's
+           Video Quality menu rebuilds the transcode URL itself when the user picks one
+           (see PlayerActivity.switchMediaVersion/switchQualityCap), it never needs the
+           raw Plex Media shape, just enough to list options and checkmark the current
+           one, same split as audioStreams above. */
+        mediaVersions: (controller._session.mediaVersions || []).map((v) => ({
+            mediaIndex: v.mediaIndex,
+            label: v.label,
+        })),
+        currentMediaIndex: controller._session.mediaIndex ?? 0,
+        qualityCapKbps: controller._session.qualityCapKbps ?? null,
         /* Title/season-episode-or-year, shown in the transport bar header - same fields
            web-fallback.js's buildTransportBar reads off controller._session directly. */
         title: controller._session.title || "",

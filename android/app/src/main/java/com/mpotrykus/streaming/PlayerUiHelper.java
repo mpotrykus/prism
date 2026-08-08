@@ -298,7 +298,9 @@ final class PlayerUiHelper {
         float shownColorBoostStrength = activity.colorBoostAuto ? activity.autoColorBoostStrength : activity.colorBoostStrength;
         sb.append("Color Boost: ").append(activity.colorBoostEnabled
             ? Math.round(shownColorBoostStrength * 100) + "%" + (activity.colorBoostAuto ? " (auto)" : "")
-            : "off");
+            : "off").append('\n');
+        sb.append("Quality cap: ").append(activity.qualityCapKbps != null ? activity.qualityCapKbps + " kbps" : "original")
+            .append(activity.autoQualityEnabled ? " (auto)" : "");
 
         text.setText(sb.toString());
     }
@@ -839,7 +841,117 @@ final class PlayerUiHelper {
             rows.add(audioRow);
         }
 
+        /* Replaces the old pre-play "Quality" picker that used to live on the web
+           card's title-info modal (see plex-player.js's chrome.js openVideoQualityMenu
+           for the same change on that leg) - Version/Quality Cap both change what's
+           actually being decoded, so they belong to an active session, not a choice
+           made before one exists. Always shown (unlike Audio Track, gated on there
+           being more than one stream) since Quality Cap always has at least
+           "Original" to show. */
+        MenuRow qualityRow = new MenuRow("Video Quality");
+        qualityRow.value = qualityCapDisplayLabel(activity);
+        qualityRow.chevron = true;
+        qualityRow.onSelect = () -> openVideoQualityMenu(activity, anchor);
+        rows.add(qualityRow);
+
         openMenuPanel(activity, anchor, rows, null);
+    }
+
+    /* {label, kbps} pairs mirroring shared.js's QUALITY_CAP_PRESETS on the web leg -
+       null kbps is "Original" (no cap), matched by identity in openQualityCapMenu/
+       qualityCapLabel just like the web leg's own null-kbps preset. Package-private
+       (not private) - QualityAbrMonitor reads this same ladder directly rather than
+       hand-duplicating a third copy of it. */
+    static final class QualityCapPreset {
+        final String label;
+        final Integer kbps;
+
+        QualityCapPreset(String label, Integer kbps) {
+            this.label = label;
+            this.kbps = kbps;
+        }
+    }
+
+    static final QualityCapPreset[] QUALITY_CAP_PRESETS = {
+        new QualityCapPreset("Original", null),
+        new QualityCapPreset("1080p (20 Mbps)", 20000),
+        new QualityCapPreset("720p (10 Mbps)", 10000),
+        new QualityCapPreset("480p (4 Mbps)", 4000),
+        new QualityCapPreset("360p (2 Mbps)", 2000),
+    };
+
+    private static String qualityCapLabel(Integer kbps) {
+        for (QualityCapPreset preset : QUALITY_CAP_PRESETS) {
+            if (java.util.Objects.equals(preset.kbps, kbps)) return preset.label;
+        }
+        return null;
+    }
+
+    /* "Auto (720p (10 Mbps))" while Auto Quality is actively adjusting the cap, else the
+       plain preset label - same "(Auto)" convention the Shader Upscaling row uses.
+       Android's player is always ExoPlayer, so unlike the web leg's menu there's no
+       "unavailable" branch to account for here. */
+    private static String qualityCapDisplayLabel(PlayerActivity activity) {
+        String label = qualityCapLabel(activity.qualityCapKbps);
+        return activity.autoQualityEnabled ? "Auto (" + label + ")" : label;
+    }
+
+    /* Sub-menu for the Video Quality row above - Version (only shown when this item
+       actually has more than one Media[] entry, same "never an empty/dead affordance"
+       rule Audio Track follows) and Quality Cap, each drilling one level further in
+       rather than both living on this one panel, matching how Speed/Sleep Timer
+       already drill from the top-level menu. */
+    private static void openVideoQualityMenu(PlayerActivity activity, View anchor) {
+        List<MenuRow> rows = new ArrayList<>();
+        if (activity.mediaVersions.size() > 1) {
+            MenuRow versionRow = new MenuRow("Version");
+            MediaVersionEntry current = findMediaVersion(activity, activity.currentMediaIndex);
+            versionRow.value = current != null ? current.label : null;
+            versionRow.chevron = true;
+            versionRow.onSelect = () -> openVersionMenu(activity, anchor);
+            rows.add(versionRow);
+        }
+        MenuRow capRow = new MenuRow("Quality Cap");
+        capRow.value = qualityCapDisplayLabel(activity);
+        capRow.chevron = true;
+        capRow.onSelect = () -> openQualityCapMenu(activity, anchor);
+        rows.add(capRow);
+        openMenuPanel(activity, anchor, rows, () -> showPlayerMenu(activity, anchor));
+    }
+
+    private static MediaVersionEntry findMediaVersion(PlayerActivity activity, int mediaIndex) {
+        for (MediaVersionEntry entry : activity.mediaVersions) {
+            if (entry.mediaIndex == mediaIndex) return entry;
+        }
+        return null;
+    }
+
+    private static void openVersionMenu(PlayerActivity activity, View anchor) {
+        List<MenuRow> rows = new ArrayList<>();
+        for (MediaVersionEntry entry : activity.mediaVersions) {
+            boolean isCurrent = entry.mediaIndex == activity.currentMediaIndex;
+            MenuRow row = new MenuRow(entry.label + (isCurrent ? "  ✓" : ""));
+            row.onSelect = () -> activity.switchMediaVersion(entry.mediaIndex);
+            rows.add(row);
+        }
+        openMenuPanel(activity, anchor, rows, () -> openVideoQualityMenu(activity, anchor));
+    }
+
+    private static void openQualityCapMenu(PlayerActivity activity, View anchor) {
+        List<MenuRow> rows = new ArrayList<>();
+        MenuRow autoRow = new MenuRow("Auto" + (activity.autoQualityEnabled ? "  ✓" : ""));
+        autoRow.onSelect = () -> activity.setAutoQualityEnabled(true);
+        rows.add(autoRow);
+        for (QualityCapPreset preset : QUALITY_CAP_PRESETS) {
+            boolean isCurrent = !activity.autoQualityEnabled && java.util.Objects.equals(preset.kbps, activity.qualityCapKbps);
+            MenuRow row = new MenuRow(preset.label + (isCurrent ? "  ✓" : ""));
+            row.onSelect = () -> {
+                activity.setAutoQualityEnabled(false);
+                activity.switchQualityCap(preset.kbps);
+            };
+            rows.add(row);
+        }
+        openMenuPanel(activity, anchor, rows, () -> openVideoQualityMenu(activity, anchor));
     }
 
     /* The hamburger row's value text (no inline toggle any more, see the mode row below)
@@ -1108,7 +1220,7 @@ final class PlayerUiHelper {
         activity.episodeListScrim = scrim;
         activity.episodeListSheet = content;
         activity.controlsFadeHandler.removeCallbacks(activity.controlsFadeRunnable);
-        setControlsVisible(activity, true);
+        setControlsVisible(activity, false);
     }
 
     /* Shown immediately on the Episodes button tap (see buildEpisodesButton), before JS
@@ -1146,7 +1258,7 @@ final class PlayerUiHelper {
         activity.episodeListScrim = scrim;
         activity.episodeListSheet = content;
         activity.controlsFadeHandler.removeCallbacks(activity.controlsFadeRunnable);
-        setControlsVisible(activity, true);
+        setControlsVisible(activity, false);
     }
 
     private static View buildEpisodeSheetScrim(PlayerActivity activity) {

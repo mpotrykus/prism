@@ -27,6 +27,9 @@ public class NativePlayerPlugin extends Plugin implements PlayerActivity.Playbac
         long startPositionMs;
         JSArray chapters;
         JSArray audioStreams;
+        JSArray mediaVersions;
+        Integer currentMediaIndex;
+        Integer qualityCapKbps;
         String bifUrl;
         String shaderType;
         String title;
@@ -44,6 +47,9 @@ public class NativePlayerPlugin extends Plugin implements PlayerActivity.Playbac
         p.startPositionMs = call.getLong("startPositionMs", 0L);
         p.chapters = call.getArray("chapters");
         p.audioStreams = call.getArray("audioStreams");
+        p.mediaVersions = call.getArray("mediaVersions");
+        p.currentMediaIndex = call.getInt("currentMediaIndex");
+        p.qualityCapKbps = call.getInt("qualityCapKbps");
         p.bifUrl = call.getString("bifUrl");
         /* shaderEnabled/upscaleStrength/upscaleAuto are NOT read from the call here any
            more - PlayerActivity now owns them as its own SharedPreferences-persisted
@@ -89,6 +95,11 @@ public class NativePlayerPlugin extends Plugin implements PlayerActivity.Playbac
         if (p.audioStreams != null) {
             intent.putExtra(PlayerActivity.EXTRA_AUDIO_STREAMS_JSON, p.audioStreams.toString());
         }
+        if (p.mediaVersions != null) {
+            intent.putExtra(PlayerActivity.EXTRA_MEDIA_VERSIONS_JSON, p.mediaVersions.toString());
+        }
+        if (p.currentMediaIndex != null) intent.putExtra(PlayerActivity.EXTRA_CURRENT_MEDIA_INDEX, p.currentMediaIndex);
+        if (p.qualityCapKbps != null) intent.putExtra(PlayerActivity.EXTRA_QUALITY_CAP_KBPS, p.qualityCapKbps);
 
         startActivityForResult(call, intent, "onPlaybackActivityResult");
     }
@@ -118,7 +129,9 @@ public class NativePlayerPlugin extends Plugin implements PlayerActivity.Playbac
             p.year, p.seasonNumber, p.episodeNumber, p.queueLength, p.queueIndex,
             p.chapters != null ? p.chapters.toString() : null,
             p.bifUrl,
-            p.audioStreams != null ? p.audioStreams.toString() : null);
+            p.audioStreams != null ? p.audioStreams.toString() : null,
+            p.mediaVersions != null ? p.mediaVersions.toString() : null,
+            p.currentMediaIndex, p.qualityCapKbps);
         call.resolve();
     }
 
