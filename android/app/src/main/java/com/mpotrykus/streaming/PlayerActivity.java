@@ -1,12 +1,16 @@
 package com.mpotrykus.streaming;
 
+import android.app.PictureInPictureParams;
 import android.content.pm.PackageManager;
+import android.content.res.Configuration;
 import android.graphics.Color;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
+import android.util.Rational;
 import android.view.GestureDetector;
 import android.view.MotionEvent;
 import android.view.ScaleGestureDetector;
@@ -779,6 +783,77 @@ public class PlayerActivity extends AppCompatActivity {
 
     private void showPlayerMenu(View anchor) {
         PlayerUiHelper.showPlayerMenu(this, anchor);
+    }
+
+    /* Manual entry point from PlayerUiHelper's "Picture-in-Picture" menu row - no
+       onUserLeaveHint auto-enter-on-home-press, since that would also fire for exits
+       this Activity already handles deliberately (Back/Close -> reportStoppedIfNeeded).
+       enterPictureInPictureMode(params) needs API 26; minSdk here is 24 (see
+       variables.gradle), so API 24-25 fall back to the deprecated no-arg overload
+       instead of just no-op'ing. */
+    void enterPip() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            enterPictureInPictureMode(new PictureInPictureParams.Builder()
+                .setAspectRatio(pipAspectRatio())
+                .build());
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            enterPictureInPictureMode();
+        }
+    }
+
+    /* PictureInPictureParams.setAspectRatio requires a ratio within [1:2.39, 2.39:1] -
+       anything outside that range throws IllegalArgumentException, so an unusually wide/
+       tall source gets clamped to the nearest edge of that range rather than passed
+       through as-is. Falls back to 16:9 if the video track's real dimensions aren't
+       resolved yet (mirrors resolveScaleFactor's own fallback above). */
+    private Rational pipAspectRatio() {
+        Format format = selectedVideoFormat();
+        if (format == null || format.width <= 0 || format.height <= 0) {
+            return new Rational(16, 9);
+        }
+        int width = format.width;
+        int height = format.height;
+        float ratio = width / (float) height;
+        if (ratio > 2.39f) {
+            width = Math.round(height * 2.39f);
+        } else if (ratio < 1f / 2.39f) {
+            height = Math.round(width * 2.39f);
+        }
+        return new Rational(width, height);
+    }
+
+    /* PiP's tiny window has no room for (and, on most launchers, no touch routing to)
+       this Activity's own overlay chrome - hide it all for the duration rather than
+       leaving faded-but-present buttons a user could still accidentally "tap" through
+       the system's PiP touch-to-expand gesture. Restored the same way any other resumed
+       interaction reveals it (showControlsTemporarily), not left permanently visible.
+
+       statsOverlayText needs its own explicit hide/restore here - it's deliberately
+       independent of setControlsVisible/fadingControls (see buildStatsOverlay's own
+       header comment: a debug readout shouldn't fade with the rest of the chrome on
+       inactivity), so it would otherwise stay pinned to the shrunken PiP frame. This
+       only touches the View's visibility, not the statsOverlayEnabled flag itself, so
+       the Performance Overlay toggle's own remembered state survives the PiP round
+       trip unchanged. */
+    @Override
+    public void onPictureInPictureModeChanged(boolean isInPictureInPictureMode, Configuration newConfig) {
+        super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig);
+        if (isInPictureInPictureMode) {
+            controlsFadeHandler.removeCallbacks(controlsFadeRunnable);
+            setControlsVisible(false);
+            if (menuPopup != null) {
+                menuPopup.dismiss();
+                menuPopup = null;
+            }
+            if (statsOverlayText != null) {
+                statsOverlayText.setVisibility(View.GONE);
+            }
+        } else {
+            showControlsTemporarily();
+            if (statsOverlayText != null && statsOverlayEnabled) {
+                statsOverlayText.setVisibility(View.VISIBLE);
+            }
+        }
     }
 
     private static ShaderType parseShaderType(String name) {

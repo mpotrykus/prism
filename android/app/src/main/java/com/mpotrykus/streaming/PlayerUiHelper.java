@@ -958,6 +958,18 @@ final class PlayerUiHelper {
         qualityRow.onSelect = () -> openVideoQualityMenu(activity, anchor);
         rows.add(qualityRow);
 
+        /* A leaf action, not a drill-in like the rows above - no chevron/toggle, and
+           onSelect has to dismiss this popup itself (openMenuPanel only dismisses it for
+           us when navigating to a submenu) before handing off to
+           PlayerActivity.enterPip(), since the tiny PiP window has no room for this
+           flyout to keep rendering in. */
+        MenuRow pipRow = new MenuRow("Picture-in-Picture");
+        pipRow.onSelect = () -> {
+            dismissMenuPopup(activity);
+            activity.enterPip();
+        };
+        rows.add(pipRow);
+
         openMenuPanel(activity, anchor, rows, null);
     }
 
