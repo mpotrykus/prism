@@ -12,7 +12,7 @@ import android.view.View;
    episodeListIconMarkup() exactly (same 24x24 viewBox, same three list-line rects plus
    a trailing play triangle), so the Episodes button reads as the same icon on web and
    native instead of two unrelated glyphs for the same action. Same "draw it, don't rely
-   on a font glyph" reasoning LockIconView/SeekIconView/ChapterSkipIconView already give. */
+   on a font glyph" reasoning SeekIconView/ChapterSkipIconView already give. */
 class EpisodeListIconView extends View {
     private final Paint fillPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final RectF lineRect = new RectF();

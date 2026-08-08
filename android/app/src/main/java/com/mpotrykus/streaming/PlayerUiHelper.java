@@ -127,25 +127,6 @@ final class PlayerUiHelper {
         activity.registerFadingControl(btn);
     }
 
-    /* Touch-only affordance - only ever built when activity.hasTouchscreen (see the
-       onCreate call site), since a remote/D-pad-driven device has no touch input to lock
-       in the first place. marginDp is computed by the caller (onCreate) rather than
-       hardcoded here - the same 44dp-per-button stacking chrome.js's registerControlButton
-       uses for its own corner control row on the web leg, needed since this button no
-       longer always sits immediately left of the hamburger (the Episodes button, when
-       present, takes that slot instead - see buildEpisodesButton/onCreate). */
-    static void buildLockButton(PlayerActivity activity, float density, int marginDp) {
-        LockIconView btn = new LockIconView(activity);
-        btn.setContentDescription("Lock touch controls");
-        btn.setOnClickListener(v -> activity.setTouchLocked(true));
-        FrameLayout.LayoutParams params = new FrameLayout.LayoutParams((int) (40 * density), (int) (40 * density));
-        params.gravity = Gravity.TOP | Gravity.END;
-        params.setMargins(0, (int) (24 * density), (int) (marginDp * density), 0);
-        btn.setLayoutParams(params);
-        activity.root.addView(btn);
-        activity.registerFadingControl(btn);
-    }
-
     /* Only built when there's an actual queue to browse (activity.queueLength > 1,
        mirroring web-fallback.js's queueRatingKeys.length > 1 gate on episode-list.js's own
        button) - same "never an empty/dead affordance" rule the Chapters/Audio Track rows
@@ -957,6 +938,21 @@ final class PlayerUiHelper {
         qualityRow.chevron = true;
         qualityRow.onSelect = () -> openVideoQualityMenu(activity, anchor);
         rows.add(qualityRow);
+
+        /* Touch-only - a remote/D-pad-driven device has no touch input to lock in the
+           first place (same activity.hasTouchscreen gate the old standalone icon button
+           used before it moved in here). A leaf action like Picture-in-Picture below:
+           dismiss this popup, then hand off to setTouchLocked, since the lock overlay
+           needs to intercept touches this flyout would otherwise still be sitting on
+           top of. */
+        if (activity.hasTouchscreen) {
+            MenuRow lockRow = new MenuRow("Lock");
+            lockRow.onSelect = () -> {
+                dismissMenuPopup(activity);
+                activity.setTouchLocked(true);
+            };
+            rows.add(lockRow);
+        }
 
         /* A leaf action, not a drill-in like the rows above - no chevron/toggle, and
            onSelect has to dismiss this popup itself (openMenuPanel only dismisses it for

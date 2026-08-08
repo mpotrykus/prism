@@ -272,8 +272,9 @@ public class PlayerActivity extends AppCompatActivity {
     final Handler controlsFadeHandler = new Handler(Looper.getMainLooper());
     final Runnable controlsFadeRunnable = () -> setControlsVisible(false);
     boolean controlsVisible = true;
-    /* Touch-only lock (see hasTouchscreen gate at the buildLockButton/buildLockOverlay
-       call sites in onCreate) - see setTouchLocked for what actually toggles. */
+    /* Touch-only lock (see the hasTouchscreen gate at buildLockOverlay's onCreate call
+       site, and PlayerUiHelper.showPlayerMenu's "Lock" row for how it's triggered) - see
+       setTouchLocked for what actually toggles. */
     boolean touchLocked = false;
     FrameLayout lockOverlay;
     TextView lockMessageView;
@@ -425,14 +426,12 @@ public class PlayerActivity extends AppCompatActivity {
         /* Each top-right button after the hamburger claims the next 44dp slot outward -
            same per-button stacking chrome.js's registerControlButton computes for its own
            corner control row - rather than hardcoding every button's margin against a
-           fixed neighbor, since which buttons exist (Episodes; Lock) varies per session. */
+           fixed neighbor, since which buttons exist (Episodes) varies per session. Lock
+           lives in the hamburger menu (see PlayerUiHelper.showPlayerMenu), not as its own
+           top-right icon. */
         int nextRightSlotDp = 68;
         if (queueLength > 1) {
             PlayerUiHelper.buildEpisodesButton(this, density, nextRightSlotDp);
-            nextRightSlotDp += 44;
-        }
-        if (hasTouchscreen) {
-            PlayerUiHelper.buildLockButton(this, density, nextRightSlotDp);
             nextRightSlotDp += 44;
         }
         PlayerUiHelper.buildStatsOverlay(this, density);
@@ -1758,13 +1757,13 @@ public class PlayerActivity extends AppCompatActivity {
         }
     }
 
-    /* Toggled by the lock button (locked=true) and the lock overlay's own long-press
-       gesture (locked=false) - see PlayerUiHelper.buildLockButton/buildLockOverlay.
-       Locking forces every fading control (including the lock button itself) hidden via
-       the same setControlsVisible lockstep-fade the inactivity timer uses, then reveals
-       the overlay on top of everything to intercept all further touches; unlocking
-       reverses both and briefly reveals the chrome again, same as any other action that
-       calls showControlsTemporarily. */
+    /* Toggled by the hamburger menu's "Lock" row (locked=true, see
+       PlayerUiHelper.showPlayerMenu) and the lock overlay's own long-press gesture
+       (locked=false) - see PlayerUiHelper.buildLockOverlay. Locking forces every fading
+       control hidden via the same setControlsVisible lockstep-fade the inactivity timer
+       uses, then reveals the overlay on top of everything to intercept all further
+       touches; unlocking reverses both and briefly reveals the chrome again, same as any
+       other action that calls showControlsTemporarily. */
     void setTouchLocked(boolean locked) {
         if (touchLocked == locked) return;
         touchLocked = locked;
