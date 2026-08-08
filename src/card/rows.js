@@ -11,7 +11,7 @@ export const EMPTY_STATE_ICON_SVG =
 export const WATCHED_ICON_SVG =
   '<svg viewBox="0 0 24 24"><path d="M5 13l4 4 10-10" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 
-/* Row rebuilds (kids-mode toggle, search exit, profile switch, ...) wipe and recreate every
+/* Row rebuilds (search exit, profile switch, ...) wipe and recreate every
    poster via innerHTML. Reusing the same <img> node (rather than a fresh one with the same
    src) guarantees the browser can't issue a second network request for a poster already on
    screen - a new element with an identical src is only a *likely* cache hit, not a guaranteed

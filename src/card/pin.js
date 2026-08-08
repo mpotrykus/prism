@@ -3,11 +3,10 @@ import { focusAfterPaint, registerNavHandler } from "../../focus-nav.js";
 /* Custom numeric-keypad modal replacing window.prompt/alert for PIN entry - this card
    has no native browser-dialog usage elsewhere, and a Netflix-style kiosk dashboard
    (often touch/TV, no physical keyboard) needs a tappable keypad rather than an OS
-   text-input dialog. Shared by Kids Mode's exit gate and the Plex profile switcher's
-   PIN prompt rather than each owning its own copy - prompt() resolves with the entered
-   digit string once `length` digits are typed, or null if cancelled. Checking those
-   digits against anything is the caller's job, not this modal's, since Kids Mode
-   verifies locally but a Plex profile PIN can only be verified by Plex itself. */
+   text-input dialog. Used by the Plex profile switcher's protected-profile PIN prompt -
+   prompt() resolves with the entered digit string once `length` digits are typed, or
+   null if cancelled. Checking those digits is the caller's job, not this modal's, since
+   only Plex itself can verify a profile PIN. */
 const PIN_GRID_COLS = 3;
 
 export class PinEntry {
@@ -43,10 +42,11 @@ export class PinEntry {
     });
   }
 
-  /* Wrong-PIN feedback (shake + clear) without closing the modal - used by Kids Mode's
-     retry loop. The profile switcher doesn't use this: a wrong Plex PIN is a server
-     round-trip away, not a local comparison, so it just reports the error and lets the
-     user press "Switch" again rather than auto-retrying. */
+  /* Wrong-PIN feedback (shake + clear) without closing the modal. Not currently used by
+     the profile switcher: a wrong Plex PIN is a server round-trip away, not a local
+     comparison, so it just reports the error and lets the user press "Switch" again
+     rather than auto-retrying. Kept available for any future caller that does local
+     verification. */
   shake() {
     this._errorEl.classList.add("visible");
     this._modal.classList.remove("shake");

@@ -1,6 +1,6 @@
 /* Plex sign-in, split out from <streaming-settings-modal> so it can gate the whole app
    at boot (see app.js) - blocking until a server is connected - while everything else
-   configurable (libraries, trailers, AI rows, kids mode, display) lives in Settings. */
+   configurable (libraries, trailers, AI rows, display) lives in Settings. */
 import { wireLinearNav, focusAfterPaint } from "./focus-nav.js";
 import { isRemoteDrivenDevice } from "./input-mode.js";
 import * as StreamingPlexAuth from "./plex-auth.js";

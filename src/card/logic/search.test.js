@@ -26,29 +26,19 @@ describe("buildGenreMatchHubs", () => {
     ],
     [2, [{ title: "HORROR", items: [{ title: "The Haunting", addedAt: 3 }] }]],
   ]);
-  const isBlockedGenreName = () => false;
-
   it("matches genres case-insensitively across sections and merges by normalized name", () => {
-    const hubs = buildGenreMatchHubs("horror", 10, { genreBySection, isBlockedGenreName });
+    const hubs = buildGenreMatchHubs("horror", 10, { genreBySection });
     expect(hubs).toHaveLength(1);
     expect(hubs[0].title).toBe('Genre "Horror"');
     expect(hubs[0].Metadata.map((m) => m.title)).toEqual(["The Haunting", "Saw"]);
   });
 
   it("returns an empty array for a blank query", () => {
-    expect(buildGenreMatchHubs("  ", 10, { genreBySection, isBlockedGenreName })).toEqual([]);
-  });
-
-  it("excludes genres blocked by Kids Mode", () => {
-    const hubs = buildGenreMatchHubs("horror", 10, {
-      genreBySection,
-      isBlockedGenreName: (name) => name.toLowerCase() === "horror",
-    });
-    expect(hubs).toEqual([]);
+    expect(buildGenreMatchHubs("  ", 10, { genreBySection })).toEqual([]);
   });
 
   it("marks hasMore when the merged pool exceeds the limit", () => {
-    const hubs = buildGenreMatchHubs("horror", 0, { genreBySection, isBlockedGenreName });
+    const hubs = buildGenreMatchHubs("horror", 0, { genreBySection });
     expect(hubs[0].hasMore).toBe(true);
     expect(hubs[0].Metadata).toHaveLength(0);
   });

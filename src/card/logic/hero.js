@@ -5,15 +5,14 @@
    a stateless shape until the shell itself is untangled (see the modularization plan's
    Phase 8). Only the parts with clear inputs/outputs move here. */
 
-export function pickHeroItem(excludeKey, sections, { genreBySection, isBlockedGenreName, passesKidsMode }) {
+export function pickHeroItem(excludeKey, sections, { genreBySection }) {
   const keys = sections ? new Set(sections.map((s) => s.key)) : null;
   const seen = new Map();
   for (const [sectionKey, entries] of genreBySection.entries()) {
     if (keys && !keys.has(sectionKey)) continue;
     for (const g of entries) {
-      if (isBlockedGenreName(g.title)) continue;
       for (const m of g.items) {
-        if (m.ratingKey && !seen.has(m.ratingKey) && passesKidsMode(m)) seen.set(m.ratingKey, m);
+        if (m.ratingKey && !seen.has(m.ratingKey)) seen.set(m.ratingKey, m);
       }
     }
   }

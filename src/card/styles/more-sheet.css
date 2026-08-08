@@ -1,5 +1,5 @@
 /* Mobile-only overflow menu for the bottom nav bar (see .nav-more) - collects Profile/
-   Kids Mode/Settings plus any library tabs past the mobile visible cap. Below
+   Settings plus any library tabs past the mobile visible cap. Below
    .profile-overlay/.pin-overlay in z-index on purpose: rows in here delegate to those
    same nav items via a real .click(), closing this sheet first, so it never needs to
    paint above something it just handed off to. */

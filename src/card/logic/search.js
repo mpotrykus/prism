@@ -18,16 +18,14 @@ export function parseYearQuery(query) {
 }
 
 /* genreBySection: Map<sectionKey, Array<{ title, items }>> - the same per-section genre
-   listing used by the genre rows. isBlockedGenreName: (name) => boolean, Kids Mode's
-   whole-row genre check (see logic/kids-mode.js). */
-export function buildGenreMatchHubs(query, limit, { genreBySection, isBlockedGenreName }) {
+   listing used by the genre rows. */
+export function buildGenreMatchHubs(query, limit, { genreBySection }) {
   const q = query.trim().toLowerCase();
   if (!q) return [];
   const merged = new Map();
   for (const entries of genreBySection.values()) {
     for (const g of entries) {
       if (!g.title.toLowerCase().includes(q)) continue;
-      if (isBlockedGenreName(g.title)) continue;
       const norm = g.title.trim().toLowerCase();
       if (!merged.has(norm)) merged.set(norm, { title: g.title, items: [] });
       merged.get(norm).items.push(...g.items);

@@ -5,7 +5,7 @@ import { plexFetch } from "./data.js";
    building, and the results-page render. Takes the PlexNetflixCard instance as an
    explicit first argument (same pattern as data.js) since these read this._config/
    this._genreBySection/this._studioFacets etc. and write this._lastSearchQuery/
-   this._lastSearchHubs for the kids-mode-toggle-while-searching re-render case. */
+   this._lastSearchHubs so Back-button re-renders reuse the cached hubs. */
 
 const SEARCH_HUB_LIMIT = 24;
 /* "See All" section expansion - large enough that no single library section's search
@@ -77,7 +77,6 @@ async function buildSearchHubs(card, q, hubLimit, rowLimit) {
     .filter((h) => h.Metadata.length);
   const genreHubs = buildGenreMatchHubs(q, rowLimit, {
     genreBySection: card._genreBySection,
-    isBlockedGenreName: (name) => card._isBlockedGenreName(name),
   });
   const yearHubs = await buildYearMatchHubs(card, q, rowLimit);
   const facetHubs = await buildFacetMatchHubs(card, q, rowLimit);
@@ -187,13 +186,7 @@ async function fetchByFacet(card, facet, filterName, limit) {
 }
 
 export function renderSearchPage(card, hubs, { expanded = false } = {}) {
-  /* Filtered here rather than at each hub-building function (reason/genre/year/facet
-     hubs all funnel through this one render call) so Kids Mode covers search with a
-     single change, and re-rendering from the cached _lastSearchHubs (Back button, or a
-     Kids Mode toggle mid-search) always re-applies the current filter live. */
-  const visibleHubs = hubs
-    .map((hub) => ({ ...hub, Metadata: (hub.Metadata || []).filter((m) => card._passesKidsMode(m)) }))
-    .filter((hub) => hub.Metadata.length);
+  const visibleHubs = hubs.filter((hub) => (hub.Metadata || []).length);
   if (!visibleHubs.length) {
     card._rowsEl.innerHTML = `<div class="empty">${card._emptyStateHtml("No results")}</div>`;
     return;

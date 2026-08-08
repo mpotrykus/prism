@@ -49,8 +49,6 @@ describe("mapItem", () => {
 });
 
 const identityMapItem = (m) => m;
-const noneBlocked = () => false;
-const alwaysPasses = () => true;
 const noShuffle = (arr) => arr;
 
 describe("mergeGenreRows", () => {
@@ -62,8 +60,6 @@ describe("mergeGenreRows", () => {
     ]);
     const rows = mergeGenreRows([{ key: 1 }, { key: 2 }, { key: 3 }], {
       genreBySection,
-      isBlockedGenreName: noneBlocked,
-      passesKidsMode: alwaysPasses,
       mapItem: identityMapItem,
       shuffle: noShuffle,
       rowSize: 20,
@@ -71,19 +67,6 @@ describe("mergeGenreRows", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0].title).toBe("Horror");
     expect(rows[0].items).toHaveLength(6);
-  });
-
-  it("excludes genres blocked by Kids Mode", () => {
-    const genreBySection = new Map([[1, [{ title: "Horror", items: Array(5).fill({ addedAt: 1 }), totalSize: 5 }]]]);
-    const rows = mergeGenreRows([{ key: 1 }], {
-      genreBySection,
-      isBlockedGenreName: (name) => name === "Horror",
-      passesKidsMode: alwaysPasses,
-      mapItem: identityMapItem,
-      shuffle: noShuffle,
-      rowSize: 20,
-    });
-    expect(rows).toEqual([]);
   });
 });
 
@@ -100,12 +83,12 @@ describe("buildRecommendedRaw", () => {
 
   it("scores unwatched items by genre overlap with watch history, excluding watched/on-deck items", () => {
     const historyRaw = [{ ratingKey: "1", Genre: [{ tag: "Sci-Fi" }] }];
-    const raw = buildRecommendedRaw(historyRaw, { genreBySection, isBlockedGenreName: noneBlocked, onDeckRaw: [] });
+    const raw = buildRecommendedRaw(historyRaw, { genreBySection, onDeckRaw: [] });
     expect(raw.map((m) => m.ratingKey)).toEqual(["2"]);
   });
 
   it("returns nothing when watch history has no genre signal", () => {
-    const raw = buildRecommendedRaw([], { genreBySection, isBlockedGenreName: noneBlocked, onDeckRaw: [] });
+    const raw = buildRecommendedRaw([], { genreBySection, onDeckRaw: [] });
     expect(raw).toEqual([]);
   });
 });
@@ -126,23 +109,23 @@ describe("buildPopularRaw", () => {
         ],
       ],
     ]);
-    const raw = buildPopularRaw({ genreBySection, isBlockedGenreName: noneBlocked });
+    const raw = buildPopularRaw({ genreBySection });
     expect(raw[0].ratingKey).toBe("new");
   });
 
   it("skips items missing year or audienceRating", () => {
     const genreBySection = new Map([[1, [{ title: "All", items: [{ ratingKey: "x" }] }]]]);
-    expect(buildPopularRaw({ genreBySection, isBlockedGenreName: noneBlocked })).toEqual([]);
+    expect(buildPopularRaw({ genreBySection })).toEqual([]);
   });
 });
 
 describe("buildCollectionRows", () => {
-  it("maps and filters out empty collections after typeFilter/Kids Mode", () => {
+  it("maps and filters out empty collections after typeFilter", () => {
     const raw = [
       { title: "Marvel", items: [{ type: "movie" }, { type: "show" }] },
       { title: "Empty", items: [{ type: "show" }] },
     ];
-    const rows = buildCollectionRows(raw, (m) => m.type === "movie", { passesKidsMode: alwaysPasses, mapItem: identityMapItem, rowSize: 20 });
+    const rows = buildCollectionRows(raw, (m) => m.type === "movie", { mapItem: identityMapItem, rowSize: 20 });
     expect(rows).toHaveLength(1);
     expect(rows[0].title).toBe("Marvel");
     expect(rows[0].source).toBe("collection");
@@ -150,15 +133,12 @@ describe("buildCollectionRows", () => {
 });
 
 describe("buildAiRows", () => {
-  it("drops rows with a blocked genre and rows under 5 items", () => {
+  it("drops rows under 5 items", () => {
     const raw = [
       { label: "Sci-Fi Comedy", genres: ["Sci-Fi", "Comedy"], items: Array(5).fill({ type: "movie", addedAt: 1 }) },
-      { label: "Horror", genres: ["Horror"], items: Array(5).fill({ type: "movie" }) },
       { label: "Too Few", genres: ["Drama"], items: [{ type: "movie" }] },
     ];
     const rows = buildAiRows(raw, () => true, {
-      isBlockedGenreName: (g) => g === "Horror",
-      passesKidsMode: alwaysPasses,
       mapItem: identityMapItem,
       rowSize: 20,
     });

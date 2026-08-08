@@ -72,8 +72,6 @@ export class HeroController {
   pickItem(excludeKey, sections) {
     return pickHeroItem(excludeKey, sections, {
       genreBySection: this._ctx.getGenreBySection(),
-      isBlockedGenreName: this._ctx.isBlockedGenreName,
-      passesKidsMode: this._ctx.passesKidsMode,
     });
   }
 

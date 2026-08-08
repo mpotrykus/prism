@@ -1,7 +1,6 @@
 import { wireLinearNav, focusAfterPaint } from "./focus-nav.js";
 import { App } from "@capacitor/app";
 import { player } from "./plex-player.js";
-import { passesKidsMode, isBlockedGenreName } from "./src/card/logic/kids-mode.js";
 import { tapUrl } from "./src/card/logic/deep-link.js";
 import { normalizeTitle, isInWatchlist } from "./src/card/logic/watchlist-match.js";
 import {
@@ -85,14 +84,6 @@ class PlexNetflixCard extends HTMLElement {
       sections: [],
       title: "Streaming",
       landscape_every_nth: 4,
-      /* Required to turn Kids Mode back OFF (turning it on is never gated). */
-      kids_mode_pin: "1233",
-      /* Ratings at/under a PG-equivalent - anything else (or unrated/missing) is hidden
-         in Kids Mode. TV-PG is the closest TV-scale equivalent to a movie PG rating. */
-      kids_mode_allowed_ratings: ["G", "PG", "TV-Y", "TV-Y7", "TV-Y7-FV", "TV-G", "TV-PG"],
-      /* Hidden in Kids Mode regardless of content rating - horror was the explicit ask;
-         war/thriller are included as a reasonable default extension, adjust freely. */
-      kids_mode_blocked_genres: ["Horror", "War", "Thriller"],
       ai_rows_cadence_ms: 7 * 24 * 60 * 60 * 1000,
       ...config,
     };
@@ -113,65 +104,14 @@ class PlexNetflixCard extends HTMLElement {
     this._loadAll();
   }
 
-  /* True unless Kids Mode is on and this raw Plex metadata item (has .contentRating /
-     .Genre, same shape everywhere in this file before _mapItem strips it down) fails
-     the rating or genre check. Used as the single filter predicate everywhere raw items
-     become candidates for display: genre rows, AI rows, hero picks, search, etc. */
-  _passesKidsMode(m) {
-    return passesKidsMode(m, {
-      kidsMode: this._kidsMode,
-      blockedGenres: this._config.kids_mode_blocked_genres || [],
-      allowedRatings: this._config.kids_mode_allowed_ratings || [],
-    });
-  }
-
-  /* Whole-row genre blocking, separate from _passesKidsMode's per-item Genre check.
-     Plex's list endpoints (genre listing, /all?genre=) truncate each item's own Genre
-     array to ~2 tags, so plenty of titles filed under e.g. Horror don't actually show
-     "Horror" in their own truncated tag list (confirmed empirically: "The Conjuring:
-     The Devil Made Me Do It" returns Genre [Thriller, Mystery], no Horror). A row built
-     directly from a genre fetch is unambiguously that genre regardless of what its
-     items' own tags say - checking the row's own genre name here is what actually keeps
-     a "Horror" row from appearing at all in Kids Mode. */
-  _isBlockedGenreName(name) {
-    return isBlockedGenreName(name, { kidsMode: this._kidsMode, blockedGenres: this._config.kids_mode_blocked_genres || [] });
-  }
-
-  _onKidsModeChanged() {
-    this._kidsToggleBtn?.classList.toggle("active", this._kidsMode);
-    if (!this._loaded) return;
-    /* Cached per-view genre/AI row shuffle needs to re-filter, not just re-shuffle. */
-    this._genreRowsCache = {};
-    if (this._currentView === "search") {
-      if (this._lastSearchHubs) this._renderSearchPage(this._lastSearchHubs);
-    } else {
-      this._renderCurrentView();
-      this._advanceHero();
-    }
-  }
-
-  /* See src/card/pin.js's PinEntry for the shared numeric-keypad modal itself - Kids
-     Mode's exit gate and the Plex profile switcher's PIN prompt (_verifyKidsPin/
-     _switchToUser) both go through this one instance. */
+  /* See src/card/pin.js's PinEntry for the shared numeric-keypad modal itself - the
+     Plex profile switcher's PIN prompt (_switchToUser) goes through this one instance. */
   _promptForDigits(length, title) {
     return this._pin.prompt(length, title);
   }
 
   _shakePinEntry() {
     this._pin.shake();
-  }
-
-  /* Loops the shared PIN prompt until the Kids Mode PIN matches or the user cancels -
-     this is where the "compare against kids_mode_pin" logic that used to live inside
-     the keypad modal itself now lives, since the modal is generic. */
-  async _verifyKidsPin() {
-    const expected = String(this._config.kids_mode_pin || "");
-    for (;;) {
-      const entry = await this._promptForDigits(expected.length || 4, "Enter PIN to Exit Kids Mode");
-      if (entry === null) return false;
-      if (entry === expected) return true;
-      this._shakePinEntry();
-    }
   }
 
   getCardSize() {
@@ -189,9 +129,6 @@ class PlexNetflixCard extends HTMLElement {
     this._currentView = "home";
     this._lastSearchQuery = null;
     this._lastSearchHubs = null;
-    /* Purely local now (localStorage) - no HA entity backing this, so it's
-       per-browser/per-device rather than shared across every screen. */
-    this._kidsMode = localStorage.getItem("prism.kidsMode") === "1";
     this.attachShadow({ mode: "open" });
     this.shadowRoot.innerHTML = `
       <style>${STYLE}</style>
@@ -204,10 +141,6 @@ class PlexNetflixCard extends HTMLElement {
             </div>
           </div>
           <div class="nav-bottom">
-            <div class="nav-item nav-kids-toggle" title="Kids Mode" tabindex="0">
-              <span class="nav-icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="8.7" cy="10" r="1.15" fill="currentColor"/><circle cx="15.3" cy="10" r="1.15" fill="currentColor"/><path d="M8 14.5c1 1.3 2.5 2 4 2s3-0.7 4-2" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></span>
-              <span class="nav-label">Kids Mode</span>
-            </div>
             <div class="nav-item nav-settings" title="Settings" tabindex="0">
               <span class="nav-icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M12 3.5v2.4M12 18.1v2.4M4.5 12H6.9M17.1 12h2.4M6.3 6.3l1.7 1.7M16 16l1.7 1.7M17.7 6.3 16 8M8 16l-1.7 1.7" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></span>
               <span class="nav-label">Settings</span>
@@ -335,7 +268,6 @@ class PlexNetflixCard extends HTMLElement {
     this._searchToggle = this.shadowRoot.querySelector(".search-toggle");
     this._searchInput = this.shadowRoot.querySelector(".search");
     this._renderNavSections();
-    this._kidsToggleBtn = this.shadowRoot.querySelector(".nav-kids-toggle");
     this._settingsBtn = this.shadowRoot.querySelector(".nav-settings");
     this._profileNavItem = this.shadowRoot.querySelector(".nav-profile");
     this._profileNavIcon = this.shadowRoot.querySelector(".nav-profile-icon");
@@ -373,8 +305,6 @@ class PlexNetflixCard extends HTMLElement {
       getCurrentView: () => this._currentView,
       getSectionsForView: (view) => this._sectionsForView(view),
       getGenreBySection: () => this._genreBySection,
-      isBlockedGenreName: (name) => this._isBlockedGenreName(name),
-      passesKidsMode: (m) => this._passesKidsMode(m),
     });
 
     /* Continue Watching membership can change from any playback session, not just one
@@ -386,17 +316,6 @@ class PlexNetflixCard extends HTMLElement {
     /* Dynamic (per-library) nav items are already wired inside _renderNavSections,
        called above - only Home is static and needs wiring here. */
     this._wireNavItem(this.shadowRoot.querySelector('.nav-item[data-view="home"]'));
-
-    this._kidsToggleBtn.addEventListener("click", async () => {
-      /* Only exiting Kids Mode is PIN-gated - turning it on is always allowed. */
-      if (this._kidsMode && this._config.kids_mode_pin) {
-        const ok = await this._verifyKidsPin();
-        if (!ok) return;
-      }
-      this._kidsMode = !this._kidsMode;
-      localStorage.setItem("prism.kidsMode", this._kidsMode ? "1" : "0");
-      this._onKidsModeChanged();
-    });
 
     this._settingsBtn.addEventListener("click", () => {
       this.dispatchEvent(new CustomEvent("open-settings", { bubbles: true, composed: true }));
@@ -545,24 +464,19 @@ class PlexNetflixCard extends HTMLElement {
 
     const onDeck = (this._onDeckRaw || [])
       .filter(onDeckFilter)
-      .filter((m) => this._passesKidsMode(m))
       .map((m) => this._mapItem(m, true));
     const watchlist = (this._watchlistRaw || [])
       .filter(watchlistFilter)
-      .filter((m) => this._passesKidsMode(m))
       .map((m) => this._mapItem(m, false));
     const recentlyAdded = (this._recentlyAddedRaw || [])
       .filter(recentlyAddedFilter)
-      .filter((m) => this._passesKidsMode(m))
       .sort((a, b) => (b.addedAt || 0) - (a.addedAt || 0))
       .slice(0, this._config.row_size)
       .map((m) => this._mapItem(m, false));
     const recommended = this._getRecommendedForView(view, recommendedFilter)
-      .filter((m) => this._passesKidsMode(m))
       .map((m) => this._mapItem(m, false));
     const popular = (this._popularRaw || [])
       .filter(popularFilter)
-      .filter((m) => this._passesKidsMode(m))
       .slice(0, Math.min(8, this._config.row_size))
       .map((m) => this._mapItem(m, false));
     const genreRows = this._getGenreRowsForView(view, sectionsForGenres);
@@ -592,7 +506,6 @@ class PlexNetflixCard extends HTMLElement {
     const watchlistFilter = sectionFilters ? (m) => m.type === sectionFilters.other : () => true;
     const watchlist = (this._watchlistRaw || [])
       .filter(watchlistFilter)
-      .filter((m) => this._passesKidsMode(m))
       .map((m) => this._mapItem(m, false));
 
     const existing = this._rowsEl.querySelector('[data-row-key="watchlist"]');
@@ -628,7 +541,6 @@ class PlexNetflixCard extends HTMLElement {
     const onDeckFilter = sectionFilters ? (m) => m.type === sectionFilters.onDeck : () => true;
     const onDeck = (this._onDeckRaw || [])
       .filter(onDeckFilter)
-      .filter((m) => this._passesKidsMode(m))
       .map((m) => this._mapItem(m, true));
 
     const existing = this._rowsEl.querySelector('[data-row-key="on-deck"]');
@@ -681,7 +593,6 @@ class PlexNetflixCard extends HTMLElement {
   }
 
   _getCollectionsRowForView(sections) {
-    if (this._kidsMode) return null;
     const keys = new Set(sections.map((s) => s.key));
     const collections = (this._collectionsRaw || []).filter((c) => keys.has(c.section.key));
     if (!collections.length) return null;
@@ -697,7 +608,6 @@ class PlexNetflixCard extends HTMLElement {
   }
 
   _getPlaylistsRowForView(view) {
-    if (this._kidsMode) return null;
     /* Playlists aren't scoped to a single library section like collections are (a
        playlist can mix movies/shows), so there's no clean per-view filter - only show
        this row on the unfiltered Home view rather than guess which playlists "belong"
@@ -740,7 +650,7 @@ class PlexNetflixCard extends HTMLElement {
 
   /* Mobile-only overflow menu (see .nav-more/.nav-item-overflow) - every row here just
      delegates to the real nav item's own click handler instead of reimplementing Profile/
-     Kids Mode/Settings/library-switch behavior a second time. */
+     Settings/library-switch behavior a second time. */
   _renderMoreSheet() {
     const rows = [];
     const addRow = (label, iconHTML, active, target) => {
@@ -752,7 +662,6 @@ class PlexNetflixCard extends HTMLElement {
     if (!this._profileNavItem.hidden) {
       addRow(this._profileNavLabel.textContent, this._profileNavIcon.innerHTML, false, this._profileNavItem);
     }
-    addRow("Kids Mode", this._kidsToggleBtn.querySelector(".nav-icon").innerHTML, this._kidsMode, this._kidsToggleBtn);
     addRow("Settings", this._settingsBtn.querySelector(".nav-icon").innerHTML, false, this._settingsBtn);
     renderMoreSheet(this._moreListEl, rows, (s) => this._escape(s));
   }
@@ -835,11 +744,11 @@ class PlexNetflixCard extends HTMLElement {
     window.open(this._tapUrl(item, source), "_blank");
   }
 
-  /* Protected profiles get prompted through the same numeric-keypad modal Kids Mode
-     uses to exit (see _promptForDigits/_verifyKidsPin above) instead of a plain text
-     input - one PIN-entry UI in the app, not two. Unlike Kids Mode, a wrong entry here
-     isn't retried automatically: only Plex can say whether it was right, so a rejected
-     PIN just reports the error and leaves the user to press "Switch" again. */
+  /* Protected profiles get prompted through the shared numeric-keypad modal (see
+     _promptForDigits above) instead of a plain text input - one PIN-entry UI in the
+     app, not two. A wrong entry here isn't retried automatically: only Plex can say
+     whether it was right, so a rejected PIN just reports the error and leaves the
+     user to press "Switch" again. */
   _switchToUser(user, rowEl) {
     return switchToUser(user, rowEl, {
       promptForDigits: (length, title) => this._promptForDigits(length, title),
@@ -897,7 +806,6 @@ class PlexNetflixCard extends HTMLElement {
 
   _buildCollectionRows(view) {
     return buildCollectionRows(this._collectionRowsRaw, this._typeFilterForView(view), {
-      passesKidsMode: (m) => this._passesKidsMode(m),
       mapItem: (m, withProgress) => this._mapItem(m, withProgress),
       rowSize: this._config.row_size,
     });
@@ -905,8 +813,6 @@ class PlexNetflixCard extends HTMLElement {
 
   _buildAiRows(view) {
     return buildAiRows(this._aiRowsRaw, this._typeFilterForView(view), {
-      isBlockedGenreName: (name) => this._isBlockedGenreName(name),
-      passesKidsMode: (m) => this._passesKidsMode(m),
       mapItem: (m, withProgress) => this._mapItem(m, withProgress),
       rowSize: this._config.row_size,
     });
@@ -915,8 +821,6 @@ class PlexNetflixCard extends HTMLElement {
   _mergeGenreRows(sections) {
     return mergeGenreRows(sections, {
       genreBySection: this._genreBySection,
-      isBlockedGenreName: (name) => this._isBlockedGenreName(name),
-      passesKidsMode: (m) => this._passesKidsMode(m),
       mapItem: (m, withProgress) => this._mapItem(m, withProgress),
       shuffle: (arr) => this._shuffle(arr),
       rowSize: this._config.row_size,

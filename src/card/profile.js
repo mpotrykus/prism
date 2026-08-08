@@ -59,10 +59,10 @@ export function renderProfileList(profileListEl, users, activeUserId, escape, on
 }
 
 /* Protected profiles get prompted through the shared numeric-keypad PIN modal (see
-   src/card/pin.js) instead of a plain text input - one PIN-entry UI in the app, not two.
-   Unlike Kids Mode, a wrong entry here isn't retried automatically: only Plex can say
-   whether it was right, so a rejected PIN just reports the error and leaves the user to
-   press "Switch" again. onSuccess({ plexToken, accountToken, userId }) lets the card
+   src/card/pin.js) instead of a plain text input. A wrong entry here isn't retried
+   automatically: only Plex can say whether it was right, so a rejected PIN just reports
+   the error and leaves the user to press "Switch" again. onSuccess({ plexToken,
+   accountToken, userId }) lets the card
    apply the new tokens/active-profile state and reload data - kept as an explicit
    callback rather than this module reaching into card state directly. */
 export async function switchToUser(user, rowEl, { promptForDigits, accountToken, machineId, onSuccess }) {

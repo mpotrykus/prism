@@ -253,8 +253,8 @@
 .poster.landscape .card { aspect-ratio: 16 / 9; }
 .poster.landscape .caption { padding: 60px 12px 12px; }
 /* Top-10-style big rank numbers (e.g. HBO Max) for rank-ordered rows like What's
-   Popular. Ties into this card's existing amber accent (#e5a00d, used for the
-   kids-mode PIN/watchlist-added color) instead of HBO's plain white/steel numerals -
+   Popular. Ties into this card's existing amber accent (#e5a00d, also used as the
+   watchlist-added color) instead of HBO's plain white/steel numerals -
    our own take on the same idea. .rank-number is absolutely positioned (not a normal
    flex sibling) specifically so its taller-than-poster font-size doesn't stretch
    row-scroller's flex height and inflate the row's padding - .rank-item's own height

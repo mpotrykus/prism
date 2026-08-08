@@ -1,8 +1,8 @@
 /* Row-building logic: turning raw Plex metadata (genre listings, watch history, AI-row
    ideas, collections) into the row shapes the UI renders. Kept free of DOM/network so
    it can be tested directly - callers (plex-netflix-card.js) supply the small set of
-   collaborators each function needs (config lookups, Kids Mode predicates, mapItem,
-   shuffle) explicitly rather than this module reaching into card state itself. */
+   collaborators each function needs (config lookups, mapItem, shuffle) explicitly
+   rather than this module reaching into card state itself. */
 
 export function shuffle(array) {
   const arr = [...array];
@@ -54,16 +54,15 @@ export function mapItem(m, withProgress, { plexImageUrl, episodeFallbackGenres =
   return item;
 }
 
-export function mergeGenreRows(sections, { genreBySection, isBlockedGenreName, passesKidsMode, mapItem: mapItemFn, shuffle: shuffleFn, rowSize }) {
+export function mergeGenreRows(sections, { genreBySection, mapItem: mapItemFn, shuffle: shuffleFn, rowSize }) {
   const merged = new Map();
   for (const s of sections) {
     const entries = (genreBySection && genreBySection.get(s.key)) || [];
     for (const g of entries) {
-      if (isBlockedGenreName(g.title)) continue;
       const norm = g.title.trim().toLowerCase();
       if (!merged.has(norm)) merged.set(norm, { title: g.title, items: [], totalSize: 0 });
       const bucket = merged.get(norm);
-      bucket.items.push(...g.items.filter((m) => passesKidsMode(m)));
+      bucket.items.push(...g.items);
       bucket.totalSize += g.totalSize;
     }
   }
@@ -87,11 +86,10 @@ export function mergeGenreRows(sections, { genreBySection, isBlockedGenreName, p
    genres overlap with genres pulled from watch history, weighted so more-recently-
    watched items count for more. Pure local-PMS data (history + genre listings already
    fetched elsewhere) - no Plex cloud/Discover dependency, unlike the watchlist fetch. */
-export function buildRecommendedRaw(historyRaw, { genreBySection, isBlockedGenreName, onDeckRaw }) {
+export function buildRecommendedRaw(historyRaw, { genreBySection, onDeckRaw }) {
   const pool = new Map();
   for (const entries of genreBySection.values()) {
     for (const g of entries) {
-      if (isBlockedGenreName(g.title)) continue;
       for (const m of g.items) {
         if (m.ratingKey && !pool.has(m.ratingKey)) pool.set(m.ratingKey, m);
       }
@@ -134,11 +132,10 @@ export function buildRecommendedRaw(historyRaw, { genreBySection, isBlockedGenre
    agent) - no external API calls. Year is normalized against the library's own min/max
    release year, so "recent" is relative to what's actually in the library, not calendar
    time; weighted 50/50 with rating, adjust freely. */
-export function buildPopularRaw({ genreBySection, isBlockedGenreName }) {
+export function buildPopularRaw({ genreBySection }) {
   const pool = new Map();
   for (const entries of genreBySection.values()) {
     for (const g of entries) {
-      if (isBlockedGenreName(g.title)) continue;
       for (const m of g.items) {
         if (m.ratingKey && !pool.has(m.ratingKey)) pool.set(m.ratingKey, m);
       }
@@ -163,22 +160,20 @@ export function buildPopularRaw({ genreBySection, isBlockedGenreName }) {
    totalSize>=5 floor here (unlike mergeGenreRows) - collections are hand-curated and
    small ones (e.g. a 2-film franchise) are still worth showing as-is. typeFilter is the
    view's movie-vs-show predicate, resolved by the caller. */
-export function buildCollectionRows(collectionRowsRaw, typeFilter, { passesKidsMode, mapItem: mapItemFn, rowSize }) {
+export function buildCollectionRows(collectionRowsRaw, typeFilter, { mapItem: mapItemFn, rowSize }) {
   return (collectionRowsRaw || [])
     .map((r) => {
-      const items = r.items.filter(typeFilter).filter((m) => passesKidsMode(m)).slice(0, rowSize);
+      const items = r.items.filter(typeFilter).slice(0, rowSize);
       return { title: r.title, source: "collection", items: items.map((m) => mapItemFn(m, false)) };
     })
     .filter((r) => r.items.length > 0);
 }
 
-export function buildAiRows(aiRowsRaw, typeFilter, { isBlockedGenreName, passesKidsMode, mapItem: mapItemFn, rowSize }) {
+export function buildAiRows(aiRowsRaw, typeFilter, { mapItem: mapItemFn, rowSize }) {
   return (aiRowsRaw || [])
-    .filter((r) => !(r.genres || []).some((g) => isBlockedGenreName(g)))
     .map((r) => {
       const items = r.items
         .filter(typeFilter)
-        .filter((m) => passesKidsMode(m))
         .sort((a, b) => (b.addedAt || 0) - (a.addedAt || 0))
         .slice(0, rowSize);
       return { title: r.label, source: "ai", items: items.map((m) => mapItemFn(m, false)) };

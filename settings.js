@@ -16,7 +16,6 @@ const DEFAULT_PLAIN_CONFIG = {
   machine_id: "",
   sections: [],
   ai_rows_cadence_ms: 7 * 24 * 60 * 60 * 1000,
-  kids_mode_pin: "1233",
   max_genre_rows: 12,
   row_size: 20,
 };
@@ -133,14 +132,6 @@ class StreamingSettingsModal extends HTMLElement {
 
             <div class="tab-panel" data-tab="preferences">
               <section class="group">
-                <div class="group-title">Kids Mode</div>
-                <div class="field">
-                  <label>Exit PIN</label>
-                  <input type="text" class="f-kids-pin" inputmode="numeric" maxlength="8" placeholder="1233" />
-                </div>
-              </section>
-
-              <section class="group">
                 <div class="group-title">Display</div>
                 <div class="row-2col">
                   <div class="field">
@@ -199,7 +190,7 @@ class StreamingSettingsModal extends HTMLElement {
       this.shadowRoot,
       ".modal-close, .tab-btn, .btn-reauth, .btn-fetch-libraries, .section-row .s-enabled, .section-row .s-label, " +
         ".f-youtube-key, .f-openrouter-key, .f-opensubtitles-username, .f-opensubtitles-password, .f-opensubtitles-key, " +
-        ".f-ai-cadence, .f-kids-pin, .f-max-genre-rows, .f-row-size, " +
+        ".f-ai-cadence, .f-max-genre-rows, .f-row-size, " +
         ".btn-cancel, .btn-save",
       { orientation: "vertical", onBack: () => this.close() }
     );
@@ -237,7 +228,6 @@ class StreamingSettingsModal extends HTMLElement {
     this._el(".plex-server-status").textContent = this._plexUrl ? `Connected — ${this._plexUrl}` : "Not connected.";
     this._el(".plex-server-status").className = this._plexUrl ? "status plex-server-status ok" : "status plex-server-status err";
     this._el(".f-ai-cadence").value = String(config.ai_rows_cadence_ms || 604800000);
-    this._el(".f-kids-pin").value = config.kids_mode_pin || "";
     this._el(".f-max-genre-rows").value = config.max_genre_rows ?? 12;
     this._el(".f-row-size").value = config.row_size ?? 20;
     this._machineId = config.machine_id || "";
@@ -360,7 +350,6 @@ class StreamingSettingsModal extends HTMLElement {
       machine_id: this._machineId || "",
       sections: (this._sections || []).filter((s) => s.enabled !== false).map((s) => ({ key: s.key, type: s.type, label: s.label })),
       ai_rows_cadence_ms: Number(this._el(".f-ai-cadence").value),
-      kids_mode_pin: this._el(".f-kids-pin").value.trim() || "1233",
       max_genre_rows: Number(this._el(".f-max-genre-rows").value) || 12,
       row_size: Number(this._el(".f-row-size").value) || 20,
     };

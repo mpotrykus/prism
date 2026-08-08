@@ -31,10 +31,10 @@
   .nav-top, .nav-bottom { display: contents; }
   .nav-item { width: 30px; height: 30px; padding: 0; justify-content: center; gap: 0; }
   .nav-label { display: none; }
-  /* Profile/Kids Mode/Settings and any library tab past the mobile cap move into the
+  /* Profile/Settings and any library tab past the mobile cap move into the
      .more-sheet overflow menu instead - a phone-width row has no room for 6+ icons at
      a real touch-target size. */
-  .nav-profile, .nav-kids-toggle, .nav-settings, .nav-item-overflow { display: none; }
+  .nav-profile, .nav-settings, .nav-item-overflow { display: none; }
   .nav-more { display: flex; }
   .main { padding-bottom: calc(56px + var(--safe-bottom)); }
   .row-title { padding-left: 24px; }

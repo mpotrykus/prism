@@ -6,28 +6,21 @@ describe("pickHeroItem", () => {
     [1, [{ title: "Sci-Fi", items: [{ ratingKey: "1" }, { ratingKey: "2" }] }]],
     [2, [{ title: "Horror", items: [{ ratingKey: "3" }] }]],
   ]);
-  const alwaysPasses = () => true;
-  const noneBlocked = () => false;
 
   it("returns null when the pool is empty", () => {
-    expect(pickHeroItem(undefined, undefined, { genreBySection: new Map(), isBlockedGenreName: noneBlocked, passesKidsMode: alwaysPasses })).toBeNull();
+    expect(pickHeroItem(undefined, undefined, { genreBySection: new Map() })).toBeNull();
   });
 
   it("restricts to the given sections", () => {
-    const pick = pickHeroItem(undefined, [{ key: 2 }], { genreBySection, isBlockedGenreName: noneBlocked, passesKidsMode: alwaysPasses });
+    const pick = pickHeroItem(undefined, [{ key: 2 }], { genreBySection });
     expect(pick.ratingKey).toBe("3");
   });
 
   it("excludes the given ratingKey when more than one candidate remains", () => {
     for (let i = 0; i < 10; i++) {
-      const pick = pickHeroItem("1", [{ key: 1 }], { genreBySection, isBlockedGenreName: noneBlocked, passesKidsMode: alwaysPasses });
+      const pick = pickHeroItem("1", [{ key: 1 }], { genreBySection });
       expect(pick.ratingKey).toBe("2");
     }
-  });
-
-  it("excludes genres blocked by Kids Mode", () => {
-    const pick = pickHeroItem(undefined, [{ key: 2 }], { genreBySection, isBlockedGenreName: (name) => name === "Horror", passesKidsMode: alwaysPasses });
-    expect(pick).toBeNull();
   });
 });
 
