@@ -71,8 +71,11 @@ class StreamingSettingsModal extends HTMLElement {
             <div class="tab-panel" data-tab="plex">
               <section class="group">
                 <div class="group-title">Plex Server</div>
-                <div class="status plex-server-status"></div>
-                <div class="field-row">
+                <div class="plex-server-card">
+                  <div class="plex-server-info">
+                    <span class="plex-server-dot"></span>
+                    <div class="status plex-server-status"></div>
+                  </div>
                   <button type="button" class="btn btn-secondary btn-reauth">Reauthenticate</button>
                 </div>
               </section>
