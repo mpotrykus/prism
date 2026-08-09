@@ -2,7 +2,6 @@ import Hls from "hls.js";
 import { ZOOM_LEVELS, storedVolume } from "./ui/shared.js";
 import { updateContentAnalysis } from "./content-analysis.js";
 import { releaseBifIndex } from "./core/bif.js";
-import { episodeListIconMarkup } from "./ui/shared.js";
 import { closeEpisodeListOverlay } from "./ui/episode-list.js";
 import { updateAbrMonitor, stopAbrLoop, notifyStall, notifyReload } from "./core/abr.js";
 
@@ -118,25 +117,6 @@ export function playWeb(controller, streamUrl, startOffsetMs) {
         },
     });
     controller._registerControlButton(menuBtn, { side: "right" });
-
-    /* Only shown when there's an actual queue to browse - same "never an empty/dead
-       affordance" rule the hamburger's Chapters/Audio Track rows already follow. Stacks
-       further from the corner than menuBtn automatically (see registerControlButton). */
-    if (controller._session?.queueRatingKeys?.length > 1) {
-        const episodesBtn = controller._makeControlButton({
-            ariaLabel: "Episodes",
-            content: "",
-            onClick: () => {
-                if (controller._episodeListEl) {
-                    controller._closeEpisodeListOverlay();
-                } else {
-                    controller._openEpisodeListOverlay();
-                }
-            },
-        });
-        episodesBtn.innerHTML = episodeListIconMarkup();
-        controller._registerControlButton(episodesBtn, { side: "right" });
-    }
 
     controller._zoomIndex = 0;
     controller._zoomPanX = 0;

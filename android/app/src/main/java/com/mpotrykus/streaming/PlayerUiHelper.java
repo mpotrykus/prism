@@ -43,9 +43,9 @@ import java.util.function.Supplier;
    shared state, not a separable subsystem" reasoning the JS-side split uses.
 
    Visual language mirrors chrome.js's redesign directly: the amber accent color, the
-   gradient transport bar with a title/remaining-time header, and the full-width
-   gradient "More" bottom sheet (showPlayerMenu) standing in for chrome.js's own
-   accordion sheet (openHamburgerMenu) instead of a native PopupMenu/AlertDialog. */
+   gradient transport bar with a title/remaining-time header, and the right-hugging,
+   vertically-centered gradient "More" card (showPlayerMenu) standing in for chrome.js's
+   own accordion sheet (openHamburgerMenu) instead of a native PopupMenu/AlertDialog. */
 @OptIn(markerClass = UnstableApi.class)
 final class PlayerUiHelper {
     private PlayerUiHelper() {}
@@ -126,33 +126,32 @@ final class PlayerUiHelper {
         activity.registerFadingControl(btn);
     }
 
-    /* Only built when there's an actual queue to browse (activity.queueLength > 1,
-       mirroring web-fallback.js's queueRatingKeys.length > 1 gate on episode-list.js's own
-       button) - same "never an empty/dead affordance" rule the Chapters/Audio Track rows
-       already follow. Takes the slot immediately left of the hamburger (marginDp computed
-       by onCreate) since it's the next-most-common action after the options menu. Tapping
-       it has no Plex data to show yet - it just asks JS for the queue (requestEpisodeList,
-       mirroring seekToAdjacentTitle's own "report a bare request, let JS resolve the Plex
-       side" split) and PlayerUiHelper.openEpisodeListMenu renders whatever comes back. */
-    static void buildEpisodesButton(PlayerActivity activity, float density, int marginDp) {
-        /* Drawn via EpisodeListIconView (mirrors src/player/ui/shared.js's
-           episodeListIconMarkup() exactly) rather than a text glyph like the other top
-           buttons here - no single font character matches that icon, and this keeps the
-           button visually identical to its web counterpart instead of an unrelated glyph. */
-        EpisodeListIconView btn = new EpisodeListIconView(activity);
-        btn.setContentDescription("Episodes");
+    /* Touch-only (a remote/D-pad-driven device has no touch input to lock in the first
+       place) - takes the slot immediately left of the hamburger (marginDp computed by
+       onCreate), same "next-most-common action after the options menu" reasoning the
+       old standalone Episodes button used before Episodes moved into the menu itself
+       (see renderMainList) and Lock/Picture-in-Picture moved out into this row. */
+    static void buildLockButton(PlayerActivity activity, float density, int marginDp) {
+        MenuIconView btn = new MenuIconView(activity, MenuIconView.Icon.LOCK, Color.WHITE);
+        btn.setContentDescription("Lock");
         FrameLayout.LayoutParams params = new FrameLayout.LayoutParams((int) (40 * density), (int) (40 * density));
         params.gravity = Gravity.TOP | Gravity.END;
         params.setMargins(0, (int) (24 * density), (int) (marginDp * density), 0);
         btn.setLayoutParams(params);
-        btn.setOnClickListener(v -> {
-            /* Shown right away rather than waiting for the round trip below to resolve -
-               episode-list.js's queue fetch is a real per-episode Plex round-trip on the
-               first open of a given queue, not instant, and a bare tap with no feedback
-               at all reads as broken while that's in flight. */
-            showEpisodeListLoading(activity);
-            PlayerActivity.requestEpisodeList();
-        });
+        btn.setOnClickListener(v -> activity.setTouchLocked(true));
+        activity.root.addView(btn);
+        activity.registerFadingControl(btn);
+    }
+
+    /* Always shown, unlike Lock above - entering PiP has no touchscreen dependency. */
+    static void buildPipButton(PlayerActivity activity, float density, int marginDp) {
+        MenuIconView btn = new MenuIconView(activity, MenuIconView.Icon.PICTURE_IN_PICTURE, Color.WHITE);
+        btn.setContentDescription("Picture-in-Picture");
+        FrameLayout.LayoutParams params = new FrameLayout.LayoutParams((int) (40 * density), (int) (40 * density));
+        params.gravity = Gravity.TOP | Gravity.END;
+        params.setMargins(0, (int) (24 * density), (int) (marginDp * density), 0);
+        btn.setLayoutParams(params);
+        btn.setOnClickListener(v -> activity.enterPip());
         activity.root.addView(btn);
         activity.registerFadingControl(btn);
     }
@@ -589,7 +588,7 @@ final class PlayerUiHelper {
        video surface does the same 5s seek instead (see PlayerActivity's
        tapGestureDetector). Chapter nav has no gesture replacement of its own yet - it's
        just hidden on touch, reachable instead via the Chapters entry in the More menu
-       (see renderChapterSection). Fire TV/remote-driven devices report no touchscreen and have
+       (see openChapterListMenu). Fire TV/remote-driven devices report no touchscreen and have
        no way to produce that gesture, so they keep both button pairs - reachable the same
        way every other button in this row is, via Android's default D-pad focus
        navigation, no extra code needed. */
@@ -829,6 +828,7 @@ final class PlayerUiHelper {
     /** One top-level row of the More sheet. */
     private static final class MenuSection {
         final String label;
+        MenuIconView.Icon icon;
         Supplier<String> getValue;
         Boolean toggleChecked;
         Function<Boolean, String> onToggle;
@@ -858,10 +858,6 @@ final class PlayerUiHelper {
     private static final class PickerItem {
         final String label;
         Runnable onSelect;
-        /* Only renderChapterSection sets this - every other picker (speed, sleep
-           timer, audio track...) leaves it null, so renderPickerRows's thumbnail block
-           is a no-op for every other section. */
-        String thumbUrl;
 
         PickerItem(String label, Runnable onSelect) {
             this.label = label;
@@ -887,24 +883,37 @@ final class PlayerUiHelper {
         int sheetWidthPx = Math.min(Math.round(400 * density), screenWidthPx);
 
         View scrim = buildMenuSheetScrim(activity);
+        /* Full-height, right-hugging gradient backdrop - the header+list card inside
+           it (`card` below) is what's actually vertically centered, via
+           setGravity(CENTER_VERTICAL), rather than the gradient itself shrinking to
+           the card's height. A full-height backdrop that shrank to a short row list's
+           own height left a stretch of plain, undarkened video below a vertically-
+           centered card - the backdrop needs to keep covering the full screen height
+           regardless of how tall the card inside it happens to be. Matches the same
+           sheet/card split chrome.js's own openHamburgerMenu uses on the web leg. */
         LinearLayout sheetContent = buildMenuSheetContainer(activity, sheetWidthPx);
-        sheetContent.addView(buildMenuSheetHeader(activity, density));
+        sheetContent.setGravity(Gravity.CENTER_VERTICAL);
+
+        /* The actual visible "menu" - header plus scrollable row list, capped at ~82%
+           of screen height and otherwise sized to its own content (see
+           clampMenuCardHeight) - a short row list (e.g. the Effects/Extras
+           sub-screens) centers as a short card rather than stretching to fill the full
+           backdrop. */
+        LinearLayout card = new LinearLayout(activity);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setLayoutParams(new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+        sheetContent.addView(card);
+
+        card.addView(buildMenuSheetHeader(activity, density));
 
         LinearLayout list = new LinearLayout(activity);
         list.setOrientation(LinearLayout.VERTICAL);
 
-        /* Full-height drawer, unlike the Episodes sheet below it - the ScrollView gets
-           weight:1 (not WRAP_CONTENT) so it fills whatever vertical space is left under
-           the header and scrolls within that fixed allotment on its own, the same way a
-           CSS flex:1/min-height:0/overflow-y:auto region does on the web leg. No manual
-           measure-and-clamp step needed here (unlike this sheet's previous bottom-sheet
-           incarnation) since a LinearLayout weight, unlike a plain WRAP_CONTENT height,
-           already gives the ScrollView a real bounded height to scroll within. */
         ScrollView scroll = new ScrollView(activity);
         scroll.setVerticalScrollBarEnabled(false);
         scroll.addView(list, new ScrollView.LayoutParams(ScrollView.LayoutParams.MATCH_PARENT, ScrollView.LayoutParams.WRAP_CONTENT));
-        scroll.setLayoutParams(new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
-        sheetContent.addView(scroll);
+        scroll.setLayoutParams(new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+        card.addView(scroll);
 
         renderMainList(activity, list);
 
@@ -914,6 +923,41 @@ final class PlayerUiHelper {
         activity.menuSheet = sheetContent;
         activity.controlsFadeHandler.removeCallbacks(activity.controlsFadeRunnable);
         setControlsVisible(activity, false);
+    }
+
+    /* Re-caps the card's ScrollView height at ~82% of screen height, or lets it size
+       naturally to its own content when that's shorter - the same "shrink to content,
+       then cap and scroll past it" behavior a CSS max-height gets for free, done by
+       hand here since a plain LinearLayout/ScrollView pairing has no such attribute.
+       Deferred via list.post() since it needs real measured widths/heights, which
+       aren't available synchronously the first time this runs (before the sheet has
+       ever been laid out) - `card`/`scroll` are found via list's own view ancestry
+       (list -> ScrollView -> card) rather than threaded through every render*List
+       call's parameters, since that ancestry is identical regardless of which screen
+       built `list`'s current contents. Called at the end of every render*List
+       function (renderMainList and each screen it navigates to/from), since each one
+       fully replaces `list`'s content and can change the card's natural height. */
+    private static void clampMenuCardHeight(PlayerActivity activity, LinearLayout list) {
+        list.post(() -> {
+            Object scrollParent = list.getParent();
+            if (!(scrollParent instanceof ScrollView)) return;
+            ScrollView scroll = (ScrollView) scrollParent;
+            Object cardParent = scroll.getParent();
+            if (!(cardParent instanceof LinearLayout)) return;
+            LinearLayout card = (LinearLayout) cardParent;
+            if (card.getWidth() == 0 || card.getChildCount() == 0) return;
+
+            int maxHeightPx = Math.round(activity.getResources().getDisplayMetrics().heightPixels * 0.82f);
+            card.measure(View.MeasureSpec.makeMeasureSpec(card.getWidth(), View.MeasureSpec.EXACTLY), View.MeasureSpec.UNSPECIFIED);
+            ViewGroup.LayoutParams scrollParams = scroll.getLayoutParams();
+            if (card.getMeasuredHeight() > maxHeightPx) {
+                int headerHeightPx = card.getChildAt(0).getHeight();
+                scrollParams.height = Math.max(0, maxHeightPx - headerHeightPx);
+            } else {
+                scrollParams.height = ViewGroup.LayoutParams.WRAP_CONTENT;
+            }
+            scroll.setLayoutParams(scrollParams);
+        });
     }
 
     /* The sheet's default screen. Clears and rebuilds `list` in place (same element,
@@ -927,21 +971,47 @@ final class PlayerUiHelper {
 
         List<MenuSection> sections = new ArrayList<>();
         /* Ordered by how often a row is actually touched, not the order features
-           shipped in: what-you're-watching controls (Chapters/Audio Track) first,
-           since those get touched per-video; source/quality (Version/Quality Cap) and
-           the Auto-Play toggle next; Effects/Extras/Performance Overlay last, in that
-           order - the three rows here most people set once and never revisit (Lock/
-           Picture-in-Picture further below are unaffected by this reordering, being
-           actions rather than settings). */
+           shipped in: Episodes first (jumping to a different title is the single most
+           common reason to open this menu at all, when there's a queue to jump within),
+           then what-you're-watching controls (Chapters/Audio Track), since those get
+           touched per-video; source/quality (Version/Quality Cap) and the Auto-Play
+           toggle next; Effects/Extras/Performance Overlay last, in that order - the
+           three rows here most people set once and never revisit. Lock/Picture-in-
+           Picture aren't in this list at all any more, being actions rather than
+           settings (see PlayerActivity.onCreate/buildLockButton/buildPipButton). */
+
+        /* Moved into the menu from a standalone top-right icon button - same "never an
+           empty/dead affordance" rule Chapters/Audio Track already follow
+           (activity.queueLength > 1, mirroring web-fallback.js's own
+           queueRatingKeys.length > 1 gate). Its queue fetch is a real Plex round trip
+           worth a loading state, unlike Lock/Picture-in-Picture (see the top-right icon
+           buttons those moved into instead), which is why this one stayed a menu row. */
+        if (activity.queueLength > 1) {
+            MenuSection episodesSection = new MenuSection("Episodes");
+            episodesSection.icon = MenuIconView.Icon.EPISODES;
+            episodesSection.showChevron = true;
+            episodesSection.onTap = () -> {
+                showEpisodeListLoading(activity);
+                PlayerActivity.requestEpisodeList();
+            };
+            sections.add(episodesSection);
+        }
 
         if (!activity.chapters.isEmpty()) {
+            /* Opens the same horizontally-scrolling card overlay openEpisodeListMenu
+               uses for browsing episodes/queue items, rather than an inline text-row
+               picker - see openChapterListMenu. Closes the More sheet on the way
+               there, matching how opening the Episodes overlay already closes it too. */
             MenuSection chaptersSection = new MenuSection("Chapters");
-            chaptersSection.render = (content, setValue, collapse) -> renderChapterSection(activity, content, collapse);
+            chaptersSection.icon = MenuIconView.Icon.CHAPTERS;
+            chaptersSection.showChevron = true;
+            chaptersSection.onTap = () -> openChapterListMenu(activity);
             sections.add(chaptersSection);
         }
 
         if (activity.audioStreams.size() > 1) {
             MenuSection audioSection = new MenuSection("Audio Track");
+            audioSection.icon = MenuIconView.Icon.AUDIO_TRACK;
             audioSection.getValue = () -> {
                 AudioStreamEntry current = findAudioStream(activity, activity.currentAudioStreamId);
                 return current != null ? current.label : null;
@@ -959,6 +1029,7 @@ final class PlayerUiHelper {
            "Original" to show. */
         if (activity.mediaVersions.size() > 1) {
             MenuSection versionSection = new MenuSection("Version");
+            versionSection.icon = MenuIconView.Icon.VERSION;
             versionSection.getValue = () -> {
                 MediaVersionEntry current = findMediaVersion(activity, activity.currentMediaIndex);
                 return current != null ? current.label : null;
@@ -967,14 +1038,21 @@ final class PlayerUiHelper {
             sections.add(versionSection);
         }
 
+        /* Own dedicated screen (see renderQualityCapList), not an inline expand - same
+           reasoning as Effects/Extras above, just for a single control. */
         MenuSection qualityCapSection = new MenuSection("Quality Cap");
+        qualityCapSection.icon = MenuIconView.Icon.QUALITY_CAP;
+        qualityCapSection.showChevron = true;
         qualityCapSection.getValue = () -> qualityCapDisplayLabel(activity);
-        qualityCapSection.render = (content, setValue, collapse) -> renderQualityCapSection(activity, content, setValue, collapse);
+        qualityCapSection.onTap = () -> renderQualityCapList(activity, list);
         sections.add(qualityCapSection);
 
         MenuSection autoPlaySection = new MenuSection("Auto-Play");
         /* No render - same plain on/off row as Performance Overlay below, nothing to
-           drill into. */
+           drill into. Icon reuses the same "skip forward" shape ChapterSkipIconView
+           draws for title/chapter nav - advancing to the next queued item is exactly
+           what this toggle does. */
+        autoPlaySection.icon = MenuIconView.Icon.AUTO_PLAY;
         autoPlaySection.toggleChecked = activity.autoPlayEnabled;
         autoPlaySection.onToggle = (checked) -> {
             activity.setAutoPlayEnabled(checked);
@@ -986,6 +1064,7 @@ final class PlayerUiHelper {
            (see renderEffectsList) rather than expanding in place - three sub-controls
            read better as their own screen than squeezed inline under a fourth row. */
         MenuSection effectsSection = new MenuSection("Effects");
+        effectsSection.icon = MenuIconView.Icon.EFFECTS;
         effectsSection.showChevron = true;
         effectsSection.onTap = () -> renderEffectsList(activity, list);
         sections.add(effectsSection);
@@ -998,6 +1077,7 @@ final class PlayerUiHelper {
            above). No Zoom row here, unlike the web leg's Extras screen - this native
            leg has never had a Zoom control in the menu. */
         MenuSection extrasSection = new MenuSection("Extras");
+        extrasSection.icon = MenuIconView.Icon.EXTRAS;
         extrasSection.showChevron = true;
         extrasSection.onTap = () -> renderExtrasList(activity, list);
         sections.add(extrasSection);
@@ -1007,6 +1087,7 @@ final class PlayerUiHelper {
            Ambient Lighting above (each has a strength/opacity slider). Toggling this is
            just a View visibility flip (see setStatsOverlayEnabled), so it's a plain
            on/off row. */
+        statsSection.icon = MenuIconView.Icon.PERFORMANCE;
         statsSection.toggleChecked = activity.statsOverlayEnabled;
         statsSection.onToggle = (checked) -> {
             activity.setStatsOverlayEnabled(checked);
@@ -1014,29 +1095,11 @@ final class PlayerUiHelper {
         };
         sections.add(statsSection);
 
-        /* Touch-only - a remote/D-pad-driven device has no touch input to lock in the
-           first place (same activity.hasTouchscreen gate the old standalone icon button
-           used before it moved in here). */
-        if (activity.hasTouchscreen) {
-            MenuSection lockSection = new MenuSection("Lock");
-            lockSection.onTap = () -> {
-                closePlayerMenu(activity);
-                activity.setTouchLocked(true);
-            };
-            sections.add(lockSection);
-        }
-
-        MenuSection pipSection = new MenuSection("Picture-in-Picture");
-        pipSection.onTap = () -> {
-            closePlayerMenu(activity);
-            activity.enterPip();
-        };
-        sections.add(pipSection);
-
         float density = activity.getResources().getDisplayMetrics().density;
         for (MenuSection section : sections) {
             list.addView(buildAccordionSection(activity, density, section, state));
         }
+        clampMenuCardHeight(activity, list);
     }
 
     /* The "Effects" sub-screen (Shader Upscaling/Color Boost/Ambient Lighting) - a
@@ -1056,16 +1119,19 @@ final class PlayerUiHelper {
            segmented control (see renderShaderSection) rather than a SwitchCompat that
            fits this row. */
         MenuSection shaderSection = new MenuSection("Shader Upscaling");
+        shaderSection.icon = MenuIconView.Icon.SHADER;
         shaderSection.getValue = () -> activity.shaderEnabled ? shaderRowLabel(activity) : null;
         shaderSection.render = (content, setValue, collapse) -> renderShaderSection(activity, content, setValue, collapse);
         sections.add(shaderSection);
 
         MenuSection colorBoostSection = new MenuSection("Color Boost");
+        colorBoostSection.icon = MenuIconView.Icon.COLOR_BOOST;
         colorBoostSection.getValue = () -> activity.colorBoostEnabled ? colorBoostRowLabel(activity) : null;
         colorBoostSection.render = (content, setValue, collapse) -> renderColorBoostSection(activity, content, setValue, collapse);
         sections.add(colorBoostSection);
 
         MenuSection ambientSection = new MenuSection("Ambient Lighting");
+        ambientSection.icon = MenuIconView.Icon.AMBIENT;
         ambientSection.getValue = () -> activity.ambientEnabled ? Math.round(activity.ambientOpacity * 100) + "%" : null;
         /* Flips on/off in place without collapsing the row - tapping anywhere else on
            it still expands/collapses the opacity slider, same independent-gestures-
@@ -1081,6 +1147,7 @@ final class PlayerUiHelper {
         for (MenuSection section : sections) {
             list.addView(buildAccordionSection(activity, density, section, state));
         }
+        clampMenuCardHeight(activity, list);
     }
 
     /* "Extras" - same dedicated-screen pattern as renderEffectsList above, for
@@ -1094,11 +1161,13 @@ final class PlayerUiHelper {
         List<MenuSection> sections = new ArrayList<>();
 
         MenuSection speedSection = new MenuSection("Playback Speed");
+        speedSection.icon = MenuIconView.Icon.SPEED;
         speedSection.getValue = () -> formatRate(activity.player != null ? activity.player.getPlaybackParameters().speed : 1f);
         speedSection.render = (content, setValue, collapse) -> renderSpeedSection(activity, content, setValue, collapse);
         sections.add(speedSection);
 
         MenuSection sleepSection = new MenuSection("Sleep Timer");
+        sleepSection.icon = MenuIconView.Icon.SLEEP;
         sleepSection.getValue = () -> activity.sleepMinutes > 0 ? activity.sleepMinutes + "m" : null;
         sleepSection.render = (content, setValue, collapse) -> renderSleepSection(activity, content, setValue, collapse);
         sections.add(sleepSection);
@@ -1106,6 +1175,7 @@ final class PlayerUiHelper {
         for (MenuSection section : sections) {
             list.addView(buildAccordionSection(activity, density, section, state));
         }
+        clampMenuCardHeight(activity, list);
     }
 
     /** Row/content taps and the close button/scrim all funnel through here rather than
@@ -1224,6 +1294,15 @@ final class PlayerUiHelper {
         header.setPadding(padH, padV, padH, padV);
         header.setLayoutParams(new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
 
+        if (section.icon != null) {
+            MenuIconView iconView = new MenuIconView(activity, section.icon);
+            int iconSizePx = Math.round(22 * density);
+            LinearLayout.LayoutParams iconParams = new LinearLayout.LayoutParams(iconSizePx, iconSizePx);
+            iconParams.setMarginEnd(Math.round(12 * density));
+            iconView.setLayoutParams(iconParams);
+            header.addView(iconView);
+        }
+
         LinearLayout labelStack = new LinearLayout(activity);
         labelStack.setOrientation(LinearLayout.VERTICAL);
         labelStack.setLayoutParams(new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
@@ -1329,27 +1408,6 @@ final class PlayerUiHelper {
             row.setPadding(padH, padV, padH, padV);
             row.setLayoutParams(new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
 
-            if (item.thumbUrl != null) {
-                android.widget.ImageView thumb = new android.widget.ImageView(activity);
-                int thumbWidthPx = Math.round(64 * density);
-                int thumbHeightPx = Math.round(36 * density);
-                LinearLayout.LayoutParams thumbParams = new LinearLayout.LayoutParams(thumbWidthPx, thumbHeightPx);
-                thumbParams.setMarginEnd(Math.round(10 * density));
-                thumb.setLayoutParams(thumbParams);
-                thumb.setScaleType(android.widget.ImageView.ScaleType.CENTER_CROP);
-                GradientDrawable thumbBg = new GradientDrawable();
-                thumbBg.setColor(Color.argb(20, 255, 255, 255));
-                thumbBg.setCornerRadius(4f * density);
-                thumb.setBackground(thumbBg);
-                thumb.setClipToOutline(true);
-                row.addView(thumb);
-                String thumbUrl = item.thumbUrl;
-                PlexHttp.runAsync(() -> PlexHttp.fetchBitmapSync(thumbUrl), bitmap -> {
-                    if (bitmap != null) thumb.setImageBitmap(bitmap);
-                    else thumb.setVisibility(View.GONE);
-                });
-            }
-
             TextView label = new TextView(activity);
             label.setText(item.label);
             label.setTextColor(Color.WHITE);
@@ -1442,6 +1500,22 @@ final class PlayerUiHelper {
             }));
         }
         renderPickerRows(activity, content, density, items);
+    }
+
+    /* "Quality Cap" navigates to its own screen (see the MenuSection.onTap case in
+       buildAccordionSection) rather than expanding in place - same reasoning as
+       Effects/Extras, just for one control instead of a cluster of several. Reuses
+       renderQualityCapSection's picker-list body unchanged: `list` stands in for the
+       accordion `content` LinearLayout it normally renders into, and navigating back to
+       renderMainList (which re-derives every row's value fresh) stands in for
+       `collapse`, so picking a preset here needs no separate "update this row's value"
+       step of its own. */
+    private static void renderQualityCapList(PlayerActivity activity, LinearLayout list) {
+        float density = activity.getResources().getDisplayMetrics().density;
+        list.removeAllViews();
+        list.addView(makeBackRow(activity, density, () -> renderMainList(activity, list)));
+        renderQualityCapSection(activity, list, (value) -> {}, () -> renderMainList(activity, list));
+        clampMenuCardHeight(activity, list);
     }
 
     /* The hamburger row's value text (no inline toggle any more, see the mode row below)
@@ -1600,21 +1674,6 @@ final class PlayerUiHelper {
         renderPickerRows(activity, content, density, items);
     }
 
-    private static void renderChapterSection(PlayerActivity activity, LinearLayout content, Runnable collapse) {
-        float density = activity.getResources().getDisplayMetrics().density;
-        List<PickerItem> items = new ArrayList<>();
-        for (ChapterEntry chapter : activity.chapters) {
-            String time = formatTimestamp(chapter.startTimeOffsetMs);
-            PickerItem item = new PickerItem(chapter.title.isEmpty() ? time : time + "  " + chapter.title, () -> {
-                PlayerActivity.seek(chapter.startTimeOffsetMs);
-                collapse.run();
-            });
-            item.thumbUrl = chapter.thumbUrl;
-            items.add(item);
-        }
-        renderPickerRows(activity, content, density, items);
-    }
-
     /* Window width, not the activity's own view width - called before the sheet (and thus
        any view to measure) exists yet for showEpisodeListLoading's placeholder. */
     private static int episodeCardWidthPx(PlayerActivity activity, float density) {
@@ -1729,7 +1788,7 @@ final class PlayerUiHelper {
         setControlsVisible(activity, false);
     }
 
-    /* Shown immediately on the Episodes button tap (see buildEpisodesButton), before JS
+    /* Shown immediately on the Episodes row tap (see renderMainList), before JS
        has resolved the actual queue metadata (episode-list.js's getQueueItems/
        formatEpisodeListItem - a real Plex round-trip per episode on the first open of a
        given queue, not instant). openEpisodeListMenu replaces this with the real content
@@ -1832,6 +1891,196 @@ final class PlayerUiHelper {
             activity.episodeListScrim = null;
             showControlsTemporarily(activity);
         }
+    }
+
+    /* Same overlay shape as openEpisodeListMenu above (horizontally-scrolling card row,
+       fade-edge scroll arrows, added straight into root for the same edge-to-edge-inset
+       reasoning) reused for the More menu's Chapters row instead of an inline picker -
+       chapters read better as thumbnail cards than plain text rows, same as episodes
+       do. Simpler than the episode overlay in one way: activity.chapters is already
+       fully populated (no async Plex fetch like showEpisodeListInternal needs), so
+       there's no loading-placeholder state to build and only one call site needs a
+       scrim/header pair. */
+    static void openChapterListMenu(PlayerActivity activity) {
+        float density = activity.getResources().getDisplayMetrics().density;
+        closeChapterListMenu(activity);
+        closePlayerMenu(activity);
+        if (activity.chapters.isEmpty()) return;
+
+        View scrim = new View(activity);
+        scrim.setBackgroundColor(Color.TRANSPARENT);
+        scrim.setLayoutParams(new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
+        scrim.setOnClickListener(v -> closeChapterListMenu(activity));
+
+        LinearLayout content = buildEpisodeSheetContainer(activity, density);
+
+        LinearLayout header = new LinearLayout(activity);
+        header.setOrientation(LinearLayout.HORIZONTAL);
+        header.setGravity(Gravity.CENTER_VERTICAL);
+        int headerPadH = Math.round(16 * density);
+        int headerPadV = Math.round(12 * density);
+        header.setPadding(headerPadH, headerPadV, headerPadH, headerPadV);
+        TextView heading = new TextView(activity);
+        heading.setText("Chapters");
+        heading.setTextColor(Color.WHITE);
+        heading.setTextSize(16);
+        heading.setTypeface(heading.getTypeface(), android.graphics.Typeface.BOLD);
+        heading.setLayoutParams(new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        header.addView(heading);
+        TextView closeBtn = new TextView(activity);
+        closeBtn.setText("✕");
+        closeBtn.setTextColor(Color.WHITE);
+        closeBtn.setTextSize(16);
+        int closePad = Math.round(6 * density);
+        closeBtn.setPadding(closePad, closePad, closePad, closePad);
+        closeBtn.setOnClickListener(v -> closeChapterListMenu(activity));
+        header.addView(closeBtn);
+        content.addView(header);
+
+        FrameLayout scrollWrap = new FrameLayout(activity);
+        scrollWrap.setLayoutParams(new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        int cardWidthPx = episodeCardWidthPx(activity, density);
+        int arrowWidthPx = Math.round(40 * density);
+
+        LinearLayout row = new LinearLayout(activity);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+
+        android.widget.HorizontalScrollView scroll = new android.widget.HorizontalScrollView(activity);
+        scroll.setHorizontalScrollBarEnabled(false);
+        scroll.setLayoutParams(new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT));
+        scroll.setClipToPadding(false);
+        int scrollPadH = Math.round(6 * density) + arrowWidthPx;
+        int scrollPadV = Math.round(12 * density);
+        scroll.setPadding(scrollPadH, scrollPadV, scrollPadH, scrollPadV);
+        scroll.addView(row, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        /* "Current" is computed once, at open time, from wherever background playback
+           happens to be right now - same reasoning chrome.js's own openChapterListOverlay
+           gives for not re-deriving this live while the overlay stays open. */
+        long positionMs = activity.player != null ? activity.player.getCurrentPosition() : 0;
+        View currentCard = null;
+        for (int i = 0; i < activity.chapters.size(); i++) {
+            ChapterEntry chapter = activity.chapters.get(i);
+            ChapterEntry next = i + 1 < activity.chapters.size() ? activity.chapters.get(i + 1) : null;
+            boolean isCurrent = chapter.startTimeOffsetMs <= positionMs && (next == null || next.startTimeOffsetMs > positionMs);
+            View card = makeChapterCardView(activity, density, chapter, cardWidthPx, isCurrent);
+            row.addView(card);
+            if (isCurrent) currentCard = card;
+        }
+        scrollWrap.addView(scroll);
+
+        View leftArrow = makeEpisodeScrollArrow(activity, density, true, scroll, arrowWidthPx);
+        View rightArrow = makeEpisodeScrollArrow(activity, density, false, scroll, arrowWidthPx);
+        scrollWrap.addView(leftArrow);
+        scrollWrap.addView(rightArrow);
+        content.addView(scrollWrap);
+
+        Runnable updateArrows = () -> {
+            leftArrow.setAlpha(scroll.canScrollHorizontally(-1) ? 1f : 0f);
+            leftArrow.setClickable(scroll.canScrollHorizontally(-1));
+            rightArrow.setAlpha(scroll.canScrollHorizontally(1) ? 1f : 0f);
+            rightArrow.setClickable(scroll.canScrollHorizontally(1));
+        };
+        scroll.setOnScrollChangeListener((v, x, y, oldX, oldY) -> updateArrows.run());
+
+        View finalCurrentCard = currentCard;
+        scroll.post(() -> {
+            updateArrows.run();
+            if (finalCurrentCard != null) {
+                int target = finalCurrentCard.getLeft() - (scroll.getWidth() / 2 - finalCurrentCard.getWidth() / 2);
+                scroll.scrollTo(Math.max(0, target), 0);
+            }
+        });
+
+        activity.root.addView(scrim);
+        activity.root.addView(content);
+        activity.chapterListScrim = scrim;
+        activity.chapterListSheet = content;
+        activity.controlsFadeHandler.removeCallbacks(activity.controlsFadeRunnable);
+        setControlsVisible(activity, false);
+    }
+
+    static void closeChapterListMenu(PlayerActivity activity) {
+        if (activity.chapterListSheet != null) {
+            activity.root.removeView(activity.chapterListSheet);
+            activity.chapterListSheet = null;
+        }
+        if (activity.chapterListScrim != null) {
+            activity.root.removeView(activity.chapterListScrim);
+            activity.chapterListScrim = null;
+            showControlsTemporarily(activity);
+        }
+    }
+
+    /* One card of the chapter row above - deliberately much plainer than
+       makeEpisodeCardView (no watched badge, no progress bar, no summary line): a
+       chapter is a timestamp within the title already being watched, not a separate
+       Plex item with its own watched/progress state of its own. */
+    private static View makeChapterCardView(PlayerActivity activity, float density, ChapterEntry chapter, int cardWidthPx, boolean isCurrent) {
+        LinearLayout card = new LinearLayout(activity);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setBackground(rowPressBackground());
+        int cardPad = Math.round(4 * density);
+        card.setPadding(cardPad, cardPad, cardPad, cardPad);
+        LinearLayout.LayoutParams cardParams = new LinearLayout.LayoutParams(cardWidthPx, LinearLayout.LayoutParams.WRAP_CONTENT);
+        cardParams.setMarginEnd(Math.round(14 * density));
+        card.setLayoutParams(cardParams);
+
+        FrameLayout thumbFrame = new FrameLayout(activity);
+        int thumbWidthPx = cardWidthPx - cardPad * 2;
+        int thumbHeightPx = Math.round(thumbWidthPx * 9f / 16f);
+        LinearLayout.LayoutParams thumbFrameParams = new LinearLayout.LayoutParams(thumbWidthPx, thumbHeightPx);
+        thumbFrameParams.bottomMargin = Math.round(6 * density);
+        thumbFrame.setLayoutParams(thumbFrameParams);
+
+        android.widget.ImageView thumb = new android.widget.ImageView(activity);
+        thumb.setLayoutParams(new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
+        thumb.setScaleType(android.widget.ImageView.ScaleType.CENTER_CROP);
+        GradientDrawable thumbBg = new GradientDrawable();
+        thumbBg.setColor(Color.argb(20, 255, 255, 255));
+        thumbBg.setCornerRadius(6f * density);
+        if (isCurrent) {
+            thumbBg.setStroke(Math.round(2 * density), ACCENT_COLOR);
+        }
+        thumb.setBackground(thumbBg);
+        thumb.setClipToOutline(true);
+        thumbFrame.addView(thumb);
+        if (chapter.thumbUrl != null) {
+            String thumbUrl = chapter.thumbUrl;
+            PlexHttp.runAsync(() -> PlexHttp.fetchBitmapSync(thumbUrl), bitmap -> {
+                if (bitmap != null) thumb.setImageBitmap(bitmap);
+            });
+        }
+        card.addView(thumbFrame);
+
+        String time = formatTimestamp(chapter.startTimeOffsetMs);
+        TextView title = new TextView(activity);
+        title.setText(chapter.title == null || chapter.title.isEmpty() ? time : chapter.title);
+        title.setTextColor(Color.WHITE);
+        title.setTextSize(13);
+        title.setTypeface(title.getTypeface(), android.graphics.Typeface.BOLD);
+        title.setMaxLines(1);
+        title.setEllipsize(TextUtils.TruncateAt.END);
+        card.addView(title);
+
+        if (chapter.title != null && !chapter.title.isEmpty()) {
+            TextView subtitle = new TextView(activity);
+            subtitle.setText(time);
+            subtitle.setTextColor(VALUE_TEXT);
+            subtitle.setTextSize(10);
+            LinearLayout.LayoutParams subtitleParams =
+                new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+            subtitleParams.topMargin = Math.round(2 * density);
+            subtitle.setLayoutParams(subtitleParams);
+            card.addView(subtitle);
+        }
+
+        card.setOnClickListener(v -> {
+            closeChapterListMenu(activity);
+            PlayerActivity.seek(chapter.startTimeOffsetMs);
+        });
+        return card;
     }
 
     /* Same fade-upward-into-the-video scrim as episode-list.js's own panel background

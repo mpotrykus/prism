@@ -1,4 +1,4 @@
-import { playQueuedTitle } from "./chrome.js";
+import { playQueuedTitle, formatTime } from "./chrome.js";
 import { plexAssetUrl } from "../core/plex-asset-url.js";
 import { fetchQueueItemsMetadata } from "../core/title-fetch.js";
 import { WATCHED_ICON_SVG } from "../../card/rows.js";
@@ -271,6 +271,183 @@ export function closeEpisodeListOverlay(controller) {
     controller._episodeListEl.panel.remove();
     controller._episodeListEl = null;
     controller._showControls();
+}
+
+/* Same overlay shape as openEpisodeListOverlay above (horizontally-scrolling card row,
+   fade-edge scroll arrows, keep-playing-behind-it scrim) reused for the More menu's
+   Chapters row instead of an inline accordion picker - chrome.js's "Chapters" section
+   navigates here (see renderMainList) rather than expanding in place. Simpler than the
+   episode overlay in one way: chapters are already fully present on session.chapters
+   (no getQueueItems-style async Plex fetch needed), so there's no loading-placeholder
+   state to build. */
+export function openChapterListOverlay(controller) {
+    closeChapterListOverlay(controller);
+    controller._closeInlineMenu();
+
+    const session = controller._session;
+    const chapters = session?.chapters || [];
+    if (!chapters.length) return;
+
+    const scrim = document.createElement("div");
+    Object.assign(scrim.style, { position: "fixed", inset: "0", zIndex: "10003", background: "transparent" });
+    scrim.addEventListener("click", () => closeChapterListOverlay(controller));
+
+    const panel = document.createElement("div");
+    Object.assign(panel.style, {
+        position: "fixed",
+        left: "0",
+        right: "0",
+        bottom: "0",
+        zIndex: "10004",
+        display: "flex",
+        flexDirection: "column",
+        gap: "14px",
+        padding: "24px 0 28px",
+        background: "linear-gradient(to top, rgba(0,0,0,0.92) 0%, rgba(0,0,0,0.88) 55%, rgba(0,0,0,0.5) 85%, transparent 100%)",
+        boxSizing: "border-box",
+        fontFamily: '"Roboto", sans-serif',
+        opacity: "0",
+        transform: "translateY(12px)",
+        transition: "opacity 0.2s ease, transform 0.2s ease",
+    });
+
+    const header = document.createElement("div");
+    Object.assign(header.style, { display: "flex", alignItems: "center", justifyContent: "space-between", flex: "0 0 auto", padding: "0 24px" });
+    const heading = document.createElement("div");
+    heading.textContent = "Chapters";
+    Object.assign(heading.style, { color: "#fff", fontSize: "18px", fontWeight: "700" });
+    header.appendChild(heading);
+    const closeBtn = document.createElement("button");
+    closeBtn.type = "button";
+    closeBtn.setAttribute("aria-label", "Close chapter list");
+    closeBtn.textContent = "✕";
+    Object.assign(closeBtn.style, {
+        width: "32px",
+        height: "32px",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        border: "none",
+        background: "transparent",
+        color: "#fff",
+        fontSize: "16px",
+        cursor: "pointer",
+        padding: "0",
+    });
+    closeBtn.addEventListener("click", () => closeChapterListOverlay(controller));
+    header.appendChild(closeBtn);
+    panel.appendChild(header);
+
+    ensureScrollStyle();
+    const scroll = document.createElement("div");
+    scroll.className = SCROLL_CLASS;
+    Object.assign(scroll.style, { display: "flex", gap: "14px", overflowX: "auto", overflowY: "hidden", padding: "4px 54px" });
+
+    const scrollWrap = document.createElement("div");
+    Object.assign(scrollWrap.style, { position: "relative", flexShrink: "0" });
+    const leftArrow = buildQueueScrollArrow("left", scroll);
+    const rightArrow = buildQueueScrollArrow("right", scroll);
+    scrollWrap.appendChild(leftArrow);
+    scrollWrap.appendChild(scroll);
+    scrollWrap.appendChild(rightArrow);
+    panel.appendChild(scrollWrap);
+
+    /* "Current" is computed once, at open time, from wherever background playback
+       happens to be right now - unlike episode-list.js's own `current` (pinned to
+       session.ratingKey, which can't change while this overlay is open), a chapter
+       boundary could in principle be crossed while the user is browsing, but re-
+       deriving it live isn't worth the complexity for a highlight that's just meant to
+       orient "you are roughly here" at a glance. */
+    const positionMs = (controller._videoEl?.currentTime || 0) * 1000;
+    let currentCard = null;
+    chapters.forEach((chapter, index) => {
+        const next = chapters[index + 1];
+        const isCurrent = (chapter.startTimeOffset ?? 0) <= positionMs && (!next || (next.startTimeOffset ?? 0) > positionMs);
+        const card = buildChapterCard(session, chapter, isCurrent, () => {
+            closeChapterListOverlay(controller);
+            if (controller._videoEl) controller._videoEl.currentTime = (chapter.startTimeOffset ?? 0) / 1000;
+        });
+        scroll.appendChild(card);
+        if (isCurrent) currentCard = card;
+    });
+
+    document.body.appendChild(scrim);
+    document.body.appendChild(panel);
+    controller._chapterListEl = { scrim, panel };
+    controller._hideControls();
+    requestAnimationFrame(() => {
+        panel.style.opacity = "1";
+        panel.style.transform = "translateY(0)";
+    });
+
+    if (currentCard) currentCard.scrollIntoView({ inline: "center", block: "nearest" });
+    wireQueueArrowVisibility(scroll, leftArrow, rightArrow);
+}
+
+export function closeChapterListOverlay(controller) {
+    if (!controller._chapterListEl) return;
+    controller._chapterListEl.scrim.remove();
+    controller._chapterListEl.panel.remove();
+    controller._chapterListEl = null;
+    controller._showControls();
+}
+
+/* One card of the chapter row above - deliberately much plainer than buildEpisodeCard
+   below (no watched badge, no progress bar, no summary line): a chapter is a timestamp
+   within the title already being watched, not a separate Plex item with its own
+   watched/progress state of its own. */
+function buildChapterCard(session, chapter, isCurrent, onSelect) {
+    const card = document.createElement("button");
+    card.type = "button";
+    Object.assign(card.style, {
+        flex: "0 0 auto",
+        width: "240px",
+        display: "flex",
+        flexDirection: "column",
+        gap: "8px",
+        textAlign: "left",
+        background: "transparent",
+        border: "none",
+        padding: "0",
+        cursor: "pointer",
+        fontFamily: '"Roboto", sans-serif',
+    });
+
+    const thumbWrap = document.createElement("div");
+    Object.assign(thumbWrap.style, {
+        position: "relative",
+        width: "100%",
+        height: "135px",
+        borderRadius: "8px",
+        overflow: "hidden",
+        background: "rgba(255,255,255,0.08)",
+        boxSizing: "border-box",
+        border: isCurrent ? `2px solid ${ACCENT_COLOR}` : "2px solid transparent",
+    });
+    const img = document.createElement("img");
+    img.loading = "lazy";
+    img.alt = "";
+    Object.assign(img.style, { width: "100%", height: "100%", objectFit: "cover", display: "block" });
+    const thumbUrl = plexAssetUrl(session, chapter.thumb);
+    if (thumbUrl) img.src = thumbUrl;
+    thumbWrap.appendChild(img);
+    card.appendChild(thumbWrap);
+
+    const timeLabel = formatTime((chapter.startTimeOffset ?? 0) / 1000);
+    const title = document.createElement("div");
+    title.textContent = chapter.title || chapter.tag || timeLabel;
+    Object.assign(title.style, { color: "#fff", fontSize: "13px", fontWeight: "700", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" });
+    card.appendChild(title);
+
+    if (chapter.title || chapter.tag) {
+        const subtitle = document.createElement("div");
+        subtitle.textContent = timeLabel;
+        Object.assign(subtitle.style, { color: "rgba(255,255,255,0.45)", fontSize: "11px", fontWeight: "600" });
+        card.appendChild(subtitle);
+    }
+
+    card.addEventListener("click", onSelect);
+    return card;
 }
 
 /* Cached per queue (reference-equality on queueRatingKeys, which threads unchanged

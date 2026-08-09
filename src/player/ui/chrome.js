@@ -6,9 +6,39 @@ import { setAmbientEnabled, setAmbientOpacity } from "../ambient-pipeline.js";
 import { reloadWebSource } from "../web-fallback.js";
 import { setAutoQualityEnabled } from "../core/abr.js";
 import { setNativePlaybackRate, setNativeSubtitle } from "../native-bridge.js";
-import { CONTROLS_HIDE_DELAY_MS, PLAYBACK_RATES, SLEEP_TIMER_PRESETS_MIN, ZOOM_LEVELS, QUALITY_CAP_PRESETS, VOLUME_STORAGE_KEY, storedVolume, volumeIconMarkup, seekIconMarkup, skipIconMarkup, fullscreenIconMarkup } from "./shared.js";
+import {
+    CONTROLS_HIDE_DELAY_MS,
+    PLAYBACK_RATES,
+    SLEEP_TIMER_PRESETS_MIN,
+    ZOOM_LEVELS,
+    QUALITY_CAP_PRESETS,
+    VOLUME_STORAGE_KEY,
+    storedVolume,
+    volumeIconMarkup,
+    seekIconMarkup,
+    skipIconMarkup,
+    fullscreenIconMarkup,
+    chaptersIconMarkup,
+    subtitlesIconMarkup,
+    versionIconMarkup,
+    qualityCapIconMarkup,
+    effectsIconMarkup,
+    extrasIconMarkup,
+    performanceIconMarkup,
+    colorBoostIconMarkup,
+    ambientIconMarkup,
+    speedIconMarkup,
+    zoomIconMarkup,
+    sleepIconMarkup,
+} from "./shared.js";
 import { loadBifIndex, findNearestBifFrame, fetchBifFrameUrl } from "../core/bif.js";
 import { plexAssetUrl } from "../core/plex-asset-url.js";
+/* Circular with episode-list.js (which imports playQueuedTitle/formatTime from this
+   file) - safe here because both sides only reference the other module's export from
+   inside a function body (openChapterListOverlay is called from a click handler, long
+   after both modules have finished loading), never at top-level module-evaluation
+   time. */
+import { openChapterListOverlay } from "./episode-list.js";
 import { fetchQueuedTitle } from "../core/title-fetch.js";
 
 /* Fullscreen player chrome: the idle-fade control row, transport bar, every hamburger
@@ -107,7 +137,7 @@ export function hideControls(controller) {
    are meant to toggle play/pause or reshow the controls. */
 export function scheduleHideControls(controller) {
     clearTimeout(controller._controlsHideTimer);
-    if (controller._controlsHovering || controller._inlineMenuEl || controller._episodeListEl) return;
+    if (controller._controlsHovering || controller._inlineMenuEl || controller._episodeListEl || controller._chapterListEl) return;
     controller._controlsHideTimer = setTimeout(() => {
         controller._controlButtons.forEach((b) => {
             b.style.opacity = "0";
@@ -1007,7 +1037,38 @@ export function buildTransportBar(controller, video) {
     const controlsRow = document.createElement("div");
     Object.assign(controlsRow.style, { display: "flex", alignItems: "center" });
     const leftCell = document.createElement("div");
-    Object.assign(leftCell.style, { flex: "1 1 0" });
+    Object.assign(leftCell.style, { flex: "1 1 0", display: "flex", alignItems: "center" });
+    /* Text label standing in for the old standalone Episodes icon button (top-right
+       corner) - same "Episodes" vs "Up Next" wording episode-list.js's own overlay
+       heading already uses (seasonNumber present means a TV episode with siblings to
+       browse; its absence means a movie/collection queue, where "next" is the more
+       accurate word than "episode"), so the button and the screen it opens never
+       disagree about what to call the same queue. Only shown when there's an actual
+       queue to browse - same "never an empty/dead affordance" rule the hamburger's
+       Chapters/Audio Track rows already follow. */
+    if (session?.queueRatingKeys?.length > 1) {
+        const episodesBtn = document.createElement("button");
+        episodesBtn.type = "button";
+        episodesBtn.textContent = session.seasonNumber != null ? "Episodes" : "Up Next";
+        Object.assign(episodesBtn.style, {
+            background: "transparent",
+            border: "none",
+            color: "#fff",
+            fontSize: "13px",
+            fontWeight: "700",
+            fontFamily: '"Roboto", sans-serif',
+            cursor: "pointer",
+            padding: "0",
+        });
+        episodesBtn.addEventListener("click", () => {
+            if (controller._episodeListEl) {
+                controller._closeEpisodeListOverlay();
+            } else {
+                controller._openEpisodeListOverlay();
+            }
+        });
+        leftCell.appendChild(episodesBtn);
+    }
     const centerCell = document.createElement("div");
     Object.assign(centerCell.style, { flex: "0 0 auto", display: "flex", alignItems: "center", gap: "22px" });
     const rightCell = document.createElement("div");
@@ -1166,7 +1227,21 @@ function buildAccordionRow(list, state, section) {
         }
     };
     setValue(section.getValue ? section.getValue() : null);
-    header.appendChild(labelStack);
+
+    /* Icon + labelStack share one flex container (leftSide) rather than being direct
+       children of `header` - header's own justify-content:space-between only reads as
+       "label left, controls right" with exactly two children; a bare 3rd child (the
+       icon) would get pushed to the middle instead of hugging the label. */
+    const leftSide = document.createElement("span");
+    Object.assign(leftSide.style, { display: "flex", alignItems: "center", gap: "12px", minWidth: "0", flex: "1 1 auto" });
+    if (section.icon) {
+        const iconEl = document.createElement("span");
+        iconEl.innerHTML = section.icon;
+        Object.assign(iconEl.style, { display: "flex", alignItems: "center", justifyContent: "center", flex: "0 0 auto", width: "20px", height: "20px", color: "rgba(255,255,255,0.75)" });
+        leftSide.appendChild(iconEl);
+    }
+    leftSide.appendChild(labelStack);
+    header.appendChild(leftSide);
 
     const rightSide = document.createElement("span");
     Object.assign(rightSide.style, { display: "flex", alignItems: "center", gap: "12px", flex: "0 0 auto" });
@@ -1274,6 +1349,13 @@ export function openHamburgerMenu(controller, anchor) {
     Object.assign(scrim.style, { position: "fixed", inset: "0", zIndex: "10002", background: "transparent" });
     scrim.addEventListener("click", () => closeInlineMenu(controller));
 
+    /* Full-height, right-hugging gradient backdrop (unchanged from the drawer this
+       replaced) - the header+list card inside it (see `card` below) is what's actually
+       vertically centered, via justifyContent, rather than the gradient itself
+       shrinking to the card's height. A full-height backdrop that shrank to a short
+       row list's own height left a stretch of plain, undarkened video below a
+       vertically-centered card - the backdrop needs to keep covering the full screen
+       height regardless of how tall the card inside it happens to be. */
     const sheet = document.createElement("div");
     Object.assign(sheet.style, {
         position: "fixed",
@@ -1284,6 +1366,7 @@ export function openHamburgerMenu(controller, anchor) {
         zIndex: "10003",
         display: "flex",
         flexDirection: "column",
+        justifyContent: "center",
         background: SHEET_GRADIENT,
         fontFamily: '"Roboto", sans-serif',
         boxSizing: "border-box",
@@ -1291,6 +1374,14 @@ export function openHamburgerMenu(controller, anchor) {
         transform: "translateX(20px)",
         transition: "opacity 0.2s ease, transform 0.2s ease",
     });
+
+    /* The actual visible "menu" - header plus scrollable row list, capped at 82vh and
+       otherwise sized to its own content (a short row list, e.g. the Effects/Extras
+       sub-screens, centers as a short card rather than stretching to fill the full
+       backdrop). */
+    const card = document.createElement("div");
+    Object.assign(card.style, { display: "flex", flexDirection: "column", maxHeight: "82vh", minHeight: "0" });
+    sheet.appendChild(card);
 
     const header = document.createElement("div");
     Object.assign(header.style, { display: "flex", alignItems: "center", justifyContent: "space-between", flex: "0 0 auto", padding: "24px 16px 12px" });
@@ -1317,12 +1408,12 @@ export function openHamburgerMenu(controller, anchor) {
     });
     closeBtn.addEventListener("click", () => closeInlineMenu(controller));
     header.appendChild(closeBtn);
-    sheet.appendChild(header);
+    card.appendChild(header);
 
     const list = document.createElement("div");
     list.className = MENU_SCROLL_CLASS;
     Object.assign(list.style, { flex: "1 1 auto", minHeight: "0", overflowY: "auto", padding: "0 0 20px" });
-    sheet.appendChild(list);
+    card.appendChild(list);
 
     function renderMainList() {
     list.innerHTML = "";
@@ -1335,23 +1426,35 @@ export function openHamburgerMenu(controller, anchor) {
     const sections = [];
     if (session?.chapters?.length) {
         sections.push({
+            /* Opens the same horizontally-scrolling card overlay episode-list.js uses
+               for browsing episodes/queue items, rather than an inline text-row picker
+               - chapters read better as thumbnail cards than plain rows, same as
+               episodes do. Closes the More sheet on the way there (see
+               openChapterListOverlay), matching how opening the Episodes overlay
+               already closes this sheet too. */
             key: "chapters",
             label: "Chapters",
-            render: (content, helpers) => renderChapterSection(controller, content, helpers),
+            icon: chaptersIconMarkup(),
+            nav: () => openChapterListOverlay(controller),
         });
     }
     if (session?.audioStreams?.length > 1) {
         sections.push({
             key: "audio",
             label: "Audio Track",
+            icon: volumeIconMarkup(1),
             getValue: () => session.audioStreams.find((s) => s.id === session.audioStreamId)?.label || null,
             render: (content, helpers) => renderAudioSection(controller, content, helpers),
         });
     }
     sections.push({
+        /* Own dedicated screen (see renderSubtitlesList), not an inline expand - same
+           reasoning as Effects/Extras below, just for a single control instead of a
+           cluster of three. */
         key: "subtitles",
         label: "Subtitles",
-        render: (content, helpers) => renderSubtitleSection(controller, content, helpers),
+        icon: subtitlesIconMarkup(),
+        nav: () => renderSubtitlesList(controller, list, renderMainList),
     });
     /* Version and Quality Cap used to live one level deeper, behind a "Video Quality"
        row - flattened to their own top-level rows (Version only shown when this item
@@ -1362,22 +1465,28 @@ export function openHamburgerMenu(controller, anchor) {
         sections.push({
             key: "version",
             label: "Version",
+            icon: versionIconMarkup(),
             getValue: () => session.mediaVersions.find((v) => v.mediaIndex === session.mediaIndex)?.label || null,
             render: (content, helpers) => renderVersionSection(controller, content, helpers),
         });
     }
     sections.push({
+        /* Own dedicated screen (see renderQualityCapList), not an inline expand - same
+           reasoning as Subtitles above. */
         key: "qualitycap",
         label: "Quality Cap",
+        icon: qualityCapIconMarkup(),
         getValue: () => qualityCapMenuLabel(controller),
-        render: (content, helpers) => renderQualityCapSection(controller, content, helpers),
+        nav: () => renderQualityCapList(controller, list, renderMainList),
     });
     sections.push({
         key: "autoplay",
         label: "Auto-Play",
         /* No expand - same plain on/off toggle as Performance Overlay below, nothing
            to drill into (advancing to whatever's next in the queue is the whole
-           feature, no strength/opacity to tune). */
+           feature, no strength/opacity to tune). Icon reuses skipIconMarkup's "next"
+           glyph - advancing to the next queued item is exactly what this toggle does. */
+        icon: skipIconMarkup("next"),
         getValue: () => (controller._autoPlayEnabled ? "On" : null),
         toggle: {
             checked: controller._autoPlayEnabled,
@@ -1393,6 +1502,7 @@ export function openHamburgerMenu(controller, anchor) {
            read better as their own screen than squeezed inline under a fourth row. */
         key: "effects",
         label: "Effects",
+        icon: effectsIconMarkup(),
         nav: () => renderEffectsList(controller, list, renderMainList),
     });
     sections.push({
@@ -1404,6 +1514,7 @@ export function openHamburgerMenu(controller, anchor) {
            the everyday audio/subtitle/quality set above). */
         key: "extras",
         label: "Extras",
+        icon: extrasIconMarkup(),
         nav: () => renderExtrasList(controller, list, renderMainList),
     });
     sections.push({
@@ -1411,6 +1522,7 @@ export function openHamburgerMenu(controller, anchor) {
         label: "Performance Overlay",
         /* No expand - nothing to drill into (no strength/opacity slider, unlike Shader
            Upscaling/Color Boost/Ambient Lighting above), just a plain on/off toggle. */
+        icon: performanceIconMarkup(),
         getValue: () => (controller._statsOverlayEnabled ? "On" : null),
         toggle: {
             checked: controller._statsOverlayEnabled,
@@ -1493,6 +1605,19 @@ function renderQualityCapSection(controller, content, { setValue, collapse }) {
             },
         })),
     ]);
+}
+
+/* "Quality Cap" navigates to its own screen (see buildAccordionRow's `nav` case)
+   rather than expanding in place - same reasoning as Effects/Extras, just for one
+   control instead of a cluster of several. Reuses renderQualityCapSection's picker-
+   list body unchanged: `list` stands in for the accordion `content` div it normally
+   renders into, and `onBack` (navigate to the main list, which re-derives every row's
+   value fresh) stands in for `collapse`, so picking a preset here needs no separate
+   "update this row's value" step of its own. */
+function renderQualityCapList(controller, list, onBack) {
+    list.innerHTML = "";
+    list.appendChild(makeBackRow(onBack));
+    renderQualityCapSection(controller, list, { setValue: () => {}, collapse: onBack });
 }
 
 function renderAudioSection(controller, content, { setValue, collapse }) {
@@ -1658,18 +1783,23 @@ function renderEffectsList(controller, list, onBack) {
     buildAccordionRow(list, state, {
         key: "shader",
         label: "Shader Upscaling",
+        /* Reuses fullscreenIconMarkup's expand-corners glyph - upscaling is, visually,
+           the same "stretch the picture outward" idea. */
+        icon: fullscreenIconMarkup(false),
         getValue: () => (controller._shaderEnabled ? shaderRowLabel(controller) : null),
         render: (content, helpers) => renderShaderSection(controller, content, helpers),
     });
     buildAccordionRow(list, state, {
         key: "colorboost",
         label: "Color Boost",
+        icon: colorBoostIconMarkup(),
         getValue: () => (controller._colorBoostEnabled ? colorBoostRowLabel(controller) : null),
         render: (content, helpers) => renderColorBoostSection(controller, content, helpers),
     });
     buildAccordionRow(list, state, {
         key: "ambient",
         label: "Ambient Lighting",
+        icon: ambientIconMarkup(),
         getValue: () => (controller._ambientEnabled ? `${Math.round(controller._ambientOpacity * 100)}%` : null),
         /* Toggle flips on/off in place without collapsing the row - tapping anywhere
            else on it still expands/collapses the opacity slider, same independent-
@@ -1694,18 +1824,21 @@ function renderExtrasList(controller, list, onBack) {
     buildAccordionRow(list, state, {
         key: "speed",
         label: "Playback Speed",
+        icon: speedIconMarkup(),
         getValue: () => `${controller._session?.playbackRate || 1}x`,
         render: (content, helpers) => renderSpeedSection(controller, content, helpers),
     });
     buildAccordionRow(list, state, {
         key: "zoom",
         label: "Zoom",
+        icon: zoomIconMarkup(),
         getValue: () => `${ZOOM_LEVELS[controller._zoomIndex]}x`,
         render: (content, helpers) => renderZoomSection(controller, content, helpers),
     });
     buildAccordionRow(list, state, {
         key: "sleep",
         label: "Sleep Timer",
+        icon: sleepIconMarkup(),
         getValue: () => (controller._sleepMinutes ? `${controller._sleepMinutes}m` : null),
         render: (content, helpers) => renderSleepSection(controller, content, helpers),
     });
@@ -1837,29 +1970,6 @@ function renderAmbientSection(controller, content, { setValue }) {
         setValue(controller._ambientEnabled ? `${opacityInput.value}%` : null);
     });
     content.appendChild(opacityInput);
-}
-
-/* Reuses renderPickerList (same scrollable tap-to-pick list as the speed/sleep-timer
-   presets) rather than a bespoke list UI - each row's thumb comes from Plex's own
-   per-chapter thumb path (see chapterThumbUrl), not a separately-fetched preview. Only
-   offered from the hamburger menu when the session actually has chapters (see
-   openHamburgerMenu), so there's never an empty list. */
-function renderChapterSection(controller, content, { collapse }) {
-    const session = controller._session;
-    renderPickerList(content, (session?.chapters || []).map((chapter) => ({
-        label: chapterLabel(chapter),
-        thumb: plexAssetUrl(session, chapter.thumb),
-        onSelect: () => {
-            if (controller._videoEl) controller._videoEl.currentTime = (chapter.startTimeOffset ?? 0) / 1000;
-            collapse();
-        },
-    })));
-}
-
-function chapterLabel(chapter) {
-    const time = formatTime((chapter.startTimeOffset ?? 0) / 1000);
-    const title = chapter.title || chapter.tag || "";
-    return title ? `${time}  ${title}` : time;
 }
 
 /* A small on/off pill, e.g. Shader Upscaling's row in openHamburgerMenu - plain divs
@@ -2063,6 +2173,17 @@ function renderSubtitleSection(controller, content, { collapse }) {
     content.appendChild(resultsEl);
 
     if (input.value) runSearch();
+}
+
+/* "Subtitles" navigates to its own screen (see buildAccordionRow's `nav` case) rather
+   than expanding in place - same reasoning as Quality Cap's renderQualityCapList
+   above. Reuses renderSubtitleSection's search-box-plus-results body unchanged: `list`
+   stands in for the accordion `content` div, and `onBack` (return to the main list)
+   stands in for `collapse`, so successfully applying a subtitle just navigates back. */
+function renderSubtitlesList(controller, list, onBack) {
+    list.innerHTML = "";
+    list.appendChild(makeBackRow(onBack));
+    renderSubtitleSection(controller, list, { collapse: onBack });
 }
 
 /* rowEl gets an inline status update on failure instead of the previous

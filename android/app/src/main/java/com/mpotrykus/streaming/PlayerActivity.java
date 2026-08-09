@@ -267,6 +267,11 @@ public class PlayerActivity extends AppCompatActivity {
        same "added straight into root" reasoning as menuScrim/menuSheet above. */
     View episodeListScrim;
     View episodeListSheet;
+    /* The Chapters bottom sheet (see PlayerUiHelper.openChapterListMenu/closeChapterListMenu) -
+       same shape/reasoning as episodeListScrim/episodeListSheet above, just for
+       activity.chapters instead of a fetched episode queue. */
+    View chapterListScrim;
+    View chapterListSheet;
     final Handler controlsFadeHandler = new Handler(Looper.getMainLooper());
     final Runnable controlsFadeRunnable = () -> setControlsVisible(false);
     boolean controlsVisible = true;
@@ -421,17 +426,23 @@ public class PlayerActivity extends AppCompatActivity {
         float density = getResources().getDisplayMetrics().density;
         PlayerUiHelper.buildCloseButton(this, density);
         PlayerUiHelper.buildMenuButton(this, density);
-        /* Each top-right button after the hamburger claims the next 44dp slot outward -
-           same per-button stacking chrome.js's registerControlButton computes for its own
+        /* Each top-right button after the hamburger claims the next slot outward - same
+           per-button stacking chrome.js's registerControlButton computes for its own
            corner control row - rather than hardcoding every button's margin against a
-           fixed neighbor, since which buttons exist (Episodes) varies per session. Lock
-           lives in the hamburger menu (see PlayerUiHelper.showPlayerMenu), not as its own
-           top-right icon. */
-        int nextRightSlotDp = 68;
-        if (queueLength > 1) {
-            PlayerUiHelper.buildEpisodesButton(this, density, nextRightSlotDp);
-            nextRightSlotDp += 44;
+           fixed neighbor, since which buttons exist (Lock) varies per session. Episodes
+           lives in the hamburger menu instead (see PlayerUiHelper.renderMainList), not as
+           its own top-right icon - unlike Lock/Picture-in-Picture, its queue fetch is a
+           real Plex round trip worth a loading state, which fits the menu better than a
+           bare icon tap. Each button is 40dp wide; the 56dp step (rather than a flush
+           44dp) leaves a deliberate 16dp gap between adjacent icons instead of them
+           nearly touching. */
+        int nextRightSlotDp = 80;
+        if (hasTouchscreen) {
+            PlayerUiHelper.buildLockButton(this, density, nextRightSlotDp);
+            nextRightSlotDp += 56;
         }
+        PlayerUiHelper.buildPipButton(this, density, nextRightSlotDp);
+        nextRightSlotDp += 56;
         PlayerUiHelper.buildStatsOverlay(this, density);
 
         buildLoadingSpinner();
@@ -1531,6 +1542,7 @@ public class PlayerActivity extends AppCompatActivity {
 
         PlayerUiHelper.closePlayerMenu(this);
         PlayerUiHelper.closeEpisodeListMenu(this);
+        PlayerUiHelper.closeChapterListMenu(this);
         hideSkipButtonInternal();
         zoomScale = 1f;
         panX = 0f;
@@ -1819,6 +1831,7 @@ public class PlayerActivity extends AppCompatActivity {
         lockMessageHandler.removeCallbacksAndMessages(null);
         PlayerUiHelper.closePlayerMenu(this);
         PlayerUiHelper.closeEpisodeListMenu(this);
+        PlayerUiHelper.closeChapterListMenu(this);
         reportStoppedIfNeeded();
         if (player != null) {
             player.release();

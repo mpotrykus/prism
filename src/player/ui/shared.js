@@ -181,17 +181,6 @@ export function skipIconMarkup(direction, { double = false } = {}) {
     return `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" xmlns="http://www.w3.org/2000/svg"><g${mirror}>${farTriangle}${nearTriangle}${bar}</g></svg>`;
 }
 
-/* Same currentColor-SVG reasoning as volumeIconMarkup above - three stacked list lines
-   plus a play triangle, marking this button as "browse the queue" rather than reusing
-   the hamburger's generic options glyph. */
-export function episodeListIconMarkup() {
-    const lines = [5, 11, 17]
-        .map((y) => `<rect x="1" y="${y - 1}" width="12" height="2" rx="1" fill="currentColor"/>`)
-        .join("");
-    const play = '<polygon points="17,8 17,16 23,12" fill="currentColor"/>';
-    return `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" xmlns="http://www.w3.org/2000/svg">${lines}${play}</svg>`;
-}
-
 /* Same currentColor-SVG reasoning as volumeIconMarkup/seekIconMarkup above - the
    standard four-corner-bracket "expand"/"contract" glyph pair, swapped on
    fullscreenchange rather than drawn once. */
@@ -200,4 +189,102 @@ export function fullscreenIconMarkup(isFullscreen) {
         ? "M5 16h3v3h2v-5H5v2zm3-8H5v2h5V5H8v3zm6 11h2v-3h3v-2h-5v5zm2-11V5h-2v5h5V8h-3z"
         : "M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z";
     return `<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path d="${path}"/></svg>`;
+}
+
+/* Icons for each row of the More menu (chrome.js's buildAccordionRow/renderPickerRows
+   callers) - one markup function per row, same currentColor-SVG-not-emoji reasoning as
+   every icon above. A handful of rows deliberately reuse an existing markup above
+   rather than getting their own (Auto-Play reuses skipIconMarkup's "next" glyph, Shader
+   Upscaling reuses fullscreenIconMarkup's expand glyph, Audio Track reuses
+   volumeIconMarkup's high-volume speaker) since those already draw the right concept -
+   see openHamburgerMenu/renderEffectsList/renderExtrasList in chrome.js for where each
+   one is actually wired up. Android's MenuIconView mirrors this same set of shapes so
+   the two platforms read as one icon family. */
+export function chaptersIconMarkup() {
+    return '<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path d="M6 2h12v19l-6-4-6 4V2z"/></svg>';
+}
+
+export function subtitlesIconMarkup() {
+    return `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <rect x="2" y="5" width="20" height="14" rx="2" stroke="currentColor" stroke-width="1.8"/>
+        <rect x="5" y="9" width="10" height="2" rx="1" fill="currentColor"/>
+        <rect x="5" y="13" width="6" height="2" rx="1" fill="currentColor"/>
+    </svg>`;
+}
+
+export function versionIconMarkup() {
+    return `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" xmlns="http://www.w3.org/2000/svg">
+        <polygon points="12,3 21,8 12,13 3,8"/>
+        <polyline points="3,12 12,17 21,12"/>
+        <polyline points="3,16 12,21 21,16"/>
+    </svg>`;
+}
+
+export function qualityCapIconMarkup() {
+    return `<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
+        <rect x="3" y="14" width="4" height="7" rx="1"/>
+        <rect x="10" y="9" width="4" height="12" rx="1"/>
+        <rect x="17" y="4" width="4" height="17" rx="1"/>
+    </svg>`;
+}
+
+export function effectsIconMarkup() {
+    return '<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path d="M12 2l2.2 6.2L20 10l-5.8 1.8L12 18l-2.2-6.2L4 10l5.8-1.8L12 2z"/></svg>';
+}
+
+export function extrasIconMarkup() {
+    return `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <line x1="4" y1="6" x2="20" y2="6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+        <circle cx="9" cy="6" r="2.2" fill="currentColor"/>
+        <line x1="4" y1="12" x2="20" y2="12" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+        <circle cx="15" cy="12" r="2.2" fill="currentColor"/>
+        <line x1="4" y1="18" x2="20" y2="18" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+        <circle cx="11" cy="18" r="2.2" fill="currentColor"/>
+    </svg>`;
+}
+
+export function performanceIconMarkup() {
+    return '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" xmlns="http://www.w3.org/2000/svg"><polyline points="2,14 7,14 10,6 14,18 17,10 22,10" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+}
+
+export function colorBoostIconMarkup() {
+    return `<svg viewBox="0 0 24 24" width="18" height="18" xmlns="http://www.w3.org/2000/svg">
+        <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.8"/>
+        <path d="M12 3a9 9 0 010 18z" fill="currentColor"/>
+    </svg>`;
+}
+
+export function ambientIconMarkup() {
+    return `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <circle cx="12" cy="12" r="4.5" fill="currentColor"/>
+        <g stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+            <line x1="12" y1="1" x2="12" y2="4"/>
+            <line x1="12" y1="20" x2="12" y2="23"/>
+            <line x1="1" y1="12" x2="4" y2="12"/>
+            <line x1="20" y1="12" x2="23" y2="12"/>
+            <line x1="4.2" y1="4.2" x2="6.3" y2="6.3"/>
+            <line x1="17.7" y1="17.7" x2="19.8" y2="19.8"/>
+            <line x1="4.2" y1="19.8" x2="6.3" y2="17.7"/>
+            <line x1="17.7" y1="6.3" x2="19.8" y2="4.2"/>
+        </g>
+    </svg>`;
+}
+
+export function speedIconMarkup() {
+    return `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <path d="M4 18a8 8 0 0 1 16 0" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+        <line x1="12" y1="18" x2="16" y2="12" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+        <circle cx="12" cy="18" r="1.4" fill="currentColor"/>
+    </svg>`;
+}
+
+export function zoomIconMarkup() {
+    return `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <circle cx="10.5" cy="10.5" r="6.5" stroke="currentColor" stroke-width="1.8"/>
+        <line x1="15.3" y1="15.3" x2="21" y2="21" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+    </svg>`;
+}
+
+export function sleepIconMarkup() {
+    return '<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path d="M20 14.5A8.5 8.5 0 1 1 9.5 4a7 7 0 0 0 10.5 10.5z"/></svg>';
 }
