@@ -308,51 +308,74 @@ export async function loadAll(card) {
     card._renderMessage(`Couldn't reach your Plex server: ${e.message}`);
     return;
   }
+  /* First paint is gated on only the cheap, no-fan-out fetches (on deck/watchlist/
+     recently added) - the hero's initial item now picks from that same pool (see
+     _buildHeroInitialPool/pickHeroItemFromPool) instead of the full per-genre fan-out (N
+     sections x M genres), which was otherwise the single most expensive thing on the
+     critical path. Genre rows, search facets, watch history, collections, playlists,
+     home profiles, and especially the OpenRouter AI-rows call all load in the background
+     afterward (see loadBackgroundData below), streamed in via extra _renderCurrentView()
+     passes instead of blocking the very first render. */
   try {
-    const [
-      onDeckRaw,
-      watchlistRaw,
-      recentlyAddedRaw,
-      genreBySection,
-      searchFacets,
-      historyRaw,
-      collectionsRaw,
-      playlistsRaw,
-      homeProfiles,
-    ] = await Promise.all([
+    const [onDeckRaw, watchlistRaw, recentlyAddedRaw] = await Promise.all([
       fetchOnDeckRaw(card),
       fetchWatchlistRaw(card),
       fetchRecentlyAddedRaw(card),
-      loadGenreDataBySection(card),
-      loadSearchFacets(card),
-      fetchWatchHistoryRaw(card),
-      fetchCollectionsRaw(card),
-      fetchPlaylistsRaw(card),
-      card._fetchHomeProfiles(),
     ]);
     card._onDeckRaw = onDeckRaw;
     card._watchlistRaw = watchlistRaw;
     card._recentlyAddedRaw = recentlyAddedRaw;
-    card._genreBySection = genreBySection;
     card._genreRowsCache = {};
     card._recommendedRowCache = {};
-    card._studioFacets = searchFacets.studios;
-    card._collectionFacets = searchFacets.collections;
-    card._collectionsRaw = collectionsRaw;
-    card._playlistsRaw = playlistsRaw;
-    card._homeUsers = homeProfiles.users;
-    card._activeUserId = homeProfiles.activeId;
-    card._renderProfileNav();
-    const rowCount = card._config.collection_row_count ?? 0;
-    card._collectionRowPicks = card._shuffle(card._collectionsRaw).slice(0, rowCount);
-    card._collectionRowsRaw = await fetchCollectionRowItems(card, card._collectionRowPicks);
-    card._recommendedRaw = card._buildRecommendedRaw(historyRaw);
-    card._popularRaw = card._buildPopularRaw();
-    const aiIdeas = await loadAiIdeas(card);
-    card._aiRowsRaw = aiIdeas.length ? await fetchAiRowsRaw(card, aiIdeas) : [];
-    await card._hero.loadInitialItem(sectionsForView(card, card._currentView));
+    const view = card._currentView || "home";
+    await card._hero.loadInitialItem(card._buildHeroInitialPool(view));
     card._renderCurrentView();
   } catch (err) {
     card._renderMessage(`Couldn't load Plex: ${err.message}`);
+    return;
   }
+
+  card._showLoadingMore();
+  loadBackgroundData(card)
+    .catch((err) => console.warn("[data] background load failed:", err))
+    .finally(() => card._hideLoadingMore());
+}
+
+/* Everything _renderCurrentView() can do without: genre/AI/collection rows, "Recommended"/
+   "Popular", the profile switcher, and search facets. Runs after the first paint (see
+   loadAll above) and re-renders in two more passes as each chunk lands, rather than making
+   the user stare at a spinner for however long the slowest of these (usually the AI-rows
+   OpenRouter call) takes. Re-renders pass { showHero: false } so streaming rows in doesn't
+   repeatedly reset hero mute state / restart its trailer - see _renderCurrentView. */
+async function loadBackgroundData(card) {
+  const [genreBySection, searchFacets, historyRaw, collectionsRaw, playlistsRaw, homeProfiles] = await Promise.all([
+    loadGenreDataBySection(card),
+    loadSearchFacets(card),
+    fetchWatchHistoryRaw(card),
+    fetchCollectionsRaw(card),
+    fetchPlaylistsRaw(card),
+    card._fetchHomeProfiles(),
+  ]);
+  card._genreBySection = genreBySection;
+  card._studioFacets = searchFacets.studios;
+  card._collectionFacets = searchFacets.collections;
+  card._collectionsRaw = collectionsRaw;
+  card._playlistsRaw = playlistsRaw;
+  card._homeUsers = homeProfiles.users;
+  card._activeUserId = homeProfiles.activeId;
+  card._renderProfileNav();
+  const rowCount = card._config.collection_row_count ?? 0;
+  card._collectionRowPicks = card._shuffle(card._collectionsRaw).slice(0, rowCount);
+  card._collectionRowsRaw = await fetchCollectionRowItems(card, card._collectionRowPicks);
+  card._recommendedRaw = card._buildRecommendedRaw(historyRaw);
+  card._popularRaw = card._buildPopularRaw();
+  card._genreRowsCache = {};
+  card._recommendedRowCache = {};
+  await card._hero.fillFromGenresIfStillEmpty(sectionsForView(card, card._currentView));
+  card._renderCurrentView({ showHero: false });
+
+  const aiIdeas = await loadAiIdeas(card);
+  card._aiRowsRaw = aiIdeas.length ? await fetchAiRowsRaw(card, aiIdeas) : [];
+  card._genreRowsCache = {};
+  card._renderCurrentView({ showHero: false });
 }

@@ -216,6 +216,7 @@ export function renderSearchPage(card, hubs, { expanded = false } = {}) {
       titleWrap.className = "search-page-group-title-wrap";
       const img = document.createElement("img");
       img.className = "search-page-group-image";
+      img.loading = "lazy";
       img.src = hub.image;
       img.alt = "";
       titleWrap.appendChild(img);

@@ -51,6 +51,24 @@ export function renderLoading(rowsEl) {
   rowsEl.innerHTML = `<div class="loading-wrap"><div class="spinner"></div></div>`;
 }
 
+/* Small inline spinner pinned to the end of the rows list while the background wave
+   (see data.js's loadBackgroundData) is still fetching genre/collection/AI rows -
+   distinct from renderLoading's full-page spinner, which only ever applies before the
+   very first render. renderRows' merge mode inserts newly-arrived rows before this node
+   (see below) so it always stays pinned to the bottom, not wherever the last row
+   happened to land. */
+export function showLoadingMore(rowsEl) {
+  if (rowsEl.querySelector(".rows-loading-more")) return;
+  const el = document.createElement("div");
+  el.className = "rows-loading-more";
+  el.innerHTML = `<div class="spinner"></div>`;
+  rowsEl.appendChild(el);
+}
+
+export function hideLoadingMore(rowsEl) {
+  rowsEl.querySelector(".rows-loading-more")?.remove();
+}
+
 export function buildScrollArrow(dir, scroller) {
   const btn = document.createElement("button");
   btn.className = `scroll-arrow ${dir} hidden`;
@@ -199,18 +217,39 @@ export function buildRowSection(row, landscape, rowIndex, ctx) {
   return section;
 }
 
-export function renderRows(rowsEl, rows, landscapeEveryNth, ctx) {
-  rowsEl.innerHTML = "";
-  if (!rows.length) {
-    rowsEl.innerHTML = `<div class="empty">${emptyStateHtml("Nothing to show yet.", ctx.escape)}</div>`;
-    return;
+/* merge: true (background data streaming in after first paint - see data.js's
+   loadBackgroundData) never touches rows already on screen: no wipe, no reordering, no
+   removal - only rows whose title isn't already rendered get appended. Scroll position,
+   in-flight images, and the anim-in classes on existing rows are left alone, so newly-
+   available rows just quietly show up instead of the whole shelf appearing to reload. A
+   row can in principle stop being part of the "true" desired set on a later pass (e.g.
+   once AI rows compete for _getGenreRowsForView's capped shuffle) - it stays visible
+   anyway rather than yanking already-seen content out from under the user. */
+export function renderRows(rowsEl, rows, landscapeEveryNth, ctx, { merge = false } = {}) {
+  if (!merge) {
+    rowsEl.innerHTML = "";
+    if (!rows.length) {
+      rowsEl.innerHTML = `<div class="empty">${emptyStateHtml("Nothing to show yet.", ctx.escape)}</div>`;
+      return;
+    }
+  } else {
+    rowsEl.querySelector(".empty")?.remove();
   }
+  const existingTitles = merge
+    ? new Set(Array.from(rowsEl.querySelectorAll(".row-title")).map((el) => el.textContent))
+    : null;
+  /* Keep the loading-more spinner (if any) pinned to the very end - inserting newly-
+     merged rows ahead of it rather than appending after it. */
+  const loadingMoreEl = merge ? rowsEl.querySelector(".rows-loading-more") : null;
   rows.forEach((row, i) => {
+    if (existingTitles?.has(row.title)) return;
     /* rankNumbers rows are pinned to portrait mode - the rank-number's height is tuned
        against portrait poster height (see .rank-number CSS); the auto-landscape cycle
        below would otherwise occasionally flip this row to much-shorter landscape
        posters and make the number overflow the row's padding. */
     const landscape = row.rankNumbers ? false : !!row.landscape || (!!landscapeEveryNth && (i + 1) % landscapeEveryNth === 0);
-    rowsEl.appendChild(buildRowSection(row, landscape, i, ctx));
+    const section = buildRowSection(row, landscape, i, ctx);
+    if (loadingMoreEl) rowsEl.insertBefore(section, loadingMoreEl);
+    else rowsEl.appendChild(section);
   });
 }

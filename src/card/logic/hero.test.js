@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { pickHeroItem, formatDuration, heroArtUrl, heroSubtitleText, heroShouldPlay } from "./hero.js";
+import { pickHeroItem, pickHeroItemFromPool, formatDuration, heroArtUrl, heroSubtitleText, heroShouldPlay } from "./hero.js";
 
 describe("pickHeroItem", () => {
   const genreBySection = new Map([
@@ -20,6 +20,30 @@ describe("pickHeroItem", () => {
     for (let i = 0; i < 10; i++) {
       const pick = pickHeroItem("1", [{ key: 1 }], { genreBySection });
       expect(pick.ratingKey).toBe("2");
+    }
+  });
+
+  it("returns null rather than throwing when genreBySection isn't loaded yet", () => {
+    expect(pickHeroItem(undefined, undefined, { genreBySection: undefined })).toBeNull();
+  });
+});
+
+describe("pickHeroItemFromPool", () => {
+  it("returns null when the pool is empty", () => {
+    expect(pickHeroItemFromPool(undefined, [])).toBeNull();
+  });
+
+  it("dedupes by ratingKey", () => {
+    const pool = [{ ratingKey: "1" }, { ratingKey: "1" }, { ratingKey: "2" }];
+    for (let i = 0; i < 10; i++) {
+      expect(["1", "2"]).toContain(pickHeroItemFromPool(undefined, pool).ratingKey);
+    }
+  });
+
+  it("excludes the given ratingKey when more than one candidate remains", () => {
+    const pool = [{ ratingKey: "1" }, { ratingKey: "2" }];
+    for (let i = 0; i < 10; i++) {
+      expect(pickHeroItemFromPool("1", pool).ratingKey).toBe("2");
     }
   });
 });

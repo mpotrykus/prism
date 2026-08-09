@@ -1,5 +1,5 @@
 import { paintWatchlistButton } from "./watchlist.js";
-import { pickHeroItem, heroArtUrl, heroSubtitleText, heroShouldPlay } from "./logic/hero.js";
+import { pickHeroItem, pickHeroItemFromPool, heroArtUrl, heroSubtitleText, heroShouldPlay } from "./logic/hero.js";
 
 /* The hero banner: autoplay trailer resolution/crossfade, mute/play controls, and the
    focus/visibility/IntersectionObserver plumbing that decides whether it should
@@ -76,13 +76,30 @@ export class HeroController {
   }
 
   /* Picks and resolves the very first hero item on initial load - the rest of the
-     card's data-loading orchestration (_loadAll) awaits this before its first render,
-     rather than this controller rendering on its own schedule. */
-  async loadInitialItem(sections) {
-    this._item = this.pickItem(undefined, sections);
+     card's data-loading orchestration (loadAll) awaits this before its first render,
+     rather than this controller rendering on its own schedule. Picks from `pool` (the
+     card's already-fetched on-deck/watchlist/recently-added items - see
+     _buildHeroInitialPool) instead of the full genre-by-section fan-out, which loads in
+     the background and isn't ready yet at this point - see data.js's loadAll. */
+  async loadInitialItem(pool) {
+    this._item = pickHeroItemFromPool(undefined, pool);
     if (this._item) {
       this._video = await this._resolveVideo(this._item);
     }
+  }
+
+  /* Called once the background genre-by-section fan-out lands (see data.js's
+     loadBackgroundData) - only actually does anything if loadInitialItem's narrower pool
+     came up empty (e.g. a library with nothing on deck/watchlisted/recently added), so
+     the hero isn't left permanently blank for the rest of the session just because it
+     picked before the full fan-out was available. */
+  async fillFromGenresIfStillEmpty(sections) {
+    if (this._item) return;
+    const item = this.pickItem(undefined, sections);
+    if (!item) return;
+    this._item = item;
+    this._video = await this._resolveVideo(item);
+    this.show();
   }
 
   async advance() {

@@ -18,6 +18,8 @@ import {
   emptyStateHtml,
   renderMessage,
   renderLoading,
+  showLoadingMore,
+  hideLoadingMore,
   renderRows,
   buildRowSection,
   buildPoster,
@@ -438,9 +440,9 @@ class PlexNetflixCard extends HTMLElement {
     this._hero.show(preserveMute, crossfade);
   }
 
-  _renderCurrentView() {
+  _renderCurrentView({ showHero = true } = {}) {
     const view = this._currentView || "home";
-    this._showHero();
+    if (showHero) this._showHero();
     const sectionsForGenres = this._sectionsForView(view);
 
     const sectionFilters = SECTION_TYPE_FILTERS[this._sectionForView(view)?.type];
@@ -482,7 +484,12 @@ class PlexNetflixCard extends HTMLElement {
     rows.push(...genreRows);
     if (collectionsRow) rows.push(collectionsRow);
     if (playlistsRow) rows.push(playlistsRow);
-    this._renderRows(rows);
+    /* showHero:false always means "background data streaming in after first paint" (see
+       data.js's loadBackgroundData) - merge the newly-available rows in without
+       disturbing what's already rendered, for the same reason showHero itself is
+       skipped: this isn't a real view change, so nothing already on screen should move
+       or restart. */
+    this._renderRows(rows, { merge: !showHero });
   }
 
   /* Rebuilds just the "My List" row after an add/remove, instead of the full
@@ -793,6 +800,20 @@ class PlexNetflixCard extends HTMLElement {
     return sectionFilters ? (m) => m.type === sectionFilters.other : () => true;
   }
 
+  /* Cheap candidate pool for the hero's very first pick (see data.js's loadAll and
+     HeroController.loadInitialItem) - reuses the same "other" (movie/show, not
+     episode) type filter _buildCollectionRows/_buildAiRows already apply for this view,
+     so an in-progress TV episode from onDeck doesn't end up as the hero item without its
+     show-level context. */
+  _buildHeroInitialPool(view) {
+    const filter = this._typeFilterForView(view);
+    return [
+      ...(this._onDeckRaw || []).filter(filter),
+      ...(this._watchlistRaw || []).filter(filter),
+      ...(this._recentlyAddedRaw || []).filter(filter),
+    ];
+  }
+
   _buildCollectionRows(view) {
     return buildCollectionRows(this._collectionRowsRaw, this._typeFilterForView(view), {
       mapItem: (m, withProgress) => this._mapItem(m, withProgress),
@@ -881,8 +902,16 @@ class PlexNetflixCard extends HTMLElement {
     renderLoading(this._rowsEl);
   }
 
-  _renderRows(rows) {
-    renderRows(this._rowsEl, rows, this._config.landscape_every_nth, this._rowCtx);
+  _showLoadingMore() {
+    showLoadingMore(this._rowsEl);
+  }
+
+  _hideLoadingMore() {
+    hideLoadingMore(this._rowsEl);
+  }
+
+  _renderRows(rows, { merge = false } = {}) {
+    renderRows(this._rowsEl, rows, this._config.landscape_every_nth, this._rowCtx, { merge });
   }
 
   _buildRowSection(row, landscape = false, rowIndex = 0) {

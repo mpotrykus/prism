@@ -31,7 +31,7 @@ export function renderProfileNav(profileNavItem, profileNavLabel, profileNavIcon
   if (!showSwitcher) return;
   const active = users.find((u) => u.id === activeUserId);
   profileNavLabel.textContent = active ? active.title : "Profile";
-  profileNavIcon.innerHTML = active?.thumb ? `<span class="nav-profile-avatar"><img src="${escape(active.thumb)}" alt="" /></span>` : PROFILE_ICON_SVG;
+  profileNavIcon.innerHTML = active?.thumb ? `<span class="nav-profile-avatar"><img loading="lazy" src="${escape(active.thumb)}" alt="" /></span>` : PROFILE_ICON_SVG;
 }
 
 /* onSwitch(user, rowEl) is called when a non-active row's Switch button is clicked -
@@ -41,7 +41,7 @@ export function renderProfileList(profileListEl, users, activeUserId, escape, on
   profileListEl.innerHTML = users
     .map((u) => {
       const isActive = u.id === activeUserId;
-      const avatar = u.thumb ? `<img src="${escape(u.thumb)}" alt="" />` : PROFILE_ICON_SVG;
+      const avatar = u.thumb ? `<img loading="lazy" src="${escape(u.thumb)}" alt="" />` : PROFILE_ICON_SVG;
       return `
       <div class="profile-row${isActive ? " active" : ""}" data-id="${u.id}">
         <div class="profile-avatar">${avatar}</div>
