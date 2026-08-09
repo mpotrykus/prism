@@ -139,6 +139,8 @@ public class PlayerActivity extends AppCompatActivity {
         void onStopped(long positionMs);
         void onTitleNavRequested(int newIndex);
         void onEpisodeListRequested();
+        void onSubtitleSearchRequested(String query);
+        void onSubtitleSelectRequested(String fileId, String label, String languageCode);
     }
 
     private static PlaybackListener listener;
@@ -272,6 +274,36 @@ public class PlayerActivity extends AppCompatActivity {
        activity.chapters instead of a fetched episode queue. */
     View chapterListScrim;
     View chapterListSheet;
+    /* The merged Audio & Subtitles dialog (see PlayerUiHelper.openAudioSubtitlesMenu/
+       closeAudioSubtitlesMenu) - same "added straight into root" reasoning as
+       menuScrim/menuSheet above, just wider (its two side-by-side columns need more
+       room than the More sheet's own capped width). */
+    View audioSubtitlesScrim;
+    View audioSubtitlesSheet;
+    /* Populated by PlayerActivity.showSubtitleResults once JS resolves an OpenSubtitles
+       search (opensubtitles.js's search(), shared with the web overlay) - Java never
+       calls that API directly, same "JS interprets the external protocol once" split
+       chapters/audioStreams already use. currentSubtitleFileId null means "Off" (no
+       sidecar track attached) - there's no server-side "current subtitle" the way
+       currentAudioStreamId has, since subtitles are searched/attached client-side, not
+       part of the Plex transcode session at all. subtitlePendingFileId/
+       subtitleApplyErrorFileId/Message track the in-flight or just-failed selection so
+       PlayerUiHelper.refreshAudioSubtitlesMenu can show "Applying…"/an inline error on
+       the one row that needs it, without threading a mutable TextView reference through
+       the native<->JS round trip. */
+    final List<SubtitleResultEntry> subtitleResults = new ArrayList<>();
+    String currentSubtitleFileId;
+    String currentSubtitleLabel;
+    String subtitlePendingFileId;
+    String subtitleApplyErrorFileId;
+    String subtitleApplyErrorMessage;
+    /* Last submitted search box text, kept separate from `title` so a rebuild of the
+       overlay (any refreshAudioSubtitlesMenu call) reflects what the user actually
+       searched for rather than snapping back to the title default - null until the
+       first search. */
+    String subtitleSearchQueryText;
+    String subtitleSearchStatus = "idle";
+    String subtitleSearchError;
     final Handler controlsFadeHandler = new Handler(Looper.getMainLooper());
     final Runnable controlsFadeRunnable = () -> setControlsVisible(false);
     boolean controlsVisible = true;
@@ -1481,6 +1513,120 @@ public class PlayerActivity extends AppCompatActivity {
     /* Same org.json.JSONArray/optString parsing idiom as parseChapters/parseAudioStreams
        below - the queue's Plex metadata is already resolved and formatted in JS
        (episode-list.js's formatEpisodeListItem), this just rebuilds it into Java objects. */
+    /* Called from PlayerUiHelper's Audio & Subtitles search button, already on the UI
+       thread - same "no thread hop needed" reasoning as requestEpisodeList above. query
+       is whatever the user typed (falls back to this title in PlayerUiHelper if left
+       untouched) - JS resolves the actual OpenSubtitles search and calls
+       showSubtitleResults below with the result. */
+    static void requestSubtitleSearch(String query) {
+        if (listener != null) {
+            listener.onSubtitleSearchRequested(query);
+        }
+    }
+
+    /* Called from a subtitle result row tap - fileId is opaque to Java (see
+       SubtitleResultEntry), label/languageCode travel along so JS doesn't need a lookup
+       and so notifySubtitleApplied below can just echo them straight back. */
+    static void requestSubtitleSelect(String fileId, String label, String languageCode) {
+        if (listener != null) {
+            listener.onSubtitleSelectRequested(fileId, label, languageCode);
+        }
+    }
+
+    /* Bridge entry point for NativePlayerPlugin.showSubtitleResults - the asynchronous
+       response to requestSubtitleSearch above. Same runOnUiThread reasoning as
+       showEpisodeList: a Capacitor plugin call isn't guaranteed to arrive on the UI
+       thread and this rebuilds the open overlay's Subtitles column. */
+    public static void showSubtitleResults(String resultsJson, String error) {
+        if (activeInstance != null) {
+            activeInstance.runOnUiThread(() -> activeInstance.showSubtitleResultsInternal(resultsJson, error));
+        }
+    }
+
+    private void showSubtitleResultsInternal(String resultsJson, String error) {
+        subtitleResults.clear();
+        subtitleResults.addAll(parseSubtitleResults(resultsJson));
+        subtitleSearchStatus = error != null ? "error" : "done";
+        subtitleSearchError = error;
+        PlayerUiHelper.refreshAudioSubtitlesMenu(this);
+    }
+
+    /* Same org.json.JSONArray/optString parsing idiom as parseEpisodeList/
+       parseAudioStreams - opensubtitles.js's search() result is already resolved/
+       formatted in JS, this just rebuilds it into Java objects. */
+    private static List<SubtitleResultEntry> parseSubtitleResults(String json) {
+        List<SubtitleResultEntry> results = new ArrayList<>();
+        if (json == null) return results;
+        try {
+            org.json.JSONArray arr = new org.json.JSONArray(json);
+            for (int i = 0; i < arr.length(); i++) {
+                org.json.JSONObject obj = arr.getJSONObject(i);
+                results.add(new SubtitleResultEntry(
+                    obj.optString("fileId", ""),
+                    obj.optString("label", ""),
+                    obj.optString("languageCode", "en")));
+            }
+        } catch (org.json.JSONException e) {
+            // malformed subtitle-search data - show nothing rather than crash
+        }
+        return results;
+    }
+
+    /* Bridge entry point for NativePlayerPlugin.notifySubtitleApplied - the success leg
+       of the requestSubtitleSelect round trip above, arriving after JS has already
+       called setSubtitleUrl (the actual attach) separately. Kept as two distinct native
+       calls rather than one, so setSubtitleUrl's signature (shared with the dead-but-
+       kept-correct web/chrome.js Android branch) doesn't need to grow fileId/label
+       params it has no other use for. */
+    public static void notifySubtitleApplied(String fileId, String label) {
+        if (activeInstance != null) {
+            activeInstance.runOnUiThread(() -> activeInstance.notifySubtitleAppliedInternal(fileId, label));
+        }
+    }
+
+    private void notifySubtitleAppliedInternal(String fileId, String label) {
+        currentSubtitleFileId = fileId;
+        currentSubtitleLabel = label;
+        subtitlePendingFileId = null;
+        subtitleApplyErrorFileId = null;
+        PlayerUiHelper.refreshAudioSubtitlesMenu(this);
+    }
+
+    /* Bridge entry point for NativePlayerPlugin.notifySubtitleApplyFailed - the failure
+       leg (resolveDownloadLink or setSubtitle rejected) of the same round trip. */
+    public static void notifySubtitleApplyFailed(String fileId, String message) {
+        if (activeInstance != null) {
+            activeInstance.runOnUiThread(() -> activeInstance.notifySubtitleApplyFailedInternal(fileId, message));
+        }
+    }
+
+    private void notifySubtitleApplyFailedInternal(String fileId, String message) {
+        subtitlePendingFileId = null;
+        subtitleApplyErrorFileId = fileId;
+        subtitleApplyErrorMessage = message;
+        PlayerUiHelper.refreshAudioSubtitlesMenu(this);
+    }
+
+    /* The "Off" row - fully native, no JS round trip needed (unlike selecting a real
+       result, clearing one has no external download to resolve). Mirrors applySubtitle
+       below (rebuild the MediaItem in place, same resumeMs/prepare/notifyReload
+       sequence) but with no SubtitleConfigurations at all, rather than a real one. */
+    void clearSubtitleTrack() {
+        if (player == null || currentUrl == null) return;
+        long resumeMs = player.getCurrentPosition();
+        MediaItem newItem = new MediaItem.Builder()
+            .setUri(Uri.parse(currentUrl))
+            .build();
+        player.setMediaItem(newItem, resumeMs);
+        player.prepare();
+        if (abrMonitor != null) abrMonitor.notifyReload();
+        currentSubtitleFileId = null;
+        currentSubtitleLabel = null;
+        subtitlePendingFileId = null;
+        subtitleApplyErrorFileId = null;
+        PlayerUiHelper.refreshAudioSubtitlesMenu(this);
+    }
+
     private static List<EpisodeEntry> parseEpisodeList(String json) {
         List<EpisodeEntry> episodes = new ArrayList<>();
         if (json == null) return episodes;
@@ -1543,6 +1689,7 @@ public class PlayerActivity extends AppCompatActivity {
         PlayerUiHelper.closePlayerMenu(this);
         PlayerUiHelper.closeEpisodeListMenu(this);
         PlayerUiHelper.closeChapterListMenu(this);
+        PlayerUiHelper.closeAudioSubtitlesMenu(this);
         hideSkipButtonInternal();
         zoomScale = 1f;
         panX = 0f;
@@ -1571,6 +1718,18 @@ public class PlayerActivity extends AppCompatActivity {
         parseChapters(chaptersJson);
         parseAudioStreams(audioStreamsJson);
         parseMediaVersions(mediaVersionsJson);
+        /* A title switch already drops any active sidecar subtitle track (see
+           applySubtitle's own header comment) - reset the bookkeeping alongside it
+           rather than leaving a stale "currently selected" checkmark pointing at a file
+           that no longer applies to whatever's now playing. */
+        subtitleResults.clear();
+        currentSubtitleFileId = null;
+        currentSubtitleLabel = null;
+        subtitlePendingFileId = null;
+        subtitleApplyErrorFileId = null;
+        subtitleSearchQueryText = null;
+        subtitleSearchStatus = "idle";
+        subtitleSearchError = null;
         currentMediaIndex = newCurrentMediaIndex != null ? newCurrentMediaIndex : 0;
         qualityCapKbps = newQualityCapKbps;
         bifIndex = null;
@@ -1832,6 +1991,7 @@ public class PlayerActivity extends AppCompatActivity {
         PlayerUiHelper.closePlayerMenu(this);
         PlayerUiHelper.closeEpisodeListMenu(this);
         PlayerUiHelper.closeChapterListMenu(this);
+        PlayerUiHelper.closeAudioSubtitlesMenu(this);
         reportStoppedIfNeeded();
         if (player != null) {
             player.release();

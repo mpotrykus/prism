@@ -2,6 +2,7 @@ import { registerPlugin } from "@capacitor/core";
 import { plexAssetUrl } from "./core/plex-asset-url.js";
 import { playQueuedTitle } from "./ui/chrome.js";
 import { getQueueItems, formatEpisodeListItem } from "./ui/episode-list.js";
+import * as StreamingSubtitles from "../../opensubtitles.js";
 
 const NativePlayer = registerPlugin("NativePlayer");
 
@@ -80,6 +81,46 @@ export async function playNative(controller, streamUrl, startOffsetMs) {
                     queueIndex: queue.findIndex((k) => String(k) === String(item.ratingKey)),
                 })),
             });
+        })
+    );
+    /* PlayerUiHelper's Audio & Subtitles search button (native-side equivalent of
+       chrome.js's renderSubtitleSection) has no OpenSubtitles result of its own to show
+       yet when tapped - it only reports the typed query back here, same "native reports
+       a bare request, JS resolves the actual external-API call" split as
+       episodeListRequested above. Reuses opensubtitles.js's search() directly rather
+       than re-deriving the query/year/season/episode params in Java. */
+    controller._nativeListenerHandles.push(
+        await NativePlayer.addListener("subtitleSearchRequested", async ({ query }) => {
+            const session = controller._session;
+            try {
+                const results = await StreamingSubtitles.search({
+                    title: query || session?.title,
+                    year: session?.year,
+                    seasonNumber: session?.seasonNumber,
+                    episodeNumber: session?.episodeNumber,
+                });
+                await NativePlayer.showSubtitleResults({
+                    items: results.map((r) => ({ fileId: String(r.fileId), label: r.label, languageCode: r.languageCode })),
+                });
+            } catch (e) {
+                await NativePlayer.showSubtitleResults({ items: [], error: e.message });
+            }
+        })
+    );
+    /* A subtitle result row tap - fileId is opaque to this bridge too, it only exists to
+       round-trip through opensubtitles.js's resolveDownloadLink() (the same two-step
+       search-then-resolve chrome.js's own, currently-unreachable Android branch in
+       applySubtitleResult already does) before handing ExoPlayer a real .srt URL via
+       setSubtitle. */
+    controller._nativeListenerHandles.push(
+        await NativePlayer.addListener("subtitleSelectRequested", async ({ fileId, label, languageCode }) => {
+            try {
+                const link = await StreamingSubtitles.resolveDownloadLink(fileId);
+                await setNativeSubtitle(link, languageCode, "application/x-subrip");
+                await NativePlayer.notifySubtitleApplied({ fileId, label });
+            } catch (e) {
+                await NativePlayer.notifySubtitleApplyFailed({ fileId, message: e.message });
+            }
         })
     );
     await NativePlayer.play(buildPlaybackPayload(controller, streamUrl, startOffsetMs));

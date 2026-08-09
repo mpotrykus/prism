@@ -218,6 +218,39 @@ public class NativePlayerPlugin extends Plugin implements PlayerActivity.Playbac
         call.resolve();
     }
 
+    /* Counterpart to onSubtitleSearchRequested below - JS resolves the actual
+       OpenSubtitles search (opensubtitles.js's search(), shared with the web overlay)
+       and hands this pre-formatted JSON blob over to render, same "JS interprets the
+       external protocol once, Java just renders it" split showEpisodeList/
+       parsePlaybackParams already use. */
+    @PluginMethod
+    public void showSubtitleResults(PluginCall call) {
+        JSArray items = call.getArray("items");
+        String error = call.getString("error");
+        PlayerActivity.showSubtitleResults(items != null ? items.toString() : null, error);
+        call.resolve();
+    }
+
+    /* Success/failure legs of onSubtitleSelectRequested below - arrive after JS has
+       already called setSubtitle (the actual attach) or failed trying to. Kept separate
+       from setSubtitle itself so that method's signature stays the same one the dead-
+       but-kept-correct web/chrome.js Android branch already calls. */
+    @PluginMethod
+    public void notifySubtitleApplied(PluginCall call) {
+        String fileId = call.getString("fileId");
+        String label = call.getString("label");
+        PlayerActivity.notifySubtitleApplied(fileId, label);
+        call.resolve();
+    }
+
+    @PluginMethod
+    public void notifySubtitleApplyFailed(PluginCall call) {
+        String fileId = call.getString("fileId");
+        String message = call.getString("message", "Unknown error");
+        PlayerActivity.notifySubtitleApplyFailed(fileId, message);
+        call.resolve();
+    }
+
     @Override
     public void onProgress(long positionMs, long durationMs) {
         JSObject data = new JSObject();
@@ -260,5 +293,28 @@ public class NativePlayerPlugin extends Plugin implements PlayerActivity.Playbac
     @Override
     public void onEpisodeListRequested() {
         notifyListeners("episodeListRequested", new JSObject());
+    }
+
+    /* PlayerUiHelper's Audio & Subtitles search button has no OpenSubtitles result of
+       its own to show yet when tapped - this reports the typed query back to JS, which
+       resolves the actual search (opensubtitles.js's search()) and calls
+       showSubtitleResults() above with the result. */
+    @Override
+    public void onSubtitleSearchRequested(String query) {
+        JSObject data = new JSObject();
+        data.put("query", query != null ? query : "");
+        notifyListeners("subtitleSearchRequested", data);
+    }
+
+    /* A subtitle result row tap - fileId is opaque to Java, JS resolves the real
+       download link (opensubtitles.js's resolveDownloadLink()) and calls setSubtitle
+       above, then notifySubtitleApplied/notifySubtitleApplyFailed with the outcome. */
+    @Override
+    public void onSubtitleSelectRequested(String fileId, String label, String languageCode) {
+        JSObject data = new JSObject();
+        data.put("fileId", fileId);
+        data.put("label", label);
+        data.put("languageCode", languageCode);
+        notifyListeners("subtitleSelectRequested", data);
     }
 }

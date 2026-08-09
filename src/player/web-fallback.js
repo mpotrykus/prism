@@ -2,8 +2,13 @@ import Hls from "hls.js";
 import { ZOOM_LEVELS, storedVolume } from "./ui/shared.js";
 import { updateContentAnalysis } from "./content-analysis.js";
 import { releaseBifIndex } from "./core/bif.js";
-import { closeEpisodeListOverlay } from "./ui/episode-list.js";
+import { closeEpisodeListOverlay, closeChapterListOverlay } from "./ui/episode-list.js";
 import { updateAbrMonitor, stopAbrLoop, notifyStall, notifyReload } from "./core/abr.js";
+/* Circular with chrome.js (which already imports reloadWebSource from this file) - safe
+   here for the same reason that one is: closeAudioSubtitlesOverlay is only ever called
+   from inside teardownWeb's own function body below, never at module-top-level
+   evaluation time. */
+import { closeAudioSubtitlesOverlay } from "./ui/chrome.js";
 
 /* <video>+hls.js fallback path - used everywhere WebView2/Chrome/Xbox/Android-web has
    no native player available (see native-bridge.js for the Android/ExoPlayer leg).
@@ -298,6 +303,8 @@ export function teardownWeb(controller) {
     }
     controller._closeInlineMenu();
     closeEpisodeListOverlay(controller);
+    closeChapterListOverlay(controller);
+    closeAudioSubtitlesOverlay(controller);
     clearTimeout(controller._controlsHideTimer);
     controller._controlsHideTimer = null;
     controller._controlsHovering = false;

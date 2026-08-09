@@ -18,8 +18,8 @@ import {
     seekIconMarkup,
     skipIconMarkup,
     fullscreenIconMarkup,
+    audioSubtitlesIconMarkup,
     chaptersIconMarkup,
-    subtitlesIconMarkup,
     versionIconMarkup,
     qualityCapIconMarkup,
     effectsIconMarkup,
@@ -137,7 +137,7 @@ export function hideControls(controller) {
    are meant to toggle play/pause or reshow the controls. */
 export function scheduleHideControls(controller) {
     clearTimeout(controller._controlsHideTimer);
-    if (controller._controlsHovering || controller._inlineMenuEl || controller._episodeListEl || controller._chapterListEl) return;
+    if (controller._controlsHovering || controller._inlineMenuEl || controller._episodeListEl || controller._chapterListEl || controller._audioSubtitlesEl) return;
     controller._controlsHideTimer = setTimeout(() => {
         controller._controlButtons.forEach((b) => {
             b.style.opacity = "0";
@@ -1072,14 +1072,39 @@ export function buildTransportBar(controller, video) {
     const centerCell = document.createElement("div");
     Object.assign(centerCell.style, { flex: "0 0 auto", display: "flex", alignItems: "center", gap: "22px" });
     const rightCell = document.createElement("div");
-    Object.assign(rightCell.style, { flex: "1 1 0", display: "flex", justifyContent: "flex-end" });
+    Object.assign(rightCell.style, { flex: "1 1 0", display: "flex", alignItems: "center", justifyContent: "flex-end", gap: "14px" });
     controlsRow.appendChild(leftCell);
     controlsRow.appendChild(centerCell);
     controlsRow.appendChild(rightCell);
     bar.appendChild(controlsRow);
     controller._centerControlsSlot = centerCell;
 
+    /* Moved out of the More menu entirely (used to be a row there, "Audio & Subtitles")
+       into its own transport-bar icon between mute and fullscreen - both are "what am I
+       hearing/reading" controls a viewer reaches for far more often than anything else
+       in that menu, so they earned equal billing with volume/fullscreen rather than
+       being buried a tap deeper. */
+    const audioSubtitlesBtn = document.createElement("button");
+    audioSubtitlesBtn.type = "button";
+    audioSubtitlesBtn.innerHTML = audioSubtitlesIconMarkup();
+    audioSubtitlesBtn.setAttribute("aria-label", "Audio & Subtitles");
+    Object.assign(audioSubtitlesBtn.style, {
+        flex: "0 0 auto",
+        width: "28px",
+        height: "28px",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        border: "none",
+        background: "transparent",
+        color: "#fff",
+        cursor: "pointer",
+        padding: "0",
+    });
+    audioSubtitlesBtn.addEventListener("click", () => openAudioSubtitlesOverlay(controller));
+
     rightCell.appendChild(muteBtn);
+    rightCell.appendChild(audioSubtitlesBtn);
     if (fullscreenBtn) rightCell.appendChild(fullscreenBtn);
     document.body.appendChild(bar);
     registerControlButton(controller, bar, { anchor: false });
@@ -1122,8 +1147,8 @@ function ensureMenuScrollStyle() {
 /* Shared row look for every tap-to-pick item inside an expanded accordion section
    (speed/sleep/zoom/audio/chapters/quality-cap/version presets) - one visual
    definition instead of each render function styling its own. */
-function renderPickerList(content, items) {
-    items.forEach((item) => {
+function renderPickerList(content, items, { rowGap = 0 } = {}) {
+    items.forEach((item, index) => {
         const row = document.createElement("button");
         row.type = "button";
         Object.assign(row.style, {
@@ -1140,6 +1165,7 @@ function renderPickerList(content, items) {
             fontSize: "13px",
             fontWeight: "500",
             fontFamily: '"Roboto", sans-serif',
+            marginBottom: index < items.length - 1 ? `${rowGap}px` : "0",
         });
         /* Only the Chapters section sets item.thumb - every other picker (speed, sleep
            timer, audio track...) leaves it undefined, so this is a no-op there. Hidden
@@ -1419,7 +1445,7 @@ export function openHamburgerMenu(controller, anchor) {
     list.innerHTML = "";
     const state = { expandedCollapse: null };
     /* Ordered by how often a row is actually touched, not the order features shipped
-       in: what-you're-watching controls (Chapters/Audio Track/Subtitles) first, since
+       in: what-you're-watching controls (Chapters/Audio & Subtitles) first, since
        those get touched per-video; source/quality (Version/Quality Cap) and the
        Auto-Play toggle next; Effects/Extras/Performance Overlay last, in that order -
        the three rows here most people set once and never revisit. */
@@ -1438,24 +1464,6 @@ export function openHamburgerMenu(controller, anchor) {
             nav: () => openChapterListOverlay(controller),
         });
     }
-    if (session?.audioStreams?.length > 1) {
-        sections.push({
-            key: "audio",
-            label: "Audio Track",
-            icon: volumeIconMarkup(1),
-            getValue: () => session.audioStreams.find((s) => s.id === session.audioStreamId)?.label || null,
-            render: (content, helpers) => renderAudioSection(controller, content, helpers),
-        });
-    }
-    sections.push({
-        /* Own dedicated screen (see renderSubtitlesList), not an inline expand - same
-           reasoning as Effects/Extras below, just for a single control instead of a
-           cluster of three. */
-        key: "subtitles",
-        label: "Subtitles",
-        icon: subtitlesIconMarkup(),
-        nav: () => renderSubtitlesList(controller, list, renderMainList),
-    });
     /* Version and Quality Cap used to live one level deeper, behind a "Video Quality"
        row - flattened to their own top-level rows (Version only shown when this item
        actually has more than one Media[] entry, same "never an empty/dead affordance"
@@ -1593,18 +1601,22 @@ function renderQualityCapSection(controller, content, { setValue, collapse }) {
             },
         });
     }
-    renderPickerList(content, [
-        ...items,
-        ...QUALITY_CAP_PRESETS.map((preset) => ({
-            label: `${preset.label}${!autoOn && (preset.kbps ?? null) === current ? "  ✓" : ""}`,
-            onSelect: () => {
-                setAutoQualityEnabled(controller, false);
-                reloadWebSource(controller, { qualityCapKbps: preset.kbps });
-                setValue(qualityCapMenuLabel(controller));
-                collapse();
-            },
-        })),
-    ]);
+    renderPickerList(
+        content,
+        [
+            ...items,
+            ...QUALITY_CAP_PRESETS.map((preset) => ({
+                label: `${preset.label}${!autoOn && (preset.kbps ?? null) === current ? "  ✓" : ""}`,
+                onSelect: () => {
+                    setAutoQualityEnabled(controller, false);
+                    reloadWebSource(controller, { qualityCapKbps: preset.kbps });
+                    setValue(qualityCapMenuLabel(controller));
+                    collapse();
+                },
+            })),
+        ],
+        { rowGap: 8 }
+    );
 }
 
 /* "Quality Cap" navigates to its own screen (see buildAccordionRow's `nav` case)
@@ -1631,6 +1643,135 @@ function renderAudioSection(controller, content, { setValue, collapse }) {
             collapse();
         },
     })));
+}
+
+/* Audio Track and Subtitles' merged control, redone as its own right-anchored dialog
+   (HBO Max's own audio/subtitle picker is the reference - a compact two-column grid,
+   not a full screen) rather than a screen inside the More sheet's own single-list-of-
+   rows shape - closes that sheet on the way there, same "own separate overlay" pattern
+   openChapterListOverlay uses. The gradient panel itself spans the full screen height
+   (top:0/bottom:0, same as the main hamburger sheet) so the fade reaches top to bottom
+   even though its actual content is vertically centered and far shorter than that. */
+export function openAudioSubtitlesOverlay(controller) {
+    closeAudioSubtitlesOverlay(controller);
+    closeInlineMenu(controller);
+
+    const scrim = document.createElement("div");
+    Object.assign(scrim.style, { position: "fixed", inset: "0", zIndex: "10002", background: "transparent" });
+    scrim.addEventListener("click", () => closeAudioSubtitlesOverlay(controller));
+
+    const panel = document.createElement("div");
+    Object.assign(panel.style, {
+        position: "fixed",
+        top: "0",
+        right: "0",
+        bottom: "0",
+        zIndex: "10003",
+        width: "min(820px, 92vw)",
+        display: "flex",
+        flexDirection: "column",
+        justifyContent: "center",
+        background: SHEET_GRADIENT,
+        fontFamily: '"Roboto", sans-serif',
+        boxSizing: "border-box",
+        padding: "20px 32px 24px",
+        opacity: "0",
+        transform: "translateX(20px)",
+        transition: "opacity 0.2s ease, transform 0.2s ease",
+    });
+
+    const closeBtn = document.createElement("button");
+    closeBtn.type = "button";
+    closeBtn.setAttribute("aria-label", "Close");
+    closeBtn.textContent = "✕";
+    Object.assign(closeBtn.style, {
+        position: "absolute",
+        top: "16px",
+        right: "16px",
+        width: "28px",
+        height: "28px",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        border: "none",
+        background: "transparent",
+        color: "#fff",
+        fontSize: "16px",
+        cursor: "pointer",
+        padding: "0",
+    });
+    closeBtn.addEventListener("click", () => closeAudioSubtitlesOverlay(controller));
+    panel.appendChild(closeBtn);
+
+    /* Audio first (left), Subtitles second (right). Each column caps its own list at a
+       fixed max-height and scrolls independently rather than the two needing to match
+       heights exactly (unlike this control's previous top/bottom-split incarnation,
+       nothing here requires the two columns to be the same height). */
+    const grid = document.createElement("div");
+    Object.assign(grid.style, { display: "flex", gap: "64px", marginTop: "12px", overflow: "hidden" });
+
+    const audioColumn = buildAudioSubtitlesColumn("Audio");
+    renderAudioSection(controller, audioColumn.body, { setValue: () => {}, collapse: () => {} });
+    grid.appendChild(audioColumn.el);
+
+    const subtitlesColumn = buildAudioSubtitlesColumn("Subtitles");
+    renderSubtitleSection(controller, subtitlesColumn.body, { collapse: () => {} });
+    grid.appendChild(subtitlesColumn.el);
+
+    panel.appendChild(grid);
+
+    document.body.appendChild(scrim);
+    document.body.appendChild(panel);
+    controller._audioSubtitlesEl = { scrim, panel };
+    hideControls(controller);
+    requestAnimationFrame(() => {
+        panel.style.opacity = "1";
+        panel.style.transform = "translateX(0)";
+    });
+}
+
+export function closeAudioSubtitlesOverlay(controller) {
+    if (!controller._audioSubtitlesEl) return;
+    controller._audioSubtitlesEl.scrim.remove();
+    controller._audioSubtitlesEl.panel.remove();
+    controller._audioSubtitlesEl = null;
+    showControls(controller);
+}
+
+/* One column of the grid above - a bold heading with a divider underneath (matching
+   the HBO reference's "Subtitles"/"Audio" column headers) plus a `body` container the
+   caller renders its own picker list into. `body` caps its own height and scrolls
+   independently of the other column, rather than the fixed 260px cap
+   renderSubtitleSection's results list otherwise still carries - here that cap is
+   exactly what "constrain to the height of the parent" already fixed once
+   (renderSubtitleSection's own resultsEl is flex:1/minHeight:0, so it fills whatever
+   height `body` actually has). */
+function buildAudioSubtitlesColumn(title) {
+    const el = document.createElement("div");
+    Object.assign(el.style, { flex: "1 1 0", minWidth: "0", display: "flex", flexDirection: "column" });
+
+    const heading = document.createElement("div");
+    heading.textContent = title;
+    Object.assign(heading.style, {
+        flex: "0 0 auto",
+        color: "#fff",
+        fontSize: "15px",
+        fontWeight: "700",
+        paddingBottom: "10px",
+        borderBottom: "1px solid rgba(255,255,255,0.25)",
+    });
+    el.appendChild(heading);
+
+    const body = document.createElement("div");
+    body.className = MENU_SCROLL_CLASS;
+    /* overflowX explicitly "hidden" here - per spec, leaving it at its default
+       "visible" while overflowY is "auto" gets it implicitly upgraded to "auto" too,
+       which was surfacing a horizontal scrollbar whenever a row's text nudged past the
+       column's width. */
+    Object.assign(body.style, { flex: "1 1 auto", minHeight: "0", maxHeight: "40vh", display: "flex", flexDirection: "column", overflowY: "auto", overflowX: "hidden", paddingTop: "16px" });
+    el.appendChild(body);
+
+    return { el, body };
 }
 
 function renderSpeedSection(controller, content, { setValue, collapse }) {
@@ -2074,6 +2215,7 @@ function renderSubtitleSection(controller, content, { collapse }) {
     input.placeholder = "Search subtitles…";
     input.value = controller._session?.title || "";
     Object.assign(input.style, {
+        flex: "0 0 auto",
         display: "block",
         width: "calc(100% - 32px)",
         margin: "0 16px 8px",
@@ -2091,6 +2233,7 @@ function renderSubtitleSection(controller, content, { collapse }) {
     searchBtn.type = "button";
     searchBtn.textContent = "Search";
     Object.assign(searchBtn.style, {
+        flex: "0 0 auto",
         display: "block",
         width: "calc(100% - 32px)",
         margin: "0 16px 10px",
@@ -2105,13 +2248,19 @@ function renderSubtitleSection(controller, content, { collapse }) {
         boxSizing: "border-box",
     });
 
+    /* flex:1 1 auto/minHeight:0 fills exactly whatever height is left in the parent
+       column after the heading/input/button above (see buildAudioSubtitlesColumn) -
+       the one and only scroll region for this column, not a second fixed-height
+       (previously 260px) scroller nested inside that column's own. */
     const resultsEl = document.createElement("div");
     resultsEl.className = MENU_SCROLL_CLASS;
     Object.assign(resultsEl.style, {
+        flex: "1 1 auto",
+        minHeight: "0",
         fontSize: "13px",
         color: "rgba(255,255,255,0.7)",
-        maxHeight: "260px",
         overflowY: "auto",
+        overflowX: "hidden",
         padding: "0 16px",
     });
 
@@ -2149,6 +2298,7 @@ function renderSubtitleSection(controller, content, { collapse }) {
                     cursor: "pointer",
                     fontSize: "13px",
                     marginBottom: "2px",
+                    boxSizing: "border-box",
                 });
                 row.addEventListener("mouseenter", () => {
                     row.style.background = "rgba(255,255,255,0.1)";
@@ -2173,17 +2323,6 @@ function renderSubtitleSection(controller, content, { collapse }) {
     content.appendChild(resultsEl);
 
     if (input.value) runSearch();
-}
-
-/* "Subtitles" navigates to its own screen (see buildAccordionRow's `nav` case) rather
-   than expanding in place - same reasoning as Quality Cap's renderQualityCapList
-   above. Reuses renderSubtitleSection's search-box-plus-results body unchanged: `list`
-   stands in for the accordion `content` div, and `onBack` (return to the main list)
-   stands in for `collapse`, so successfully applying a subtitle just navigates back. */
-function renderSubtitlesList(controller, list, onBack) {
-    list.innerHTML = "";
-    list.appendChild(makeBackRow(onBack));
-    renderSubtitleSection(controller, list, { collapse: onBack });
 }
 
 /* rowEl gets an inline status update on failure instead of the previous

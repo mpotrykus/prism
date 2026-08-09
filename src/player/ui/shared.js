@@ -191,25 +191,26 @@ export function fullscreenIconMarkup(isFullscreen) {
     return `<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path d="${path}"/></svg>`;
 }
 
+/* Same currentColor-SVG reasoning as volumeIconMarkup/fullscreenIconMarkup above - a
+   classic closed-captions glyph (rounded outline rect + two text-line bars) for the
+   transport bar's Audio & Subtitles button (see buildTransportBar's rightCell), which
+   opens openAudioSubtitlesOverlay directly rather than living in the More menu.
+   Geometry mirrors Android's MenuIconView.Icon.SUBTITLES exactly (same 24x24 box) so
+   the two platforms read as the same icon. */
+export function audioSubtitlesIconMarkup() {
+    return '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x="2" y="5" width="20" height="14" rx="2" stroke="currentColor" stroke-width="1.8"/><rect x="5" y="9" width="10" height="2" rx="1" fill="currentColor"/><rect x="5" y="13" width="6" height="2" rx="1" fill="currentColor"/></svg>';
+}
+
 /* Icons for each row of the More menu (chrome.js's buildAccordionRow/renderPickerRows
    callers) - one markup function per row, same currentColor-SVG-not-emoji reasoning as
    every icon above. A handful of rows deliberately reuse an existing markup above
    rather than getting their own (Auto-Play reuses skipIconMarkup's "next" glyph, Shader
-   Upscaling reuses fullscreenIconMarkup's expand glyph, Audio Track reuses
-   volumeIconMarkup's high-volume speaker) since those already draw the right concept -
-   see openHamburgerMenu/renderEffectsList/renderExtrasList in chrome.js for where each
-   one is actually wired up. Android's MenuIconView mirrors this same set of shapes so
-   the two platforms read as one icon family. */
+   Upscaling reuses fullscreenIconMarkup's expand glyph) since those already draw the
+   right concept - see openHamburgerMenu/renderEffectsList/renderExtrasList in chrome.js
+   for where each one is actually wired up. Android's MenuIconView mirrors this same set
+   of shapes so the two platforms read as one icon family. */
 export function chaptersIconMarkup() {
     return '<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path d="M6 2h12v19l-6-4-6 4V2z"/></svg>';
-}
-
-export function subtitlesIconMarkup() {
-    return `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" xmlns="http://www.w3.org/2000/svg">
-        <rect x="2" y="5" width="20" height="14" rx="2" stroke="currentColor" stroke-width="1.8"/>
-        <rect x="5" y="9" width="10" height="2" rx="1" fill="currentColor"/>
-        <rect x="5" y="13" width="6" height="2" rx="1" fill="currentColor"/>
-    </svg>`;
 }
 
 export function versionIconMarkup() {

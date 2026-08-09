@@ -13,6 +13,7 @@ import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.PopupWindow;
@@ -1009,16 +1010,19 @@ final class PlayerUiHelper {
             sections.add(chaptersSection);
         }
 
-        if (activity.audioStreams.size() > 1) {
-            MenuSection audioSection = new MenuSection("Audio Track");
-            audioSection.icon = MenuIconView.Icon.AUDIO_TRACK;
-            audioSection.getValue = () -> {
-                AudioStreamEntry current = findAudioStream(activity, activity.currentAudioStreamId);
-                return current != null ? current.label : null;
-            };
-            audioSection.render = (content, setValue, collapse) -> renderAudioSection(activity, content, setValue, collapse);
-            sections.add(audioSection);
-        }
+        /* Audio Track and Subtitles used to be a separate accordion row (audio only,
+           gated on activity.audioStreams.size() > 1) plus no Subtitles row at all -
+           merged into one row opening its own standalone dialog (see
+           openAudioSubtitlesMenu), a two-column side-by-side grid rather than a screen
+           inside this sheet's own single-list-of-rows shape, matching chrome.js's own
+           HBO-style Audio & Subtitles overlay on the web leg. Always shown (unlike the
+           old audio-only row) since subtitle search is useful even with only one audio
+           track. */
+        MenuSection audioSubtitlesSection = new MenuSection("Audio & Subtitles");
+        audioSubtitlesSection.icon = MenuIconView.Icon.AUDIO_TRACK;
+        audioSubtitlesSection.showChevron = true;
+        audioSubtitlesSection.onTap = () -> openAudioSubtitlesMenu(activity);
+        sections.add(audioSubtitlesSection);
 
         /* Version and Quality Cap used to live one level deeper, behind a "Video
            Quality" row - flattened to their own top-level sections (Version only shown
@@ -1398,7 +1402,13 @@ final class PlayerUiHelper {
         sleep/audio/chapters/quality-cap/version presets) - one visual definition
         instead of each render method styling its own. */
     private static void renderPickerRows(PlayerActivity activity, LinearLayout content, float density, List<PickerItem> items) {
-        for (PickerItem item : items) {
+        renderPickerRows(activity, content, density, items, 0);
+    }
+
+    private static void renderPickerRows(PlayerActivity activity, LinearLayout content, float density, List<PickerItem> items, int rowGapDp) {
+        int rowGapPx = Math.round(rowGapDp * density);
+        for (int i = 0; i < items.size(); i++) {
+            PickerItem item = items.get(i);
             LinearLayout row = new LinearLayout(activity);
             row.setOrientation(LinearLayout.HORIZONTAL);
             row.setGravity(Gravity.CENTER_VERTICAL);
@@ -1406,7 +1416,9 @@ final class PlayerUiHelper {
             int padH = Math.round(16 * density);
             int padV = Math.round(9 * density);
             row.setPadding(padH, padV, padH, padV);
-            row.setLayoutParams(new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+            LinearLayout.LayoutParams rowParams = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+            if (i < items.size() - 1) rowParams.bottomMargin = rowGapPx;
+            row.setLayoutParams(rowParams);
 
             TextView label = new TextView(activity);
             label.setText(item.label);
@@ -1499,7 +1511,7 @@ final class PlayerUiHelper {
                 collapse.run();
             }));
         }
-        renderPickerRows(activity, content, density, items);
+        renderPickerRows(activity, content, density, items, 8);
     }
 
     /* "Quality Cap" navigates to its own screen (see the MenuSection.onTap case in
@@ -1609,14 +1621,6 @@ final class PlayerUiHelper {
             buttons[i].setBackground(bg);
             buttons[i].setTextColor(selected ? Color.parseColor("#1A1A1A") : VALUE_TEXT);
         }
-    }
-
-    private static AudioStreamEntry findAudioStream(PlayerActivity activity, String id) {
-        if (id == null) return null;
-        for (AudioStreamEntry entry : activity.audioStreams) {
-            if (entry.id.equals(id)) return entry;
-        }
-        return null;
     }
 
     private static String formatRate(float rate) {
@@ -2010,6 +2014,257 @@ final class PlayerUiHelper {
             activity.root.removeView(activity.chapterListScrim);
             activity.chapterListScrim = null;
             showControlsTemporarily(activity);
+        }
+    }
+
+    /* Own standalone dialog for the merged Audio & Subtitles row (see renderMainList) -
+       full-height, right-hugging gradient backdrop exactly like showPlayerMenu's own
+       More sheet (same menuSheetGradient/CENTER_VERTICAL trick, so the fade reaches
+       genuinely top-to-bottom regardless of how short the actual two-column content
+       is), just wider (AUDIO_SUBTITLES_WIDTH_DP vs the More sheet's capped 400dp) since
+       it needs to fit two side-by-side columns rather than one list of rows. Closes the
+       More sheet on the way there, same "own separate overlay" pattern
+       openEpisodeListMenu/openChapterListMenu use. */
+    private static final int AUDIO_SUBTITLES_WIDTH_DP = 560;
+
+    static void openAudioSubtitlesMenu(PlayerActivity activity) {
+        closePlayerMenu(activity);
+        closeAudioSubtitlesMenu(activity);
+        float density = activity.getResources().getDisplayMetrics().density;
+
+        int screenWidthPx = activity.getResources().getDisplayMetrics().widthPixels;
+        int sheetWidthPx = Math.min(Math.round(AUDIO_SUBTITLES_WIDTH_DP * density), Math.round(screenWidthPx * 0.92f));
+
+        View scrim = buildMenuSheetScrim(activity);
+        scrim.setOnClickListener(v -> closeAudioSubtitlesMenu(activity));
+
+        LinearLayout sheetContent = buildMenuSheetContainer(activity, sheetWidthPx);
+        sheetContent.setGravity(Gravity.CENTER_VERTICAL);
+
+        LinearLayout card = new LinearLayout(activity);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setLayoutParams(new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+        int cardPad = Math.round(20 * density);
+        card.setPadding(cardPad, Math.round(12 * density), cardPad, cardPad);
+        sheetContent.addView(card);
+
+        LinearLayout closeRow = new LinearLayout(activity);
+        closeRow.setOrientation(LinearLayout.HORIZONTAL);
+        closeRow.setGravity(Gravity.END);
+        closeRow.setLayoutParams(new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+        TextView closeBtn = new TextView(activity);
+        closeBtn.setText("✕");
+        closeBtn.setTextColor(Color.WHITE);
+        closeBtn.setTextSize(16);
+        int closePad = Math.round(6 * density);
+        closeBtn.setPadding(closePad, closePad, closePad, closePad);
+        closeBtn.setOnClickListener(v -> closeAudioSubtitlesMenu(activity));
+        closeRow.addView(closeBtn);
+        card.addView(closeRow);
+
+        LinearLayout grid = new LinearLayout(activity);
+        grid.setOrientation(LinearLayout.HORIZONTAL);
+        grid.setLayoutParams(new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+        card.addView(grid);
+
+        LinearLayout audioColumn = buildAudioSubtitlesColumn(activity, density, "Audio");
+        LinearLayout.LayoutParams audioColumnParams = (LinearLayout.LayoutParams) audioColumn.getLayoutParams();
+        audioColumnParams.setMarginEnd(Math.round(24 * density));
+        LinearLayout audioBody = (LinearLayout) audioColumn.getTag();
+        if (activity.audioStreams.isEmpty()) {
+            TextView noAudio = new TextView(activity);
+            noAudio.setText("No alternate audio tracks.");
+            noAudio.setTextColor(VALUE_TEXT);
+            noAudio.setTextSize(13);
+            audioBody.addView(noAudio);
+        } else {
+            renderAudioSection(activity, audioBody, (v) -> {}, () -> {});
+        }
+        grid.addView(audioColumn);
+
+        LinearLayout subtitlesColumn = buildAudioSubtitlesColumn(activity, density, "Subtitles");
+        renderSubtitlesColumn(activity, density, (LinearLayout) subtitlesColumn.getTag());
+        grid.addView(subtitlesColumn);
+
+        activity.root.addView(scrim);
+        activity.root.addView(sheetContent);
+        activity.audioSubtitlesScrim = scrim;
+        activity.audioSubtitlesSheet = sheetContent;
+        activity.controlsFadeHandler.removeCallbacks(activity.controlsFadeRunnable);
+        setControlsVisible(activity, false);
+    }
+
+    static void closeAudioSubtitlesMenu(PlayerActivity activity) {
+        if (activity.audioSubtitlesSheet != null) {
+            activity.root.removeView(activity.audioSubtitlesSheet);
+            activity.audioSubtitlesSheet = null;
+        }
+        if (activity.audioSubtitlesScrim != null) {
+            activity.root.removeView(activity.audioSubtitlesScrim);
+            activity.audioSubtitlesScrim = null;
+            showControlsTemporarily(activity);
+        }
+    }
+
+    /* Rebuilds the whole dialog in place whenever its underlying data changes
+       (a subtitle search resolving, an apply succeeding/failing, the Off row clearing
+       the track) - simpler than threading a mutable TextView reference through the
+       native<->JS round trip to patch one row in place, at the cost of a visible full
+       redraw on each of those (infrequent, user-initiated) events. No-op if the dialog
+       isn't currently open. */
+    static void refreshAudioSubtitlesMenu(PlayerActivity activity) {
+        if (activity.audioSubtitlesSheet == null) return;
+        openAudioSubtitlesMenu(activity);
+    }
+
+    /* One column of the grid above - a bold heading with a divider underneath (matching
+       the HBO Max reference the web leg's own openAudioSubtitlesOverlay was built
+       against) plus a `body` LinearLayout inside a capped-height ScrollView the caller
+       renders its own picker list into. The returned column View carries `body` as its
+       tag rather than this method returning a pair, since every other builder in this
+       file already returns a single View. */
+    private static LinearLayout buildAudioSubtitlesColumn(PlayerActivity activity, float density, String title) {
+        LinearLayout column = new LinearLayout(activity);
+        column.setOrientation(LinearLayout.VERTICAL);
+        column.setLayoutParams(new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+
+        TextView heading = new TextView(activity);
+        heading.setText(title);
+        heading.setTextColor(Color.WHITE);
+        heading.setTextSize(15);
+        heading.setTypeface(heading.getTypeface(), android.graphics.Typeface.BOLD);
+        heading.setPadding(0, 0, 0, Math.round(10 * density));
+        column.addView(heading);
+
+        View divider = new View(activity);
+        divider.setBackgroundColor(Color.argb(64, 255, 255, 255));
+        column.addView(divider, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, Math.round(1 * density)));
+
+        LinearLayout body = new LinearLayout(activity);
+        body.setOrientation(LinearLayout.VERTICAL);
+        body.setPadding(0, Math.round(16 * density), 0, 0);
+
+        ScrollView scroll = new ScrollView(activity);
+        scroll.setVerticalScrollBarEnabled(false);
+        scroll.addView(body, new ScrollView.LayoutParams(ScrollView.LayoutParams.MATCH_PARENT, ScrollView.LayoutParams.WRAP_CONTENT));
+        int maxHeightPx = Math.round(activity.getResources().getDisplayMetrics().heightPixels * 0.4f);
+        scroll.setLayoutParams(new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+        column.addView(scroll);
+        /* Capped via a post-measure check rather than a fixed height up front - a short
+           list (e.g. only two audio tracks) should size to its own content instead of
+           always reserving 40% of the screen, matching clampMenuCardHeight's own
+           "shrink to content, then cap" behavior for the More sheet's card. */
+        scroll.post(() -> {
+            ViewGroup.LayoutParams params = scroll.getLayoutParams();
+            if (body.getHeight() > maxHeightPx) {
+                params.height = maxHeightPx;
+                scroll.setLayoutParams(params);
+            }
+        });
+
+        column.setTag(body);
+        return column;
+    }
+
+    /* Audio column content - reuses renderAudioSection wholesale (same picker-row
+       list/checkmark logic the old standalone accordion row used) with no-op setValue/
+       collapse, exactly mirroring how chrome.js's own openAudioSubtitlesOverlay reuses
+       renderAudioSection on the web leg instead of a second, parallel implementation. */
+
+    /* Subtitles column content - search box (defaults to this title, matching
+       chrome.js's renderSubtitleSection) plus an "Off" row and whatever
+       activity.subtitleResults holds. Fully re-derived from activity's own fields each
+       call (see refreshAudioSubtitlesMenu) rather than mutated in place. */
+    private static void renderSubtitlesColumn(PlayerActivity activity, float density, LinearLayout body) {
+        EditText input = new EditText(activity);
+        input.setHint("Search subtitles…");
+        input.setHintTextColor(VALUE_TEXT);
+        input.setTextColor(Color.WHITE);
+        input.setTextSize(13);
+        input.setSingleLine(true);
+        String defaultQuery = activity.title != null ? activity.title : "";
+        input.setText(activity.subtitleSearchQueryText != null ? activity.subtitleSearchQueryText : defaultQuery);
+        GradientDrawable inputBg = new GradientDrawable();
+        inputBg.setColor(Color.argb(15, 255, 255, 255));
+        inputBg.setStroke(1, Color.argb(38, 255, 255, 255));
+        inputBg.setCornerRadius(8 * density);
+        input.setBackground(inputBg);
+        int inputPadH = Math.round(12 * density);
+        int inputPadV = Math.round(9 * density);
+        input.setPadding(inputPadH, inputPadV, inputPadH, inputPadV);
+        LinearLayout.LayoutParams inputParams = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        inputParams.bottomMargin = Math.round(8 * density);
+        input.setLayoutParams(inputParams);
+        body.addView(input);
+
+        TextView searchBtn = new TextView(activity);
+        searchBtn.setText("Search");
+        searchBtn.setTextColor(Color.parseColor("#1A1A1A"));
+        searchBtn.setTextSize(13);
+        searchBtn.setTypeface(searchBtn.getTypeface(), android.graphics.Typeface.BOLD);
+        searchBtn.setGravity(Gravity.CENTER);
+        GradientDrawable searchBg = new GradientDrawable();
+        searchBg.setColor(ACCENT_COLOR);
+        searchBg.setCornerRadius(8 * density);
+        searchBtn.setBackground(searchBg);
+        int searchPad = Math.round(9 * density);
+        searchBtn.setPadding(searchPad, searchPad, searchPad, searchPad);
+        LinearLayout.LayoutParams searchParams = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        searchParams.bottomMargin = Math.round(10 * density);
+        searchBtn.setLayoutParams(searchParams);
+        searchBtn.setOnClickListener(v -> {
+            activity.subtitleSearchQueryText = input.getText().toString();
+            activity.subtitleSearchStatus = "searching";
+            activity.subtitleResults.clear();
+            PlayerUiHelper.refreshAudioSubtitlesMenu(activity);
+            PlayerActivity.requestSubtitleSearch(activity.subtitleSearchQueryText);
+        });
+        body.addView(searchBtn);
+
+        List<PickerItem> items = new ArrayList<>();
+        items.add(new PickerItem("Off" + (activity.currentSubtitleFileId == null ? "  ✓" : ""), () -> {
+            activity.clearSubtitleTrack();
+        }));
+        for (SubtitleResultEntry entry : activity.subtitleResults) {
+            boolean isCurrent = entry.fileId.equals(activity.currentSubtitleFileId);
+            boolean isPending = entry.fileId.equals(activity.subtitlePendingFileId);
+            boolean isError = entry.fileId.equals(activity.subtitleApplyErrorFileId);
+            String label = entry.label + " (" + entry.languageCode + ")";
+            if (isPending) {
+                label = "Applying…";
+            } else if (isError) {
+                label = label + " — failed: " + activity.subtitleApplyErrorMessage;
+            } else if (isCurrent) {
+                label = label + "  ✓";
+            }
+            String finalLabel = label;
+            items.add(new PickerItem(finalLabel, () -> {
+                activity.subtitlePendingFileId = entry.fileId;
+                activity.subtitleApplyErrorFileId = null;
+                PlayerUiHelper.refreshAudioSubtitlesMenu(activity);
+                PlayerActivity.requestSubtitleSelect(entry.fileId, entry.label, entry.languageCode);
+            }));
+        }
+        renderPickerRows(activity, body, density, items);
+
+        if ("searching".equals(activity.subtitleSearchStatus)) {
+            TextView status = new TextView(activity);
+            status.setText("Searching…");
+            status.setTextColor(VALUE_TEXT);
+            status.setTextSize(13);
+            body.addView(status);
+        } else if ("error".equals(activity.subtitleSearchStatus)) {
+            TextView status = new TextView(activity);
+            status.setText(activity.subtitleSearchError != null ? activity.subtitleSearchError : "Search failed.");
+            status.setTextColor(VALUE_TEXT);
+            status.setTextSize(13);
+            body.addView(status);
+        } else if ("done".equals(activity.subtitleSearchStatus) && activity.subtitleResults.isEmpty()) {
+            TextView status = new TextView(activity);
+            status.setText("No results.");
+            status.setTextColor(VALUE_TEXT);
+            status.setTextSize(13);
+            body.addView(status);
         }
     }
 
