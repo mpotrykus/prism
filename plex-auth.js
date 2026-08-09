@@ -154,6 +154,25 @@ export async function resolveBestConnection(server) {
   return null;
 }
 
+/* Called before every data load - the connection resolveBestConnection() picks at
+   sign-in time (LAN-first) is cached as a single plex_url and never re-checked, so
+   leaving the home network doesn't fail, it just hangs every fetch against an address
+   that's no longer reachable (a private LAN IP gives no fast refusal from outside the
+   LAN). Re-probes that cached address first and, only if it's gone dark, re-runs
+   discovery to find whichever connection - relay or remote - actually works from here. */
+export async function ensureReachable({ plex_url, plex_token, plex_account_token, machine_id }) {
+  if (await probeConnection(plex_url, plex_token)) return { plex_url, plex_token };
+  if (!plex_account_token || !machine_id) {
+    throw new Error(`Can't reach your Plex server at ${plex_url}.`);
+  }
+  const servers = await discoverServers(plex_account_token);
+  const server = servers.find((s) => s.clientIdentifier === machine_id);
+  if (!server) throw new Error("Can't reach your Plex server, and it's no longer listed on this account.");
+  const uri = await resolveBestConnection(server);
+  if (!uri) throw new Error(`Can't reach ${server.name} from this network.`);
+  return { plex_url: uri, plex_token: server.accessToken };
+}
+
 /* Plex Home ("managed users"/profiles) - a family group sharing one Plex account and
    server, each with their own watch history/watchlist/parental restrictions. Listing
    and switching both work off whichever account-level token is currently active, not

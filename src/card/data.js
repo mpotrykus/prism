@@ -1,4 +1,7 @@
 import { parseAiSectionIdeas } from "./logic/catalog.js";
+import * as StreamingPlexAuth from "../../plex-auth.js";
+import { loadPlain, savePlain } from "../../settings.js";
+import { hasSecrets, loadSecrets, saveSecrets } from "../../vault.js";
 
 /* Plex fetch/data-loading orchestration - the card's single "go get everything Home
    needs" entry point plus every raw fetch it fans out to. Takes the PlexNetflixCard
@@ -292,6 +295,19 @@ export async function loadAll(card) {
     return;
   }
   card._renderLoading();
+  try {
+    const reachable = await StreamingPlexAuth.ensureReachable(card._config);
+    if (reachable.plex_url !== card._config.plex_url || reachable.plex_token !== card._config.plex_token) {
+      card._config.plex_url = reachable.plex_url;
+      card._config.plex_token = reachable.plex_token;
+      savePlain({ ...loadPlain(), plex_url: reachable.plex_url });
+      const secrets = hasSecrets() ? await loadSecrets() : {};
+      await saveSecrets({ ...secrets, plex_token: reachable.plex_token });
+    }
+  } catch (e) {
+    card._renderMessage(`Couldn't reach your Plex server: ${e.message}`);
+    return;
+  }
   try {
     const [
       onDeckRaw,

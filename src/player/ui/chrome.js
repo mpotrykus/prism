@@ -1354,18 +1354,6 @@ function makeBackRow(onClick) {
     return row;
 }
 
-/* Shared by the hamburger row's initial value and its toggle's onChange return value -
-   "Auto" replaces the numeric % once strength is computed dynamically (see
-   content-analysis.js) rather than showing a live-ticking percentage, since the row only
-   ever refreshes on toggle/menu-close, not every sample tick. */
-function shaderRowLabel(controller) {
-    return controller._upscaleAuto ? `${SHADER_TYPES[controller._shaderAutoType].label} (Auto)` : SHADER_TYPES[controller._shaderAutoType].label;
-}
-
-function colorBoostRowLabel(controller) {
-    return controller._colorBoostAuto ? "Auto" : `${Math.round(controller._colorBoostStrength * 100)}%`;
-}
-
 export function openHamburgerMenu(controller, anchor) {
     closeInlineMenu(controller);
     ensureMenuScrollStyle();
@@ -1559,9 +1547,8 @@ export function openHamburgerMenu(controller, anchor) {
 }
 
 /* "Auto (720p (10 Mbps))" while Auto Quality is actively adjusting the cap, else the
-   plain preset label - same "(Auto)" convention shaderRowLabel uses for Shader Upscaling.
-   Shared by the top-level "Quality Cap" row's own value and its expanded picker list so
-   the two never show a different answer for the same state. */
+   plain preset label. Shared by the top-level "Quality Cap" row's own value and its
+   expanded picker list so the two never show a different answer for the same state. */
 function qualityCapMenuLabel(controller) {
     const label = QUALITY_CAP_PRESETS.find((p) => (p.kbps ?? null) === (controller._session?.qualityCapKbps ?? null))?.label || null;
     return controller._autoQualityEnabled ? `Auto (${label})` : label;
@@ -1863,11 +1850,16 @@ function buildModeRow({ mode, onModeChange, getAutoValue, getManualValue, streng
     const row = document.createElement("div");
     Object.assign(row.style, { display: "flex", gap: "6px", padding: "0 0 10px" });
 
+    let currentMode = mode;
     const applyStrengthDisplay = (m) => {
         const auto = m === "auto";
-        strengthInput.disabled = auto;
-        strengthInput.style.opacity = auto ? "0.5" : "1";
-        strengthInput.style.cursor = auto ? "default" : "pointer";
+        /* Only "on" leaves the slider interactive - "auto" because the value isn't
+           user-driven, and "off" because there's no effect running for it to tune, same
+           reasoning "off" already gets a dimmed/disabled mode button of its own. */
+        const enabled = m === "on";
+        strengthInput.disabled = !enabled;
+        strengthInput.style.opacity = enabled ? "1" : "0.5";
+        strengthInput.style.cursor = enabled ? "pointer" : "default";
         const value = auto ? (getAutoValue() ?? 0) : getManualValue();
         strengthInput.value = String(Math.round(value * 100));
         strengthLabel.textContent = `Strength: ${Math.round(value * 100)}%${auto ? " (auto)" : ""}`;
@@ -1878,7 +1870,9 @@ function buildModeRow({ mode, onModeChange, getAutoValue, getManualValue, streng
         btn.type = "button";
         btn.textContent = opt.label;
         Object.assign(btn.style, {
-            flex: "1",
+            width: "44px",
+            textAlign: "center",
+            boxSizing: "border-box",
             padding: "6px 0",
             fontSize: "12px",
             fontWeight: "600",
@@ -1889,6 +1883,7 @@ function buildModeRow({ mode, onModeChange, getAutoValue, getManualValue, streng
             color: "rgba(255,255,255,0.7)",
         });
         btn.addEventListener("click", () => {
+            currentMode = opt.key;
             onModeChange(opt.key);
             setActive(opt.key);
             applyStrengthDisplay(opt.key);
@@ -1908,7 +1903,33 @@ function buildModeRow({ mode, onModeChange, getAutoValue, getManualValue, streng
     setActive(mode);
     applyStrengthDisplay(mode);
 
-    return row;
+    /* Lets the caller re-run the auto-value refresh (see startLiveAutoRefresh below)
+       without duplicating applyStrengthDisplay's formatting/disabled-state logic - a
+       no-op whenever this row isn't currently in "auto" mode, so it's safe to call
+       blindly on a timer. */
+    const refreshIfAuto = () => {
+        if (currentMode === "auto") applyStrengthDisplay("auto");
+    };
+
+    return { row, refreshIfAuto };
+}
+
+/* Ticks `refresh` while `el` stays in the DOM, then stops itself - used by the two
+   Effects rows with an Auto mode (Shader Upscaling/Color Boost) to reflect
+   content-analysis.js's background strength recalculation (every ~750ms, see
+   CONTENT_SAMPLE_INTERVAL_MS there) instead of leaving a stale snapshot from whenever
+   "Auto" was last tapped. Polls DOM connectedness rather than requiring an explicit
+   teardown call, since this row can disappear via several different paths (back
+   navigation, closing the whole sheet) that would otherwise each need their own
+   cleanup wired in. */
+function startLiveAutoRefresh(el, refresh) {
+    const id = setInterval(() => {
+        if (!el.isConnected) {
+            clearInterval(id);
+            return;
+        }
+        refresh();
+    }, 750);
 }
 
 /* "Effects" navigates to a whole separate list (see buildAccordionRow's `nav` case)
@@ -1916,44 +1937,175 @@ function buildModeRow({ mode, onModeChange, getAutoValue, getManualValue, streng
    better as their own dedicated screen than squeezed inline under a fourth row. Clears
    and rebuilds `list` in place (same element, new contents) rather than swapping in a
    second list element, so the sheet's own scroll position/height logic doesn't need to
-   know which screen is currently showing. */
+   know which screen is currently showing. Unlike the main list's rows, these three are
+   plain always-visible rows (see buildEffectRow) rather than accordion sections - with
+   only three of them and every one landing on a slider, tap-to-expand just added a step
+   between opening "Effects" and reaching the control someone came here for. */
 function renderEffectsList(controller, list, onBack) {
     list.innerHTML = "";
     list.appendChild(makeBackRow(onBack));
-    const state = { expandedCollapse: null };
-    buildAccordionRow(list, state, {
-        key: "shader",
-        label: "Shader Upscaling",
-        /* Reuses fullscreenIconMarkup's expand-corners glyph - upscaling is, visually,
-           the same "stretch the picture outward" idea. */
+    buildShaderEffectRow(controller, list);
+    buildColorBoostEffectRow(controller, list);
+    buildAmbientEffectRow(controller, list);
+}
+
+/* Shared shell for the three Effects rows below - icon+label (and an optional caption
+   under the label) on the left, whatever control(s) belong at a glance (mode buttons or
+   a toggle) on the right, matching buildAccordionRow's header layout minus the chevron/
+   click-to-expand behavior. Returns `rightSide` for the caller to drop its control into,
+   and the row itself (`wrap`) for the caller to append full-width content (e.g. a
+   slider) below the header line. */
+function buildEffectRow(list, { icon, label, caption }) {
+    const wrap = document.createElement("div");
+    Object.assign(wrap.style, { borderBottom: "1px solid rgba(255,255,255,0.07)", padding: "14px 16px" });
+
+    const header = document.createElement("div");
+    Object.assign(header.style, { display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px" });
+
+    const leftSide = document.createElement("span");
+    Object.assign(leftSide.style, { display: "flex", alignItems: "center", gap: "12px", minWidth: "0", flex: "1 1 auto" });
+    const iconEl = document.createElement("span");
+    iconEl.innerHTML = icon;
+    Object.assign(iconEl.style, { display: "flex", alignItems: "center", justifyContent: "center", flex: "0 0 auto", width: "20px", height: "20px", color: "rgba(255,255,255,0.75)" });
+    leftSide.appendChild(iconEl);
+
+    const labelStack = document.createElement("span");
+    Object.assign(labelStack.style, { display: "flex", flexDirection: "column", gap: "2px", minWidth: "0" });
+    const labelEl = document.createElement("span");
+    labelEl.textContent = label;
+    Object.assign(labelEl.style, { color: "#fff", fontSize: "15px", fontWeight: "600" });
+    labelStack.appendChild(labelEl);
+    if (caption) {
+        const captionEl = document.createElement("span");
+        captionEl.textContent = caption;
+        Object.assign(captionEl.style, { fontSize: "11px", fontWeight: "400", color: "rgba(255,255,255,0.45)" });
+        labelStack.appendChild(captionEl);
+    }
+    leftSide.appendChild(labelStack);
+    header.appendChild(leftSide);
+
+    const rightSide = document.createElement("span");
+    Object.assign(rightSide.style, { display: "flex", alignItems: "center", gap: "12px", flex: "0 0 auto" });
+    header.appendChild(rightSide);
+
+    wrap.appendChild(header);
+    list.appendChild(wrap);
+    return { wrap, rightSide };
+}
+
+/* Reuses fullscreenIconMarkup's expand-corners glyph - upscaling is, visually, the same
+   "stretch the picture outward" idea. No manual Off/Anime4K/Live-Action picker -
+   controller._shaderAutoType is decided once per video from its Plex genre tags (see
+   detectShaderType) and shown here as read-only info via the caption. The mode row +
+   slider are the only remaining controls, and dragging strength to 0% in "on" mode is
+   what a plain "Off" used to be. */
+function buildShaderEffectRow(controller, list) {
+    const { wrap, rightSide } = buildEffectRow(list, {
         icon: fullscreenIconMarkup(false),
-        getValue: () => (controller._shaderEnabled ? shaderRowLabel(controller) : null),
-        render: (content, helpers) => renderShaderSection(controller, content, helpers),
+        label: "Shader Upscaling",
+        caption: `Detected: ${SHADER_TYPES[controller._shaderAutoType].label}`,
     });
-    buildAccordionRow(list, state, {
-        key: "colorboost",
-        label: "Color Boost",
-        icon: colorBoostIconMarkup(),
-        getValue: () => (controller._colorBoostEnabled ? colorBoostRowLabel(controller) : null),
-        render: (content, helpers) => renderColorBoostSection(controller, content, helpers),
+
+    const strengthLabel = document.createElement("div");
+    Object.assign(strengthLabel.style, { color: "rgba(255,255,255,0.7)", fontSize: "12px", padding: "10px 0 4px" });
+
+    const strengthInput = document.createElement("input");
+    strengthInput.type = "range";
+    strengthInput.min = "0";
+    strengthInput.max = "100";
+    Object.assign(strengthInput.style, { display: "block", width: "100%", accentColor: "#e5a00d", cursor: "pointer", boxSizing: "border-box" });
+    strengthInput.addEventListener("input", () => {
+        strengthLabel.textContent = `Strength: ${strengthInput.value}%`;
+        setShaderStrength(controller, Number(strengthInput.value) / 100);
     });
-    buildAccordionRow(list, state, {
-        key: "ambient",
-        label: "Ambient Lighting",
-        icon: ambientIconMarkup(),
-        getValue: () => (controller._ambientEnabled ? `${Math.round(controller._ambientOpacity * 100)}%` : null),
-        /* Toggle flips on/off in place without collapsing the row - tapping anywhere
-           else on it still expands/collapses the opacity slider, same independent-
-           gestures-on-one-row pattern as every toggle+chevron row in this sheet. */
-        toggle: {
-            checked: controller._ambientEnabled,
-            onChange: (checked) => {
-                controller._setAmbientEnabled(checked);
-                return checked ? `${Math.round(controller._ambientOpacity * 100)}%` : null;
-            },
-        },
-        render: (content, helpers) => renderAmbientSection(controller, content, helpers),
+
+    const { row: modeRow, refreshIfAuto } = buildModeRow({
+        mode: upscaleModeOf(controller),
+        onModeChange: (mode) => setUpscaleMode(controller, mode),
+        getAutoValue: () => controller._autoUpscaleStrength,
+        getManualValue: () => controller._shaderStrength,
+        strengthInput,
+        strengthLabel,
     });
+    rightSide.appendChild(modeRow);
+    wrap.appendChild(strengthLabel);
+    wrap.appendChild(strengthInput);
+    startLiveAutoRefresh(strengthInput, refreshIfAuto);
+}
+
+/* Same pattern as buildShaderEffectRow above, simpler since there's no auto-detected
+   type to show as read-only info here - just the one strength control. Unlike
+   Android's equivalent panel, this applies live on every `input` event rather than
+   gating to release: both compiled GL programs stay resident (see
+   ensureShaderPipeline), so a strength change here is only a uniform update on the next
+   frame, not a program rebuild. */
+function buildColorBoostEffectRow(controller, list) {
+    const { wrap, rightSide } = buildEffectRow(list, { icon: colorBoostIconMarkup(), label: "Color Boost" });
+
+    const strengthLabel = document.createElement("div");
+    Object.assign(strengthLabel.style, { color: "rgba(255,255,255,0.7)", fontSize: "12px", padding: "10px 0 4px" });
+
+    const strengthInput = document.createElement("input");
+    strengthInput.type = "range";
+    strengthInput.min = "0";
+    strengthInput.max = "100";
+    Object.assign(strengthInput.style, { display: "block", width: "100%", accentColor: "#e5a00d", cursor: "pointer", boxSizing: "border-box" });
+    strengthInput.addEventListener("input", () => {
+        strengthLabel.textContent = `Strength: ${strengthInput.value}%`;
+        setColorBoostStrength(controller, Number(strengthInput.value) / 100);
+    });
+
+    const { row: modeRow, refreshIfAuto } = buildModeRow({
+        mode: colorBoostModeOf(controller),
+        onModeChange: (mode) => setColorBoostMode(controller, mode),
+        getAutoValue: () => controller._autoColorBoostStrength,
+        getManualValue: () => controller._colorBoostStrength,
+        strengthInput,
+        strengthLabel,
+    });
+    rightSide.appendChild(modeRow);
+    wrap.appendChild(strengthLabel);
+    wrap.appendChild(strengthInput);
+    startLiveAutoRefresh(strengthInput, refreshIfAuto);
+}
+
+/* Same pattern as buildShaderEffectRow above (a continuous slider can't be expressed as
+   tappable picker rows) - simpler, since there's no auto-detected type to show as read-
+   only info here, just the one opacity control plus the on/off toggle. */
+function buildAmbientEffectRow(controller, list) {
+    const { wrap, rightSide } = buildEffectRow(list, { icon: ambientIconMarkup(), label: "Ambient Lighting" });
+
+    const opacityLabel = document.createElement("div");
+    opacityLabel.textContent = `Opacity: ${Math.round(controller._ambientOpacity * 100)}%`;
+    Object.assign(opacityLabel.style, { color: "rgba(255,255,255,0.7)", fontSize: "12px", padding: "10px 0 4px" });
+
+    const opacityInput = document.createElement("input");
+    opacityInput.type = "range";
+    opacityInput.min = "0";
+    opacityInput.max = "100";
+    opacityInput.value = String(Math.round(controller._ambientOpacity * 100));
+    Object.assign(opacityInput.style, { display: "block", width: "100%", accentColor: "#e5a00d", boxSizing: "border-box" });
+    opacityInput.addEventListener("input", () => {
+        opacityLabel.textContent = `Opacity: ${opacityInput.value}%`;
+        setAmbientOpacity(controller, Number(opacityInput.value) / 100);
+    });
+
+    /* No effect running to tune while the toggle is off, same "disabled unless there's
+       something to adjust" reasoning as Shader Upscaling/Color Boost's own strength
+       slider (see buildModeRow's applyStrengthDisplay). */
+    const applyOpacityEnabled = (enabled) => {
+        opacityInput.disabled = !enabled;
+        opacityInput.style.opacity = enabled ? "1" : "0.5";
+        opacityInput.style.cursor = enabled ? "pointer" : "default";
+    };
+    applyOpacityEnabled(controller._ambientEnabled);
+
+    rightSide.appendChild(makeToggleSwitch(controller._ambientEnabled, (checked) => {
+        controller._setAmbientEnabled(checked);
+        applyOpacityEnabled(checked);
+    }));
+    wrap.appendChild(opacityLabel);
+    wrap.appendChild(opacityInput);
 }
 
 /* "Extras" - same dedicated-screen pattern as renderEffectsList above, for Playback
@@ -1983,134 +2135,6 @@ function renderExtrasList(controller, list, onBack) {
         getValue: () => (controller._sleepMinutes ? `${controller._sleepMinutes}m` : null),
         render: (content, helpers) => renderSleepSection(controller, content, helpers),
     });
-}
-
-/* No manual Off/Anime4K/Live-Action picker - controller._shaderAutoType is decided
-   once per video from its Plex genre tags (see detectShaderType) and shown here as
-   read-only info. The mode row + slider are the only remaining controls, and dragging
-   strength to 0% in "on" mode is what a plain "Off" used to be. */
-function renderShaderSection(controller, content, { setValue }) {
-    const detectedLabel = document.createElement("div");
-    detectedLabel.textContent = `Detected: ${SHADER_TYPES[controller._shaderAutoType].label}`;
-    Object.assign(detectedLabel.style, { color: "#fff", fontSize: "13px", fontWeight: "600", padding: "2px 16px" });
-    content.appendChild(detectedLabel);
-
-    const detectedHint = document.createElement("div");
-    detectedHint.textContent = "Auto-detected from this title's genre";
-    Object.assign(detectedHint.style, { color: "rgba(255,255,255,0.5)", fontSize: "11px", padding: "0 16px 10px" });
-    content.appendChild(detectedHint);
-
-    const strengthLabel = document.createElement("div");
-    Object.assign(strengthLabel.style, { color: "rgba(255,255,255,0.7)", fontSize: "12px", padding: "0 16px 4px" });
-
-    const strengthInput = document.createElement("input");
-    strengthInput.type = "range";
-    strengthInput.min = "0";
-    strengthInput.max = "100";
-    Object.assign(strengthInput.style, {
-        display: "block",
-        width: "calc(100% - 32px)",
-        margin: "0 16px",
-        accentColor: "#e5a00d",
-        cursor: "pointer",
-        boxSizing: "border-box",
-    });
-    strengthInput.addEventListener("input", () => {
-        strengthLabel.textContent = `Strength: ${strengthInput.value}%`;
-        setShaderStrength(controller, Number(strengthInput.value) / 100);
-    });
-
-    const modeRowWrap = document.createElement("div");
-    modeRowWrap.style.padding = "0 16px";
-    modeRowWrap.appendChild(buildModeRow({
-        mode: upscaleModeOf(controller),
-        onModeChange: (mode) => {
-            setUpscaleMode(controller, mode);
-            setValue(controller._shaderEnabled ? shaderRowLabel(controller) : null);
-        },
-        getAutoValue: () => controller._autoUpscaleStrength,
-        getManualValue: () => controller._shaderStrength,
-        strengthInput,
-        strengthLabel,
-    }));
-    content.appendChild(modeRowWrap);
-    content.appendChild(strengthLabel);
-    content.appendChild(strengthInput);
-}
-
-/* Same pattern as renderShaderSection above, simpler since there's no auto-detected
-   type to show as read-only info here - just the one strength control. Unlike
-   Android's equivalent panel, this applies live on every `input` event rather than
-   gating to release: both compiled GL programs stay resident (see
-   ensureShaderPipeline), so a strength change here is only a uniform update on the next
-   frame, not a program rebuild. */
-function renderColorBoostSection(controller, content, { setValue }) {
-    const strengthLabel = document.createElement("div");
-    Object.assign(strengthLabel.style, { color: "rgba(255,255,255,0.7)", fontSize: "12px", padding: "4px 16px 4px" });
-
-    const strengthInput = document.createElement("input");
-    strengthInput.type = "range";
-    strengthInput.min = "0";
-    strengthInput.max = "100";
-    Object.assign(strengthInput.style, {
-        display: "block",
-        width: "calc(100% - 32px)",
-        margin: "0 16px",
-        accentColor: "#e5a00d",
-        cursor: "pointer",
-        boxSizing: "border-box",
-    });
-    strengthInput.addEventListener("input", () => {
-        strengthLabel.textContent = `Strength: ${strengthInput.value}%`;
-        setColorBoostStrength(controller, Number(strengthInput.value) / 100);
-    });
-
-    const modeRowWrap = document.createElement("div");
-    modeRowWrap.style.padding = "0 16px";
-    modeRowWrap.appendChild(buildModeRow({
-        mode: colorBoostModeOf(controller),
-        onModeChange: (mode) => {
-            setColorBoostMode(controller, mode);
-            setValue(controller._colorBoostEnabled ? colorBoostRowLabel(controller) : null);
-        },
-        getAutoValue: () => controller._autoColorBoostStrength,
-        getManualValue: () => controller._colorBoostStrength,
-        strengthInput,
-        strengthLabel,
-    }));
-    content.appendChild(modeRowWrap);
-    content.appendChild(strengthLabel);
-    content.appendChild(strengthInput);
-}
-
-/* Same pattern as renderShaderSection above (a continuous slider can't be expressed
-   as tappable picker rows) - simpler, since there's no auto-detected type to show as
-   read-only info here, just the one opacity control. */
-function renderAmbientSection(controller, content, { setValue }) {
-    const opacityLabel = document.createElement("div");
-    opacityLabel.textContent = `Opacity: ${Math.round(controller._ambientOpacity * 100)}%`;
-    Object.assign(opacityLabel.style, { color: "rgba(255,255,255,0.7)", fontSize: "12px", padding: "4px 16px 4px" });
-    content.appendChild(opacityLabel);
-
-    const opacityInput = document.createElement("input");
-    opacityInput.type = "range";
-    opacityInput.min = "0";
-    opacityInput.max = "100";
-    opacityInput.value = String(Math.round(controller._ambientOpacity * 100));
-    Object.assign(opacityInput.style, {
-        display: "block",
-        width: "calc(100% - 32px)",
-        margin: "0 16px",
-        accentColor: "#e5a00d",
-        cursor: "pointer",
-        boxSizing: "border-box",
-    });
-    opacityInput.addEventListener("input", () => {
-        opacityLabel.textContent = `Opacity: ${opacityInput.value}%`;
-        setAmbientOpacity(controller, Number(opacityInput.value) / 100);
-        setValue(controller._ambientEnabled ? `${opacityInput.value}%` : null);
-    });
-    content.appendChild(opacityInput);
 }
 
 /* A small on/off pill, e.g. Shader Upscaling's row in openHamburgerMenu - plain divs

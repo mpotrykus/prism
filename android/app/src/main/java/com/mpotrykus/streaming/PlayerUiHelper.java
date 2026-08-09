@@ -3,10 +3,14 @@ package com.mpotrykus.streaming;
 import android.content.res.ColorStateList;
 import android.graphics.Color;
 import android.graphics.PorterDuff;
+import android.graphics.drawable.ClipDrawable;
 import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.LayerDrawable;
 import android.graphics.drawable.StateListDrawable;
+import android.os.Handler;
+import android.os.Looper;
 import android.text.TextUtils;
 import android.view.GestureDetector;
 import android.view.Gravity;
@@ -797,6 +801,45 @@ final class PlayerUiHelper {
         seekBar.setSplitTrack(false);
     }
 
+    /* Unlike transportSeekBar above, the Effects panel's three sliders (shader/color
+       boost strength, ambient opacity - see buildShaderEffectRow/etc) aren't layered
+       over a SegmentedSeekTrackView; each is the only visible representation of its own
+       track, so it needs a real progress drawable rather than styleSeekBar's
+       transparent one. */
+    private static void styleMenuSeekBar(SeekBar seekBar, float density) {
+        int trackHeightPx = Math.round(3 * density);
+
+        GradientDrawable trackBg = new GradientDrawable();
+        trackBg.setShape(GradientDrawable.RECTANGLE);
+        trackBg.setCornerRadius(trackHeightPx / 2f);
+        trackBg.setColor(Color.argb(64, 255, 255, 255));
+
+        GradientDrawable trackFill = new GradientDrawable();
+        trackFill.setShape(GradientDrawable.RECTANGLE);
+        trackFill.setCornerRadius(trackHeightPx / 2f);
+        trackFill.setColor(ACCENT_COLOR);
+        ClipDrawable clip = new ClipDrawable(trackFill, Gravity.START, ClipDrawable.HORIZONTAL);
+
+        LayerDrawable progressDrawable = new LayerDrawable(new Drawable[]{trackBg, clip});
+        progressDrawable.setId(0, android.R.id.background);
+        progressDrawable.setId(1, android.R.id.progress);
+        progressDrawable.setLayerHeight(0, trackHeightPx);
+        progressDrawable.setLayerHeight(1, trackHeightPx);
+        progressDrawable.setLayerGravity(0, Gravity.CENTER_VERTICAL);
+        progressDrawable.setLayerGravity(1, Gravity.CENTER_VERTICAL);
+        seekBar.setProgressDrawable(progressDrawable);
+
+        int thumbSizePx = Math.round(12 * density);
+        GradientDrawable thumb = new GradientDrawable();
+        thumb.setShape(GradientDrawable.OVAL);
+        thumb.setColor(ACCENT_COLOR);
+        thumb.setSize(thumbSizePx, thumbSizePx);
+        seekBar.setThumb(thumb);
+        seekBar.setThumbOffset(0);
+        seekBar.setPadding(0, 0, 0, 0);
+        seekBar.setSplitTrack(false);
+    }
+
     static void showControlsTemporarily(PlayerActivity activity) {
         setControlsVisible(activity, true);
         activity.controlsFadeHandler.removeCallbacks(activity.controlsFadeRunnable);
@@ -988,7 +1031,10 @@ final class PlayerUiHelper {
            worth a loading state, unlike Lock/Picture-in-Picture (see the top-right icon
            buttons those moved into instead), which is why this one stayed a menu row. */
         if (activity.queueLength > 1) {
-            MenuSection episodesSection = new MenuSection("Episodes");
+            /* Same seasonNumber-present check the overlay heading (renderEpisodeListContent)
+               and web's chrome.js episodesBtn use to distinguish a TV episode queue from a
+               movie playlist/collection queue. */
+            MenuSection episodesSection = new MenuSection(activity.seasonNumber >= 0 ? "Episodes" : "Up Next");
             episodesSection.icon = MenuIconView.Icon.EPISODES;
             episodesSection.showChevron = true;
             episodesSection.onTap = () -> {
@@ -1110,48 +1156,274 @@ final class PlayerUiHelper {
        whole separate list navigated to via the main list's "Effects" row (see
        renderMainList), not an inline expansion, since three sub-controls read better
        as their own screen than squeezed under a fourth row. Its own back row returns
-       to renderMainList, same "clear and rebuild `list` in place" approach. */
+       to renderMainList, same "clear and rebuild `list` in place" approach. Unlike the
+       main list's rows, these three are plain always-visible rows (see buildEffectRow)
+       rather than accordion sections - with only three of them and every one landing
+       on a SeekBar, tap-to-expand just added a step between opening "Effects" and
+       reaching the control someone came here for. */
     private static void renderEffectsList(PlayerActivity activity, LinearLayout list) {
         float density = activity.getResources().getDisplayMetrics().density;
         list.removeAllViews();
         list.addView(makeBackRow(activity, density, () -> renderMainList(activity, list)));
-
-        AccordionState state = new AccordionState();
-        List<MenuSection> sections = new ArrayList<>();
-
-        /* Auto/On/Off is a 3-way mode, not a boolean, so it needs the section's own
-           segmented control (see renderShaderSection) rather than a SwitchCompat that
-           fits this row. */
-        MenuSection shaderSection = new MenuSection("Shader Upscaling");
-        shaderSection.icon = MenuIconView.Icon.SHADER;
-        shaderSection.getValue = () -> activity.shaderEnabled ? shaderRowLabel(activity) : null;
-        shaderSection.render = (content, setValue, collapse) -> renderShaderSection(activity, content, setValue, collapse);
-        sections.add(shaderSection);
-
-        MenuSection colorBoostSection = new MenuSection("Color Boost");
-        colorBoostSection.icon = MenuIconView.Icon.COLOR_BOOST;
-        colorBoostSection.getValue = () -> activity.colorBoostEnabled ? colorBoostRowLabel(activity) : null;
-        colorBoostSection.render = (content, setValue, collapse) -> renderColorBoostSection(activity, content, setValue, collapse);
-        sections.add(colorBoostSection);
-
-        MenuSection ambientSection = new MenuSection("Ambient Lighting");
-        ambientSection.icon = MenuIconView.Icon.AMBIENT;
-        ambientSection.getValue = () -> activity.ambientEnabled ? Math.round(activity.ambientOpacity * 100) + "%" : null;
-        /* Flips on/off in place without collapsing the row - tapping anywhere else on
-           it still expands/collapses the opacity slider, same independent-gestures-
-           on-one-row pattern as every toggle+chevron row here. */
-        ambientSection.toggleChecked = activity.ambientEnabled;
-        ambientSection.onToggle = (checked) -> {
-            activity.setAmbientEnabled(checked);
-            return checked ? Math.round(activity.ambientOpacity * 100) + "%" : null;
-        };
-        ambientSection.render = (content, setValue, collapse) -> renderAmbientSection(activity, content, setValue, collapse);
-        sections.add(ambientSection);
-
-        for (MenuSection section : sections) {
-            list.addView(buildAccordionSection(activity, density, section, state));
-        }
+        buildShaderEffectRow(activity, list, density);
+        buildColorBoostEffectRow(activity, list, density);
+        buildAmbientEffectRow(activity, list, density);
         clampMenuCardHeight(activity, list);
+    }
+
+    /** Row + rightSide pair returned by buildEffectRow, so callers can append full-width
+        content below the header (`wrap`) and drop their at-a-glance control into the
+        header's right column (`rightSide`) without threading both back through a longer
+        parameter list. */
+    private static final class EffectRowParts {
+        final LinearLayout wrap;
+        final LinearLayout rightSide;
+
+        EffectRowParts(LinearLayout wrap, LinearLayout rightSide) {
+            this.wrap = wrap;
+            this.rightSide = rightSide;
+        }
+    }
+
+    /** Shared shell for the three Effects rows below - icon+label (and an optional
+        caption under the label) on the left, whatever control belongs at a glance (mode
+        buttons or a toggle) on the right, matching buildAccordionSection's header
+        layout minus the chevron/click-to-expand behavior. Appends the row to `list`
+        immediately; the caller appends full-width content (e.g. a SeekBar) to the
+        returned `wrap` below the header line. */
+    private static EffectRowParts buildEffectRow(PlayerActivity activity, LinearLayout list, float density, MenuIconView.Icon icon, String label, String caption) {
+        LinearLayout wrap = new LinearLayout(activity);
+        wrap.setOrientation(LinearLayout.VERTICAL);
+        LinearLayout.LayoutParams wrapParams = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        wrapParams.bottomMargin = Math.round(4 * density);
+        wrap.setLayoutParams(wrapParams);
+
+        LinearLayout header = new LinearLayout(activity);
+        header.setOrientation(LinearLayout.HORIZONTAL);
+        header.setGravity(Gravity.CENTER_VERTICAL);
+        int padH = Math.round(16 * density);
+        int padV = Math.round(14 * density);
+        header.setPadding(padH, padV, padH, 0);
+        header.setLayoutParams(new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        MenuIconView iconView = new MenuIconView(activity, icon);
+        int iconSizePx = Math.round(22 * density);
+        LinearLayout.LayoutParams iconParams = new LinearLayout.LayoutParams(iconSizePx, iconSizePx);
+        iconParams.setMarginEnd(Math.round(12 * density));
+        iconView.setLayoutParams(iconParams);
+        header.addView(iconView);
+
+        LinearLayout labelStack = new LinearLayout(activity);
+        labelStack.setOrientation(LinearLayout.VERTICAL);
+        labelStack.setLayoutParams(new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        TextView labelEl = new TextView(activity);
+        labelEl.setText(label);
+        labelEl.setTextColor(Color.WHITE);
+        labelEl.setTextSize(15);
+        labelStack.addView(labelEl);
+        if (caption != null) {
+            TextView captionEl = new TextView(activity);
+            captionEl.setText(caption);
+            captionEl.setTextColor(VALUE_TEXT);
+            captionEl.setTextSize(11);
+            labelStack.addView(captionEl);
+        }
+        header.addView(labelStack);
+
+        /* WRAP_CONTENT, not weighted - unlike labelStack above, this needs to hug
+           whatever control the caller drops in (mode buttons or a toggle) rather than
+           stretching to fill the row, so it reads as a value sitting to the right of
+           the label instead of a second flexible column. */
+        LinearLayout rightSide = new LinearLayout(activity);
+        rightSide.setOrientation(LinearLayout.HORIZONTAL);
+        rightSide.setGravity(Gravity.CENTER_VERTICAL);
+        rightSide.setLayoutParams(new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+        header.addView(rightSide);
+
+        wrap.addView(header);
+        list.addView(wrap);
+        return new EffectRowParts(wrap, rightSide);
+    }
+
+    /* No more manual Off/Anime4K/Live-Action picker - detectedShaderType came from
+       plex-player.js's genre-based detection before this Activity ever launched, shown
+       here as read-only info via the row's caption. The SeekBar + mode row are the only
+       remaining controls; dragging strength to 0% in "on" mode is what "Off" used to
+       be. setVideoEffects() supports being called mid-playback (see
+       PlayerActivity.applyVideoEffects's own comment), so there's no Apply/Cancel
+       step. */
+    private static void buildShaderEffectRow(PlayerActivity activity, LinearLayout list, float density) {
+        EffectRowParts row = buildEffectRow(activity, list, density, MenuIconView.Icon.SHADER, "Shader Upscaling", "Detected: " + activity.detectedShaderType.label);
+        int padH = Math.round(16 * density);
+
+        TextView strengthLabel = new TextView(activity);
+        strengthLabel.setTextColor(SUBTLE_TEXT);
+        strengthLabel.setTextSize(12);
+        strengthLabel.setPadding(padH, Math.round(6 * density), padH, 0);
+
+        SeekBar strengthSeekBar = new SeekBar(activity);
+        styleMenuSeekBar(strengthSeekBar, density);
+        strengthSeekBar.setMax(100);
+        LinearLayout.LayoutParams strengthParams =
+            new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        strengthParams.topMargin = Math.round(4 * density);
+        strengthParams.leftMargin = padH;
+        strengthParams.rightMargin = padH;
+        strengthParams.bottomMargin = Math.round(12 * density);
+        strengthSeekBar.setLayoutParams(strengthParams);
+        strengthSeekBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override
+            public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+                /* Label only here - applyVideoEffects() recompiles/relinks a brand-new GL
+                   shader program and rebuilds ExoPlayer's whole video-effects pipeline on
+                   every call. Calling that at drag frequency previously got the renderer
+                   stuck (playback paused and wouldn't resume) - committed once on release
+                   instead, below. */
+                strengthLabel.setText("Strength: " + progress + "%");
+            }
+
+            @Override
+            public void onStartTrackingTouch(SeekBar seekBar) {}
+
+            @Override
+            public void onStopTrackingTouch(SeekBar seekBar) {
+                activity.setShaderStrength(seekBar.getProgress() / 100f);
+            }
+        });
+
+        String[] currentMode = { activity.upscaleMode() };
+        addModeRow(activity, row.rightSide, density, currentMode[0], (mode) -> {
+            currentMode[0] = mode;
+            activity.setUpscaleMode(mode);
+            applyStrengthDisplay(strengthSeekBar, strengthLabel, mode, activity.autoUpscaleStrength, activity.upscaleStrength);
+        });
+        applyStrengthDisplay(strengthSeekBar, strengthLabel, currentMode[0], activity.autoUpscaleStrength, activity.upscaleStrength);
+        row.wrap.addView(strengthLabel);
+        row.wrap.addView(strengthSeekBar);
+        startLiveAutoRefresh(strengthSeekBar, () -> {
+            if ("auto".equals(currentMode[0])) {
+                applyStrengthDisplay(strengthSeekBar, strengthLabel, "auto", activity.autoUpscaleStrength, activity.upscaleStrength);
+            }
+        });
+    }
+
+    /* Same pattern as buildShaderEffectRow above, simpler since there's no auto-detected
+       type to show as read-only info here - just the one strength control. Gated to
+       onStopTrackingTouch like Shader Upscaling's own row (not live like Ambient
+       Lighting's opacity below) - PlayerActivity.setColorBoostStrength goes through
+       applyVideoEffects(), the same GL-program-rebuild-per-call hazard documented on
+       buildShaderEffectRow's own SeekBar listener. */
+    private static void buildColorBoostEffectRow(PlayerActivity activity, LinearLayout list, float density) {
+        EffectRowParts row = buildEffectRow(activity, list, density, MenuIconView.Icon.COLOR_BOOST, "Color Boost", null);
+        int padH = Math.round(16 * density);
+
+        TextView strengthLabel = new TextView(activity);
+        strengthLabel.setTextColor(SUBTLE_TEXT);
+        strengthLabel.setTextSize(12);
+        strengthLabel.setPadding(padH, Math.round(6 * density), padH, 0);
+
+        SeekBar strengthSeekBar = new SeekBar(activity);
+        styleMenuSeekBar(strengthSeekBar, density);
+        strengthSeekBar.setMax(100);
+        LinearLayout.LayoutParams strengthParams =
+            new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        strengthParams.topMargin = Math.round(4 * density);
+        strengthParams.leftMargin = padH;
+        strengthParams.rightMargin = padH;
+        strengthParams.bottomMargin = Math.round(12 * density);
+        strengthSeekBar.setLayoutParams(strengthParams);
+        strengthSeekBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override
+            public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+                strengthLabel.setText("Strength: " + progress + "%");
+            }
+
+            @Override
+            public void onStartTrackingTouch(SeekBar seekBar) {}
+
+            @Override
+            public void onStopTrackingTouch(SeekBar seekBar) {
+                activity.setColorBoostStrength(seekBar.getProgress() / 100f);
+            }
+        });
+
+        String[] currentMode = { activity.colorBoostMode() };
+        addModeRow(activity, row.rightSide, density, currentMode[0], (mode) -> {
+            currentMode[0] = mode;
+            activity.setColorBoostMode(mode);
+            applyStrengthDisplay(strengthSeekBar, strengthLabel, mode, activity.autoColorBoostStrength, activity.colorBoostStrength);
+        });
+        applyStrengthDisplay(strengthSeekBar, strengthLabel, currentMode[0], activity.autoColorBoostStrength, activity.colorBoostStrength);
+        row.wrap.addView(strengthLabel);
+        row.wrap.addView(strengthSeekBar);
+        startLiveAutoRefresh(strengthSeekBar, () -> {
+            if ("auto".equals(currentMode[0])) {
+                applyStrengthDisplay(strengthSeekBar, strengthLabel, "auto", activity.autoColorBoostStrength, activity.colorBoostStrength);
+            }
+        });
+    }
+
+    /* Same pattern as buildShaderEffectRow above, simpler since there's no auto-detected
+       type to show as read-only info here, just the one opacity control plus the on/off
+       toggle. Unlike strength's SeekBar, this one applies live on every
+       onProgressChanged tick, not gated to onStopTrackingTouch -
+       PlayerActivity.setAmbientOpacity is just a Paint.setAlpha (see
+       AmbientGlowView.setGlowOpacity), not a GL program rebuild like
+       applyVideoEffects, so there's no drag-frequency renderer-freeze risk to guard
+       against here. */
+    private static void buildAmbientEffectRow(PlayerActivity activity, LinearLayout list, float density) {
+        EffectRowParts row = buildEffectRow(activity, list, density, MenuIconView.Icon.AMBIENT, "Ambient Lighting", null);
+        int padH = Math.round(16 * density);
+
+        SwitchCompat toggle = new SwitchCompat(activity);
+        toggle.setChecked(activity.ambientEnabled);
+        toggle.setTrackTintList(toggleTrackTint());
+        toggle.setThumbTintList(toggleThumbTint());
+        row.rightSide.addView(toggle);
+
+        TextView opacityLabel = new TextView(activity);
+        opacityLabel.setText("Opacity: " + Math.round(activity.ambientOpacity * 100) + "%");
+        opacityLabel.setTextColor(SUBTLE_TEXT);
+        opacityLabel.setTextSize(12);
+        opacityLabel.setPadding(padH, Math.round(6 * density), padH, 0);
+        row.wrap.addView(opacityLabel);
+
+        SeekBar opacitySeekBar = new SeekBar(activity);
+        styleMenuSeekBar(opacitySeekBar, density);
+        opacitySeekBar.setMax(100);
+        opacitySeekBar.setProgress(Math.round(activity.ambientOpacity * 100));
+        LinearLayout.LayoutParams opacityParams =
+            new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        opacityParams.topMargin = Math.round(4 * density);
+        opacityParams.leftMargin = padH;
+        opacityParams.rightMargin = padH;
+        opacityParams.bottomMargin = Math.round(12 * density);
+        opacitySeekBar.setLayoutParams(opacityParams);
+        opacitySeekBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override
+            public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+                opacityLabel.setText("Opacity: " + progress + "%");
+                activity.setAmbientOpacity(progress / 100f);
+            }
+
+            @Override
+            public void onStartTrackingTouch(SeekBar seekBar) {}
+
+            @Override
+            public void onStopTrackingTouch(SeekBar seekBar) {}
+        });
+        row.wrap.addView(opacitySeekBar);
+
+        /* No effect running to tune while the toggle is off, same "disabled unless
+           there's something to adjust" reasoning as Shader Upscaling/Color Boost's own
+           strength SeekBar (see applyStrengthDisplay). */
+        opacitySeekBar.setEnabled(activity.ambientEnabled);
+        opacitySeekBar.setAlpha(activity.ambientEnabled ? 1f : 0.5f);
+        toggle.setOnCheckedChangeListener((buttonView, checked) -> {
+            activity.setAmbientEnabled(checked);
+            opacitySeekBar.setEnabled(checked);
+            opacitySeekBar.setAlpha(checked ? 1f : 0.5f);
+        });
     }
 
     /* "Extras" - same dedicated-screen pattern as renderEffectsList above, for
@@ -1530,40 +1802,52 @@ final class PlayerUiHelper {
         clampMenuCardHeight(activity, list);
     }
 
-    /* The hamburger row's value text (no inline toggle any more, see the mode row below)
-       - "Auto" replaces the numeric % once strength is computed dynamically (see
-       ContentAnalysisSampler) rather than showing a live-ticking percentage, matching
-       chrome.js's shaderRowLabel/colorBoostRowLabel on the web leg. */
-    private static String shaderRowLabel(PlayerActivity activity) {
-        return activity.upscaleAuto ? activity.detectedShaderType.label + " (Auto)" : activity.detectedShaderType.label;
-    }
-
-    private static String colorBoostRowLabel(PlayerActivity activity) {
-        return activity.colorBoostAuto ? "Auto" : Math.round(activity.colorBoostStrength * 100) + "%";
-    }
-
     private static final String[] MODE_KEYS = { "auto", "on", "off" };
     private static final String[] MODE_LABELS = { "Auto", "On", "Off" };
 
-    /* Shared by renderShaderSection/renderColorBoostSection's mode row - disables the manual
-       SeekBar and snapshots the current auto-resolved value into its label only in
-       "auto" mode ("on"/"off" both leave it showing/editable at the manual value, same
-       as the old enabled-toggle-off case always did), matching chrome.js's
-       applyStrengthDisplay on the web leg. Deliberately never calls
-       strengthSeekBar.setProgress() while auto is selected - unlike a plain HTML range
-       input, SeekBar.setProgress() fires onProgressChanged even for a programmatic
-       change, which would silently overwrite the remembered manual strength (see
-       renderShaderSection/renderColorBoostSection's own SeekBar listeners) with whatever the
-       auto snapshot happened to be. */
+    /* Shared by buildShaderEffectRow/buildColorBoostEffectRow's mode row - drives the
+       SeekBar's thumb + label from the auto-resolved value while in "auto" mode, and
+       only leaves the SeekBar itself interactive in "on" mode: "auto" because the value
+       isn't user-driven, "off" because there's no effect running for it to tune, same
+       reasoning "off" already gets a dimmed/disabled mode button of its own. Matches
+       chrome.js's applyStrengthDisplay on the web leg. Safe to call setProgress() in
+       every branch - unlike a plain HTML range input, SeekBar.setProgress() does fire
+       onProgressChanged even for a programmatic change, but that listener only ever
+       touches the label text (see buildShaderEffectRow/buildColorBoostEffectRow's own
+       SeekBar listeners); the actual manual-strength commit happens in
+       onStopTrackingTouch, which is gesture-only and never fires from a programmatic
+       change, so there's no risk of a live auto-mode refresh (see
+       startLiveAutoRefresh) clobbering the remembered manual value. */
     private static void applyStrengthDisplay(SeekBar strengthSeekBar, TextView strengthLabel, String mode, float autoValue, float manualValue) {
         boolean auto = "auto".equals(mode);
-        strengthSeekBar.setEnabled(!auto);
-        strengthSeekBar.setAlpha(auto ? 0.5f : 1f);
-        if (!auto) {
-            strengthSeekBar.setProgress(Math.round(manualValue * 100));
-        }
+        boolean enabled = "on".equals(mode);
+        strengthSeekBar.setEnabled(enabled);
+        strengthSeekBar.setAlpha(enabled ? 1f : 0.5f);
         int shown = Math.round((auto ? autoValue : manualValue) * 100);
+        strengthSeekBar.setProgress(shown);
         strengthLabel.setText("Strength: " + shown + "%" + (auto ? " (auto)" : ""));
+    }
+
+    /* Ticks `refresh` while `view` stays attached to the window, then stops itself -
+       used by the two Effects rows with an Auto mode (Shader Upscaling/Color Boost) to
+       reflect ContentAnalysisSampler's background strength recalculation (every
+       ~750ms, see its own SAMPLE_INTERVAL_MS) instead of leaving a stale snapshot from
+       whenever "Auto" was last tapped. Polls attachment state rather than requiring an
+       explicit teardown call, since this row can disappear via several different paths
+       (back navigation, closing the whole sheet) that would otherwise each need their
+       own cleanup wired in - same self-stopping approach as chrome.js's
+       startLiveAutoRefresh on the web leg (which polls DOM connectedness instead). */
+    private static void startLiveAutoRefresh(View view, Runnable refresh) {
+        Handler handler = new Handler(Looper.getMainLooper());
+        Runnable tick = new Runnable() {
+            @Override
+            public void run() {
+                if (!view.isAttachedToWindow()) return;
+                refresh.run();
+                handler.postDelayed(this, 750L);
+            }
+        };
+        handler.postDelayed(tick, 750L);
     }
 
     /* 3-way Auto/On/Off segmented control replacing the old separate enabled-toggle
@@ -1573,15 +1857,22 @@ final class PlayerUiHelper {
        were rather than being replaced outright. Matches chrome.js's buildModeRow on the
        web leg: three equal-weight buttons, tap wires straight through to onModeChange +
        a strength-display refresh, no separate "commit" step. */
+    /* Fixed-width buttons (not layout_weight) rather than the old evenly-filled
+       full-width row - this now sits in buildEffectRow's `rightSide`, which itself
+       hugs its content instead of stretching to the sheet's full width, so weighted
+       0dp-width children here would hit LinearLayout's "weight inside a WRAP_CONTENT
+       ancestor" measurement trap (an UNSPECIFIED/AT_MOST spec propagating down to a
+       0dp+weight child can collapse or over-expand it unpredictably). A fixed width
+       per button sidesteps that entirely and keeps "Auto"/"On"/"Off" equal width
+       despite their different text lengths, reading as a compact segmented control
+       next to the row's label. */
     private static void addModeRow(PlayerActivity activity, LinearLayout content, float density, String mode, Consumer<String> onModeChange) {
         LinearLayout row = new LinearLayout(activity);
         row.setOrientation(LinearLayout.HORIZONTAL);
         int gap = Math.round(6 * density);
-        LinearLayout.LayoutParams rowParams =
-            new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        rowParams.bottomMargin = Math.round(10 * density);
-        row.setLayoutParams(rowParams);
+        row.setLayoutParams(new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
 
+        int btnWidth = Math.round(44 * density);
         TextView[] buttons = new TextView[MODE_KEYS.length];
         for (int i = 0; i < MODE_KEYS.length; i++) {
             String key = MODE_KEYS[i];
@@ -1590,9 +1881,12 @@ final class PlayerUiHelper {
             btn.setGravity(Gravity.CENTER);
             btn.setTextSize(12);
             btn.setTypeface(btn.getTypeface(), android.graphics.Typeface.BOLD);
-            int pad = Math.round(6 * density);
-            btn.setPadding(0, pad, 0, pad);
-            LinearLayout.LayoutParams btnParams = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
+            int padV = Math.round(6 * density);
+            btn.setPadding(0, padV, 0, padV);
+            /* Fixed width, not WRAP_CONTENT+minWidth - "Auto"/"On"/"Off" have different
+               natural text widths, and minWidth only guarantees a floor, not equality,
+               once any label's content happens to exceed it. */
+            LinearLayout.LayoutParams btnParams = new LinearLayout.LayoutParams(btnWidth, LinearLayout.LayoutParams.WRAP_CONTENT);
             if (i > 0) btnParams.setMarginStart(gap);
             btn.setLayoutParams(btnParams);
             btn.setOnClickListener(v -> {
@@ -2501,177 +2795,6 @@ final class PlayerUiHelper {
         });
 
         return card;
-    }
-
-    /* No more manual Off/Anime4K/Live-Action picker - detectedShaderType came from
-       plex-player.js's genre-based detection before this Activity ever launched, shown
-       here as read-only info. The SeekBar is the only remaining control; dragging it to
-       0% is what "Off" used to be. setVideoEffects() supports being called mid-playback
-       (see PlayerActivity.applyVideoEffects's own comment), so there's no Apply/Cancel
-       step - matches chrome.js's openShaderMenu panel. */
-    private static void renderShaderSection(PlayerActivity activity, LinearLayout content, Consumer<String> setValue, Runnable collapse) {
-        float density = activity.getResources().getDisplayMetrics().density;
-        int padH = Math.round(16 * density);
-
-        TextView detectedLabel = new TextView(activity);
-        detectedLabel.setText("Detected: " + activity.detectedShaderType.label);
-        detectedLabel.setTextColor(Color.WHITE);
-        detectedLabel.setTextSize(13);
-        detectedLabel.setTypeface(detectedLabel.getTypeface(), android.graphics.Typeface.BOLD);
-        detectedLabel.setPadding(padH, 0, padH, 0);
-        content.addView(detectedLabel);
-
-        TextView detectedHint = new TextView(activity);
-        detectedHint.setText("Auto-detected from this title's genre");
-        detectedHint.setTextColor(VALUE_TEXT);
-        detectedHint.setTextSize(11);
-        detectedHint.setPadding(padH, Math.round(2 * density), padH, Math.round(10 * density));
-        content.addView(detectedHint);
-
-        TextView strengthLabel = new TextView(activity);
-        strengthLabel.setTextColor(SUBTLE_TEXT);
-        strengthLabel.setTextSize(12);
-        strengthLabel.setPadding(padH, 0, padH, 0);
-
-        SeekBar strengthSeekBar = new SeekBar(activity);
-        styleSeekBar(strengthSeekBar, density);
-        strengthSeekBar.setMax(100);
-        LinearLayout.LayoutParams strengthParams =
-            new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        strengthParams.topMargin = Math.round(4 * density);
-        strengthParams.leftMargin = padH;
-        strengthParams.rightMargin = padH;
-        strengthSeekBar.setLayoutParams(strengthParams);
-        strengthSeekBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
-            @Override
-            public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
-                /* Label only here - applyVideoEffects() recompiles/relinks a brand-new GL
-                   shader program and rebuilds ExoPlayer's whole video-effects pipeline on
-                   every call. Calling that at drag frequency previously got the renderer
-                   stuck (playback paused and wouldn't resume) - committed once on release
-                   instead, below. */
-                strengthLabel.setText("Strength: " + progress + "%");
-            }
-
-            @Override
-            public void onStartTrackingTouch(SeekBar seekBar) {}
-
-            @Override
-            public void onStopTrackingTouch(SeekBar seekBar) {
-                activity.setShaderStrength(seekBar.getProgress() / 100f);
-            }
-        });
-
-        LinearLayout modeRowWrap = new LinearLayout(activity);
-        modeRowWrap.setOrientation(LinearLayout.HORIZONTAL);
-        modeRowWrap.setPadding(padH, 0, padH, 0);
-        addModeRow(activity, modeRowWrap, density, activity.upscaleMode(), (mode) -> {
-            activity.setUpscaleMode(mode);
-            applyStrengthDisplay(strengthSeekBar, strengthLabel, mode, activity.autoUpscaleStrength, activity.upscaleStrength);
-            setValue.accept(activity.shaderEnabled ? shaderRowLabel(activity) : null);
-        });
-        applyStrengthDisplay(strengthSeekBar, strengthLabel, activity.upscaleMode(), activity.autoUpscaleStrength, activity.upscaleStrength);
-        content.addView(modeRowWrap);
-        content.addView(strengthLabel);
-        content.addView(strengthSeekBar);
-    }
-
-    /* Same pattern as renderShaderSection above, simpler since there's no auto-detected
-       type to show as read-only info here - just the one strength control. Gated to
-       onStopTrackingTouch like Shader Upscaling's own section (not live like Ambient
-       Lighting's opacity below) - PlayerActivity.setColorBoostStrength goes through
-       applyVideoEffects(), the same GL-program-rebuild-per-call hazard documented on
-       renderShaderSection's own SeekBar listener. */
-    private static void renderColorBoostSection(PlayerActivity activity, LinearLayout content, Consumer<String> setValue, Runnable collapse) {
-        float density = activity.getResources().getDisplayMetrics().density;
-        int padH = Math.round(16 * density);
-
-        TextView strengthLabel = new TextView(activity);
-        strengthLabel.setTextColor(SUBTLE_TEXT);
-        strengthLabel.setTextSize(12);
-        strengthLabel.setPadding(padH, Math.round(4 * density), padH, 0);
-
-        SeekBar strengthSeekBar = new SeekBar(activity);
-        styleSeekBar(strengthSeekBar, density);
-        strengthSeekBar.setMax(100);
-        LinearLayout.LayoutParams strengthParams =
-            new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        strengthParams.topMargin = Math.round(4 * density);
-        strengthParams.leftMargin = padH;
-        strengthParams.rightMargin = padH;
-        strengthSeekBar.setLayoutParams(strengthParams);
-        strengthSeekBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
-            @Override
-            public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
-                strengthLabel.setText("Strength: " + progress + "%");
-            }
-
-            @Override
-            public void onStartTrackingTouch(SeekBar seekBar) {}
-
-            @Override
-            public void onStopTrackingTouch(SeekBar seekBar) {
-                activity.setColorBoostStrength(seekBar.getProgress() / 100f);
-            }
-        });
-
-        LinearLayout modeRowWrap = new LinearLayout(activity);
-        modeRowWrap.setOrientation(LinearLayout.HORIZONTAL);
-        modeRowWrap.setPadding(padH, 0, padH, 0);
-        addModeRow(activity, modeRowWrap, density, activity.colorBoostMode(), (mode) -> {
-            activity.setColorBoostMode(mode);
-            applyStrengthDisplay(strengthSeekBar, strengthLabel, mode, activity.autoColorBoostStrength, activity.colorBoostStrength);
-            setValue.accept(activity.colorBoostEnabled ? colorBoostRowLabel(activity) : null);
-        });
-        applyStrengthDisplay(strengthSeekBar, strengthLabel, activity.colorBoostMode(), activity.autoColorBoostStrength, activity.colorBoostStrength);
-        content.addView(modeRowWrap);
-        content.addView(strengthLabel);
-        content.addView(strengthSeekBar);
-    }
-
-    /* Same pattern as renderShaderSection above, simpler since there's no auto-detected
-       type to show as read-only info here, just the one opacity control. Unlike
-       strength's SeekBar, this one applies live on every onProgressChanged tick, not
-       gated to onStopTrackingTouch - PlayerActivity.setAmbientOpacity is just a
-       Paint.setAlpha (see AmbientGlowView.setGlowOpacity), not a GL program rebuild like
-       applyVideoEffects, so there's no drag-frequency renderer-freeze risk to guard
-       against here. */
-    private static void renderAmbientSection(PlayerActivity activity, LinearLayout content, Consumer<String> setValue, Runnable collapse) {
-        float density = activity.getResources().getDisplayMetrics().density;
-        int padH = Math.round(16 * density);
-
-        TextView opacityLabel = new TextView(activity);
-        opacityLabel.setText("Opacity: " + Math.round(activity.ambientOpacity * 100) + "%");
-        opacityLabel.setTextColor(SUBTLE_TEXT);
-        opacityLabel.setTextSize(12);
-        opacityLabel.setPadding(padH, Math.round(4 * density), padH, 0);
-        content.addView(opacityLabel);
-
-        SeekBar opacitySeekBar = new SeekBar(activity);
-        styleSeekBar(opacitySeekBar, density);
-        opacitySeekBar.setMax(100);
-        opacitySeekBar.setProgress(Math.round(activity.ambientOpacity * 100));
-        LinearLayout.LayoutParams opacityParams =
-            new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        opacityParams.topMargin = Math.round(4 * density);
-        opacityParams.leftMargin = padH;
-        opacityParams.rightMargin = padH;
-        opacitySeekBar.setLayoutParams(opacityParams);
-        opacitySeekBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
-            @Override
-            public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
-                opacityLabel.setText("Opacity: " + progress + "%");
-                activity.setAmbientOpacity(progress / 100f);
-                setValue.accept(activity.ambientEnabled ? progress + "%" : null);
-            }
-
-            @Override
-            public void onStartTrackingTouch(SeekBar seekBar) {}
-
-            @Override
-            public void onStopTrackingTouch(SeekBar seekBar) {}
-        });
-        content.addView(opacitySeekBar);
     }
 
     private static Drawable rowPressBackground() {
