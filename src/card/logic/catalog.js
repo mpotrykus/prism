@@ -13,13 +13,17 @@ export function shuffle(array) {
   return arr;
 }
 
-/* plexImageUrl: (path) => absolute Plex image URL. episodeFallbackGenres: genre tags to
+/* plexImageUrl: (path) => absolute Plex image URL, full source resolution - used for
+   `art` (hero/backdrop, meant to fill the screen). plexThumbUrl: (path) => same but
+   resized via Plex's /photo/:/transcode - used for `image` (poster grid, always
+   displayed small); defaults to plexImageUrl so existing callers/tests that don't pass
+   it keep working unresized rather than throwing. episodeFallbackGenres: genre tags to
    use for an episode item, whose own Plex metadata carries no Genre of its own (that
    lives on the show) - see plex-netflix-card.js's _mapItem for why this matters to
    plex-player.js's shader auto-detection. */
-export function mapItem(m, withProgress, { plexImageUrl, episodeFallbackGenres = [] }) {
+export function mapItem(m, withProgress, { plexImageUrl, plexThumbUrl = plexImageUrl, episodeFallbackGenres = [] }) {
   const thumbPath = m.thumb || m.grandparentThumb || m.composite || m.art || "";
-  const image = plexImageUrl(thumbPath);
+  const image = plexThumbUrl(thumbPath);
   const art = plexImageUrl(m.art || m.grandparentArt || thumbPath);
   const title = m.grandparentTitle || m.title || "Untitled";
   const subtitle = m.grandparentTitle ? m.title : m.year ? String(m.year) : "";

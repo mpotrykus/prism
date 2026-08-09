@@ -277,6 +277,7 @@ class PlexNetflixCard extends HTMLElement {
       escape: (s) => this._escape(s),
       plexFetch: (path, params) => this._plexFetch(path, params),
       plexImageUrl: (path) => this._plexImageUrl(path),
+      plexThumbUrl: (path, width, height) => this._plexThumbUrl(path, width, height),
       mapItem: (m, withProgress) => this._mapItem(m, withProgress),
       isInWatchlist: (item) => this._isInWatchlist(item),
       resolveLocalRatingKey: (item) => this._resolveLocalRatingKey(item),
@@ -430,6 +431,32 @@ class PlexNetflixCard extends HTMLElement {
     if (path.startsWith("http")) return path;
     const sep = path.includes("?") ? "&" : "?";
     return `${this._config.plex_url}${path}${sep}X-Plex-Token=${this._config.plex_token}`;
+  }
+
+  /* Poster-grid/avatar/episode-thumb images are always displayed small but Plex hands
+     back full source-resolution art regardless (a lighthouse audit found 62MB/337
+     images on one cold load) - route those through Plex's own /photo/:/transcode so PMS
+     resizes once, caches the result, and every later request for that (item, size) is
+     cheap. Deliberately NOT applied to hero/backdrop art (see _plexImageUrl callers in
+     hero.js/catalog.js's `art` field) - those fill the screen at full res on purpose,
+     and this endpoint's own cost is what an earlier investigation decided was too risky
+     to run for the high-volume case (see image-transcode-wont-do memory) - this narrows
+     that back down to just the small fixed-size grid case, not a blanket resize.
+     Doesn't handle `path` values that are already absolute URLs (e.g. Gracenote-hosted
+     agent artwork on metadata-static.plex.tv) - those aren't served by this PMS so can't
+     be transcoded through it; falls back to the untouched original for those. */
+  _plexThumbUrl(path, width = 320, height = 480) {
+    if (!path) return "";
+    if (path.startsWith("http")) return path;
+    const sourceUrl = `${path}${path.includes("?") ? "&" : "?"}X-Plex-Token=${this._config.plex_token}`;
+    const url = new URL(`${this._config.plex_url}/photo/:/transcode`);
+    url.searchParams.set("width", String(width));
+    url.searchParams.set("height", String(height));
+    url.searchParams.set("minSize", "1");
+    url.searchParams.set("upscale", "0");
+    url.searchParams.set("X-Plex-Token", this._config.plex_token);
+    url.searchParams.set("url", sourceUrl);
+    return url.toString();
   }
 
   _advanceHero() {
@@ -597,7 +624,7 @@ class PlexNetflixCard extends HTMLElement {
       type: "collection",
       title: c.title,
       subtitle: c.childCount ? `${c.childCount} titles` : "",
-      image: this._plexImageUrl(c.thumb),
+      image: this._plexThumbUrl(c.thumb),
       art: this._plexImageUrl(c.thumb),
     }));
     return { title: "Collections", items, source: "local" };
@@ -616,7 +643,7 @@ class PlexNetflixCard extends HTMLElement {
       type: "playlist",
       title: p.title,
       subtitle: p.leafCount ? `${p.leafCount} items` : "",
-      image: this._plexImageUrl(p.composite),
+      image: this._plexThumbUrl(p.composite),
       art: this._plexImageUrl(p.composite),
     }));
     return { title: "Playlists", items, source: "local" };
@@ -867,6 +894,7 @@ class PlexNetflixCard extends HTMLElement {
   _mapItem(m, withProgress) {
     return mapItem(m, withProgress, {
       plexImageUrl: (path) => this._plexImageUrl(path),
+      plexThumbUrl: (path) => this._plexThumbUrl(path),
       episodeFallbackGenres: this._titleInfo?.item?.genres || [],
     });
   }

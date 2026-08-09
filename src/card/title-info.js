@@ -294,7 +294,7 @@ export class TitleInfoController {
       .map((r) => {
         const fallback = `<div class="title-info-cast-avatar-fallback">${PROFILE_ICON_SVG}</div>`;
         const avatar = r.thumb
-          ? `<img src="${this._ctx.escape(this._ctx.plexImageUrl(r.thumb))}" alt="" loading="lazy" onerror="this.style.display='none';this.nextElementSibling.style.display='flex';" />
+          ? `<img src="${this._ctx.escape(this._ctx.plexThumbUrl(r.thumb, 160, 160))}" alt="" loading="lazy" onerror="this.style.display='none';this.nextElementSibling.style.display='flex';" />
              <div class="title-info-cast-avatar-fallback" style="display:none">${PROFILE_ICON_SVG}</div>`
           : fallback;
         const role = r.role ? `<div class="title-info-cast-role">${this._ctx.escape(r.role)}</div>` : "";
@@ -336,7 +336,7 @@ export class TitleInfoController {
             return `
           <div class="title-info-episode" data-rating-key="${ep.ratingKey}">
             <div class="title-info-episode-thumb">
-              <img loading="lazy" src="${this._ctx.escape(this._ctx.plexImageUrl(ep.thumb))}" alt="" />
+              <img loading="lazy" src="${this._ctx.escape(this._ctx.plexThumbUrl(ep.thumb, 320, 180))}" alt="" />
               ${watched ? `<div class="title-info-episode-watched">${WATCHED_ICON_SVG}</div>` : ""}
               ${
                 progress > 0

@@ -155,7 +155,7 @@ async function buildFacetMatchHubs(card, query, limit) {
         const match = (card._collectionsRaw || []).find(
           (c) => c.section.key === facet.section.key && c.title === facet.title
         );
-        if (match?.thumb) hub.image = card._plexImageUrl(match.thumb);
+        if (match?.thumb) hub.image = card._plexThumbUrl(match.thumb);
       }
       return hub;
     })
