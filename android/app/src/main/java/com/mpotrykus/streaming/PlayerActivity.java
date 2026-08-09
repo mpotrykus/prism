@@ -38,6 +38,7 @@ import androidx.media3.common.Tracks;
 import androidx.media3.common.VideoSize;
 import androidx.media3.common.util.UnstableApi;
 import androidx.media3.common.Effect;
+import androidx.media3.datasource.DefaultDataSource;
 import androidx.media3.datasource.DefaultHttpDataSource;
 import androidx.media3.exoplayer.ExoPlayer;
 import androidx.media3.exoplayer.analytics.AnalyticsListener;
@@ -293,6 +294,26 @@ public class PlayerActivity extends AppCompatActivity {
     String subtitlePendingFileId;
     String subtitleApplyErrorFileId;
     String subtitleApplyErrorMessage;
+    /* The actual sidecar track state, as opposed to currentSubtitleFileId/Label above
+       (OpenSubtitles-search-result bookkeeping for the menu UI). currentSubtitleUri is
+       what's actually fed to MediaItem.SubtitleConfiguration - needed as its own field
+       (not just re-derived from currentSubtitleSrtText each time) because
+       switchAudioStream/switchMediaVersion/switchQualityCap each rebuild the MediaItem
+       from scratch for their own reasons (a new audioStreamID/mediaIndex/maxVideoBitrate
+       baked into the transcode URL) and, without carrying this forward, silently dropped
+       whatever subtitle was active - confirmed against a real device: the auto-quality
+       ABR monitor can call switchQualityCap on its own, an arbitrary amount of time after
+       a subtitle was applied with no user action in between, wiping it out with no
+       visible error. currentSubtitleSrtText/OffsetMs exist so the Sync +/- control
+       (writeSubtitleCacheFile/adjustSubtitleOffset below) can re-shift and rewrite the
+       on-disk file without re-hitting OpenSubtitles for every click - mirrors the web
+       leg's own Sync control (chrome.js's adjustSubtitleOffset), which can mutate
+       already-parsed VTTCue objects directly instead of a source file. */
+    private String currentSubtitleSrtText;
+    private long currentSubtitleOffsetMs;
+    private Uri currentSubtitleUri;
+    private String currentSubtitleLanguageCode;
+    private String currentSubtitleMimeType;
     /* Last submitted search box text, kept separate from `title` so a rebuild of the
        overlay (any refreshAudioSubtitlesMenu call) reflects what the user actually
        searched for rather than snapping back to the title default - null until the
@@ -658,7 +679,21 @@ public class PlayerActivity extends AppCompatActivity {
         }
         everStartedPlaying = false;
         DefaultHttpDataSource.Factory httpDataSourceFactory = new DefaultHttpDataSource.Factory();
-        DefaultMediaSourceFactory mediaSourceFactory = new DefaultMediaSourceFactory(this).setDataSourceFactory(httpDataSourceFactory);
+        /* Wrapped in DefaultDataSource.Factory rather than handing httpDataSourceFactory
+           to setDataSourceFactory directly - DefaultMediaSourceFactory uses whatever
+           factory it's given for EVERY sub-source it builds, including the sidecar
+           subtitle SingleSampleMediaSource, and a bare DefaultHttpDataSource.Factory only
+           knows how to open http(s):// connections. The Sync +/- control's local
+           file://-URI subtitle (see PlayerActivity's writeSubtitleCacheFile) failed to
+           load through it with no crash and no visible error - confirmed against a real
+           device: the file existed on disk with valid content, but nothing ever rendered.
+           DefaultDataSource.Factory delegates to FileDataSource/AssetDataSource/etc. for
+           non-http(s) schemes and falls through to the wrapped httpDataSourceFactory
+           unchanged for http(s):// - onSegmentLoadCompleted's own bandwidth-measurement
+           reasoning below is untouched by this, since that factory's behavior for
+           http(s) requests is exactly the same either way. */
+        DefaultMediaSourceFactory mediaSourceFactory = new DefaultMediaSourceFactory(this)
+            .setDataSourceFactory(new DefaultDataSource.Factory(this, httpDataSourceFactory));
         player = new ExoPlayer.Builder(this).setMediaSourceFactory(mediaSourceFactory).build();
         playerView.setPlayer(player);
         /* setVideoEffects() must be called at least once before prepare() even to apply an
@@ -1404,31 +1439,46 @@ public class PlayerActivity extends AppCompatActivity {
         finish();
     }
 
+    /* Every one of these four - like setSubtitleText further down - touches the
+       ExoPlayer instance directly from a Capacitor plugin method. Capacitor plugin
+       calls arrive on their own "CapacitorPlugins" thread, never main, and ExoPlayer
+       enforces "accessed on main thread only" on essentially every public method, not
+       just the view-mutation style calls below - confirmed via a real device crash log
+       for setSubtitleText's own getCurrentPosition() call. These four were the same
+       latent crash, just not yet hit by anything that exercised them. */
     public static void pause() {
         if (activeInstance != null && activeInstance.player != null) {
-            activeInstance.player.setPlayWhenReady(false);
+            activeInstance.runOnUiThread(() -> {
+                if (activeInstance.player != null) activeInstance.player.setPlayWhenReady(false);
+            });
         }
     }
 
     public static void resume() {
         if (activeInstance != null && activeInstance.player != null) {
-            activeInstance.player.setPlayWhenReady(true);
+            activeInstance.runOnUiThread(() -> {
+                if (activeInstance.player != null) activeInstance.player.setPlayWhenReady(true);
+            });
         }
     }
 
     public static void seek(long positionMs) {
         if (activeInstance != null && activeInstance.player != null) {
-            activeInstance.player.seekTo(positionMs);
+            activeInstance.runOnUiThread(() -> {
+                if (activeInstance.player != null) activeInstance.player.seekTo(positionMs);
+            });
         }
     }
 
     public static void setPlaybackSpeed(float speed) {
         if (activeInstance != null && activeInstance.player != null) {
-            activeInstance.player.setPlaybackParameters(new PlaybackParameters(speed));
+            activeInstance.runOnUiThread(() -> {
+                if (activeInstance.player != null) activeInstance.player.setPlaybackParameters(new PlaybackParameters(speed));
+            });
         }
     }
 
-    /* View mutations, unlike the player-only static methods above, need to run on the
+    /* View mutations, same as the player-only static methods above, need to run on the
        main thread since Capacitor plugin calls aren't guaranteed to arrive on it. */
     public static void showSkipButton(String label, long seekToMs) {
         if (activeInstance != null) {
@@ -1549,10 +1599,10 @@ public class PlayerActivity extends AppCompatActivity {
 
     /* Bridge entry point for NativePlayerPlugin.notifySubtitleApplied - the success leg
        of the requestSubtitleSelect round trip above, arriving after JS has already
-       called setSubtitleUrl (the actual attach) separately. Kept as two distinct native
-       calls rather than one, so setSubtitleUrl's signature (shared with the dead-but-
-       kept-correct web/chrome.js Android branch) doesn't need to grow fileId/label
-       params it has no other use for. */
+       called setSubtitleText (the actual attach) separately. Kept as two distinct
+       native calls rather than one, so setSubtitleText's signature (shared with the
+       dead-but-kept-correct web/chrome.js Android branch) doesn't need to grow
+       fileId/label params it has no other use for. */
     public static void notifySubtitleApplied(String fileId, String label) {
         if (activeInstance != null) {
             activeInstance.runOnUiThread(() -> activeInstance.notifySubtitleAppliedInternal(fileId, label));
@@ -1595,6 +1645,11 @@ public class PlayerActivity extends AppCompatActivity {
         player.setMediaItem(newItem, resumeMs);
         player.prepare();
         if (abrMonitor != null) abrMonitor.notifyReload();
+        currentSubtitleSrtText = null;
+        currentSubtitleOffsetMs = 0;
+        currentSubtitleUri = null;
+        currentSubtitleLanguageCode = null;
+        currentSubtitleMimeType = null;
         currentSubtitleFileId = null;
         currentSubtitleLabel = null;
         subtitlePendingFileId = null;
@@ -1697,6 +1752,11 @@ public class PlayerActivity extends AppCompatActivity {
            rather than leaving a stale "currently selected" checkmark pointing at a file
            that no longer applies to whatever's now playing. */
         subtitleResults.clear();
+        currentSubtitleSrtText = null;
+        currentSubtitleOffsetMs = 0;
+        currentSubtitleUri = null;
+        currentSubtitleLanguageCode = null;
+        currentSubtitleMimeType = null;
         currentSubtitleFileId = null;
         currentSubtitleLabel = null;
         subtitlePendingFileId = null;
@@ -1768,27 +1828,137 @@ public class PlayerActivity extends AppCompatActivity {
        untouched, only the local MediaItem description changes. setMediaItem's resumeMs
        argument re-prepares in place without restarting from zero - unverified whether
        that's visibly seamless (no rebuffer/flash) on a real device against this specific
-       HLS transcode source, see this phase's open risks. */
-    public static void setSubtitleUrl(String url, String languageCode, String mimeType) {
+       HLS transcode source, see this phase's open risks. Takes the raw .srt TEXT now,
+       not a bare URL - the Sync +/- control (adjustSubtitleOffset below) needs the
+       original, un-shifted timestamps cached on this side so every click can re-shift
+       and rewrite a local file without re-hitting OpenSubtitles, and ExoPlayer only ever
+       reads whatever's currently on disk (currentSubtitleUri), never this text directly. */
+    public static void setSubtitleText(String srtText, String languageCode, String mimeType) {
         if (activeInstance != null) {
-            activeInstance.applySubtitle(url, languageCode, mimeType);
+            /* Capacitor plugin methods run on their own "CapacitorPlugins" thread, not
+               main - every ExoPlayer call (getCurrentPosition/setMediaItem/prepare below)
+               enforces "accessed on main thread only" and crashes otherwise (confirmed
+               via a real device crash log: IllegalStateException at
+               ExoPlayerImpl.verifyApplicationThread). Every other bridge entry point in
+               this file already hops via runOnUiThread for the same reason - this one
+               was just missing it. */
+            activeInstance.runOnUiThread(() -> activeInstance.applySubtitle(srtText, languageCode, mimeType));
         }
     }
 
-    private void applySubtitle(String url, String languageCode, String mimeType) {
+    private void applySubtitle(String srtText, String languageCode, String mimeType) {
         if (player == null || currentUrl == null) return;
+        currentSubtitleSrtText = srtText;
+        currentSubtitleOffsetMs = 0;
+        currentSubtitleLanguageCode = languageCode;
+        currentSubtitleMimeType = mimeType;
+        if (!writeSubtitleCacheFile()) return;
+        /* SELECTION_FLAG_DEFAULT alone isn't enough - confirmed against a real device:
+           the subtitle attaches and re-prepares with no error, but DefaultTrackSelector
+           still never turns it on, because its default behavior is to only auto-select a
+           text track whose language matches TrackSelectionParameters.preferredTextLanguages
+           (empty here) or is itself undetermined - a sideloaded sidecar track carrying a
+           real language tag matches neither by default. Setting both here, rather than
+           relying on either alone, covers a track missing a language tag too. */
+        player.setTrackSelectionParameters(
+            player.getTrackSelectionParameters().buildUpon()
+                .setPreferredTextLanguage(languageCode)
+                .setSelectUndeterminedTextLanguage(true)
+                .build());
+        reloadWithCurrentSubtitle();
+    }
+
+    /* Called directly from PlayerUiHelper's Sync +/- buttons, fully native (no JS round
+       trip) - unlike the initial apply above, currentSubtitleSrtText is already cached
+       from that first fetch, so nudging the offset never re-hits OpenSubtitles. Mirrors
+       chrome.js's own adjustSubtitleOffset (250ms/click) on the web leg, which mutates
+       already-parsed VTTCue objects directly instead of a source file - this rewrites
+       the on-disk .srt instead, since ExoPlayer's SubripDecoder parses that itself and
+       there's no equivalent live cue list on this side to mutate in place. */
+    void adjustSubtitleOffset(long deltaMs) {
+        if (player == null || currentSubtitleSrtText == null) return;
+        currentSubtitleOffsetMs += deltaMs;
+        if (!writeSubtitleCacheFile()) return;
+        reloadWithCurrentSubtitle();
+        PlayerUiHelper.refreshAudioSubtitlesMenu(this);
+    }
+
+    /* currentSubtitleOffsetMs itself is private (only the reload plumbing above should
+       mutate it) - this is PlayerUiHelper's read-only window onto it for the Sync row's
+       own label. */
+    long subtitleOffsetMs() {
+        return currentSubtitleOffsetMs;
+    }
+
+    /* Shared by applySubtitle/adjustSubtitleOffset above and every reload path that
+       rebuilds the MediaItem for its own unrelated reason (switchAudioStream/
+       switchMediaVersion/switchQualityCap below) - resumeMs/prepare/notifyReload is the
+       same sequence every one of them needs, and currentSubtitleConfigOrNull is what
+       lets the latter three carry forward whatever's already in currentSubtitleUri
+       without themselves knowing anything about subtitles. */
+    private void reloadWithCurrentSubtitle() {
         long resumeMs = player.getCurrentPosition();
-        MediaItem.SubtitleConfiguration subtitleConfig = new MediaItem.SubtitleConfiguration.Builder(Uri.parse(url))
-            .setMimeType(mimeType)
-            .setLanguage(languageCode)
-            .build();
-        MediaItem newItem = new MediaItem.Builder()
-            .setUri(Uri.parse(currentUrl))
-            .setSubtitleConfigurations(java.util.Collections.singletonList(subtitleConfig))
-            .build();
-        player.setMediaItem(newItem, resumeMs);
+        MediaItem.Builder itemBuilder = new MediaItem.Builder().setUri(Uri.parse(currentUrl));
+        MediaItem.SubtitleConfiguration subtitleConfig = currentSubtitleConfigOrNull();
+        if (subtitleConfig != null) itemBuilder.setSubtitleConfigurations(java.util.Collections.singletonList(subtitleConfig));
+        player.setMediaItem(itemBuilder.build(), resumeMs);
         player.prepare();
         if (abrMonitor != null) abrMonitor.notifyReload();
+    }
+
+    /* Writes currentSubtitleSrtText, shifted by currentSubtitleOffsetMs, to a fixed
+       cache-dir file and points currentSubtitleUri at it - a fixed filename is fine
+       since every caller immediately follows this with a fresh setMediaItem+prepare()
+       that re-reads it, and Media3's file:// DataSource has no caching layer of its own
+       to bust between one offset click and the next. Returns false (leaving the
+       previous currentSubtitleUri/file untouched) on write failure rather than handing
+       ExoPlayer a half-written or stale file. */
+    private boolean writeSubtitleCacheFile() {
+        String shifted = currentSubtitleOffsetMs == 0
+            ? currentSubtitleSrtText
+            : shiftSrtTimestamps(currentSubtitleSrtText, currentSubtitleOffsetMs);
+        java.io.File file = new java.io.File(getCacheDir(), "prism_subtitle.srt");
+        try (java.io.FileWriter writer = new java.io.FileWriter(file, false)) {
+            writer.write(shifted);
+        } catch (java.io.IOException e) {
+            return false;
+        }
+        currentSubtitleUri = Uri.fromFile(file);
+        return true;
+    }
+
+    private static final java.util.regex.Pattern SRT_TIMESTAMP_PATTERN =
+        java.util.regex.Pattern.compile("(\\d{2}):(\\d{2}):(\\d{2}),(\\d{3})");
+
+    /* SRT timestamps are "HH:MM:SS,mmm" - shifts every one found by offsetMs, clamped
+       at 0 so a large negative offset can't produce a negative/malformed timestamp. */
+    private static String shiftSrtTimestamps(String srt, long offsetMs) {
+        java.util.regex.Matcher m = SRT_TIMESTAMP_PATTERN.matcher(srt);
+        StringBuffer out = new StringBuffer();
+        while (m.find()) {
+            long totalMs = Long.parseLong(m.group(1)) * 3600000L
+                + Long.parseLong(m.group(2)) * 60000L
+                + Long.parseLong(m.group(3)) * 1000L
+                + Long.parseLong(m.group(4));
+            long shiftedMs = Math.max(0, totalMs + offsetMs);
+            long h = shiftedMs / 3600000; shiftedMs %= 3600000;
+            long mi = shiftedMs / 60000; shiftedMs %= 60000;
+            long s = shiftedMs / 1000; long millis = shiftedMs % 1000;
+            m.appendReplacement(out, String.format(java.util.Locale.US, "%02d:%02d:%02d,%03d", h, mi, s, millis));
+        }
+        m.appendTail(out);
+        return out.toString();
+    }
+
+    /* Null whenever no subtitle is currently active - callers must check before calling
+       MediaItem.Builder.setSubtitleConfigurations, which doesn't accept a null element. */
+    private MediaItem.SubtitleConfiguration currentSubtitleConfigOrNull() {
+        if (currentSubtitleUri == null) return null;
+        return new MediaItem.SubtitleConfiguration.Builder(currentSubtitleUri)
+            .setMimeType(currentSubtitleMimeType)
+            .setLanguage(currentSubtitleLanguageCode)
+            .setSelectionFlags(C.SELECTION_FLAG_DEFAULT)
+            .build();
     }
 
     /* Plex bakes the selected audio stream into the HLS transcode at session start, so
@@ -1796,9 +1966,12 @@ public class PlayerActivity extends AppCompatActivity {
        audioStreamID (best-known param name for this, unverified against a live request -
        same caveat plex-player.js's _buildStreamUrl already carries for maxVideoBitrate)
        plus a fresh session id and an offset resuming where playback left off. Reuses the
-       same "rebuild MediaItem, resume in place" mechanism applySubtitle uses above - note
-       this drops any active sidecar subtitle track, the same pre-existing limitation
-       applySubtitle already has when called a second time. */
+       same "rebuild MediaItem, resume in place" mechanism applySubtitle uses above,
+       including carrying over whatever subtitle is currently active (currentSubtitleUri
+       et al, via currentSubtitleConfigOrNull) - a plain MediaItem.Builder with no
+       subtitleConfigurations silently dropped it here otherwise, confirmed against a
+       real device where the ABR monitor's own switchQualityCap (same rebuild shape) did
+       exactly that with no user action and no visible error in between. */
     void switchAudioStream(String streamId) {
         if (player == null || currentUrl == null) return;
         long resumeMs = player.getCurrentPosition();
@@ -1815,8 +1988,10 @@ public class PlayerActivity extends AppCompatActivity {
         builder.appendQueryParameter("session", java.util.UUID.randomUUID().toString());
         currentUrl = builder.build().toString();
         currentAudioStreamId = streamId;
-        MediaItem newItem = new MediaItem.Builder().setUri(Uri.parse(currentUrl)).build();
-        player.setMediaItem(newItem, resumeMs);
+        MediaItem.Builder itemBuilder = new MediaItem.Builder().setUri(Uri.parse(currentUrl));
+        MediaItem.SubtitleConfiguration subtitleConfig = currentSubtitleConfigOrNull();
+        if (subtitleConfig != null) itemBuilder.setSubtitleConfigurations(java.util.Collections.singletonList(subtitleConfig));
+        player.setMediaItem(itemBuilder.build(), resumeMs);
         player.prepare();
         if (abrMonitor != null) abrMonitor.notifyReload();
     }
@@ -1842,8 +2017,10 @@ public class PlayerActivity extends AppCompatActivity {
         builder.appendQueryParameter("session", java.util.UUID.randomUUID().toString());
         currentUrl = builder.build().toString();
         currentMediaIndex = mediaIndex;
-        MediaItem newItem = new MediaItem.Builder().setUri(Uri.parse(currentUrl)).build();
-        player.setMediaItem(newItem, resumeMs);
+        MediaItem.Builder itemBuilder = new MediaItem.Builder().setUri(Uri.parse(currentUrl));
+        MediaItem.SubtitleConfiguration subtitleConfig = currentSubtitleConfigOrNull();
+        if (subtitleConfig != null) itemBuilder.setSubtitleConfigurations(java.util.Collections.singletonList(subtitleConfig));
+        player.setMediaItem(itemBuilder.build(), resumeMs);
         player.prepare();
         if (abrMonitor != null) abrMonitor.notifyReload();
     }
@@ -1852,7 +2029,10 @@ public class PlayerActivity extends AppCompatActivity {
        kbps (Quality Cap's "Original" option) means the param is dropped entirely
        rather than sent as some sentinel value, matching stream-url.js's
        buildStreamUrl on the web leg. Called from PlayerUiHelper's Video Quality >
-       Quality Cap menu. */
+       Quality Cap menu, and autonomously by QualityAbrMonitor - the latter is exactly
+       why carrying the active subtitle forward (see switchAudioStream's own comment)
+       matters most here: this can fire with no user action at all, an arbitrary amount
+       of time after a subtitle was applied. */
     void switchQualityCap(Integer kbps) {
         if (player == null || currentUrl == null) return;
         long resumeMs = player.getCurrentPosition();
@@ -1869,8 +2049,10 @@ public class PlayerActivity extends AppCompatActivity {
         builder.appendQueryParameter("session", java.util.UUID.randomUUID().toString());
         currentUrl = builder.build().toString();
         qualityCapKbps = kbps;
-        MediaItem newItem = new MediaItem.Builder().setUri(Uri.parse(currentUrl)).build();
-        player.setMediaItem(newItem, resumeMs);
+        MediaItem.Builder itemBuilder = new MediaItem.Builder().setUri(Uri.parse(currentUrl));
+        MediaItem.SubtitleConfiguration subtitleConfig = currentSubtitleConfigOrNull();
+        if (subtitleConfig != null) itemBuilder.setSubtitleConfigurations(java.util.Collections.singletonList(subtitleConfig));
+        player.setMediaItem(itemBuilder.build(), resumeMs);
         player.prepare();
         if (abrMonitor != null) abrMonitor.notifyReload();
     }

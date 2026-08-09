@@ -2451,8 +2451,8 @@ async function applySubtitleResult(controller, result, rowEl, collapse) {
     }
     try {
         if (Capacitor.isNativePlatform() && Capacitor.getPlatform() === "android") {
-            const link = await StreamingSubtitles.resolveDownloadLink(result.fileId);
-            await setNativeSubtitle(link, result.languageCode, "application/x-subrip");
+            const srtText = await StreamingSubtitles.download(result.fileId);
+            await setNativeSubtitle(srtText, result.languageCode, "application/x-subrip");
         } else {
             const srtText = await StreamingSubtitles.download(result.fileId);
             attachSubtitleTrack(controller, srtText, result.languageCode, result.label);

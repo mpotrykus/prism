@@ -205,16 +205,19 @@ public class NativePlayerPlugin extends Plugin implements PlayerActivity.Playbac
         call.resolve();
     }
 
+    /* Takes the raw .srt TEXT, not a bare URL - PlayerActivity's Sync +/- control needs
+       the original timestamps cached natively so every click can re-shift and rewrite a
+       local file without a JS round trip back to OpenSubtitles for each one. */
     @PluginMethod
     public void setSubtitle(PluginCall call) {
-        String url = call.getString("url");
-        if (url == null || url.isEmpty()) {
-            call.reject("Missing required parameter: url");
+        String text = call.getString("text");
+        if (text == null || text.isEmpty()) {
+            call.reject("Missing required parameter: text");
             return;
         }
         String languageCode = call.getString("languageCode", "en");
         String mimeType = call.getString("mimeType", "application/x-subrip");
-        PlayerActivity.setSubtitleUrl(url, languageCode, mimeType);
+        PlayerActivity.setSubtitleText(text, languageCode, mimeType);
         call.resolve();
     }
 

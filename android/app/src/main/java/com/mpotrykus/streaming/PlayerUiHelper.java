@@ -2390,6 +2390,30 @@ final class PlayerUiHelper {
         activity.audioSubtitlesSheet = sheetContent;
         activity.controlsFadeHandler.removeCallbacks(activity.controlsFadeRunnable);
         setControlsVisible(activity, false);
+
+        /* Caps the WHOLE card, not just each column's own ScrollView - each column
+           already shrinks its ScrollView to content or a flat 40%-of-screen cap (see
+           buildAudioSubtitlesColumn), but that cap has no idea this method's own
+           closeRow/card padding sit above/around both columns too, so the combined
+           total can still exceed a landscape screen's actual height even though each
+           column's own cap was respected - confirmed against a real device: subtitle
+           results were clipped at the screen's bottom edge despite that per-column cap
+           already applying correctly. `card` is already attached to activity.root by
+           this point (added a few lines up), so card.post() here measures a real
+           post-layout height - no pre-attach race like the one buildAudioSubtitlesColumn
+           itself used to have. */
+        card.post(() -> {
+            int screenHeightPx = activity.getResources().getDisplayMetrics().heightPixels;
+            int overflowPx = card.getHeight() - Math.round(screenHeightPx * 0.94f);
+            if (overflowPx <= 0) return;
+            for (LinearLayout column : new LinearLayout[] { audioColumn, subtitlesColumn }) {
+                View scroll = column.getChildAt(column.getChildCount() - 1);
+                if (!(scroll instanceof ScrollView)) continue;
+                ViewGroup.LayoutParams params = scroll.getLayoutParams();
+                params.height = Math.max(0, scroll.getHeight() - overflowPx);
+                scroll.setLayoutParams(params);
+            }
+        });
     }
 
     static void closeAudioSubtitlesMenu(PlayerActivity activity) {
@@ -2442,23 +2466,34 @@ final class PlayerUiHelper {
         body.setOrientation(LinearLayout.VERTICAL);
         body.setPadding(0, Math.round(16 * density), 0, 0);
 
-        ScrollView scroll = new ScrollView(activity);
+        int maxHeightPx = Math.round(activity.getResources().getDisplayMetrics().heightPixels * 0.4f);
+        /* Capped via an onMeasure override (AT_MOST against maxHeightPx) rather than the
+           previous post()-then-check-body.getHeight() approach - that read the body's
+           height before this column's very first layout pass had run (scroll.post() is
+           queued here while `scroll` is still unattached to any window; Android flushes
+           an unattached view's queued post() actions during attach, which happens before
+           that same traversal's measure/layout), so body.getHeight() was reliably still 0
+           and the cap never actually applied. That looked exactly like "the subtitle
+           results scroll area renders tiny" on a real device - the ScrollView was left
+           at plain WRAP_CONTENT with no cap, so only whatever leftover space existed
+           after the rest of the sheet was visible, and dragging it still scrolled
+           (confirmed against a real device: the fix removes the need to drag at all). A
+           MeasureSpec override has no such race - it's re-evaluated on every measure
+           pass, including every refreshAudioSubtitlesMenu rebuild, and still shrinks to
+           content instead of always reserving 40% of the screen for a short list (e.g.
+           only two audio tracks), matching clampMenuCardHeight's own "shrink to content,
+           then cap" behavior for the More sheet's card. */
+        ScrollView scroll = new ScrollView(activity) {
+            @Override
+            protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
+                int cappedHeightSpec = View.MeasureSpec.makeMeasureSpec(maxHeightPx, View.MeasureSpec.AT_MOST);
+                super.onMeasure(widthMeasureSpec, cappedHeightSpec);
+            }
+        };
         scroll.setVerticalScrollBarEnabled(false);
         scroll.addView(body, new ScrollView.LayoutParams(ScrollView.LayoutParams.MATCH_PARENT, ScrollView.LayoutParams.WRAP_CONTENT));
-        int maxHeightPx = Math.round(activity.getResources().getDisplayMetrics().heightPixels * 0.4f);
         scroll.setLayoutParams(new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
         column.addView(scroll);
-        /* Capped via a post-measure check rather than a fixed height up front - a short
-           list (e.g. only two audio tracks) should size to its own content instead of
-           always reserving 40% of the screen, matching clampMenuCardHeight's own
-           "shrink to content, then cap" behavior for the More sheet's card. */
-        scroll.post(() -> {
-            ViewGroup.LayoutParams params = scroll.getLayoutParams();
-            if (body.getHeight() > maxHeightPx) {
-                params.height = maxHeightPx;
-                scroll.setLayoutParams(params);
-            }
-        });
 
         column.setTag(body);
         return column;
@@ -2468,6 +2503,63 @@ final class PlayerUiHelper {
        list/checkmark logic the old standalone accordion row used) with no-op setValue/
        collapse, exactly mirroring how chrome.js's own openAudioSubtitlesOverlay reuses
        renderAudioSection on the web leg instead of a second, parallel implementation. */
+
+    /* Real-world .srt files are commonly a fixed amount early/late against the actual
+       video - mirrors chrome.js's own SUBTITLE_OFFSET_STEP_MS/adjustSubtitleOffset on
+       the web leg exactly (same 250ms step), just calling activity.adjustSubtitleOffset
+       directly instead of mutating a TextTrack's cues, since this leg has no equivalent
+       live cue list to mutate (see that method's own header comment). */
+    private static final long SUBTITLE_OFFSET_STEP_MS = 250L;
+
+    private static View buildSubtitleOffsetRow(PlayerActivity activity, float density) {
+        LinearLayout row = new LinearLayout(activity);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        LinearLayout.LayoutParams rowParams = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        rowParams.bottomMargin = Math.round(10 * density);
+        row.setLayoutParams(rowParams);
+
+        TextView label = new TextView(activity);
+        label.setText("Sync: " + formatSubtitleOffset(activity.subtitleOffsetMs()));
+        label.setTextColor(VALUE_TEXT);
+        label.setTextSize(13);
+        label.setLayoutParams(new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        row.addView(label);
+
+        row.addView(buildSubtitleOffsetStepBtn(activity, density, "–", -SUBTITLE_OFFSET_STEP_MS));
+        View spacer = new View(activity);
+        spacer.setLayoutParams(new LinearLayout.LayoutParams(Math.round(6 * density), 1));
+        row.addView(spacer);
+        row.addView(buildSubtitleOffsetStepBtn(activity, density, "+", SUBTITLE_OFFSET_STEP_MS));
+
+        return row;
+    }
+
+    /* No local label update on click, unlike a plain picker row's own state - clicking
+       calls into activity.adjustSubtitleOffset, which already ends in
+       PlayerUiHelper.refreshAudioSubtitlesMenu (a full rebuild of this whole dialog), so
+       this row's own label gets its updated text for free on the very next render. */
+    private static TextView buildSubtitleOffsetStepBtn(PlayerActivity activity, float density, String glyph, long deltaMs) {
+        TextView btn = new TextView(activity);
+        btn.setText(glyph);
+        btn.setTextColor(Color.WHITE);
+        btn.setTextSize(16);
+        btn.setTypeface(btn.getTypeface(), android.graphics.Typeface.BOLD);
+        btn.setGravity(Gravity.CENTER);
+        GradientDrawable bg = new GradientDrawable();
+        bg.setColor(Color.argb(20, 255, 255, 255));
+        bg.setStroke(1, Color.argb(51, 255, 255, 255));
+        bg.setCornerRadius(6 * density);
+        btn.setBackground(bg);
+        int sizePx = Math.round(30 * density);
+        btn.setLayoutParams(new LinearLayout.LayoutParams(sizePx, sizePx));
+        btn.setOnClickListener(v -> activity.adjustSubtitleOffset(deltaMs));
+        return btn;
+    }
+
+    private static String formatSubtitleOffset(long ms) {
+        return (ms > 0 ? "+" : "") + ms + "ms";
+    }
 
     /* Subtitles column content - search box (defaults to this title, matching
        chrome.js's renderSubtitleSection) plus an "Off" row and whatever
@@ -2518,6 +2610,15 @@ final class PlayerUiHelper {
             PlayerActivity.requestSubtitleSearch(activity.subtitleSearchQueryText);
         });
         body.addView(searchBtn);
+
+        /* Only shown once a subtitle is actually attached - offsetting a track that
+           doesn't exist yet has nothing to act on, same condition chrome.js's own
+           renderSubtitleSection uses on the web leg. Rebuilt fresh on every render (this
+           whole method already fully re-derives body's content each call) rather than
+           kept in sync some other way. */
+        if (activity.currentSubtitleFileId != null) {
+            body.addView(buildSubtitleOffsetRow(activity, density));
+        }
 
         List<PickerItem> items = new ArrayList<>();
         items.add(new PickerItem("Off" + (activity.currentSubtitleFileId == null ? "  ✓" : ""), () -> {

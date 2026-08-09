@@ -108,15 +108,17 @@ export async function playNative(controller, streamUrl, startOffsetMs) {
         })
     );
     /* A subtitle result row tap - fileId is opaque to this bridge too, it only exists to
-       round-trip through opensubtitles.js's resolveDownloadLink() (the same two-step
-       search-then-resolve chrome.js's own, currently-unreachable Android branch in
-       applySubtitleResult already does) before handing ExoPlayer a real .srt URL via
-       setSubtitle. */
+       round-trip through opensubtitles.js's download() (the same search-then-download
+       chrome.js's own, currently-unreachable Android branch in applySubtitleResult
+       already does) before handing PlayerActivity the raw .srt text via setSubtitle.
+       The raw text, not just a download link, is what lets PlayerActivity's Sync +/-
+       control re-shift and rewrite a local file natively for every click rather than
+       re-resolving/re-downloading from OpenSubtitles each time. */
     controller._nativeListenerHandles.push(
         await NativePlayer.addListener("subtitleSelectRequested", async ({ fileId, label, languageCode }) => {
             try {
-                const link = await StreamingSubtitles.resolveDownloadLink(fileId);
-                await setNativeSubtitle(link, languageCode, "application/x-subrip");
+                const srtText = await StreamingSubtitles.download(fileId);
+                await setNativeSubtitle(srtText, languageCode, "application/x-subrip");
                 await NativePlayer.notifySubtitleApplied({ fileId, label });
             } catch (e) {
                 await NativePlayer.notifySubtitleApplyFailed({ fileId, message: e.message });
@@ -226,6 +228,6 @@ export async function setNativePlaybackRate(rate) {
     await NativePlayer.setPlaybackSpeed({ speed: rate });
 }
 
-export async function setNativeSubtitle(url, languageCode, mimeType) {
-    await NativePlayer.setSubtitle({ url, languageCode, mimeType });
+export async function setNativeSubtitle(text, languageCode, mimeType) {
+    await NativePlayer.setSubtitle({ text, languageCode, mimeType });
 }
