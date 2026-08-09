@@ -2,7 +2,22 @@
   .title-info-overlay { padding: 0; }
   .title-info-modal { width: 100%; max-width: 100%; min-height: 100dvh; border-radius: 0; border: none; }
   .title-info-close { display: none; }
-  .title-info-body { padding-bottom: calc(32px + var(--safe-bottom)); }
+  .title-info-art { height: 200px; }
+  .title-info-body { padding: 20px 20px calc(32px + var(--safe-bottom)); }
+  .title-info-header { left: 20px; right: 20px; padding-bottom: 16px; }
+  .title-info-title { font-size: 22px; }
+  .title-info-meta { display: flex; flex-wrap: wrap; row-gap: 6px; }
+  .title-info-meta span { white-space: nowrap; }
+  .title-info-actions { flex-wrap: wrap; row-gap: 10px; }
+  .title-info-play { flex: 1 1 100%; white-space: nowrap; }
+  .title-info-restart-btn, .title-info-unwatch-btn, .title-info-watchlist-btn { flex: 1 1 100%; }
+  .title-info-unwatch-btn, .title-info-watchlist-btn {
+    width: auto; height: auto; padding: 10px 14px; border-radius: 8px;
+    display: flex; align-items: center; justify-content: center; gap: 6px;
+  }
+  .title-info-unwatch-btn::after { content: "Mark as Unwatched"; font-size: 14px; font-weight: 700; }
+  .title-info-watchlist-btn::after { content: "Add to My List"; font-size: 14px; font-weight: 700; }
+  .title-info-watchlist-btn.added::after { content: "Remove from My List"; }
   .hero-info { left: 20px; max-width: calc(100% - 40px); }
   .hero-title { font-size: 24px; }
   .hero-subtitle { font-size: 13px; }

@@ -230,8 +230,10 @@ class PlexNetflixCard extends HTMLElement {
             <div class="title-info-progress" hidden><div class="bar"></div></div>
           </div>
           <div class="title-info-body">
-            <div class="title-info-title"></div>
-            <div class="title-info-meta"></div>
+            <div class="title-info-header">
+              <div class="title-info-title"></div>
+              <div class="title-info-meta"></div>
+            </div>
             <div class="title-info-actions">
               <button type="button" class="title-info-play">▶ Play</button>
               <button type="button" class="title-info-restart-btn" hidden>↺ Restart</button>

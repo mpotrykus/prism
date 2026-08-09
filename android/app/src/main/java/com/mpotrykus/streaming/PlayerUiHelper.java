@@ -630,9 +630,9 @@ final class PlayerUiHelper {
        there's nothing queued after this title - see makeTitleSkipButton/
        seekToAdjacentTitle - so a movie played on its own still gets both buttons, just
        with next disabled. Title nav is skipped entirely on a touchscreen device (see
-       buildCenterControlsRow's header comment) since swipe left/right on the video
-       surface already covers it there (see PlayerActivity's tapGestureDetector) - only
-       play/pause, which has no gesture equivalent, is unconditional. Registered as one
+       buildCenterControlsRow's header comment) - touch reaches the same queue via the
+       Episodes bottom sheet in the More menu instead (see openEpisodeListMenu) - only
+       play/pause, which has no menu equivalent, is unconditional. Registered as one
        fading control (not per-button) like every other chrome group - see
        registerFadingControl. */
     static void buildFloatingPlaybackControls(PlayerActivity activity, float density) {
@@ -758,18 +758,15 @@ final class PlayerUiHelper {
 
     /* "Next" always jumps forward to the next queued title - only ever called with
        forward=true when that's actually possible (see makeTitleSkipButton's enabled
-       check, and PlayerActivity's own queueIndex/queueLength guard before calling this
-       from a left-swipe). "Prev" jumps back to the actual previous queued title only when
+       check). "Prev" jumps back to the actual previous queued title only when
        one exists and playback is still within TITLE_PREV_RESTART_MS of the start;
        otherwise it just restarts the current title from 0, the same convention
        seekToAdjacentChapter above uses for prev-track buttons. Either jump is reported
        back to JS as a bare index (see PlayerActivity.requestTitleNav) rather than
        resolved here - the actual Plex metadata fetch for whichever adjacent title gets
        requested belongs to plex-player.js's fetchQueuedTitle/playQueuedTitle, one
-       implementation shared with the web leg instead of duplicated into Java. Package-
-       private (not private) since PlayerActivity's swipe-to-change-title gesture calls
-       this directly too, not just makeTitleSkipButton. */
-    static void seekToAdjacentTitle(PlayerActivity activity, boolean forward) {
+       implementation shared with the web leg instead of duplicated into Java. */
+    private static void seekToAdjacentTitle(PlayerActivity activity, boolean forward) {
         if (forward) {
             PlayerActivity.requestTitleNav(activity.queueIndex + 1);
             return;
@@ -1666,6 +1663,13 @@ final class PlayerUiHelper {
         } else if (section.onTap != null) {
             header.setOnClickListener(v -> section.onTap.run());
         }
+
+        /* Matches chrome.js's own buildAccordionRow, which gives every top-level row a
+           borderBottom - a plain divider View here since LinearLayout has no CSS-style
+           border property. */
+        View divider = new View(activity);
+        divider.setBackgroundColor(Color.argb(18, 255, 255, 255));
+        wrap.addView(divider, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, Math.round(density)));
 
         return wrap;
     }

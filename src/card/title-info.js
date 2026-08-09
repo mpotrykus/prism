@@ -138,9 +138,12 @@ export class TitleInfoController {
 
   /* Play/Resume + the Restart/mark-unwatched pair share one on/off switch - "has this
      been started or finished before" - rather than three separately-derived booleans
-     that could drift out of sync with each other. */
-  _updatePlayHistoryUI(hasHistory) {
-    this._playBtn.textContent = hasHistory ? "▶ Resume" : "▶ Play";
+     that could drift out of sync with each other. resumeEpisode ({season, episode}) is
+     only known when this modal stands in for a specific episode (see openForEpisode) -
+     a show opened directly has no single episode to name, so it keeps the plain label. */
+  _updatePlayHistoryUI(hasHistory, resumeEpisode = null) {
+    const resumeLabel = resumeEpisode ? `▶ Resume S${resumeEpisode.season} E${resumeEpisode.episode}` : "▶ Resume";
+    this._playBtn.textContent = hasHistory ? resumeLabel : "▶ Play";
     this._restartBtn.hidden = !hasHistory;
     this._unwatchBtn.hidden = !hasHistory;
   }
@@ -171,7 +174,8 @@ export class TitleInfoController {
       /* The show container's own meta has no viewOffset (see _playEpisodeByRatingKey's
          comment) - use the resumed episode's own progress/hasHistory, already known from
          the click that led here, instead. */
-      this._updatePlayHistoryUI(!!(item.progress > 0 || item.hasHistory));
+      const resumeEpisode = item.seasonNumber != null && item.episodeNumber != null ? { season: item.seasonNumber, episode: item.episodeNumber } : null;
+      this._updatePlayHistoryUI(!!(item.progress > 0 || item.hasHistory), resumeEpisode);
     }
   }
 
@@ -657,7 +661,8 @@ export class TitleInfoController {
       const progress = meta.duration ? Math.max(0, Math.min(1, this._viewOffset / meta.duration)) : 0;
       this._progressEl.hidden = progress <= 0;
       this._progressBar.style.width = `${Math.round(progress * 100)}%`;
-      this._updatePlayHistoryUI(hasAnyHistory(meta));
+      const resumeEpisode = this._resumeEpisodeKey && meta.parentIndex != null && meta.index != null ? { season: meta.parentIndex, episode: meta.index } : null;
+      this._updatePlayHistoryUI(hasAnyHistory(meta), resumeEpisode);
       /* A poster's "Watched" badge belongs to the container shown in rows (a show's own
          poster), not to the leaf episode ratingKey just fetched above - watching more of
          one episode can newly complete the whole show, which needs the show's own

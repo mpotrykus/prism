@@ -115,10 +115,6 @@ public class PlayerActivity extends AppCompatActivity {
        devices have no touch input to trigger it at all, so they keep those buttons
        instead - see buildCenterControlsRow. */
     private static final long SEEK_STEP_MS = 5000L;
-    /* Minimum horizontal travel (on top of GestureDetector's own fling-velocity
-       threshold) before a swipe counts as a deliberate title-change gesture - see
-       tapGestureDetector's onFling. */
-    private static final float SWIPE_MIN_DISTANCE_DP = 80f;
     private static final String PREFS_NAME = "prism_player_prefs";
     private static final String PREF_AMBIENT_ENABLED = "ambient_lighting_enabled";
     private static final String PREF_AMBIENT_OPACITY = "ambient_lighting_opacity";
@@ -526,8 +522,8 @@ public class PlayerActivity extends AppCompatActivity {
             }
 
             /* First tap on a hidden transport bar just reveals it, same as tapping used
-               to unconditionally do before double-tap-seek/swipe-title-nav needed tap
-               classification at all (see the comment above this detector) - only a tap
+               to unconditionally do before double-tap-seek needed tap classification at
+               all (see the comment above this detector) - only a tap
                while it's already showing falls through to the transport bar's own
                play/pause button action. Avoids the video pausing/resuming "by surprise"
                the moment someone taps just to bring the controls up. */
@@ -547,27 +543,6 @@ public class PlayerActivity extends AppCompatActivity {
             @Override
             public boolean onDoubleTap(MotionEvent e) {
                 seekByOffset(e.getX() < playerView.getWidth() / 2f ? -SEEK_STEP_MS : SEEK_STEP_MS);
-                return true;
-            }
-
-            /* Swipe left advances to the next queued title, swipe right goes back - same
-               convention as swiping through a photo/stories carousel (content advances
-               leftward). Requires the swipe to be both long enough and predominantly
-               horizontal, on top of GestureDetector's own built-in fling-velocity
-               threshold, so a mostly-vertical drag or a slow/short one doesn't
-               misfire - there's no dedicated "pan" gesture on this surface today
-               (zoomScale > 1f's manual drag-to-pan is the only other one), but this still
-               guards against it in case that ever changes. */
-            @Override
-            public boolean onFling(MotionEvent e1, MotionEvent e2, float velocityX, float velocityY) {
-                if (e1 == null || zoomScale > 1f) return false;
-                float dx = e2.getX() - e1.getX();
-                float dy = e2.getY() - e1.getY();
-                if (Math.abs(dx) < SWIPE_MIN_DISTANCE_DP * density || Math.abs(dx) < Math.abs(dy) * 2f) return false;
-                boolean forward = dx < 0;
-                if (forward && (queueIndex < 0 || queueIndex >= queueLength - 1)) return false;
-                PlayerUiHelper.seekToAdjacentTitle(PlayerActivity.this, forward);
-                showControlsTemporarily();
                 return true;
             }
         });
@@ -734,8 +709,8 @@ public class PlayerActivity extends AppCompatActivity {
                            Activity would already be gone, too late to switchTitle() into
                            it. requestTitleNav reuses the exact same JS round-trip
                            (titleNav event -> playQueuedTitle -> switchNative) the button
-                           and swipe gesture already use, so this reads as one continuous
-                           player rather than a close-and-relaunch. */
+                           already uses, so this reads as one continuous player rather
+                           than a close-and-relaunch. */
                         if (autoPlayEnabled && queueIndex >= 0 && queueIndex < queueLength - 1) {
                             requestTitleNav(queueIndex + 1);
                             return;
@@ -1674,12 +1649,11 @@ public class PlayerActivity extends AppCompatActivity {
     /* Swaps the currently playing title in place - same Activity instance, same
        ExoPlayer, same ambient/shader GL pipeline - instead of finish()-ing and letting
        NativePlayerPlugin.play() relaunch a fresh PlayerActivity for the next title. That
-       relaunch is what used to make title-prev/title-next (both the on-screen buttons
-       and the swipe gesture, see PlayerUiHelper.seekToAdjacentTitle) visibly swipe the
-       whole window out and back in for what should read as one continuous player.
-       Mirrors the per-title subset of onCreate's own setup - everything NOT tied to the
-       Activity/PlayerView/ExoPlayer instance itself (which onCreate builds once and this
-       reuses unchanged). */
+       relaunch is what used to make title-prev/title-next (the on-screen buttons, see
+       PlayerUiHelper.seekToAdjacentTitle) visibly swipe the whole window out and back in
+       for what should read as one continuous player. Mirrors the per-title subset of
+       onCreate's own setup - everything NOT tied to the Activity/PlayerView/ExoPlayer
+       instance itself (which onCreate builds once and this reuses unchanged). */
     void applyTitleSwitch(String url, long startPositionMs, String shaderTypeName, String newTitle,
             String newEpisodeTitle, Integer newYear, Integer newSeasonNumber, Integer newEpisodeNumber,
             Integer newQueueLength, Integer newQueueIndex, String chaptersJson, String bifUrl, String audioStreamsJson,

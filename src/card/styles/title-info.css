@@ -62,7 +62,13 @@
 }
 .title-info-progress[hidden] { display: none; }
 .title-info-progress .bar { height: 100%; background: #e5a00d; }
-.title-info-body { padding: 0 32px 32px; margin-top: -64px; position: relative; z-index: 1; }
+.title-info-body { padding: 28px 32px 32px; position: relative; z-index: 1; }
+/* Anchored to the bottom of its own starting line (title-info-body's own top edge,
+   which lines up with title-info-art's bottom edge/the progress bar) via top:0 +
+   translateY(-100%) rather than a fixed negative margin - a long/wrapped title or
+   genre list then grows upward into the art image instead of pushing this text down
+   into the divider or the actions row below it. */
+.title-info-header { position: absolute; left: 32px; right: 32px; top: 0; transform: translateY(-100%); padding-bottom: 24px; }
 .title-info-title { font-size: 26px; font-weight: 800; margin-bottom: 8px; }
 .title-info-meta { font-size: 13px; color: rgba(255,255,255,0.65); margin-bottom: 18px; }
 .title-info-meta span:not(:last-child)::after { content: "•"; margin: 0 8px; color: rgba(255,255,255,0.3); }
@@ -95,8 +101,8 @@
 }
 .title-info-watchlist-btn:hover { background: rgba(255,255,255,0.1); }
 .title-info-watchlist-btn[hidden] { display: none; }
-.title-info-summary { font-size: 14px; line-height: 1.6; color: rgba(255,255,255,0.85); margin-bottom: 22px; max-width: 640px; }
-.title-info-section-title { font-size: 14px; font-weight: 700; margin: 22px 0 10px; }
+.title-info-summary { font-size: 14px; line-height: 1.6; color: rgba(255,255,255,0.85); margin-bottom: 28px; max-width: 640px; }
+.title-info-section-title { font-size: 14px; font-weight: 700; margin: 40px 0 16px; }
 .title-info-cast-wrap[hidden], .title-info-similar-wrap[hidden] { display: none; }
 .title-info-cast { display: grid; grid-template-columns: repeat(auto-fill, minmax(76px, 1fr)); gap: 14px; }
 .title-info-cast-chip { display: flex; flex-direction: column; align-items: center; text-align: center; }
