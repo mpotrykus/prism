@@ -1702,7 +1702,7 @@ export function openAudioSubtitlesOverlay(controller) {
     grid.appendChild(audioColumn.el);
 
     const subtitlesColumn = buildAudioSubtitlesColumn("Subtitles");
-    renderSubtitleSection(controller, subtitlesColumn.body, { collapse: () => {} });
+    renderSubtitleSection(controller, subtitlesColumn.body, { collapse: () => closeAudioSubtitlesOverlay(controller) });
     grid.appendChild(subtitlesColumn.el);
 
     panel.appendChild(grid);
@@ -2344,9 +2344,100 @@ function renderSubtitleSection(controller, content, { collapse }) {
 
     content.appendChild(input);
     content.appendChild(searchBtn);
+    /* Only shown once a subtitle is actually attached - offsetting a track that doesn't
+       exist yet has nothing to act on. Rebuilt fresh on every render (same as the rest
+       of this section) rather than kept in sync some other way, so reopening the menu
+       after a fresh applySubtitleResult always picks this up. */
+    if (controller._videoEl?.textTracks?.[0]) {
+        content.appendChild(buildSubtitleOffsetRow(controller));
+    }
     content.appendChild(resultsEl);
 
     if (input.value) runSearch();
+}
+
+/* Real-world .srt files are commonly a fixed amount early/late against the actual
+   video - this nudges every cue's timing by SUBTITLE_OFFSET_STEP_MS per click without
+   needing a new download. Kept as a flat +/- control (no numeric entry) to match the
+   rest of this menu's picker-row style rather than adding a text input just for this. */
+const SUBTITLE_OFFSET_STEP_MS = 250;
+
+function buildSubtitleOffsetRow(controller) {
+    const row = document.createElement("div");
+    Object.assign(row.style, {
+        flex: "0 0 auto",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        margin: "0 16px 10px",
+        gap: "10px",
+    });
+
+    const label = document.createElement("span");
+    Object.assign(label.style, {
+        fontSize: "13px",
+        color: "rgba(255,255,255,0.7)",
+    });
+    const renderLabel = () => {
+        const ms = controller._subtitleOffsetMs || 0;
+        label.textContent = `Sync: ${ms > 0 ? "+" : ""}${ms}ms`;
+    };
+    renderLabel();
+
+    const makeStepBtn = (glyph, delta) => {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.textContent = glyph;
+        btn.setAttribute("aria-label", delta < 0 ? "Subtitles earlier" : "Subtitles later");
+        Object.assign(btn.style, {
+            flex: "0 0 auto",
+            width: "30px",
+            height: "30px",
+            borderRadius: "6px",
+            border: "1px solid rgba(255,255,255,0.2)",
+            background: "rgba(255,255,255,0.08)",
+            color: "#fff",
+            fontSize: "16px",
+            fontWeight: "700",
+            lineHeight: "1",
+            cursor: "pointer",
+        });
+        btn.addEventListener("click", () => {
+            adjustSubtitleOffset(controller, delta);
+            renderLabel();
+        });
+        return btn;
+    };
+
+    const buttons = document.createElement("div");
+    Object.assign(buttons.style, { display: "flex", gap: "6px", flex: "0 0 auto" });
+    buttons.appendChild(makeStepBtn("–", -SUBTITLE_OFFSET_STEP_MS));
+    buttons.appendChild(makeStepBtn("+", SUBTITLE_OFFSET_STEP_MS));
+
+    row.appendChild(label);
+    row.appendChild(buttons);
+    return row;
+}
+
+/* Shifts every cue relative to its ORIGINAL parsed time (cue._baseStart/_baseEnd),
+   captured lazily on first adjustment here rather than up front when the track loads -
+   by the time this menu is reachable a subtitle is already attached and its cues
+   already parsed, so a separate <track> "load" listener would just be dead weight.
+   Mutating startTime/endTime directly (rather than re-deriving cues from scratch) is
+   what makes the browser's own cuechange timeline immediately reflect the new offset. */
+function adjustSubtitleOffset(controller, deltaMs) {
+    const textTrack = controller._videoEl?.textTracks?.[0];
+    if (!textTrack) return;
+    controller._subtitleOffsetMs = (controller._subtitleOffsetMs || 0) + deltaMs;
+    const offsetSec = controller._subtitleOffsetMs / 1000;
+    Array.from(textTrack.cues || []).forEach((cue) => {
+        if (cue._baseStart == null) {
+            cue._baseStart = cue.startTime;
+            cue._baseEnd = cue.endTime;
+        }
+        cue.startTime = cue._baseStart + offsetSec;
+        cue.endTime = cue._baseEnd + offsetSec;
+    });
 }
 
 /* rowEl gets an inline status update on failure instead of the previous
@@ -2383,6 +2474,9 @@ async function applySubtitleResult(controller, result, rowEl, collapse) {
 function attachSubtitleTrack(controller, srtText, langCode, label) {
     if (!controller._videoEl) return;
     if (controller._subtitleTrackUrl) URL.revokeObjectURL(controller._subtitleTrackUrl);
+    /* A new subtitle file has its own inherent timing - carrying over the previous
+       file's offset would misalign this one from the very first cue. */
+    controller._subtitleOffsetMs = 0;
     const vtt = srtToVtt(srtText);
     const url = URL.createObjectURL(new Blob([vtt], { type: "text/vtt" }));
     controller._subtitleTrackUrl = url;
@@ -2394,7 +2488,66 @@ function attachSubtitleTrack(controller, srtText, langCode, label) {
     track.src = url;
     track.default = true;
     controller._videoEl.appendChild(track);
-    if (controller._videoEl.textTracks[0]) controller._videoEl.textTracks[0].mode = "showing";
+    const textTrack = controller._videoEl.textTracks[0];
+    if (!textTrack) return;
+    /* Rendered through a manual overlay instead of native "showing" mode - the shader
+       upscaling/Color Boost canvas (shader-pipeline.js) opacity:0's the <video> element
+       and paints from the raw decoded frame instead, which never includes the browser's
+       own separately-composited caption layer. Native rendering would work whenever
+       neither is active and silently vanish the instant either turns on, so this always
+       draws cues itself rather than having two divergent code paths depending on
+       whatever the shader state happens to be. */
+    textTrack.mode = "hidden";
+    const overlay = ensureSubtitleOverlay(controller);
+    textTrack.addEventListener("cuechange", () => {
+        const cues = Array.from(textTrack.activeCues || []);
+        overlay.style.display = cues.length ? "block" : "none";
+        overlay.innerHTML = cues.map((c) => renderSubtitleCueHtml(c.text)).join("<br>");
+    });
+}
+
+/* Escapes everything first (this is untrusted third-party subtitle text), then
+   re-enables only the handful of legacy SRT-style styling tags real-world .srt files
+   actually carry (b/i/u, plus <font color="...">) - native VTT "showing" mode used to
+   render these for free; a plain escape-and-dump would instead print the raw tags as
+   literal text (confirmed against a real OpenSubtitles .srt with <font color> lines).
+   Anything not matching one of these exact patterns stays escaped/literal rather than
+   risking arbitrary HTML/CSS injection from a subtitle file. */
+function renderSubtitleCueHtml(text) {
+    let html = text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\n/g, "<br>");
+    html = html.replace(/&lt;(\/?)(b|i|u)&gt;/gi, "<$1$2>");
+    html = html.replace(/&lt;font color="(#[0-9a-fA-F]{3,8}|[a-zA-Z]+)"&gt;/gi, '<span style="color:$1">');
+    html = html.replace(/&lt;\/font&gt;/gi, "</span>");
+    return html;
+}
+
+/* Lazily created (and reused across subtitle-result picks) rather than built alongside
+   the video in web-fallback.js's playWeb - most sessions never touch subtitles at all.
+   z-index 10001 matches every other always-on-top-of-the-shader-canvas overlay in this
+   file (e.g. updateSkipButton) - the canvas itself sits at 10000 (shader-pipeline.js). */
+function ensureSubtitleOverlay(controller) {
+    if (controller._subtitleOverlayEl) return controller._subtitleOverlayEl;
+    const overlay = document.createElement("div");
+    overlay.className = "streaming-player-subtitle-overlay";
+    Object.assign(overlay.style, {
+        position: "fixed",
+        left: "5%",
+        right: "5%",
+        bottom: "85px",
+        zIndex: "10001",
+        textAlign: "center",
+        pointerEvents: "none",
+        color: "rgba(235,235,235,0.95)",
+        fontFamily: '"Roboto", sans-serif',
+        fontWeight: "700",
+        fontSize: "1.4em",
+        lineHeight: "1.3",
+        textShadow: "0 2px 6px rgba(0,0,0,0.85)",
+        display: "none",
+    });
+    document.body.appendChild(overlay);
+    controller._subtitleOverlayEl = overlay;
+    return overlay;
 }
 
 function srtToVtt(srtText) {

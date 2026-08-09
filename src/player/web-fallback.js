@@ -17,25 +17,6 @@ import { closeAudioSubtitlesOverlay } from "./ui/chrome.js";
    UI-chrome/shader-pipeline methods (still defined on the class as thin delegates) for
    everything that isn't this path's own concern - the transport bar, shader pipeline,
    and skip-marker UI aren't separable from a playback session's own lifecycle. */
-/* Plain bold white-on-transparent cues instead of the browser's default boxed caption
-   style - only affects <track> rendering (attachSubtitleTrack in chrome.js), no change
-   to which captions load or when. */
-if (!document.getElementById("streaming-player-cue-style")) {
-    const style = document.createElement("style");
-    style.id = "streaming-player-cue-style";
-    style.textContent = `
-        .streaming-player-video::cue {
-            background: transparent;
-            color: rgba(235,235,235,0.95);
-            font-family: "Roboto", sans-serif;
-            font-weight: 700;
-            font-size: 1.05em;
-            text-shadow: 0 2px 6px rgba(0,0,0,0.85);
-        }
-    `;
-    document.head.appendChild(style);
-}
-
 export function playWeb(controller, streamUrl, startOffsetMs) {
     const video = document.createElement("video");
     video.className = "streaming-player-video";
@@ -337,6 +318,10 @@ export function teardownWeb(controller) {
     if (controller._subtitleTrackUrl) {
         URL.revokeObjectURL(controller._subtitleTrackUrl);
         controller._subtitleTrackUrl = null;
+    }
+    if (controller._subtitleOverlayEl) {
+        controller._subtitleOverlayEl.remove();
+        controller._subtitleOverlayEl = null;
     }
     if (controller._bifIndex) {
         releaseBifIndex(controller._bifIndex);

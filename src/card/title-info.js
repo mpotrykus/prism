@@ -458,7 +458,11 @@ export class TitleInfoController {
   async _loadSimilar(ratingKey) {
     try {
       const data = await this._ctx.plexFetch(`/library/metadata/${ratingKey}/related`);
-      const items = (data?.MediaContainer?.Hub || []).flatMap((h) => h.Metadata || []).slice(0, 12);
+      const seen = new Set();
+      const items = (data?.MediaContainer?.Hub || [])
+        .flatMap((h) => h.Metadata || [])
+        .filter((m) => (seen.has(m.ratingKey) ? false : (seen.add(m.ratingKey), true)))
+        .slice(0, 12);
       if (!items.length || this._item?.ratingKey !== ratingKey) return;
       this._similarWrap.hidden = false;
       this._similarEl.innerHTML = items
