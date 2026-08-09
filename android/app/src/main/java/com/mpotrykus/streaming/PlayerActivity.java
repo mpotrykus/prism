@@ -252,21 +252,19 @@ public class PlayerActivity extends AppCompatActivity {
     private ContentAnalysisSampler contentSampler;
     int sleepMinutes = 0;
     String currentAudioStreamId;
-    /* The currently-open options-menu flyout (see PlayerUiHelper's PopupWindow-based
-       menu system) - tracked here, not just a PlayerUiHelper-local variable, since a new
-       submenu replaces it and PlayerActivity.onDestroy needs a way to know none is
-       leaked, the same "shared session state lives on the activity" reasoning every
-       other package-private field here follows. */
-    PopupWindow menuPopup;
+    /* The More options bottom sheet (see PlayerUiHelper.showPlayerMenu/closePlayerMenu) -
+       tracked here, not just a PlayerUiHelper-local variable, since PlayerActivity.
+       onDestroy needs a way to know none is leaked, the same "shared session state lives
+       on the activity" reasoning every other package-private field here follows. Added
+       directly into root rather than a PopupWindow - same edge-to-edge cutout-clipping
+       reasoning as episodeListScrim/episodeListSheet below (confirmed via dumpsys window
+       that a full-width PopupWindow's frame gets clipped to the display's cutout-safe
+       area even though the Activity's own window renders edge-to-edge, with no public
+       PopupWindow API to opt out of that). */
+    View menuScrim;
+    View menuSheet;
     /* The Episodes bottom sheet (see PlayerUiHelper.openEpisodeListMenu/closeEpisodeListMenu) -
-       added directly into root rather than a PopupWindow like menuPopup above, since a
-       PopupWindow is a separate WindowManager window that doesn't inherit this Activity's
-       own layoutInDisplayCutoutMode=always - confirmed on a real device (dumpsys window)
-       that a full-width PopupWindow's frame was still being clipped to the display's
-       cutout-safe area even though the Activity's own window correctly spans edge-to-edge,
-       and PopupWindow exposes no public API to opt a popup's window into that same
-       cutout-mode flag. Adding straight into root sidesteps the whole problem - it's the
-       same window as the video/transport bar, which already renders edge-to-edge. */
+       same "added straight into root" reasoning as menuScrim/menuSheet above. */
     View episodeListScrim;
     View episodeListSheet;
     final Handler controlsFadeHandler = new Handler(Looper.getMainLooper());
@@ -840,10 +838,7 @@ public class PlayerActivity extends AppCompatActivity {
         if (isInPictureInPictureMode) {
             controlsFadeHandler.removeCallbacks(controlsFadeRunnable);
             setControlsVisible(false);
-            if (menuPopup != null) {
-                menuPopup.dismiss();
-                menuPopup = null;
-            }
+            PlayerUiHelper.closePlayerMenu(this);
             if (statsOverlayText != null) {
                 statsOverlayText.setVisibility(View.GONE);
             }
@@ -1092,7 +1087,7 @@ public class PlayerActivity extends AppCompatActivity {
     /* Same immediate-persistence model as setAmbientEnabled/setShaderStrength above.
        Cheap to apply live (just Paint.setAlpha in AmbientGlowView, no GL program
        rebuild), unlike applyVideoEffects for shader/color-boost strength - see
-       openAmbientPanel in PlayerUiHelper for why that one doesn't need to gate to the
+       renderAmbientSection in PlayerUiHelper for why that one doesn't need to gate to the
        slider's release. */
     void setAmbientOpacity(float opacity) {
         ambientOpacity = opacity;
@@ -1534,10 +1529,7 @@ public class PlayerActivity extends AppCompatActivity {
             String mediaVersionsJson, Integer newCurrentMediaIndex, Integer newQualityCapKbps) {
         if (player == null) return;
 
-        if (menuPopup != null) {
-            menuPopup.dismiss();
-            menuPopup = null;
-        }
+        PlayerUiHelper.closePlayerMenu(this);
         PlayerUiHelper.closeEpisodeListMenu(this);
         hideSkipButtonInternal();
         zoomScale = 1f;
@@ -1825,10 +1817,7 @@ public class PlayerActivity extends AppCompatActivity {
         sleepTimerHandler.removeCallbacksAndMessages(null);
         controlsFadeHandler.removeCallbacksAndMessages(null);
         lockMessageHandler.removeCallbacksAndMessages(null);
-        if (menuPopup != null) {
-            menuPopup.dismiss();
-            menuPopup = null;
-        }
+        PlayerUiHelper.closePlayerMenu(this);
         PlayerUiHelper.closeEpisodeListMenu(this);
         reportStoppedIfNeeded();
         if (player != null) {

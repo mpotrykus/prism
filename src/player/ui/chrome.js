@@ -1025,23 +1025,15 @@ export function buildTransportBar(controller, video) {
     return bar;
 }
 
-/* Shared look for every flyout panel (the top-level hamburger list, its submenus, the
-   shader-strength panel, and subtitle search) - one visual definition instead of four
-   near-identical inline style blocks drifting apart over time. */
-const MENU_PANEL_STYLE = {
-    zIndex: "10002",
-    background: "rgba(24,24,26,0.94)",
-    backdropFilter: "blur(24px)",
-    WebkitBackdropFilter: "blur(24px)",
-    border: "1px solid rgba(255,255,255,0.08)",
-    borderRadius: "12px",
-    boxShadow: "0 20px 48px rgba(0,0,0,0.55)",
-    fontFamily: '"Roboto", sans-serif',
-    boxSizing: "border-box",
-    opacity: "0",
-    transform: "translateY(-6px) scale(0.98)",
-    transition: "opacity 0.15s ease, transform 0.15s ease",
-};
+/* Full-height right-side drawer (frameless, gradient fading into the video rather than
+   a bordered/blurred glass panel - same white-text look as episode-list.js's queue
+   overlay, just fading in from the right edge instead of up from the bottom) instead of
+   a small flyout anchored to the hamburger button. Every category expands in place as
+   an accordion section instead of replacing the whole panel with a new one to navigate
+   back from. Picking a value only collapses that one section (see buildAccordionRow),
+   so adjusting several settings in one sitting no longer means reopening the hamburger
+   button between each one. */
+const SHEET_GRADIENT = "linear-gradient(to left, rgba(0,0,0,0.92) 0%, rgba(0,0,0,0.88) 55%, rgba(0,0,0,0.5) 85%, transparent 100%)";
 
 const MENU_SCROLL_CLASS = "streaming-player-menu-scroll";
 
@@ -1066,34 +1058,172 @@ function ensureMenuScrollStyle() {
     document.head.appendChild(style);
 }
 
-function menuAnchorPosition(anchor) {
-    const rect = anchor.getBoundingClientRect();
-    return {
-        position: "fixed",
-        top: `${rect.bottom + 10}px`,
-        ...(anchor.dataset.anchorSide === "left" ? { left: `${rect.left}px` } : { right: `${window.innerWidth - rect.right}px` }),
-    };
-}
-
-/* Animates in on the next frame rather than at insertion time - starting from the
-   opacity:0/translateY(-6px) baked into MENU_PANEL_STYLE, so the transition actually has
-   a starting and ending state to interpolate between instead of snapping straight to
-   "open". */
-function mountMenuPanel(controller, panel, anchor) {
-    document.body.appendChild(panel);
-    controller._inlineMenuEl = panel;
-    controller._inlineMenuAnchor = anchor;
-    clearTimeout(controller._controlsHideTimer);
-    showControls(controller);
-    requestAnimationFrame(() => {
-        panel.style.opacity = "1";
-        panel.style.transform = "translateY(0) scale(1)";
+/* Shared row look for every tap-to-pick item inside an expanded accordion section
+   (speed/sleep/zoom/audio/chapters/quality-cap/version presets) - one visual
+   definition instead of each render function styling its own. */
+function renderPickerList(content, items) {
+    items.forEach((item) => {
+        const row = document.createElement("button");
+        row.type = "button";
+        Object.assign(row.style, {
+            display: "flex",
+            alignItems: "center",
+            gap: "12px",
+            width: "100%",
+            textAlign: "left",
+            padding: "9px 16px",
+            background: "transparent",
+            color: "#fff",
+            border: "none",
+            cursor: "pointer",
+            fontSize: "13px",
+            fontWeight: "500",
+            fontFamily: '"Roboto", sans-serif',
+        });
+        /* Only the Chapters section sets item.thumb - every other picker (speed, sleep
+           timer, audio track...) leaves it undefined, so this is a no-op there. Hidden
+           on error rather than left to show a broken-image icon - Plex's chapterImages
+           endpoint isn't guaranteed pre-generated for every chapter. */
+        if (item.thumb) {
+            const thumb = document.createElement("img");
+            thumb.src = item.thumb;
+            thumb.loading = "lazy";
+            thumb.alt = "";
+            Object.assign(thumb.style, {
+                width: "64px",
+                height: "36px",
+                borderRadius: "4px",
+                objectFit: "cover",
+                flex: "0 0 auto",
+                background: "rgba(255,255,255,0.08)",
+            });
+            thumb.addEventListener("error", () => thumb.remove());
+            row.appendChild(thumb);
+        }
+        const label = document.createElement("span");
+        label.textContent = item.label;
+        label.style.flex = "1 1 auto";
+        row.appendChild(label);
+        row.addEventListener("mouseenter", () => {
+            row.style.background = "rgba(255,255,255,0.08)";
+        });
+        row.addEventListener("mouseleave", () => {
+            row.style.background = "transparent";
+        });
+        row.addEventListener("click", () => item.onSelect && item.onSelect());
+        content.appendChild(row);
     });
 }
 
-/* Every submenu gets the same dimmed, divider-topped "back up a level" row instead of
-   each panel styling its own - distinguishes "leave this screen" from a selectable
-   option in a way a plain list row sharing the same style as everything else couldn't. */
+/* One row of the More sheet. Sections with `render` expand in place (accordion, one
+   section open at a time per `state` - opening a new one collapses whatever else was
+   open, via `state.expandedCollapse`); sections with `nav` instead replace the whole
+   list with a different screen (see renderEffectsList) rather than expanding in
+   place - used only for "Effects", whose three sub-controls (Shader Upscaling/Color
+   Boost/Ambient Lighting) read better as their own dedicated list than squeezed inline
+   under a fourth row. Sections with only `toggle` (Auto-Play, Performance Overlay) are
+   plain on/off rows with nothing to expand or navigate to. `toggle` and `render` are
+   independent - Ambient Lighting has both, flipping on/off without affecting whether
+   its opacity section is open. */
+function buildAccordionRow(list, state, section) {
+    const wrap = document.createElement("div");
+    wrap.style.borderBottom = "1px solid rgba(255,255,255,0.07)";
+
+    const header = document.createElement("button");
+    header.type = "button";
+    Object.assign(header.style, {
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        gap: "12px",
+        width: "100%",
+        textAlign: "left",
+        padding: "14px 16px",
+        background: "transparent",
+        border: "none",
+        cursor: section.render || section.nav ? "pointer" : "default",
+        fontFamily: '"Roboto", sans-serif',
+    });
+
+    const labelStack = document.createElement("span");
+    Object.assign(labelStack.style, { display: "flex", flexDirection: "column", gap: "2px", minWidth: "0" });
+    const labelEl = document.createElement("span");
+    labelEl.textContent = section.label;
+    Object.assign(labelEl.style, { color: "#fff", fontSize: "15px", fontWeight: "600" });
+    labelStack.appendChild(labelEl);
+    let valueEl = null;
+    const setValue = (text) => {
+        if (text) {
+            if (!valueEl) {
+                valueEl = document.createElement("span");
+                Object.assign(valueEl.style, { fontSize: "12px", fontWeight: "400", color: "rgba(255,255,255,0.45)" });
+                labelStack.appendChild(valueEl);
+            }
+            valueEl.textContent = text;
+        } else if (valueEl) {
+            valueEl.remove();
+            valueEl = null;
+        }
+    };
+    setValue(section.getValue ? section.getValue() : null);
+    header.appendChild(labelStack);
+
+    const rightSide = document.createElement("span");
+    Object.assign(rightSide.style, { display: "flex", alignItems: "center", gap: "12px", flex: "0 0 auto" });
+    if (section.toggle) {
+        rightSide.appendChild(makeToggleSwitch(section.toggle.checked, (checked) => setValue(section.toggle.onChange(checked))));
+    }
+
+    let chevronEl = null;
+    if (section.render || section.nav) {
+        chevronEl = document.createElement("span");
+        chevronEl.textContent = "›";
+        Object.assign(chevronEl.style, { color: "rgba(255,255,255,0.35)", fontSize: "17px", display: "inline-block", transition: "transform 0.15s ease" });
+        rightSide.appendChild(chevronEl);
+    }
+    if (rightSide.children.length) header.appendChild(rightSide);
+    wrap.appendChild(header);
+
+    if (section.render) {
+        const content = document.createElement("div");
+        content.style.display = "none";
+        content.style.padding = "0 0 12px";
+        wrap.appendChild(content);
+
+        header.setAttribute("aria-expanded", "false");
+        let built = false;
+        const collapse = () => {
+            content.style.display = "none";
+            chevronEl.style.transform = "rotate(0deg)";
+            header.setAttribute("aria-expanded", "false");
+            if (state.expandedCollapse === collapse) state.expandedCollapse = null;
+        };
+        header.addEventListener("click", () => {
+            if (content.style.display !== "none") {
+                collapse();
+                return;
+            }
+            if (state.expandedCollapse) state.expandedCollapse();
+            if (!built) {
+                built = true;
+                section.render(content, { setValue, collapse });
+            }
+            content.style.display = "block";
+            chevronEl.style.transform = "rotate(90deg)";
+            header.setAttribute("aria-expanded", "true");
+            state.expandedCollapse = collapse;
+        });
+    } else if (section.nav) {
+        header.addEventListener("click", () => section.nav());
+    }
+
+    list.appendChild(wrap);
+}
+
+/* Every navigated-to sub-list (currently just Effects') gets the same dimmed,
+   divider-topped "back up a level" row instead of each screen styling its own -
+   distinguishes "leave this screen" from a selectable option in a way a plain row
+   sharing the same style as everything else couldn't. */
 function makeBackRow(onClick) {
     const row = document.createElement("button");
     row.type = "button";
@@ -1104,14 +1234,14 @@ function makeBackRow(onClick) {
         textAlign: "left",
         background: "transparent",
         border: "none",
-        borderBottom: "1px solid rgba(255,255,255,0.08)",
+        borderBottom: "1px solid rgba(255,255,255,0.07)",
         color: "rgba(255,255,255,0.55)",
         fontSize: "12px",
         fontWeight: "700",
         letterSpacing: "0.02em",
         cursor: "pointer",
-        padding: "0 0 10px",
-        marginBottom: "6px",
+        padding: "14px 16px",
+        fontFamily: '"Roboto", sans-serif',
     });
     row.addEventListener("mouseenter", () => {
         row.style.color = "#fff";
@@ -1123,10 +1253,6 @@ function makeBackRow(onClick) {
     return row;
 }
 
-/* Every custom option lives behind one hamburger button instead of one circular button
-   each (see web-fallback.js's playWeb) - this is its top-level list; each entry either
-   opens a submenu or, for subtitles, the search panel - the trailing "›" marks every
-   row here as a drill-down rather than an immediate action. */
 /* Shared by the hamburger row's initial value and its toggle's onChange return value -
    "Auto" replaces the numeric % once strength is computed dynamically (see
    content-analysis.js) rather than showing a live-ticking percentage, since the row only
@@ -1140,194 +1266,258 @@ function colorBoostRowLabel(controller) {
 }
 
 export function openHamburgerMenu(controller, anchor) {
-    const rate = controller._session?.playbackRate || 1;
-    const zoomLevel = ZOOM_LEVELS[controller._zoomIndex];
-    const items = [
-        { label: "Playback Speed", value: `${rate}x`, trailing: "›", onSelect: () => openSpeedMenu(controller, anchor) },
-        {
-            label: "Sleep Timer",
-            value: controller._sleepMinutes ? `${controller._sleepMinutes}m` : null,
-            trailing: "›",
-            onSelect: () => openSleepMenu(controller, anchor),
-        },
-        { label: "Zoom", value: `${zoomLevel}x`, trailing: "›", onSelect: () => openZoomMenu(controller, anchor) },
-        {
-            label: "Auto-Play",
-            value: controller._autoPlayEnabled ? "On" : null,
-            /* No trailing chevron - same plain on/off toggle as Performance Overlay
-               below, nothing to drill into (advancing to whatever's next in the queue
-               is the whole feature, no strength/opacity to tune). */
-            toggle: {
-                checked: controller._autoPlayEnabled,
-                onChange: (checked) => {
-                    controller._setAutoPlayEnabled(checked);
-                    return checked ? "On" : null;
-                },
-            },
-            onSelect: () => {},
-        },
-        {
-            /* No inline toggle any more - Auto/On/Off is a 3-way mode, not a boolean, so
-               it needs the panel's own segmented control (see openShaderMenu) rather than
-               a switch that fits this row. Same chevron-only, drill-in-to-change pattern
-               as Zoom/Playback Speed/Sleep Timer above. */
-            label: "Shader Upscaling",
-            value: controller._shaderEnabled ? shaderRowLabel(controller) : null,
-            trailing: "›",
-            onSelect: () => openShaderMenu(controller, anchor),
-        },
-        {
-            label: "Color Boost",
-            value: controller._colorBoostEnabled ? colorBoostRowLabel(controller) : null,
-            trailing: "›",
-            onSelect: () => openColorBoostMenu(controller, anchor),
-        },
-        {
-            label: "Ambient Lighting",
-            value: controller._ambientEnabled ? `${Math.round(controller._ambientOpacity * 100)}%` : null,
-            trailing: "›",
-            /* Toggle flips on/off in place without leaving this menu - onSelect (tap
-               anywhere else on the row) still drills into the opacity slider, same
-               independent-gestures-on-one-row pattern as Shader Upscaling above. */
-            toggle: {
-                checked: controller._ambientEnabled,
-                onChange: (checked) => {
-                    controller._setAmbientEnabled(checked);
-                    return checked ? `${Math.round(controller._ambientOpacity * 100)}%` : null;
-                },
-            },
-            onSelect: () => openAmbientMenu(controller, anchor),
-        },
-        {
-            label: "Performance Overlay",
-            value: controller._statsOverlayEnabled ? "On" : null,
-            /* No trailing chevron - nothing to drill into (no strength/opacity slider,
-               unlike Shader Upscaling/Color Boost/Ambient Lighting above), just a plain
-               on/off toggle. onSelect is required by openInlineMenu's row click handler
-               (called unconditionally, unlike Android's null-checked MenuRow.onSelect) -
-               a no-op here since the switch itself is the only thing this row does. */
-            toggle: {
-                checked: controller._statsOverlayEnabled,
-                onChange: (checked) => {
-                    controller._setStatsOverlayEnabled(checked);
-                    return checked ? "On" : null;
-                },
-            },
-            onSelect: () => {},
-        },
-    ];
-    if (controller._session?.chapters?.length) {
-        items.push({ label: "Chapters", trailing: "›", onSelect: () => openChapterMenu(controller, anchor) });
+    closeInlineMenu(controller);
+    ensureMenuScrollStyle();
+    const session = controller._session;
+
+    const scrim = document.createElement("div");
+    Object.assign(scrim.style, { position: "fixed", inset: "0", zIndex: "10002", background: "transparent" });
+    scrim.addEventListener("click", () => closeInlineMenu(controller));
+
+    const sheet = document.createElement("div");
+    Object.assign(sheet.style, {
+        position: "fixed",
+        top: "0",
+        right: "0",
+        bottom: "0",
+        width: "min(400px, 100vw)",
+        zIndex: "10003",
+        display: "flex",
+        flexDirection: "column",
+        background: SHEET_GRADIENT,
+        fontFamily: '"Roboto", sans-serif',
+        boxSizing: "border-box",
+        opacity: "0",
+        transform: "translateX(20px)",
+        transition: "opacity 0.2s ease, transform 0.2s ease",
+    });
+
+    const header = document.createElement("div");
+    Object.assign(header.style, { display: "flex", alignItems: "center", justifyContent: "space-between", flex: "0 0 auto", padding: "24px 16px 12px" });
+    const heading = document.createElement("div");
+    heading.textContent = "More";
+    Object.assign(heading.style, { color: "#fff", fontSize: "18px", fontWeight: "700" });
+    header.appendChild(heading);
+    const closeBtn = document.createElement("button");
+    closeBtn.type = "button";
+    closeBtn.setAttribute("aria-label", "Close menu");
+    closeBtn.textContent = "✕";
+    Object.assign(closeBtn.style, {
+        width: "32px",
+        height: "32px",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        border: "none",
+        background: "transparent",
+        color: "#fff",
+        fontSize: "16px",
+        cursor: "pointer",
+        padding: "0",
+    });
+    closeBtn.addEventListener("click", () => closeInlineMenu(controller));
+    header.appendChild(closeBtn);
+    sheet.appendChild(header);
+
+    const list = document.createElement("div");
+    list.className = MENU_SCROLL_CLASS;
+    Object.assign(list.style, { flex: "1 1 auto", minHeight: "0", overflowY: "auto", padding: "0 0 20px" });
+    sheet.appendChild(list);
+
+    function renderMainList() {
+    list.innerHTML = "";
+    const state = { expandedCollapse: null };
+    /* Ordered by how often a row is actually touched, not the order features shipped
+       in: what-you're-watching controls (Chapters/Audio Track/Subtitles) first, since
+       those get touched per-video; source/quality (Version/Quality Cap) and the
+       Auto-Play toggle next; Effects/Extras/Performance Overlay last, in that order -
+       the three rows here most people set once and never revisit. */
+    const sections = [];
+    if (session?.chapters?.length) {
+        sections.push({
+            key: "chapters",
+            label: "Chapters",
+            render: (content, helpers) => renderChapterSection(controller, content, helpers),
+        });
     }
-    if (controller._session?.audioStreams?.length > 1) {
-        const current = controller._session.audioStreams.find((s) => s.id === controller._session.audioStreamId);
-        items.push({ label: "Audio Track", value: current?.label || null, trailing: "›", onSelect: () => openAudioMenu(controller, anchor) });
+    if (session?.audioStreams?.length > 1) {
+        sections.push({
+            key: "audio",
+            label: "Audio Track",
+            getValue: () => session.audioStreams.find((s) => s.id === session.audioStreamId)?.label || null,
+            render: (content, helpers) => renderAudioSection(controller, content, helpers),
+        });
     }
-    /* Replaces the old pre-play "Quality" picker on the title-info modal (see that
-       file's own header comment) - Version/Quality Cap both change what's actually
-       being decoded, so they belong to an active session, not a choice made before one
-       exists. Always shown (unlike Audio Track/Chapters, gated on there being more than
-       one option) since Quality Cap always has at least "Original" to show. */
-    items.push({ label: "Video Quality", value: qualityCapMenuLabel(controller), trailing: "›", onSelect: () => openVideoQualityMenu(controller, anchor) });
-    items.push({ label: "Subtitles", trailing: "›", onSelect: () => openSubtitleSearch(controller, anchor) });
-    openInlineMenu(controller, { anchor, items });
+    sections.push({
+        key: "subtitles",
+        label: "Subtitles",
+        render: (content, helpers) => renderSubtitleSection(controller, content, helpers),
+    });
+    /* Version and Quality Cap used to live one level deeper, behind a "Video Quality"
+       row - flattened to their own top-level rows (Version only shown when this item
+       actually has more than one Media[] entry, same "never an empty/dead affordance"
+       rule Audio Track/Chapters follow) so changing either is one fewer tap. Quality
+       Cap is always shown since it always has at least "Original" to show. */
+    if (session?.mediaVersions?.length > 1) {
+        sections.push({
+            key: "version",
+            label: "Version",
+            getValue: () => session.mediaVersions.find((v) => v.mediaIndex === session.mediaIndex)?.label || null,
+            render: (content, helpers) => renderVersionSection(controller, content, helpers),
+        });
+    }
+    sections.push({
+        key: "qualitycap",
+        label: "Quality Cap",
+        getValue: () => qualityCapMenuLabel(controller),
+        render: (content, helpers) => renderQualityCapSection(controller, content, helpers),
+    });
+    sections.push({
+        key: "autoplay",
+        label: "Auto-Play",
+        /* No expand - same plain on/off toggle as Performance Overlay below, nothing
+           to drill into (advancing to whatever's next in the queue is the whole
+           feature, no strength/opacity to tune). */
+        getValue: () => (controller._autoPlayEnabled ? "On" : null),
+        toggle: {
+            checked: controller._autoPlayEnabled,
+            onChange: (checked) => {
+                controller._setAutoPlayEnabled(checked);
+                return checked ? "On" : null;
+            },
+        },
+    });
+    sections.push({
+        /* Navigates to a dedicated Shader Upscaling/Color Boost/Ambient Lighting list
+           (see renderEffectsList) rather than expanding in place - three sub-controls
+           read better as their own screen than squeezed inline under a fourth row. */
+        key: "effects",
+        label: "Effects",
+        nav: () => renderEffectsList(controller, list, renderMainList),
+    });
+    sections.push({
+        /* Same "own dedicated screen" reasoning as Effects above, for Playback Speed/
+           Zoom/Sleep Timer - grouped as "Extras" since none of the three relate to
+           each other the way Effects' three GPU-pipeline controls do, but each is
+           simple/single-picker enough that squeezing all three top-level rows down to
+           one still reads as a sensible cluster (playback tweaks that aren't part of
+           the everyday audio/subtitle/quality set above). */
+        key: "extras",
+        label: "Extras",
+        nav: () => renderExtrasList(controller, list, renderMainList),
+    });
+    sections.push({
+        key: "stats",
+        label: "Performance Overlay",
+        /* No expand - nothing to drill into (no strength/opacity slider, unlike Shader
+           Upscaling/Color Boost/Ambient Lighting above), just a plain on/off toggle. */
+        getValue: () => (controller._statsOverlayEnabled ? "On" : null),
+        toggle: {
+            checked: controller._statsOverlayEnabled,
+            onChange: (checked) => {
+                controller._setStatsOverlayEnabled(checked);
+                return checked ? "On" : null;
+            },
+        },
+    });
+
+    sections.forEach((section) => buildAccordionRow(list, state, section));
+    }
+
+    renderMainList();
+
+    document.body.appendChild(scrim);
+    document.body.appendChild(sheet);
+    controller._inlineMenuEl = sheet;
+    controller._inlineMenuScrim = scrim;
+    controller._inlineMenuAnchor = anchor;
+    hideControls(controller);
+    requestAnimationFrame(() => {
+        sheet.style.opacity = "1";
+        sheet.style.transform = "translateX(0)";
+    });
 }
 
 /* "Auto (720p (10 Mbps))" while Auto Quality is actively adjusting the cap, else the
    plain preset label - same "(Auto)" convention shaderRowLabel uses for Shader Upscaling.
-   Shared by the top-level "Video Quality" row and this submenu's "Quality Cap" row so the
-   two never show a different answer for the same state. */
+   Shared by the top-level "Quality Cap" row's own value and its expanded picker list so
+   the two never show a different answer for the same state. */
 function qualityCapMenuLabel(controller) {
     const label = QUALITY_CAP_PRESETS.find((p) => (p.kbps ?? null) === (controller._session?.qualityCapKbps ?? null))?.label || null;
     return controller._autoQualityEnabled ? `Auto (${label})` : label;
 }
 
-/* Sub-menu for the Video Quality row above - Version (only shown when this item
-   actually has more than one Media[] entry, same "never an empty/dead affordance"
-   rule Chapters/Audio Track follow) and Quality Cap, each drilling one level further
-   in rather than both living on this one panel, matching how Playback Speed/Sleep
-   Timer/Zoom already drill from the top-level hamburger menu. */
-function openVideoQualityMenu(controller, anchor) {
+function renderVersionSection(controller, content, { setValue, collapse }) {
     const session = controller._session;
     const versions = session?.mediaVersions || [];
-    const items = [];
-    if (versions.length > 1) {
-        const current = versions.find((v) => v.mediaIndex === session.mediaIndex);
-        items.push({ label: "Version", value: current?.label || null, trailing: "›", onSelect: () => openVersionMenu(controller, anchor) });
-    }
-    items.push({ label: "Quality Cap", value: qualityCapMenuLabel(controller), trailing: "›", onSelect: () => openQualityCapMenu(controller, anchor) });
-    openInlineMenu(controller, { anchor, onBack: () => openHamburgerMenu(controller, anchor), items });
+    renderPickerList(content, versions.map((v) => ({
+        label: `${v.label}${v.mediaIndex === session.mediaIndex ? "  ✓" : ""}`,
+        onSelect: () => {
+            reloadWebSource(controller, { mediaIndex: v.mediaIndex });
+            setValue(v.label);
+            collapse();
+        },
+    })));
 }
 
-function openVersionMenu(controller, anchor) {
-    const session = controller._session;
-    const versions = session?.mediaVersions || [];
-    openInlineMenu(controller, {
-        anchor,
-        onBack: () => openVideoQualityMenu(controller, anchor),
-        items: versions.map((v) => ({
-            label: `${v.label}${v.mediaIndex === session.mediaIndex ? "  ✓" : ""}`,
-            onSelect: () => reloadWebSource(controller, { mediaIndex: v.mediaIndex }),
-        })),
-    });
-}
-
-function openQualityCapMenu(controller, anchor) {
+function renderQualityCapSection(controller, content, { setValue, collapse }) {
     const session = controller._session;
     const current = session?.qualityCapKbps ?? null;
     const autoOn = controller._autoQualityEnabled;
     /* No bandwidth signal exists on the native-HLS <video> branch (controller._hls is
        null there, see web-fallback.js's attachSource) - Auto Quality has nothing to
-       evaluate against, so this row is shown but not selectable rather than silently
-       doing nothing behind a checked toggle. The persisted flag itself is untouched
-       either way, so it still takes effect on a future session/device that does use
-       hls.js. */
+       evaluate against, so the row is omitted entirely rather than shown disabled.
+       The persisted flag itself is untouched either way, so it still takes effect on
+       a future session/device that does use hls.js. */
     const autoAvailable = !!controller._hls;
-    const autoRow = autoAvailable
-        ? {
-              label: `Auto${autoOn ? "  ✓" : ""}`,
-              onSelect: () => setAutoQualityEnabled(controller, true),
-          }
-        : { label: "Auto (unavailable)", onSelect: () => {} };
-    openInlineMenu(controller, {
-        anchor,
-        onBack: () => openVideoQualityMenu(controller, anchor),
-        items: [
-            autoRow,
-            ...QUALITY_CAP_PRESETS.map((preset) => ({
-                label: `${preset.label}${!autoOn && (preset.kbps ?? null) === current ? "  ✓" : ""}`,
-                onSelect: () => {
-                    setAutoQualityEnabled(controller, false);
-                    reloadWebSource(controller, { qualityCapKbps: preset.kbps });
-                },
-            })),
-        ],
-    });
+    const items = [];
+    if (autoAvailable) {
+        items.push({
+            label: `Auto${autoOn ? "  ✓" : ""}`,
+            onSelect: () => {
+                setAutoQualityEnabled(controller, true);
+                setValue(qualityCapMenuLabel(controller));
+                collapse();
+            },
+        });
+    }
+    renderPickerList(content, [
+        ...items,
+        ...QUALITY_CAP_PRESETS.map((preset) => ({
+            label: `${preset.label}${!autoOn && (preset.kbps ?? null) === current ? "  ✓" : ""}`,
+            onSelect: () => {
+                setAutoQualityEnabled(controller, false);
+                reloadWebSource(controller, { qualityCapKbps: preset.kbps });
+                setValue(qualityCapMenuLabel(controller));
+                collapse();
+            },
+        })),
+    ]);
 }
 
-function openAudioMenu(controller, anchor) {
+function renderAudioSection(controller, content, { setValue, collapse }) {
     const streams = controller._session?.audioStreams || [];
     const current = controller._session?.audioStreamId;
-    openInlineMenu(controller, {
-        anchor,
-        onBack: () => openHamburgerMenu(controller, anchor),
-        items: streams.map((stream) => ({
-            label: `${stream.label}${stream.id === current ? "  ✓" : ""}`,
-            onSelect: () => reloadWebSource(controller, { audioStreamID: stream.id }),
-        })),
-    });
+    renderPickerList(content, streams.map((stream) => ({
+        label: `${stream.label}${stream.id === current ? "  ✓" : ""}`,
+        onSelect: () => {
+            reloadWebSource(controller, { audioStreamID: stream.id });
+            setValue(stream.label);
+            collapse();
+        },
+    })));
 }
 
-function openSpeedMenu(controller, anchor) {
+function renderSpeedSection(controller, content, { setValue, collapse }) {
     const current = controller._session?.playbackRate || 1;
-    openInlineMenu(controller, {
-        anchor,
-        onBack: () => openHamburgerMenu(controller, anchor),
-        items: PLAYBACK_RATES.map((rate) => ({
-            label: `${rate}x${rate === current ? "  ✓" : ""}`,
-            onSelect: () => setPlaybackRate(controller, rate),
-        })),
-    });
+    renderPickerList(content, PLAYBACK_RATES.map((rate) => ({
+        label: `${rate}x${rate === current ? "  ✓" : ""}`,
+        onSelect: () => {
+            setPlaybackRate(controller, rate);
+            setValue(`${rate}x`);
+            collapse();
+        },
+    })));
 }
 
 async function setPlaybackRate(controller, rate) {
@@ -1340,19 +1530,15 @@ async function setPlaybackRate(controller, rate) {
     }
 }
 
-function openSleepMenu(controller, anchor) {
-    openInlineMenu(controller, {
-        anchor,
-        onBack: () => openHamburgerMenu(controller, anchor),
-        items: [
-            { label: `Off${!controller._sleepMinutes ? "  ✓" : ""}`, onSelect: () => setSleepTimer(controller, 0) },
-            ...SLEEP_TIMER_PRESETS_MIN.map((min) => ({
-                label: `${min} min${controller._sleepMinutes === min ? "  ✓" : ""}`,
-                onSelect: () => setSleepTimer(controller, min * 60000),
-            })),
-            { label: "End of episode", onSelect: () => setSleepTimer(controller, 0) },
-        ],
-    });
+function renderSleepSection(controller, content, { setValue, collapse }) {
+    renderPickerList(content, [
+        { label: `Off${!controller._sleepMinutes ? "  ✓" : ""}`, onSelect: () => { setSleepTimer(controller, 0); setValue(null); collapse(); } },
+        ...SLEEP_TIMER_PRESETS_MIN.map((min) => ({
+            label: `${min} min${controller._sleepMinutes === min ? "  ✓" : ""}`,
+            onSelect: () => { setSleepTimer(controller, min * 60000); setValue(`${min}m`); collapse(); },
+        })),
+        { label: "End of episode", onSelect: () => { setSleepTimer(controller, 0); setValue(null); collapse(); } },
+    ]);
 }
 
 /* ms=0 clears any pending timer - used by both "Off" (don't pause early) and "End of
@@ -1363,20 +1549,18 @@ function setSleepTimer(controller, ms) {
     controller._sleepMinutes = ms > 0 ? Math.round(ms / 60000) : 0;
 }
 
-function openZoomMenu(controller, anchor) {
-    openInlineMenu(controller, {
-        anchor,
-        onBack: () => openHamburgerMenu(controller, anchor),
-        items: ZOOM_LEVELS.map((level, idx) => ({
-            label: `${level}x${idx === controller._zoomIndex ? "  ✓" : ""}`,
-            onSelect: () => {
-                controller._zoomIndex = idx;
-                controller._zoomPanX = 0;
-                controller._zoomPanY = 0;
-                applyZoomTransform(controller);
-            },
-        })),
-    });
+function renderZoomSection(controller, content, { setValue, collapse }) {
+    renderPickerList(content, ZOOM_LEVELS.map((level, idx) => ({
+        label: `${level}x${idx === controller._zoomIndex ? "  ✓" : ""}`,
+        onSelect: () => {
+            controller._zoomIndex = idx;
+            controller._zoomPanX = 0;
+            controller._zoomPanY = 0;
+            applyZoomTransform(controller);
+            setValue(`${level}x`);
+            collapse();
+        },
+    })));
 }
 
 export function applyZoomTransform(controller) {
@@ -1397,7 +1581,7 @@ const MODE_OPTIONS = [
     { key: "off", label: "Off" },
 ];
 
-/* Shared by openShaderMenu/openColorBoostMenu - a 3-way Auto/On/Off segmented control
+/* Shared by renderShaderSection/renderColorBoostSection - a 3-way Auto/On/Off segmented control
    replacing the old separate enabled-toggle (hamburger row) + "Auto strength" checkbox
    (panel) pair, collapsed into shader-pipeline.js's upscaleModeOf/setUpscaleMode (and the
    Color Boost equivalents) - see those functions' own comments for why the underlying
@@ -1461,38 +1645,98 @@ function buildModeRow({ mode, onModeChange, getAutoValue, getManualValue, streng
     return row;
 }
 
-/* Reuses openSubtitleSearch's custom-panel pattern rather than openInlineMenu's plain
-   item list - a continuous strength slider can't be expressed as tappable menu rows. */
-function openShaderMenu(controller, anchor) {
-    closeInlineMenu(controller);
-    const panel = document.createElement("div");
-    Object.assign(panel.style, { ...menuAnchorPosition(anchor), ...MENU_PANEL_STYLE, padding: "14px", width: "240px" });
+/* "Effects" navigates to a whole separate list (see buildAccordionRow's `nav` case)
+   rather than expanding in place - Shader Upscaling/Color Boost/Ambient Lighting read
+   better as their own dedicated screen than squeezed inline under a fourth row. Clears
+   and rebuilds `list` in place (same element, new contents) rather than swapping in a
+   second list element, so the sheet's own scroll position/height logic doesn't need to
+   know which screen is currently showing. */
+function renderEffectsList(controller, list, onBack) {
+    list.innerHTML = "";
+    list.appendChild(makeBackRow(onBack));
+    const state = { expandedCollapse: null };
+    buildAccordionRow(list, state, {
+        key: "shader",
+        label: "Shader Upscaling",
+        getValue: () => (controller._shaderEnabled ? shaderRowLabel(controller) : null),
+        render: (content, helpers) => renderShaderSection(controller, content, helpers),
+    });
+    buildAccordionRow(list, state, {
+        key: "colorboost",
+        label: "Color Boost",
+        getValue: () => (controller._colorBoostEnabled ? colorBoostRowLabel(controller) : null),
+        render: (content, helpers) => renderColorBoostSection(controller, content, helpers),
+    });
+    buildAccordionRow(list, state, {
+        key: "ambient",
+        label: "Ambient Lighting",
+        getValue: () => (controller._ambientEnabled ? `${Math.round(controller._ambientOpacity * 100)}%` : null),
+        /* Toggle flips on/off in place without collapsing the row - tapping anywhere
+           else on it still expands/collapses the opacity slider, same independent-
+           gestures-on-one-row pattern as every toggle+chevron row in this sheet. */
+        toggle: {
+            checked: controller._ambientEnabled,
+            onChange: (checked) => {
+                controller._setAmbientEnabled(checked);
+                return checked ? `${Math.round(controller._ambientOpacity * 100)}%` : null;
+            },
+        },
+        render: (content, helpers) => renderAmbientSection(controller, content, helpers),
+    });
+}
 
-    panel.appendChild(makeBackRow(() => openHamburgerMenu(controller, anchor)));
+/* "Extras" - same dedicated-screen pattern as renderEffectsList above, for Playback
+   Speed/Zoom/Sleep Timer instead of the shader/color/ambient trio. */
+function renderExtrasList(controller, list, onBack) {
+    list.innerHTML = "";
+    list.appendChild(makeBackRow(onBack));
+    const state = { expandedCollapse: null };
+    buildAccordionRow(list, state, {
+        key: "speed",
+        label: "Playback Speed",
+        getValue: () => `${controller._session?.playbackRate || 1}x`,
+        render: (content, helpers) => renderSpeedSection(controller, content, helpers),
+    });
+    buildAccordionRow(list, state, {
+        key: "zoom",
+        label: "Zoom",
+        getValue: () => `${ZOOM_LEVELS[controller._zoomIndex]}x`,
+        render: (content, helpers) => renderZoomSection(controller, content, helpers),
+    });
+    buildAccordionRow(list, state, {
+        key: "sleep",
+        label: "Sleep Timer",
+        getValue: () => (controller._sleepMinutes ? `${controller._sleepMinutes}m` : null),
+        render: (content, helpers) => renderSleepSection(controller, content, helpers),
+    });
+}
 
-    /* No more manual Off/Anime4K/Live-Action picker - controller._shaderAutoType is
-       decided once per video from its Plex genre tags (see detectShaderType) and shown
-       here as read-only info. The slider below is the only remaining control, and
-       dragging it to 0% is what "Off" used to be. */
+/* No manual Off/Anime4K/Live-Action picker - controller._shaderAutoType is decided
+   once per video from its Plex genre tags (see detectShaderType) and shown here as
+   read-only info. The mode row + slider are the only remaining controls, and dragging
+   strength to 0% in "on" mode is what a plain "Off" used to be. */
+function renderShaderSection(controller, content, { setValue }) {
     const detectedLabel = document.createElement("div");
     detectedLabel.textContent = `Detected: ${SHADER_TYPES[controller._shaderAutoType].label}`;
-    Object.assign(detectedLabel.style, { color: "#fff", fontSize: "13px", fontWeight: "600", padding: "2px 0" });
-    panel.appendChild(detectedLabel);
+    Object.assign(detectedLabel.style, { color: "#fff", fontSize: "13px", fontWeight: "600", padding: "2px 16px" });
+    content.appendChild(detectedLabel);
 
     const detectedHint = document.createElement("div");
     detectedHint.textContent = "Auto-detected from this title's genre";
-    Object.assign(detectedHint.style, { color: "rgba(255,255,255,0.5)", fontSize: "11px", padding: "0 0 10px" });
-    panel.appendChild(detectedHint);
+    Object.assign(detectedHint.style, { color: "rgba(255,255,255,0.5)", fontSize: "11px", padding: "0 16px 10px" });
+    content.appendChild(detectedHint);
 
     const strengthLabel = document.createElement("div");
-    Object.assign(strengthLabel.style, { color: "rgba(255,255,255,0.7)", fontSize: "12px", padding: "0 0 4px" });
+    Object.assign(strengthLabel.style, { color: "rgba(255,255,255,0.7)", fontSize: "12px", padding: "0 16px 4px" });
 
     const strengthInput = document.createElement("input");
     strengthInput.type = "range";
     strengthInput.min = "0";
     strengthInput.max = "100";
     Object.assign(strengthInput.style, {
-        width: "100%",
+        display: "block",
+        width: "calc(100% - 32px)",
+        margin: "0 16px",
         accentColor: "#e5a00d",
         cursor: "pointer",
         boxSizing: "border-box",
@@ -1502,49 +1746,42 @@ function openShaderMenu(controller, anchor) {
         setShaderStrength(controller, Number(strengthInput.value) / 100);
     });
 
-    panel.appendChild(buildModeRow({
+    const modeRowWrap = document.createElement("div");
+    modeRowWrap.style.padding = "0 16px";
+    modeRowWrap.appendChild(buildModeRow({
         mode: upscaleModeOf(controller),
-        onModeChange: (mode) => setUpscaleMode(controller, mode),
+        onModeChange: (mode) => {
+            setUpscaleMode(controller, mode);
+            setValue(controller._shaderEnabled ? shaderRowLabel(controller) : null);
+        },
         getAutoValue: () => controller._autoUpscaleStrength,
         getManualValue: () => controller._shaderStrength,
         strengthInput,
         strengthLabel,
     }));
-    panel.appendChild(strengthLabel);
-    panel.appendChild(strengthInput);
-
-    mountMenuPanel(controller, panel, anchor);
-
-    const onOutsideClick = (e) => {
-        if (panel.contains(e.target) || anchor.contains(e.target)) return;
-        closeInlineMenu(controller);
-    };
-    setTimeout(() => document.addEventListener("click", onOutsideClick), 0);
-    controller._inlineMenuCleanup = () => document.removeEventListener("click", onOutsideClick);
+    content.appendChild(modeRowWrap);
+    content.appendChild(strengthLabel);
+    content.appendChild(strengthInput);
 }
 
-/* Same custom-panel pattern as openShaderMenu above, simpler since there's no
-   auto-detected type to show as read-only info here - just the one strength control.
-   Unlike Android's equivalent panel, this applies live on every `input` event rather
-   than gating to release: both compiled GL programs stay resident (see
+/* Same pattern as renderShaderSection above, simpler since there's no auto-detected
+   type to show as read-only info here - just the one strength control. Unlike
+   Android's equivalent panel, this applies live on every `input` event rather than
+   gating to release: both compiled GL programs stay resident (see
    ensureShaderPipeline), so a strength change here is only a uniform update on the next
    frame, not a program rebuild. */
-function openColorBoostMenu(controller, anchor) {
-    closeInlineMenu(controller);
-    const panel = document.createElement("div");
-    Object.assign(panel.style, { ...menuAnchorPosition(anchor), ...MENU_PANEL_STYLE, padding: "14px", width: "240px" });
-
-    panel.appendChild(makeBackRow(() => openHamburgerMenu(controller, anchor)));
-
+function renderColorBoostSection(controller, content, { setValue }) {
     const strengthLabel = document.createElement("div");
-    Object.assign(strengthLabel.style, { color: "rgba(255,255,255,0.7)", fontSize: "12px", padding: "0 0 4px" });
+    Object.assign(strengthLabel.style, { color: "rgba(255,255,255,0.7)", fontSize: "12px", padding: "4px 16px 4px" });
 
     const strengthInput = document.createElement("input");
     strengthInput.type = "range";
     strengthInput.min = "0";
     strengthInput.max = "100";
     Object.assign(strengthInput.style, {
-        width: "100%",
+        display: "block",
+        width: "calc(100% - 32px)",
+        margin: "0 16px",
         accentColor: "#e5a00d",
         cursor: "pointer",
         boxSizing: "border-box",
@@ -1554,41 +1791,32 @@ function openColorBoostMenu(controller, anchor) {
         setColorBoostStrength(controller, Number(strengthInput.value) / 100);
     });
 
-    panel.appendChild(buildModeRow({
+    const modeRowWrap = document.createElement("div");
+    modeRowWrap.style.padding = "0 16px";
+    modeRowWrap.appendChild(buildModeRow({
         mode: colorBoostModeOf(controller),
-        onModeChange: (mode) => setColorBoostMode(controller, mode),
+        onModeChange: (mode) => {
+            setColorBoostMode(controller, mode);
+            setValue(controller._colorBoostEnabled ? colorBoostRowLabel(controller) : null);
+        },
         getAutoValue: () => controller._autoColorBoostStrength,
         getManualValue: () => controller._colorBoostStrength,
         strengthInput,
         strengthLabel,
     }));
-    panel.appendChild(strengthLabel);
-    panel.appendChild(strengthInput);
-
-    mountMenuPanel(controller, panel, anchor);
-
-    const onOutsideClick = (e) => {
-        if (panel.contains(e.target) || anchor.contains(e.target)) return;
-        closeInlineMenu(controller);
-    };
-    setTimeout(() => document.addEventListener("click", onOutsideClick), 0);
-    controller._inlineMenuCleanup = () => document.removeEventListener("click", onOutsideClick);
+    content.appendChild(modeRowWrap);
+    content.appendChild(strengthLabel);
+    content.appendChild(strengthInput);
 }
 
-/* Same custom-panel pattern as openShaderMenu above (a continuous slider can't be
-   expressed as tappable menu rows) - simpler, since there's no auto-detected type to
-   show as read-only info here, just the one opacity control. */
-function openAmbientMenu(controller, anchor) {
-    closeInlineMenu(controller);
-    const panel = document.createElement("div");
-    Object.assign(panel.style, { ...menuAnchorPosition(anchor), ...MENU_PANEL_STYLE, padding: "14px", width: "240px" });
-
-    panel.appendChild(makeBackRow(() => openHamburgerMenu(controller, anchor)));
-
+/* Same pattern as renderShaderSection above (a continuous slider can't be expressed
+   as tappable picker rows) - simpler, since there's no auto-detected type to show as
+   read-only info here, just the one opacity control. */
+function renderAmbientSection(controller, content, { setValue }) {
     const opacityLabel = document.createElement("div");
     opacityLabel.textContent = `Opacity: ${Math.round(controller._ambientOpacity * 100)}%`;
-    Object.assign(opacityLabel.style, { color: "rgba(255,255,255,0.7)", fontSize: "12px", padding: "0 0 4px" });
-    panel.appendChild(opacityLabel);
+    Object.assign(opacityLabel.style, { color: "rgba(255,255,255,0.7)", fontSize: "12px", padding: "4px 16px 4px" });
+    content.appendChild(opacityLabel);
 
     const opacityInput = document.createElement("input");
     opacityInput.type = "range";
@@ -1596,7 +1824,9 @@ function openAmbientMenu(controller, anchor) {
     opacityInput.max = "100";
     opacityInput.value = String(Math.round(controller._ambientOpacity * 100));
     Object.assign(opacityInput.style, {
-        width: "100%",
+        display: "block",
+        width: "calc(100% - 32px)",
+        margin: "0 16px",
         accentColor: "#e5a00d",
         cursor: "pointer",
         boxSizing: "border-box",
@@ -1604,39 +1834,27 @@ function openAmbientMenu(controller, anchor) {
     opacityInput.addEventListener("input", () => {
         opacityLabel.textContent = `Opacity: ${opacityInput.value}%`;
         setAmbientOpacity(controller, Number(opacityInput.value) / 100);
+        setValue(controller._ambientEnabled ? `${opacityInput.value}%` : null);
     });
-    panel.appendChild(opacityInput);
-
-    mountMenuPanel(controller, panel, anchor);
-
-    const onOutsideClick = (e) => {
-        if (panel.contains(e.target) || anchor.contains(e.target)) return;
-        closeInlineMenu(controller);
-    };
-    setTimeout(() => document.addEventListener("click", onOutsideClick), 0);
-    controller._inlineMenuCleanup = () => document.removeEventListener("click", onOutsideClick);
+    content.appendChild(opacityInput);
 }
 
-/* Reuses openInlineMenu (same scrollable tap-to-pick list as the speed/sleep-timer
+/* Reuses renderPickerList (same scrollable tap-to-pick list as the speed/sleep-timer
    presets) rather than a bespoke list UI - each row's thumb comes from Plex's own
    per-chapter thumb path (see chapterThumbUrl), not a separately-fetched preview. Only
    offered from the hamburger menu when the session actually has chapters (see
    openHamburgerMenu), so there's never an empty list. */
-function openChapterMenu(controller, anchor) {
+function renderChapterSection(controller, content, { collapse }) {
     const session = controller._session;
-    openInlineMenu(controller, {
-        anchor,
-        onBack: () => openHamburgerMenu(controller, anchor),
-        items: (session?.chapters || []).map((chapter) => ({
-            label: chapterLabel(chapter),
-            thumb: plexAssetUrl(session, chapter.thumb),
-            onSelect: () => {
-                if (controller._videoEl) controller._videoEl.currentTime = (chapter.startTimeOffset ?? 0) / 1000;
-            },
-        })),
-    });
+    renderPickerList(content, (session?.chapters || []).map((chapter) => ({
+        label: chapterLabel(chapter),
+        thumb: plexAssetUrl(session, chapter.thumb),
+        onSelect: () => {
+            if (controller._videoEl) controller._videoEl.currentTime = (chapter.startTimeOffset ?? 0) / 1000;
+            collapse();
+        },
+    })));
 }
-
 
 function chapterLabel(chapter) {
     const time = formatTime((chapter.startTimeOffset ?? 0) / 1000);
@@ -1687,142 +1905,18 @@ function makeToggleSwitch(checked, onChange) {
     return el;
 }
 
-/* Shared by every control button that needs a small tap-to-pick list (speed presets,
-   sleep timer presets, and future picker buttons) instead of each building its own
-   floating menu. Only one menu is ever open at a time. `onBack`, when given, renders one
-   makeBackRow above `items` rather than each caller including its own "← Back" item -
-   see openSpeedMenu/openSleepMenu/etc. */
-export function openInlineMenu(controller, { anchor, items, onBack }) {
-    closeInlineMenu(controller);
-    ensureMenuScrollStyle();
-    const menu = document.createElement("div");
-    menu.className = MENU_SCROLL_CLASS;
-    Object.assign(menu.style, { ...menuAnchorPosition(anchor), ...MENU_PANEL_STYLE, padding: "8px", minWidth: "180px", maxHeight: "60vh", overflowY: "auto" });
-
-    if (onBack) menu.appendChild(makeBackRow(onBack));
-
-    items.forEach((item) => {
-        const row = document.createElement("button");
-        row.type = "button";
-        Object.assign(row.style, {
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            gap: "12px",
-            width: "100%",
-            textAlign: "left",
-            padding: "10px 14px",
-            background: "transparent",
-            color: "#fff",
-            border: "none",
-            borderRadius: "8px",
-            cursor: "pointer",
-            fontSize: "14px",
-            fontWeight: "500",
-        });
-        /* Only the Chapters menu sets item.thumb today - every other openInlineMenu
-           caller (speed, sleep timer, audio track...) leaves it undefined, so this is a
-           no-op there. Hidden on error rather than left to show a broken-image icon -
-           Plex's chapterImages endpoint isn't guaranteed pre-generated for every chapter. */
-        if (item.thumb) {
-            const thumb = document.createElement("img");
-            thumb.src = item.thumb;
-            thumb.loading = "lazy";
-            thumb.alt = "";
-            Object.assign(thumb.style, {
-                width: "64px",
-                height: "36px",
-                borderRadius: "4px",
-                objectFit: "cover",
-                flex: "0 0 auto",
-                background: "rgba(255,255,255,0.08)",
-            });
-            thumb.addEventListener("error", () => thumb.remove());
-            row.appendChild(thumb);
-        }
-
-        /* Current value (Playback Speed's "1x", Audio Track's stream label, etc.) renders
-           as its own smaller/dimmer line under the row's title instead of an inline
-           "(value)" suffix - keeps the title itself the same weight/size across every
-           row whether or not it happens to have a current value to show. */
-        const labelStack = document.createElement("span");
-        Object.assign(labelStack.style, { display: "flex", flexDirection: "column", gap: "2px", minWidth: "0" });
-        const label = document.createElement("span");
-        label.textContent = item.label;
-        labelStack.appendChild(label);
-        let valueEl = null;
-        const setValue = (text) => {
-            if (text) {
-                if (!valueEl) {
-                    valueEl = document.createElement("span");
-                    Object.assign(valueEl.style, { fontSize: "11px", fontWeight: "400", color: "rgba(255,255,255,0.4)" });
-                    labelStack.appendChild(valueEl);
-                }
-                valueEl.textContent = text;
-            } else if (valueEl) {
-                valueEl.remove();
-                valueEl = null;
-            }
-        };
-        setValue(item.value);
-        row.appendChild(labelStack);
-
-        /* toggle and trailing are independent gestures on the same row - the toggle
-           flips item.toggle.onChange in place (stopping propagation so it doesn't also
-           trigger the row's own onSelect below), while trailing's chevron just marks that
-           tapping the rest of the row still drills into a submenu, toggle or not. */
-        const rightSide = document.createElement("span");
-        Object.assign(rightSide.style, { display: "flex", alignItems: "center", gap: "10px", flex: "0 0 auto" });
-        if (item.toggle) {
-            const switchEl = makeToggleSwitch(item.toggle.checked, (checked) => setValue(item.toggle.onChange(checked)));
-            rightSide.appendChild(switchEl);
-        }
-        if (item.trailing) {
-            const trailing = document.createElement("span");
-            trailing.textContent = item.trailing;
-            trailing.style.color = "rgba(255,255,255,0.35)";
-            rightSide.appendChild(trailing);
-        }
-        if (rightSide.children.length) row.appendChild(rightSide);
-        row.addEventListener("mouseenter", () => {
-            row.style.background = "rgba(255,255,255,0.1)";
-        });
-        row.addEventListener("mouseleave", () => {
-            row.style.background = "transparent";
-        });
-        row.addEventListener("click", () => {
-            item.onSelect();
-            /* Only auto-close if onSelect() didn't already replace the open menu with a
-               submenu/panel of its own (Zoom, Speed, Sleep, Chapters, Subtitles, and
-               Shader Upscaling all do this) - otherwise this would immediately tear down
-               whatever onSelect just opened, before it ever paints. */
-            if (controller._inlineMenuEl === menu) closeInlineMenu(controller);
-        });
-        menu.appendChild(row);
-    });
-    mountMenuPanel(controller, menu, anchor);
-
-    const onOutsideClick = (e) => {
-        if (menu.contains(e.target) || anchor.contains(e.target)) return;
-        closeInlineMenu(controller);
-    };
-    /* Deferred by a tick so the same click that opened this menu (which is already
-       bubbling toward document) doesn't immediately close it again. */
-    setTimeout(() => document.addEventListener("click", onOutsideClick), 0);
-    controller._inlineMenuCleanup = () => document.removeEventListener("click", onOutsideClick);
-}
-
 export function closeInlineMenu(controller) {
-    if (controller._inlineMenuCleanup) {
-        controller._inlineMenuCleanup();
-        controller._inlineMenuCleanup = null;
-    }
+    const wasOpen = !!controller._inlineMenuEl;
     if (controller._inlineMenuEl) {
         controller._inlineMenuEl.remove();
         controller._inlineMenuEl = null;
     }
+    if (controller._inlineMenuScrim) {
+        controller._inlineMenuScrim.remove();
+        controller._inlineMenuScrim = null;
+    }
     controller._inlineMenuAnchor = null;
-    scheduleHideControls(controller);
+    if (wasOpen) showControls(controller);
 }
 
 /* Pan only engages once zoomed past 1x, and only within the padding introduced by that
@@ -1863,26 +1957,16 @@ export function wireZoomPan(controller) {
 
 /* Lives in the player chrome, not the title-info modal - subtitle search is
    realistically a mid-playback action ("I'm already watching, there's no subs, let me
-   search") more than a pre-playback picker step. Reuses the anchor/menu-cleanup
-   bookkeeping openInlineMenu already tracks, even though this panel has an input and
-   dynamic results rather than a fixed item list. */
-export function openSubtitleSearch(controller, anchor) {
-    closeInlineMenu(controller);
-    ensureMenuScrollStyle();
-    const panel = document.createElement("div");
-    /* No maxHeight/overflow on the panel itself - only the results list below scrolls,
-       so the back row/input/search button stay put rather than scrolling out of view
-       along with whatever's found. */
-    Object.assign(panel.style, { ...menuAnchorPosition(anchor), ...MENU_PANEL_STYLE, padding: "14px", width: "280px" });
-
-    panel.appendChild(makeBackRow(() => openHamburgerMenu(controller, anchor)));
-
+   search") more than a pre-playback picker step. */
+function renderSubtitleSection(controller, content, { collapse }) {
     const input = document.createElement("input");
     input.type = "text";
     input.placeholder = "Search subtitles…";
     input.value = controller._session?.title || "";
     Object.assign(input.style, {
-        width: "100%",
+        display: "block",
+        width: "calc(100% - 32px)",
+        margin: "0 16px 8px",
         padding: "9px 12px",
         borderRadius: "8px",
         border: "1px solid rgba(255,255,255,0.15)",
@@ -1890,7 +1974,6 @@ export function openSubtitleSearch(controller, anchor) {
         color: "#fff",
         fontSize: "13px",
         fontFamily: '"Roboto", sans-serif',
-        marginBottom: "8px",
         boxSizing: "border-box",
     });
 
@@ -1898,9 +1981,10 @@ export function openSubtitleSearch(controller, anchor) {
     searchBtn.type = "button";
     searchBtn.textContent = "Search";
     Object.assign(searchBtn.style, {
-        width: "100%",
+        display: "block",
+        width: "calc(100% - 32px)",
+        margin: "0 16px 10px",
         padding: "9px",
-        marginBottom: "10px",
         borderRadius: "8px",
         border: "none",
         background: "#e5a00d",
@@ -1908,6 +1992,7 @@ export function openSubtitleSearch(controller, anchor) {
         fontSize: "13px",
         fontWeight: "700",
         cursor: "pointer",
+        boxSizing: "border-box",
     });
 
     const resultsEl = document.createElement("div");
@@ -1917,7 +2002,7 @@ export function openSubtitleSearch(controller, anchor) {
         color: "rgba(255,255,255,0.7)",
         maxHeight: "260px",
         overflowY: "auto",
-        paddingRight: "4px",
+        padding: "0 16px",
     });
 
     const runSearch = async () => {
@@ -1946,7 +2031,7 @@ export function openSubtitleSearch(controller, anchor) {
                     display: "block",
                     width: "100%",
                     textAlign: "left",
-                    padding: "9px 12px",
+                    padding: "9px 4px",
                     background: "transparent",
                     color: "#fff",
                     border: "none",
@@ -1961,7 +2046,7 @@ export function openSubtitleSearch(controller, anchor) {
                 row.addEventListener("mouseleave", () => {
                     row.style.background = "transparent";
                 });
-                row.addEventListener("click", () => applySubtitleResult(controller, r, row));
+                row.addEventListener("click", () => applySubtitleResult(controller, r, row, collapse));
                 resultsEl.appendChild(row);
             });
         } catch (e) {
@@ -1973,18 +2058,9 @@ export function openSubtitleSearch(controller, anchor) {
     });
     searchBtn.addEventListener("click", runSearch);
 
-    panel.appendChild(input);
-    panel.appendChild(searchBtn);
-    panel.appendChild(resultsEl);
-    mountMenuPanel(controller, panel, anchor);
-    input.focus();
-
-    const onOutsideClick = (e) => {
-        if (panel.contains(e.target) || anchor.contains(e.target)) return;
-        closeInlineMenu(controller);
-    };
-    setTimeout(() => document.addEventListener("click", onOutsideClick), 0);
-    controller._inlineMenuCleanup = () => document.removeEventListener("click", onOutsideClick);
+    content.appendChild(input);
+    content.appendChild(searchBtn);
+    content.appendChild(resultsEl);
 
     if (input.value) runSearch();
 }
@@ -1992,7 +2068,7 @@ export function openSubtitleSearch(controller, anchor) {
 /* rowEl gets an inline status update on failure instead of the previous
    console.error-only handling - a swallowed error here looked indistinguishable from
    "the click didn't register" since nothing on screen ever changed. */
-async function applySubtitleResult(controller, result, rowEl) {
+async function applySubtitleResult(controller, result, rowEl, collapse) {
     const originalLabel = rowEl?.textContent;
     if (rowEl) {
         rowEl.textContent = "Applying…";
@@ -2006,7 +2082,7 @@ async function applySubtitleResult(controller, result, rowEl) {
             const srtText = await StreamingSubtitles.download(result.fileId);
             attachSubtitleTrack(controller, srtText, result.languageCode, result.label);
         }
-        closeInlineMenu(controller);
+        collapse();
     } catch (e) {
         console.error("StreamingPlayer: subtitle download failed -", e);
         if (rowEl) {

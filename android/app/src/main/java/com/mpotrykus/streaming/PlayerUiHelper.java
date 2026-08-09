@@ -32,6 +32,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Consumer;
 import java.util.function.Function;
+import java.util.function.Supplier;
 
 /* Transport-bar/menu/chapter-skip chrome for PlayerActivity, pulled out into its own
    class the same way plex-player.js's web-side transport bar/menus live in
@@ -42,16 +43,14 @@ import java.util.function.Function;
    shared state, not a separable subsystem" reasoning the JS-side split uses.
 
    Visual language mirrors chrome.js's redesign directly: the amber accent color, the
-   gradient transport bar with a title/remaining-time header, and glass-panel PopupWindow
-   flyouts standing in for chrome.js's div-based menu panels (openHamburgerMenu/
-   openInlineMenu) instead of a native PopupMenu/AlertDialog. */
+   gradient transport bar with a title/remaining-time header, and the full-width
+   gradient "More" bottom sheet (showPlayerMenu) standing in for chrome.js's own
+   accordion sheet (openHamburgerMenu) instead of a native PopupMenu/AlertDialog. */
 @OptIn(markerClass = UnstableApi.class)
 final class PlayerUiHelper {
     private PlayerUiHelper() {}
 
     private static final int ACCENT_COLOR = Color.parseColor("#E5A00D");
-    private static final int PANEL_BG = Color.argb(240, 24, 24, 26);
-    private static final int PANEL_BORDER = Color.argb(20, 255, 255, 255);
     private static final int ROW_PRESSED_BG = Color.argb(26, 255, 255, 255);
     private static final int DIM_TEXT = Color.argb(166, 255, 255, 255);
     private static final int SUBTLE_TEXT = Color.argb(140, 255, 255, 255);
@@ -589,8 +588,8 @@ final class PlayerUiHelper {
        (activity.hasTouchscreen, see PlayerActivity.onCreate): double-tap left/right on the
        video surface does the same 5s seek instead (see PlayerActivity's
        tapGestureDetector). Chapter nav has no gesture replacement of its own yet - it's
-       just hidden on touch, reachable instead via the Chapters entry in the hamburger menu
-       (see openChapterMenu). Fire TV/remote-driven devices report no touchscreen and have
+       just hidden on touch, reachable instead via the Chapters entry in the More menu
+       (see renderChapterSection). Fire TV/remote-driven devices report no touchscreen and have
        no way to produce that gesture, so they keep both button pairs - reachable the same
        way every other button in this row is, via Android's default D-pad focus
        navigation, no extra code needed. */
@@ -823,154 +822,550 @@ final class PlayerUiHelper {
         }
     }
 
-    // ---- Options menu: glass-panel PopupWindow flyouts, mirroring chrome.js's
-    // ---- openHamburgerMenu/openInlineMenu/openShaderMenu instead of a native
-    // ---- PopupMenu/AlertDialog.
+    // ---- More menu: a full-width gradient bottom sheet, mirroring chrome.js's own
+    // ---- accordion redesign (openHamburgerMenu) - every category expands in place
+    // ---- instead of replacing the sheet with a new panel to navigate back from.
 
-    private static final class MenuRow {
+    /** One top-level row of the More sheet. */
+    private static final class MenuSection {
         final String label;
-        String value;
-        boolean chevron;
+        Supplier<String> getValue;
         Boolean toggleChecked;
         Function<Boolean, String> onToggle;
-        Runnable onSelect;
-        /* Only openChapterMenu sets this - every other caller leaves it null, so
-           makeMenuRowView's thumbnail block is a no-op for every other menu. */
-        String thumbUrl;
+        SectionRenderer render;
+        /* Lock/Picture-in-Picture close the whole sheet before running their action;
+           Effects instead navigates to a different screen within it (see
+           renderEffectsList) - both are "tap this row to do something rather than
+           expand/collapse it", so they share this one field. */
+        Runnable onTap;
+        /* Effects only - onTap navigates rather than performing a leaf action, so it
+           still gets a chevron hinting at the drill-down, unlike Lock/Picture-in-
+           Picture's onTap. */
+        boolean showChevron;
 
-        MenuRow(String label) {
+        MenuSection(String label) {
             this.label = label;
         }
     }
 
+    /** Builds a section's expanded content into `content`, given callbacks to update
+        this row's own header value and to collapse just this section afterward. */
+    private interface SectionRenderer {
+        void render(LinearLayout content, Consumer<String> setValue, Runnable collapse);
+    }
+
+    /** One item inside an expanded section's picker list (see renderPickerRows). */
+    private static final class PickerItem {
+        final String label;
+        Runnable onSelect;
+        /* Only renderChapterSection sets this - every other picker (speed, sleep
+           timer, audio track...) leaves it null, so renderPickerRows's thumbnail block
+           is a no-op for every other section. */
+        String thumbUrl;
+
+        PickerItem(String label, Runnable onSelect) {
+            this.label = label;
+            this.onSelect = onSelect;
+        }
+    }
+
+    /** Tracks which single section is currently expanded - opening a new one collapses
+        it - shared across every buildAccordionSection call for one sheet. */
+    private static final class AccordionState {
+        LinearLayout expandedContent;
+        TextView expandedChevron;
+    }
+
     static void showPlayerMenu(PlayerActivity activity, View anchor) {
-        List<MenuRow> rows = new ArrayList<>();
+        float density = activity.getResources().getDisplayMetrics().density;
+        closePlayerMenu(activity);
 
-        MenuRow speedRow = new MenuRow("Playback Speed");
-        float currentRate = activity.player != null ? activity.player.getPlaybackParameters().speed : 1f;
-        speedRow.value = formatRate(currentRate);
-        speedRow.chevron = true;
-        speedRow.onSelect = () -> openSpeedMenu(activity, anchor);
-        rows.add(speedRow);
+        /* Hugs the right edge with a capped width, matching the same change on the web
+           leg (chrome.js's own sheet) - a full-width sheet read as far too wide once
+           there was real desktop/tablet-landscape screen real estate to fill. */
+        int screenWidthPx = activity.getResources().getDisplayMetrics().widthPixels;
+        int sheetWidthPx = Math.min(Math.round(400 * density), screenWidthPx);
 
-        MenuRow sleepRow = new MenuRow("Sleep Timer");
-        sleepRow.value = activity.sleepMinutes > 0 ? activity.sleepMinutes + "m" : null;
-        sleepRow.chevron = true;
-        sleepRow.onSelect = () -> openSleepMenu(activity, anchor);
-        rows.add(sleepRow);
+        View scrim = buildMenuSheetScrim(activity);
+        LinearLayout sheetContent = buildMenuSheetContainer(activity, sheetWidthPx);
+        sheetContent.addView(buildMenuSheetHeader(activity, density));
 
-        MenuRow autoPlayRow = new MenuRow("Auto-Play");
-        autoPlayRow.toggleChecked = activity.autoPlayEnabled;
-        /* No chevron/onSelect - same plain on/off row as Performance Overlay below,
-           nothing to drill into. */
-        autoPlayRow.onToggle = (checked) -> {
-            activity.setAutoPlayEnabled(checked);
-            return null;
-        };
-        rows.add(autoPlayRow);
+        LinearLayout list = new LinearLayout(activity);
+        list.setOrientation(LinearLayout.VERTICAL);
 
-        /* No inline toggle any more - Auto/On/Off is a 3-way mode, not a boolean, so it
-           needs the panel's own segmented control (see openShaderPanel) rather than a
-           SwitchCompat that fits this row. Same chevron-only, drill-in-to-change pattern
-           as Sleep Timer/Zoom/Playback Speed above. */
-        MenuRow shaderRow = new MenuRow("Shader Upscaling");
-        shaderRow.value = activity.shaderEnabled ? shaderRowLabel(activity) : null;
-        shaderRow.chevron = true;
-        shaderRow.onSelect = () -> openShaderPanel(activity, anchor);
-        rows.add(shaderRow);
+        /* Full-height drawer, unlike the Episodes sheet below it - the ScrollView gets
+           weight:1 (not WRAP_CONTENT) so it fills whatever vertical space is left under
+           the header and scrolls within that fixed allotment on its own, the same way a
+           CSS flex:1/min-height:0/overflow-y:auto region does on the web leg. No manual
+           measure-and-clamp step needed here (unlike this sheet's previous bottom-sheet
+           incarnation) since a LinearLayout weight, unlike a plain WRAP_CONTENT height,
+           already gives the ScrollView a real bounded height to scroll within. */
+        ScrollView scroll = new ScrollView(activity);
+        scroll.setVerticalScrollBarEnabled(false);
+        scroll.addView(list, new ScrollView.LayoutParams(ScrollView.LayoutParams.MATCH_PARENT, ScrollView.LayoutParams.WRAP_CONTENT));
+        scroll.setLayoutParams(new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
+        sheetContent.addView(scroll);
 
-        MenuRow colorBoostRow = new MenuRow("Color Boost");
-        colorBoostRow.value = activity.colorBoostEnabled ? colorBoostRowLabel(activity) : null;
-        colorBoostRow.chevron = true;
-        colorBoostRow.onSelect = () -> openColorBoostPanel(activity, anchor);
-        rows.add(colorBoostRow);
+        renderMainList(activity, list);
 
-        MenuRow ambientRow = new MenuRow("Ambient Lighting");
-        ambientRow.toggleChecked = activity.ambientEnabled;
-        ambientRow.chevron = true;
-        /* Flips on/off in place without leaving this menu - onSelect (tap anywhere else
-           on the row) still drills into the opacity panel, same independent-gestures-
-           on-one-row pattern as Shader Upscaling above. */
-        ambientRow.onToggle = (checked) -> {
-            activity.setAmbientEnabled(checked);
-            return null;
-        };
-        ambientRow.onSelect = () -> openAmbientPanel(activity, anchor);
-        rows.add(ambientRow);
+        activity.root.addView(scrim);
+        activity.root.addView(sheetContent);
+        activity.menuScrim = scrim;
+        activity.menuSheet = sheetContent;
+        activity.controlsFadeHandler.removeCallbacks(activity.controlsFadeRunnable);
+        setControlsVisible(activity, false);
+    }
 
-        MenuRow statsRow = new MenuRow("Performance Overlay");
-        statsRow.toggleChecked = activity.statsOverlayEnabled;
-        /* No chevron/onSelect - nothing to drill into, unlike Shader Upscaling/Color
-           Boost/Ambient Lighting above (each has a strength/opacity slider). Toggling
-           this is just a View visibility flip (see setStatsOverlayEnabled), so it's a
-           plain on/off row. */
-        statsRow.onToggle = (checked) -> {
-            activity.setStatsOverlayEnabled(checked);
-            return null;
-        };
-        rows.add(statsRow);
+    /* The sheet's default screen. Clears and rebuilds `list` in place (same element,
+       new contents) rather than swapping in a second list element, so the sheet's own
+       scroll region doesn't need to know which screen is currently showing - same
+       reasoning renderEffectsList below uses for the "Effects" sub-screen it navigates
+       to and back from. */
+    private static void renderMainList(PlayerActivity activity, LinearLayout list) {
+        list.removeAllViews();
+        AccordionState state = new AccordionState();
+
+        List<MenuSection> sections = new ArrayList<>();
+        /* Ordered by how often a row is actually touched, not the order features
+           shipped in: what-you're-watching controls (Chapters/Audio Track) first,
+           since those get touched per-video; source/quality (Version/Quality Cap) and
+           the Auto-Play toggle next; Effects/Extras/Performance Overlay last, in that
+           order - the three rows here most people set once and never revisit (Lock/
+           Picture-in-Picture further below are unaffected by this reordering, being
+           actions rather than settings). */
 
         if (!activity.chapters.isEmpty()) {
-            MenuRow chaptersRow = new MenuRow("Chapters");
-            chaptersRow.chevron = true;
-            chaptersRow.onSelect = () -> openChapterMenu(activity, anchor);
-            rows.add(chaptersRow);
+            MenuSection chaptersSection = new MenuSection("Chapters");
+            chaptersSection.render = (content, setValue, collapse) -> renderChapterSection(activity, content, collapse);
+            sections.add(chaptersSection);
         }
 
         if (activity.audioStreams.size() > 1) {
-            MenuRow audioRow = new MenuRow("Audio Track");
-            AudioStreamEntry current = findAudioStream(activity, activity.currentAudioStreamId);
-            audioRow.value = current != null ? current.label : null;
-            audioRow.chevron = true;
-            audioRow.onSelect = () -> openAudioMenu(activity, anchor);
-            rows.add(audioRow);
+            MenuSection audioSection = new MenuSection("Audio Track");
+            audioSection.getValue = () -> {
+                AudioStreamEntry current = findAudioStream(activity, activity.currentAudioStreamId);
+                return current != null ? current.label : null;
+            };
+            audioSection.render = (content, setValue, collapse) -> renderAudioSection(activity, content, setValue, collapse);
+            sections.add(audioSection);
         }
 
-        /* Replaces the old pre-play "Quality" picker that used to live on the web
-           card's title-info modal (see plex-player.js's chrome.js openVideoQualityMenu
-           for the same change on that leg) - Version/Quality Cap both change what's
-           actually being decoded, so they belong to an active session, not a choice
-           made before one exists. Always shown (unlike Audio Track, gated on there
-           being more than one stream) since Quality Cap always has at least
+        /* Version and Quality Cap used to live one level deeper, behind a "Video
+           Quality" row - flattened to their own top-level sections (Version only shown
+           when this item actually has more than one Media[] entry, same "never an
+           empty/dead affordance" rule Audio Track follows) so changing either is one
+           fewer tap, matching the same change on the web leg (see chrome.js's
+           openHamburgerMenu). Quality Cap is always shown since it always has at least
            "Original" to show. */
-        MenuRow qualityRow = new MenuRow("Video Quality");
-        qualityRow.value = qualityCapDisplayLabel(activity);
-        qualityRow.chevron = true;
-        qualityRow.onSelect = () -> openVideoQualityMenu(activity, anchor);
-        rows.add(qualityRow);
+        if (activity.mediaVersions.size() > 1) {
+            MenuSection versionSection = new MenuSection("Version");
+            versionSection.getValue = () -> {
+                MediaVersionEntry current = findMediaVersion(activity, activity.currentMediaIndex);
+                return current != null ? current.label : null;
+            };
+            versionSection.render = (content, setValue, collapse) -> renderVersionSection(activity, content, setValue, collapse);
+            sections.add(versionSection);
+        }
+
+        MenuSection qualityCapSection = new MenuSection("Quality Cap");
+        qualityCapSection.getValue = () -> qualityCapDisplayLabel(activity);
+        qualityCapSection.render = (content, setValue, collapse) -> renderQualityCapSection(activity, content, setValue, collapse);
+        sections.add(qualityCapSection);
+
+        MenuSection autoPlaySection = new MenuSection("Auto-Play");
+        /* No render - same plain on/off row as Performance Overlay below, nothing to
+           drill into. */
+        autoPlaySection.toggleChecked = activity.autoPlayEnabled;
+        autoPlaySection.onToggle = (checked) -> {
+            activity.setAutoPlayEnabled(checked);
+            return null;
+        };
+        sections.add(autoPlaySection);
+
+        /* Navigates to a dedicated Shader Upscaling/Color Boost/Ambient Lighting list
+           (see renderEffectsList) rather than expanding in place - three sub-controls
+           read better as their own screen than squeezed inline under a fourth row. */
+        MenuSection effectsSection = new MenuSection("Effects");
+        effectsSection.showChevron = true;
+        effectsSection.onTap = () -> renderEffectsList(activity, list);
+        sections.add(effectsSection);
+
+        /* Same "own dedicated screen" reasoning as Effects above, for Playback Speed/
+           Sleep Timer - grouped as "Extras" since neither relates to the other the way
+           Effects' GPU-pipeline controls do, but each is simple/single-picker enough
+           that squeezing both top-level rows down to one still reads as a sensible
+           cluster (playback tweaks outside the everyday audio/subtitle/quality set
+           above). No Zoom row here, unlike the web leg's Extras screen - this native
+           leg has never had a Zoom control in the menu. */
+        MenuSection extrasSection = new MenuSection("Extras");
+        extrasSection.showChevron = true;
+        extrasSection.onTap = () -> renderExtrasList(activity, list);
+        sections.add(extrasSection);
+
+        MenuSection statsSection = new MenuSection("Performance Overlay");
+        /* No render - nothing to drill into, unlike Shader Upscaling/Color Boost/
+           Ambient Lighting above (each has a strength/opacity slider). Toggling this is
+           just a View visibility flip (see setStatsOverlayEnabled), so it's a plain
+           on/off row. */
+        statsSection.toggleChecked = activity.statsOverlayEnabled;
+        statsSection.onToggle = (checked) -> {
+            activity.setStatsOverlayEnabled(checked);
+            return checked ? "On" : null;
+        };
+        sections.add(statsSection);
 
         /* Touch-only - a remote/D-pad-driven device has no touch input to lock in the
            first place (same activity.hasTouchscreen gate the old standalone icon button
-           used before it moved in here). A leaf action like Picture-in-Picture below:
-           dismiss this popup, then hand off to setTouchLocked, since the lock overlay
-           needs to intercept touches this flyout would otherwise still be sitting on
-           top of. */
+           used before it moved in here). */
         if (activity.hasTouchscreen) {
-            MenuRow lockRow = new MenuRow("Lock");
-            lockRow.onSelect = () -> {
-                dismissMenuPopup(activity);
+            MenuSection lockSection = new MenuSection("Lock");
+            lockSection.onTap = () -> {
+                closePlayerMenu(activity);
                 activity.setTouchLocked(true);
             };
-            rows.add(lockRow);
+            sections.add(lockSection);
         }
 
-        /* A leaf action, not a drill-in like the rows above - no chevron/toggle, and
-           onSelect has to dismiss this popup itself (openMenuPanel only dismisses it for
-           us when navigating to a submenu) before handing off to
-           PlayerActivity.enterPip(), since the tiny PiP window has no room for this
-           flyout to keep rendering in. */
-        MenuRow pipRow = new MenuRow("Picture-in-Picture");
-        pipRow.onSelect = () -> {
-            dismissMenuPopup(activity);
+        MenuSection pipSection = new MenuSection("Picture-in-Picture");
+        pipSection.onTap = () -> {
+            closePlayerMenu(activity);
             activity.enterPip();
         };
-        rows.add(pipRow);
+        sections.add(pipSection);
 
-        openMenuPanel(activity, anchor, rows, null);
+        float density = activity.getResources().getDisplayMetrics().density;
+        for (MenuSection section : sections) {
+            list.addView(buildAccordionSection(activity, density, section, state));
+        }
+    }
+
+    /* The "Effects" sub-screen (Shader Upscaling/Color Boost/Ambient Lighting) - a
+       whole separate list navigated to via the main list's "Effects" row (see
+       renderMainList), not an inline expansion, since three sub-controls read better
+       as their own screen than squeezed under a fourth row. Its own back row returns
+       to renderMainList, same "clear and rebuild `list` in place" approach. */
+    private static void renderEffectsList(PlayerActivity activity, LinearLayout list) {
+        float density = activity.getResources().getDisplayMetrics().density;
+        list.removeAllViews();
+        list.addView(makeBackRow(activity, density, () -> renderMainList(activity, list)));
+
+        AccordionState state = new AccordionState();
+        List<MenuSection> sections = new ArrayList<>();
+
+        /* Auto/On/Off is a 3-way mode, not a boolean, so it needs the section's own
+           segmented control (see renderShaderSection) rather than a SwitchCompat that
+           fits this row. */
+        MenuSection shaderSection = new MenuSection("Shader Upscaling");
+        shaderSection.getValue = () -> activity.shaderEnabled ? shaderRowLabel(activity) : null;
+        shaderSection.render = (content, setValue, collapse) -> renderShaderSection(activity, content, setValue, collapse);
+        sections.add(shaderSection);
+
+        MenuSection colorBoostSection = new MenuSection("Color Boost");
+        colorBoostSection.getValue = () -> activity.colorBoostEnabled ? colorBoostRowLabel(activity) : null;
+        colorBoostSection.render = (content, setValue, collapse) -> renderColorBoostSection(activity, content, setValue, collapse);
+        sections.add(colorBoostSection);
+
+        MenuSection ambientSection = new MenuSection("Ambient Lighting");
+        ambientSection.getValue = () -> activity.ambientEnabled ? Math.round(activity.ambientOpacity * 100) + "%" : null;
+        /* Flips on/off in place without collapsing the row - tapping anywhere else on
+           it still expands/collapses the opacity slider, same independent-gestures-
+           on-one-row pattern as every toggle+chevron row here. */
+        ambientSection.toggleChecked = activity.ambientEnabled;
+        ambientSection.onToggle = (checked) -> {
+            activity.setAmbientEnabled(checked);
+            return checked ? Math.round(activity.ambientOpacity * 100) + "%" : null;
+        };
+        ambientSection.render = (content, setValue, collapse) -> renderAmbientSection(activity, content, setValue, collapse);
+        sections.add(ambientSection);
+
+        for (MenuSection section : sections) {
+            list.addView(buildAccordionSection(activity, density, section, state));
+        }
+    }
+
+    /* "Extras" - same dedicated-screen pattern as renderEffectsList above, for
+       Playback Speed/Sleep Timer instead of the shader/color/ambient trio. */
+    private static void renderExtrasList(PlayerActivity activity, LinearLayout list) {
+        float density = activity.getResources().getDisplayMetrics().density;
+        list.removeAllViews();
+        list.addView(makeBackRow(activity, density, () -> renderMainList(activity, list)));
+
+        AccordionState state = new AccordionState();
+        List<MenuSection> sections = new ArrayList<>();
+
+        MenuSection speedSection = new MenuSection("Playback Speed");
+        speedSection.getValue = () -> formatRate(activity.player != null ? activity.player.getPlaybackParameters().speed : 1f);
+        speedSection.render = (content, setValue, collapse) -> renderSpeedSection(activity, content, setValue, collapse);
+        sections.add(speedSection);
+
+        MenuSection sleepSection = new MenuSection("Sleep Timer");
+        sleepSection.getValue = () -> activity.sleepMinutes > 0 ? activity.sleepMinutes + "m" : null;
+        sleepSection.render = (content, setValue, collapse) -> renderSleepSection(activity, content, setValue, collapse);
+        sections.add(sleepSection);
+
+        for (MenuSection section : sections) {
+            list.addView(buildAccordionSection(activity, density, section, state));
+        }
+    }
+
+    /** Row/content taps and the close button/scrim all funnel through here rather than
+        each removing views directly, so there's one place that stays in sync with
+        activity's own menuScrim/menuSheet bookkeeping - same reasoning
+        closeEpisodeListMenu exists alongside the Episodes bottom sheet. */
+    static void closePlayerMenu(PlayerActivity activity) {
+        if (activity.menuSheet != null) {
+            activity.root.removeView(activity.menuSheet);
+            activity.menuSheet = null;
+        }
+        if (activity.menuScrim != null) {
+            activity.root.removeView(activity.menuScrim);
+            activity.menuScrim = null;
+            showControlsTemporarily(activity);
+        }
+    }
+
+    private static View buildMenuSheetScrim(PlayerActivity activity) {
+        View scrim = new View(activity);
+        scrim.setBackgroundColor(Color.TRANSPARENT);
+        scrim.setLayoutParams(new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
+        scrim.setOnClickListener(v -> closePlayerMenu(activity));
+        return scrim;
+    }
+
+    /* Full-height drawer hugging the right edge at a capped width (see showPlayerMenu's
+       sheetWidthPx) rather than the Episodes sheet's full-width/bottom-anchored shape -
+       a full-width bottom sheet read as far too wide once there was real desktop/
+       tablet-landscape screen width to fill. Same frameless-gradient-into-the-video
+       look as that sheet, just fading in from the right edge (where the drawer anchors)
+       toward the left (into the video) instead of up from the bottom. */
+    private static Drawable menuSheetGradient() {
+        return new GradientDrawable(GradientDrawable.Orientation.RIGHT_LEFT, new int[]{
+            Color.argb(235, 0, 0, 0),
+            Color.argb(224, 0, 0, 0),
+            Color.argb(128, 0, 0, 0),
+            Color.argb(0, 0, 0, 0),
+        });
+    }
+
+    private static LinearLayout buildMenuSheetContainer(PlayerActivity activity, int widthPx) {
+        LinearLayout content = new LinearLayout(activity);
+        content.setOrientation(LinearLayout.VERTICAL);
+        content.setBackground(menuSheetGradient());
+        FrameLayout.LayoutParams contentParams = new FrameLayout.LayoutParams(widthPx, FrameLayout.LayoutParams.MATCH_PARENT);
+        contentParams.gravity = Gravity.END;
+        content.setLayoutParams(contentParams);
+        return content;
+    }
+
+    private static LinearLayout buildMenuSheetHeader(PlayerActivity activity, float density) {
+        LinearLayout header = new LinearLayout(activity);
+        header.setOrientation(LinearLayout.HORIZONTAL);
+        header.setGravity(Gravity.CENTER_VERTICAL);
+        int headerPadH = Math.round(16 * density);
+        int headerPadV = Math.round(12 * density);
+        header.setPadding(headerPadH, headerPadV, headerPadH, headerPadV);
+
+        TextView heading = new TextView(activity);
+        heading.setText("More");
+        heading.setTextColor(Color.WHITE);
+        heading.setTextSize(16);
+        heading.setTypeface(heading.getTypeface(), android.graphics.Typeface.BOLD);
+        heading.setLayoutParams(new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        header.addView(heading);
+
+        TextView closeBtn = new TextView(activity);
+        closeBtn.setText("✕");
+        closeBtn.setTextColor(Color.WHITE);
+        closeBtn.setTextSize(16);
+        int closePad = Math.round(6 * density);
+        closeBtn.setPadding(closePad, closePad, closePad, closePad);
+        closeBtn.setOnClickListener(v -> closePlayerMenu(activity));
+        header.addView(closeBtn);
+        return header;
+    }
+
+    /* Every navigated-to sub-list (currently just Effects') gets the same dimmed,
+       divider-topped "back up a level" row instead of each screen styling its own -
+       distinguishes "leave this screen" from a selectable option in a way a plain row
+       sharing the same style as everything else couldn't. */
+    private static View makeBackRow(PlayerActivity activity, float density, Runnable onBack) {
+        TextView row = new TextView(activity);
+        row.setText("‹  Back");
+        row.setTextColor(SUBTLE_TEXT);
+        row.setTextSize(12);
+        row.setTypeface(row.getTypeface(), android.graphics.Typeface.BOLD);
+        row.setBackground(rowPressBackground());
+        int padH = Math.round(16 * density);
+        int padV = Math.round(14 * density);
+        row.setPadding(padH, padV, padH, padV);
+        row.setLayoutParams(new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+        row.setOnClickListener(v -> onBack.run());
+        return row;
+    }
+
+    /** One top-level row: header (label/value/optional toggle/optional chevron) plus,
+        for sections with a `render`, a GONE-by-default content block that expands in
+        place on tap - accordion, one section open at a time via `state` - instead of
+        navigating to a whole new panel. `toggle` and `render` are independent - Ambient
+        Lighting has both, flipping on/off without affecting whether its opacity section
+        is open. Sections with only `onTap` (Lock, Picture-in-Picture) are leaf rows that
+        run an action and close the whole sheet, not just this row. */
+    private static LinearLayout buildAccordionSection(PlayerActivity activity, float density, MenuSection section, AccordionState state) {
+        LinearLayout wrap = new LinearLayout(activity);
+        wrap.setOrientation(LinearLayout.VERTICAL);
+        wrap.setLayoutParams(new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        LinearLayout header = new LinearLayout(activity);
+        header.setOrientation(LinearLayout.HORIZONTAL);
+        header.setGravity(Gravity.CENTER_VERTICAL);
+        header.setBackground(rowPressBackground());
+        int padH = Math.round(16 * density);
+        int padV = Math.round(14 * density);
+        header.setPadding(padH, padV, padH, padV);
+        header.setLayoutParams(new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        LinearLayout labelStack = new LinearLayout(activity);
+        labelStack.setOrientation(LinearLayout.VERTICAL);
+        labelStack.setLayoutParams(new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        TextView labelEl = new TextView(activity);
+        labelEl.setText(section.label);
+        labelEl.setTextColor(Color.WHITE);
+        labelEl.setTextSize(15);
+        labelStack.addView(labelEl);
+        TextView valueEl = new TextView(activity);
+        valueEl.setTextColor(VALUE_TEXT);
+        valueEl.setTextSize(12);
+        valueEl.setVisibility(View.GONE);
+        labelStack.addView(valueEl);
+        header.addView(labelStack);
+
+        Consumer<String> setValue = (text) -> {
+            if (text != null) {
+                valueEl.setText(text);
+                valueEl.setVisibility(View.VISIBLE);
+            } else {
+                valueEl.setVisibility(View.GONE);
+            }
+        };
+        setValue.accept(section.getValue != null ? section.getValue.get() : null);
+
+        if (section.toggleChecked != null) {
+            SwitchCompat toggle = new SwitchCompat(activity);
+            toggle.setChecked(section.toggleChecked);
+            toggle.setTrackTintList(toggleTrackTint());
+            toggle.setThumbTintList(toggleThumbTint());
+            toggle.setOnCheckedChangeListener((buttonView, checked) ->
+                setValue.accept(section.onToggle != null ? section.onToggle.apply(checked) : null));
+            LinearLayout.LayoutParams toggleParams =
+                new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+            toggleParams.setMarginEnd(section.render != null ? Math.round(8 * density) : 0);
+            toggle.setLayoutParams(toggleParams);
+            header.addView(toggle);
+        }
+
+        TextView chevron = null;
+        if (section.render != null || section.showChevron) {
+            chevron = new TextView(activity);
+            chevron.setText("›");
+            chevron.setTextColor(SUBTLE_TEXT);
+            chevron.setTextSize(17);
+            header.addView(chevron);
+        }
+        wrap.addView(header);
+
+        if (section.render != null) {
+            LinearLayout content = new LinearLayout(activity);
+            content.setOrientation(LinearLayout.VERTICAL);
+            content.setVisibility(View.GONE);
+            content.setPadding(0, 0, 0, Math.round(12 * density));
+            wrap.addView(content);
+
+            TextView chevronF = chevron;
+            boolean[] built = {false};
+            Runnable collapse = () -> {
+                content.setVisibility(View.GONE);
+                chevronF.setRotation(0f);
+                if (state.expandedContent == content) {
+                    state.expandedContent = null;
+                    state.expandedChevron = null;
+                }
+            };
+            header.setOnClickListener(v -> {
+                if (content.getVisibility() == View.VISIBLE) {
+                    collapse.run();
+                    return;
+                }
+                if (state.expandedContent != null) {
+                    state.expandedContent.setVisibility(View.GONE);
+                    if (state.expandedChevron != null) state.expandedChevron.setRotation(0f);
+                }
+                if (!built[0]) {
+                    built[0] = true;
+                    section.render.render(content, setValue, collapse);
+                }
+                content.setVisibility(View.VISIBLE);
+                chevronF.setRotation(90f);
+                state.expandedContent = content;
+                state.expandedChevron = chevronF;
+            });
+        } else if (section.onTap != null) {
+            header.setOnClickListener(v -> section.onTap.run());
+        }
+
+        return wrap;
+    }
+
+    /** Shared row look for every tap-to-pick item inside an expanded section (speed/
+        sleep/audio/chapters/quality-cap/version presets) - one visual definition
+        instead of each render method styling its own. */
+    private static void renderPickerRows(PlayerActivity activity, LinearLayout content, float density, List<PickerItem> items) {
+        for (PickerItem item : items) {
+            LinearLayout row = new LinearLayout(activity);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            row.setGravity(Gravity.CENTER_VERTICAL);
+            row.setBackground(rowPressBackground());
+            int padH = Math.round(16 * density);
+            int padV = Math.round(9 * density);
+            row.setPadding(padH, padV, padH, padV);
+            row.setLayoutParams(new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+
+            if (item.thumbUrl != null) {
+                android.widget.ImageView thumb = new android.widget.ImageView(activity);
+                int thumbWidthPx = Math.round(64 * density);
+                int thumbHeightPx = Math.round(36 * density);
+                LinearLayout.LayoutParams thumbParams = new LinearLayout.LayoutParams(thumbWidthPx, thumbHeightPx);
+                thumbParams.setMarginEnd(Math.round(10 * density));
+                thumb.setLayoutParams(thumbParams);
+                thumb.setScaleType(android.widget.ImageView.ScaleType.CENTER_CROP);
+                GradientDrawable thumbBg = new GradientDrawable();
+                thumbBg.setColor(Color.argb(20, 255, 255, 255));
+                thumbBg.setCornerRadius(4f * density);
+                thumb.setBackground(thumbBg);
+                thumb.setClipToOutline(true);
+                row.addView(thumb);
+                String thumbUrl = item.thumbUrl;
+                PlexHttp.runAsync(() -> PlexHttp.fetchBitmapSync(thumbUrl), bitmap -> {
+                    if (bitmap != null) thumb.setImageBitmap(bitmap);
+                    else thumb.setVisibility(View.GONE);
+                });
+            }
+
+            TextView label = new TextView(activity);
+            label.setText(item.label);
+            label.setTextColor(Color.WHITE);
+            label.setTextSize(13);
+            label.setLayoutParams(new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+            row.addView(label);
+
+            row.setOnClickListener(v -> {
+                if (item.onSelect != null) item.onSelect.run();
+            });
+            content.addView(row);
+        }
     }
 
     /* {label, kbps} pairs mirroring shared.js's QUALITY_CAP_PRESETS on the web leg -
-       null kbps is "Original" (no cap), matched by identity in openQualityCapMenu/
+       null kbps is "Original" (no cap), matched by identity in renderQualityCapSection/
        qualityCapLabel just like the web leg's own null-kbps preset. Package-private
        (not private) - QualityAbrMonitor reads this same ladder directly rather than
        hand-duplicating a third copy of it. */
@@ -1008,29 +1403,6 @@ final class PlayerUiHelper {
         return activity.autoQualityEnabled ? "Auto (" + label + ")" : label;
     }
 
-    /* Sub-menu for the Video Quality row above - Version (only shown when this item
-       actually has more than one Media[] entry, same "never an empty/dead affordance"
-       rule Audio Track follows) and Quality Cap, each drilling one level further in
-       rather than both living on this one panel, matching how Speed/Sleep Timer
-       already drill from the top-level menu. */
-    private static void openVideoQualityMenu(PlayerActivity activity, View anchor) {
-        List<MenuRow> rows = new ArrayList<>();
-        if (activity.mediaVersions.size() > 1) {
-            MenuRow versionRow = new MenuRow("Version");
-            MediaVersionEntry current = findMediaVersion(activity, activity.currentMediaIndex);
-            versionRow.value = current != null ? current.label : null;
-            versionRow.chevron = true;
-            versionRow.onSelect = () -> openVersionMenu(activity, anchor);
-            rows.add(versionRow);
-        }
-        MenuRow capRow = new MenuRow("Quality Cap");
-        capRow.value = qualityCapDisplayLabel(activity);
-        capRow.chevron = true;
-        capRow.onSelect = () -> openQualityCapMenu(activity, anchor);
-        rows.add(capRow);
-        openMenuPanel(activity, anchor, rows, () -> showPlayerMenu(activity, anchor));
-    }
-
     private static MediaVersionEntry findMediaVersion(PlayerActivity activity, int mediaIndex) {
         for (MediaVersionEntry entry : activity.mediaVersions) {
             if (entry.mediaIndex == mediaIndex) return entry;
@@ -1038,32 +1410,38 @@ final class PlayerUiHelper {
         return null;
     }
 
-    private static void openVersionMenu(PlayerActivity activity, View anchor) {
-        List<MenuRow> rows = new ArrayList<>();
+    private static void renderVersionSection(PlayerActivity activity, LinearLayout content, Consumer<String> setValue, Runnable collapse) {
+        float density = activity.getResources().getDisplayMetrics().density;
+        List<PickerItem> items = new ArrayList<>();
         for (MediaVersionEntry entry : activity.mediaVersions) {
             boolean isCurrent = entry.mediaIndex == activity.currentMediaIndex;
-            MenuRow row = new MenuRow(entry.label + (isCurrent ? "  ✓" : ""));
-            row.onSelect = () -> activity.switchMediaVersion(entry.mediaIndex);
-            rows.add(row);
+            items.add(new PickerItem(entry.label + (isCurrent ? "  ✓" : ""), () -> {
+                activity.switchMediaVersion(entry.mediaIndex);
+                setValue.accept(entry.label);
+                collapse.run();
+            }));
         }
-        openMenuPanel(activity, anchor, rows, () -> openVideoQualityMenu(activity, anchor));
+        renderPickerRows(activity, content, density, items);
     }
 
-    private static void openQualityCapMenu(PlayerActivity activity, View anchor) {
-        List<MenuRow> rows = new ArrayList<>();
-        MenuRow autoRow = new MenuRow("Auto" + (activity.autoQualityEnabled ? "  ✓" : ""));
-        autoRow.onSelect = () -> activity.setAutoQualityEnabled(true);
-        rows.add(autoRow);
+    private static void renderQualityCapSection(PlayerActivity activity, LinearLayout content, Consumer<String> setValue, Runnable collapse) {
+        float density = activity.getResources().getDisplayMetrics().density;
+        List<PickerItem> items = new ArrayList<>();
+        items.add(new PickerItem("Auto" + (activity.autoQualityEnabled ? "  ✓" : ""), () -> {
+            activity.setAutoQualityEnabled(true);
+            setValue.accept(qualityCapDisplayLabel(activity));
+            collapse.run();
+        }));
         for (QualityCapPreset preset : QUALITY_CAP_PRESETS) {
             boolean isCurrent = !activity.autoQualityEnabled && java.util.Objects.equals(preset.kbps, activity.qualityCapKbps);
-            MenuRow row = new MenuRow(preset.label + (isCurrent ? "  ✓" : ""));
-            row.onSelect = () -> {
+            items.add(new PickerItem(preset.label + (isCurrent ? "  ✓" : ""), () -> {
                 activity.setAutoQualityEnabled(false);
                 activity.switchQualityCap(preset.kbps);
-            };
-            rows.add(row);
+                setValue.accept(qualityCapDisplayLabel(activity));
+                collapse.run();
+            }));
         }
-        openMenuPanel(activity, anchor, rows, () -> openVideoQualityMenu(activity, anchor));
+        renderPickerRows(activity, content, density, items);
     }
 
     /* The hamburger row's value text (no inline toggle any more, see the mode row below)
@@ -1081,7 +1459,7 @@ final class PlayerUiHelper {
     private static final String[] MODE_KEYS = { "auto", "on", "off" };
     private static final String[] MODE_LABELS = { "Auto", "On", "Off" };
 
-    /* Shared by openShaderPanel/openColorBoostPanel's mode row - disables the manual
+    /* Shared by renderShaderSection/renderColorBoostSection's mode row - disables the manual
        SeekBar and snapshots the current auto-resolved value into its label only in
        "auto" mode ("on"/"off" both leave it showing/editable at the manual value, same
        as the old enabled-toggle-off case always did), matching chrome.js's
@@ -1089,7 +1467,7 @@ final class PlayerUiHelper {
        strengthSeekBar.setProgress() while auto is selected - unlike a plain HTML range
        input, SeekBar.setProgress() fires onProgressChanged even for a programmatic
        change, which would silently overwrite the remembered manual strength (see
-       openShaderPanel/openColorBoostPanel's own SeekBar listeners) with whatever the
+       renderShaderSection/renderColorBoostSection's own SeekBar listeners) with whatever the
        auto snapshot happened to be. */
     private static void applyStrengthDisplay(SeekBar strengthSeekBar, TextView strengthLabel, String mode, float autoValue, float manualValue) {
         boolean auto = "auto".equals(mode);
@@ -1171,54 +1549,70 @@ final class PlayerUiHelper {
         return rate == Math.floor(rate) ? ((int) rate) + "x" : rate + "x";
     }
 
-    private static void openSpeedMenu(PlayerActivity activity, View anchor) {
+    private static void renderSpeedSection(PlayerActivity activity, LinearLayout content, Consumer<String> setValue, Runnable collapse) {
+        float density = activity.getResources().getDisplayMetrics().density;
         float current = activity.player != null ? activity.player.getPlaybackParameters().speed : 1f;
-        List<MenuRow> rows = new ArrayList<>();
+        List<PickerItem> items = new ArrayList<>();
         for (float rate : PLAYBACK_RATES) {
-            MenuRow row = new MenuRow(formatRate(rate) + (rate == current ? "  ✓" : ""));
-            row.onSelect = () -> PlayerActivity.setPlaybackSpeed(rate);
-            rows.add(row);
+            items.add(new PickerItem(formatRate(rate) + (rate == current ? "  ✓" : ""), () -> {
+                PlayerActivity.setPlaybackSpeed(rate);
+                setValue.accept(formatRate(rate));
+                collapse.run();
+            }));
         }
-        openMenuPanel(activity, anchor, rows, () -> showPlayerMenu(activity, anchor));
+        renderPickerRows(activity, content, density, items);
     }
 
-    private static void openSleepMenu(PlayerActivity activity, View anchor) {
-        List<MenuRow> rows = new ArrayList<>();
-        MenuRow off = new MenuRow("Off" + (activity.sleepMinutes == 0 ? "  ✓" : ""));
-        off.onSelect = () -> activity.setSleepTimer(0);
-        rows.add(off);
+    private static void renderSleepSection(PlayerActivity activity, LinearLayout content, Consumer<String> setValue, Runnable collapse) {
+        float density = activity.getResources().getDisplayMetrics().density;
+        List<PickerItem> items = new ArrayList<>();
+        items.add(new PickerItem("Off" + (activity.sleepMinutes == 0 ? "  ✓" : ""), () -> {
+            activity.setSleepTimer(0);
+            setValue.accept(null);
+            collapse.run();
+        }));
         for (int minutes : SLEEP_TIMER_PRESETS_MIN) {
-            MenuRow row = new MenuRow(minutes + " min" + (activity.sleepMinutes == minutes ? "  ✓" : ""));
-            row.onSelect = () -> activity.setSleepTimer(minutes * 60_000L);
-            rows.add(row);
+            items.add(new PickerItem(minutes + " min" + (activity.sleepMinutes == minutes ? "  ✓" : ""), () -> {
+                activity.setSleepTimer(minutes * 60_000L);
+                setValue.accept(minutes + "m");
+                collapse.run();
+            }));
         }
-        MenuRow endOfEpisode = new MenuRow("End of episode");
-        endOfEpisode.onSelect = () -> activity.setSleepTimer(0);
-        rows.add(endOfEpisode);
-        openMenuPanel(activity, anchor, rows, () -> showPlayerMenu(activity, anchor));
+        items.add(new PickerItem("End of episode", () -> {
+            activity.setSleepTimer(0);
+            setValue.accept(null);
+            collapse.run();
+        }));
+        renderPickerRows(activity, content, density, items);
     }
 
-    private static void openAudioMenu(PlayerActivity activity, View anchor) {
-        List<MenuRow> rows = new ArrayList<>();
+    private static void renderAudioSection(PlayerActivity activity, LinearLayout content, Consumer<String> setValue, Runnable collapse) {
+        float density = activity.getResources().getDisplayMetrics().density;
+        List<PickerItem> items = new ArrayList<>();
         for (AudioStreamEntry entry : activity.audioStreams) {
             boolean isCurrent = entry.id.equals(activity.currentAudioStreamId);
-            MenuRow row = new MenuRow(entry.label + (isCurrent ? "  ✓" : ""));
-            row.onSelect = () -> activity.switchAudioStream(entry.id);
-            rows.add(row);
+            items.add(new PickerItem(entry.label + (isCurrent ? "  ✓" : ""), () -> {
+                activity.switchAudioStream(entry.id);
+                setValue.accept(entry.label);
+                collapse.run();
+            }));
         }
-        openMenuPanel(activity, anchor, rows, () -> showPlayerMenu(activity, anchor));
+        renderPickerRows(activity, content, density, items);
     }
 
-    private static void openChapterMenu(PlayerActivity activity, View anchor) {
-        List<MenuRow> rows = new ArrayList<>();
+    private static void renderChapterSection(PlayerActivity activity, LinearLayout content, Runnable collapse) {
+        float density = activity.getResources().getDisplayMetrics().density;
+        List<PickerItem> items = new ArrayList<>();
         for (ChapterEntry chapter : activity.chapters) {
             String time = formatTimestamp(chapter.startTimeOffsetMs);
-            MenuRow row = new MenuRow(chapter.title.isEmpty() ? time : time + "  " + chapter.title);
-            row.thumbUrl = chapter.thumbUrl;
-            row.onSelect = () -> PlayerActivity.seek(chapter.startTimeOffsetMs);
-            rows.add(row);
+            PickerItem item = new PickerItem(chapter.title.isEmpty() ? time : time + "  " + chapter.title, () -> {
+                PlayerActivity.seek(chapter.startTimeOffsetMs);
+                collapse.run();
+            });
+            item.thumbUrl = chapter.thumbUrl;
+            items.add(item);
         }
-        openMenuPanel(activity, anchor, rows, () -> showPlayerMenu(activity, anchor));
+        renderPickerRows(activity, content, density, items);
     }
 
     /* Window width, not the activity's own view width - called before the sheet (and thus
@@ -1255,7 +1649,7 @@ final class PlayerUiHelper {
     static void openEpisodeListMenu(PlayerActivity activity, List<EpisodeEntry> episodes) {
         float density = activity.getResources().getDisplayMetrics().density;
         closeEpisodeListMenu(activity);
-        dismissMenuPopup(activity);
+        closePlayerMenu(activity);
 
         View scrim = buildEpisodeSheetScrim(activity);
         LinearLayout content = buildEpisodeSheetContainer(activity, density);
@@ -1346,7 +1740,7 @@ final class PlayerUiHelper {
     static void showEpisodeListLoading(PlayerActivity activity) {
         float density = activity.getResources().getDisplayMetrics().density;
         closeEpisodeListMenu(activity);
-        dismissMenuPopup(activity);
+        closePlayerMenu(activity);
 
         View scrim = buildEpisodeSheetScrim(activity);
         LinearLayout content = buildEpisodeSheetContainer(activity, density);
@@ -1427,7 +1821,7 @@ final class PlayerUiHelper {
     /* Row/card taps and the close button/scrim above all funnel through here rather than
        each removing views directly, so there's one place that stays in sync with
        activity's own episodeListScrim/episodeListSheet bookkeeping - same reasoning
-       dismissMenuPopup exists alongside the options-menu PopupWindow. */
+       closePlayerMenu exists alongside the More sheet. */
     static void closeEpisodeListMenu(PlayerActivity activity) {
         if (activity.episodeListSheet != null) {
             activity.root.removeView(activity.episodeListSheet);
@@ -1611,38 +2005,29 @@ final class PlayerUiHelper {
        0% is what "Off" used to be. setVideoEffects() supports being called mid-playback
        (see PlayerActivity.applyVideoEffects's own comment), so there's no Apply/Cancel
        step - matches chrome.js's openShaderMenu panel. */
-    private static void openShaderPanel(PlayerActivity activity, View anchor) {
+    private static void renderShaderSection(PlayerActivity activity, LinearLayout content, Consumer<String> setValue, Runnable collapse) {
         float density = activity.getResources().getDisplayMetrics().density;
-        dismissMenuPopup(activity);
-
-        LinearLayout content = new LinearLayout(activity);
-        content.setOrientation(LinearLayout.VERTICAL);
-        int pad = Math.round(14 * density);
-        content.setPadding(pad, pad, pad, pad);
-        content.setBackground(panelBackground(density));
-        content.addView(makeBackRow(activity, density, () -> showPlayerMenu(activity, anchor)));
+        int padH = Math.round(16 * density);
 
         TextView detectedLabel = new TextView(activity);
         detectedLabel.setText("Detected: " + activity.detectedShaderType.label);
         detectedLabel.setTextColor(Color.WHITE);
         detectedLabel.setTextSize(13);
         detectedLabel.setTypeface(detectedLabel.getTypeface(), android.graphics.Typeface.BOLD);
+        detectedLabel.setPadding(padH, 0, padH, 0);
         content.addView(detectedLabel);
 
         TextView detectedHint = new TextView(activity);
         detectedHint.setText("Auto-detected from this title's genre");
         detectedHint.setTextColor(VALUE_TEXT);
         detectedHint.setTextSize(11);
-        LinearLayout.LayoutParams hintParams =
-            new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        hintParams.topMargin = Math.round(2 * density);
-        hintParams.bottomMargin = Math.round(10 * density);
-        detectedHint.setLayoutParams(hintParams);
+        detectedHint.setPadding(padH, Math.round(2 * density), padH, Math.round(10 * density));
         content.addView(detectedHint);
 
         TextView strengthLabel = new TextView(activity);
         strengthLabel.setTextColor(SUBTLE_TEXT);
         strengthLabel.setTextSize(12);
+        strengthLabel.setPadding(padH, 0, padH, 0);
 
         SeekBar strengthSeekBar = new SeekBar(activity);
         styleSeekBar(strengthSeekBar, density);
@@ -1650,6 +2035,8 @@ final class PlayerUiHelper {
         LinearLayout.LayoutParams strengthParams =
             new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
         strengthParams.topMargin = Math.round(4 * density);
+        strengthParams.leftMargin = padH;
+        strengthParams.rightMargin = padH;
         strengthSeekBar.setLayoutParams(strengthParams);
         strengthSeekBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override
@@ -1671,37 +2058,34 @@ final class PlayerUiHelper {
             }
         });
 
-        addModeRow(activity, content, density, activity.upscaleMode(), (mode) -> {
+        LinearLayout modeRowWrap = new LinearLayout(activity);
+        modeRowWrap.setOrientation(LinearLayout.HORIZONTAL);
+        modeRowWrap.setPadding(padH, 0, padH, 0);
+        addModeRow(activity, modeRowWrap, density, activity.upscaleMode(), (mode) -> {
             activity.setUpscaleMode(mode);
             applyStrengthDisplay(strengthSeekBar, strengthLabel, mode, activity.autoUpscaleStrength, activity.upscaleStrength);
+            setValue.accept(activity.shaderEnabled ? shaderRowLabel(activity) : null);
         });
         applyStrengthDisplay(strengthSeekBar, strengthLabel, activity.upscaleMode(), activity.autoUpscaleStrength, activity.upscaleStrength);
+        content.addView(modeRowWrap);
         content.addView(strengthLabel);
         content.addView(strengthSeekBar);
-
-        showPopup(activity, anchor, content, density);
     }
 
-    /* Same custom-panel pattern as openShaderPanel above, simpler since there's no
-       auto-detected type to show as read-only info here - just the one strength
-       control. Gated to onStopTrackingTouch like Shader Upscaling's own panel (not
-       live like Ambient Lighting's opacity below) - PlayerActivity.setColorBoostStrength
-       goes through applyVideoEffects(), the same GL-program-rebuild-per-call hazard
-       documented on openShaderPanel's own SeekBar listener. */
-    private static void openColorBoostPanel(PlayerActivity activity, View anchor) {
+    /* Same pattern as renderShaderSection above, simpler since there's no auto-detected
+       type to show as read-only info here - just the one strength control. Gated to
+       onStopTrackingTouch like Shader Upscaling's own section (not live like Ambient
+       Lighting's opacity below) - PlayerActivity.setColorBoostStrength goes through
+       applyVideoEffects(), the same GL-program-rebuild-per-call hazard documented on
+       renderShaderSection's own SeekBar listener. */
+    private static void renderColorBoostSection(PlayerActivity activity, LinearLayout content, Consumer<String> setValue, Runnable collapse) {
         float density = activity.getResources().getDisplayMetrics().density;
-        dismissMenuPopup(activity);
-
-        LinearLayout content = new LinearLayout(activity);
-        content.setOrientation(LinearLayout.VERTICAL);
-        int pad = Math.round(14 * density);
-        content.setPadding(pad, pad, pad, pad);
-        content.setBackground(panelBackground(density));
-        content.addView(makeBackRow(activity, density, () -> showPlayerMenu(activity, anchor)));
+        int padH = Math.round(16 * density);
 
         TextView strengthLabel = new TextView(activity);
         strengthLabel.setTextColor(SUBTLE_TEXT);
         strengthLabel.setTextSize(12);
+        strengthLabel.setPadding(padH, Math.round(4 * density), padH, 0);
 
         SeekBar strengthSeekBar = new SeekBar(activity);
         styleSeekBar(strengthSeekBar, density);
@@ -1709,6 +2093,8 @@ final class PlayerUiHelper {
         LinearLayout.LayoutParams strengthParams =
             new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
         strengthParams.topMargin = Math.round(4 * density);
+        strengthParams.leftMargin = padH;
+        strengthParams.rightMargin = padH;
         strengthSeekBar.setLayoutParams(strengthParams);
         strengthSeekBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override
@@ -1725,39 +2111,36 @@ final class PlayerUiHelper {
             }
         });
 
-        addModeRow(activity, content, density, activity.colorBoostMode(), (mode) -> {
+        LinearLayout modeRowWrap = new LinearLayout(activity);
+        modeRowWrap.setOrientation(LinearLayout.HORIZONTAL);
+        modeRowWrap.setPadding(padH, 0, padH, 0);
+        addModeRow(activity, modeRowWrap, density, activity.colorBoostMode(), (mode) -> {
             activity.setColorBoostMode(mode);
             applyStrengthDisplay(strengthSeekBar, strengthLabel, mode, activity.autoColorBoostStrength, activity.colorBoostStrength);
+            setValue.accept(activity.colorBoostEnabled ? colorBoostRowLabel(activity) : null);
         });
         applyStrengthDisplay(strengthSeekBar, strengthLabel, activity.colorBoostMode(), activity.autoColorBoostStrength, activity.colorBoostStrength);
+        content.addView(modeRowWrap);
         content.addView(strengthLabel);
         content.addView(strengthSeekBar);
-
-        showPopup(activity, anchor, content, density);
     }
 
-    /* Same custom-panel pattern as openShaderPanel above, simpler since there's no
-       auto-detected type to show as read-only info here, just the one opacity control.
-       Unlike strength's SeekBar, this one applies live on every onProgressChanged tick,
-       not gated to onStopTrackingTouch - PlayerActivity.setAmbientOpacity is just a
+    /* Same pattern as renderShaderSection above, simpler since there's no auto-detected
+       type to show as read-only info here, just the one opacity control. Unlike
+       strength's SeekBar, this one applies live on every onProgressChanged tick, not
+       gated to onStopTrackingTouch - PlayerActivity.setAmbientOpacity is just a
        Paint.setAlpha (see AmbientGlowView.setGlowOpacity), not a GL program rebuild like
        applyVideoEffects, so there's no drag-frequency renderer-freeze risk to guard
        against here. */
-    private static void openAmbientPanel(PlayerActivity activity, View anchor) {
+    private static void renderAmbientSection(PlayerActivity activity, LinearLayout content, Consumer<String> setValue, Runnable collapse) {
         float density = activity.getResources().getDisplayMetrics().density;
-        dismissMenuPopup(activity);
-
-        LinearLayout content = new LinearLayout(activity);
-        content.setOrientation(LinearLayout.VERTICAL);
-        int pad = Math.round(14 * density);
-        content.setPadding(pad, pad, pad, pad);
-        content.setBackground(panelBackground(density));
-        content.addView(makeBackRow(activity, density, () -> showPlayerMenu(activity, anchor)));
+        int padH = Math.round(16 * density);
 
         TextView opacityLabel = new TextView(activity);
         opacityLabel.setText("Opacity: " + Math.round(activity.ambientOpacity * 100) + "%");
         opacityLabel.setTextColor(SUBTLE_TEXT);
         opacityLabel.setTextSize(12);
+        opacityLabel.setPadding(padH, Math.round(4 * density), padH, 0);
         content.addView(opacityLabel);
 
         SeekBar opacitySeekBar = new SeekBar(activity);
@@ -1767,12 +2150,15 @@ final class PlayerUiHelper {
         LinearLayout.LayoutParams opacityParams =
             new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
         opacityParams.topMargin = Math.round(4 * density);
+        opacityParams.leftMargin = padH;
+        opacityParams.rightMargin = padH;
         opacitySeekBar.setLayoutParams(opacityParams);
         opacitySeekBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override
             public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
                 opacityLabel.setText("Opacity: " + progress + "%");
                 activity.setAmbientOpacity(progress / 100f);
+                setValue.accept(activity.ambientEnabled ? progress + "%" : null);
             }
 
             @Override
@@ -1782,17 +2168,6 @@ final class PlayerUiHelper {
             public void onStopTrackingTouch(SeekBar seekBar) {}
         });
         content.addView(opacitySeekBar);
-
-        showPopup(activity, anchor, content, density);
-    }
-
-    private static Drawable panelBackground(float density) {
-        GradientDrawable bg = new GradientDrawable();
-        bg.setShape(GradientDrawable.RECTANGLE);
-        bg.setColor(PANEL_BG);
-        bg.setCornerRadius(12 * density);
-        bg.setStroke(Math.max(1, Math.round(density)), PANEL_BORDER);
-        return bg;
     }
 
     private static Drawable rowPressBackground() {
@@ -1800,24 +2175,6 @@ final class PlayerUiHelper {
         states.addState(new int[]{android.R.attr.state_pressed}, new ColorDrawable(ROW_PRESSED_BG));
         states.addState(new int[]{}, new ColorDrawable(Color.TRANSPARENT));
         return states;
-    }
-
-    private static View makeBackRow(PlayerActivity activity, float density, Runnable onBack) {
-        TextView row = new TextView(activity);
-        row.setText("‹  Back");
-        row.setTextColor(SUBTLE_TEXT);
-        row.setTextSize(12);
-        row.setTypeface(row.getTypeface(), android.graphics.Typeface.BOLD);
-        row.setBackground(rowPressBackground());
-        int padH = Math.round(10 * density);
-        int padV = Math.round(8 * density);
-        row.setPadding(padH, padV, padH, padV);
-        LinearLayout.LayoutParams params =
-            new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        params.bottomMargin = Math.round(4 * density);
-        row.setLayoutParams(params);
-        row.setOnClickListener(v -> onBack.run());
-        return row;
     }
 
     private static ColorStateList toggleTrackTint() {
@@ -1830,156 +2187,6 @@ final class PlayerUiHelper {
         return new ColorStateList(
             new int[][]{new int[]{android.R.attr.state_checked}, new int[]{}},
             new int[]{ACCENT_COLOR, Color.WHITE});
-    }
-
-    private static View makeMenuRowView(PlayerActivity activity, float density, MenuRow item) {
-        LinearLayout row = new LinearLayout(activity);
-        row.setOrientation(LinearLayout.HORIZONTAL);
-        row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setBackground(rowPressBackground());
-        int padH = Math.round(14 * density);
-        int padV = Math.round(10 * density);
-        row.setPadding(padH, padV, padH, padV);
-        row.setLayoutParams(new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
-
-        /* Only the Chapters menu sets item.thumbUrl - every other row (speed, sleep
-           timer, audio track...) leaves it null, so this is a no-op there. Hidden on
-           fetch failure rather than left showing a broken/empty image - a chapter's
-           thumb isn't guaranteed to exist just because the chapter itself does. */
-        if (item.thumbUrl != null) {
-            android.widget.ImageView thumb = new android.widget.ImageView(activity);
-            int thumbWidthPx = Math.round(64 * density);
-            int thumbHeightPx = Math.round(36 * density);
-            LinearLayout.LayoutParams thumbParams = new LinearLayout.LayoutParams(thumbWidthPx, thumbHeightPx);
-            thumbParams.setMarginEnd(Math.round(10 * density));
-            thumb.setLayoutParams(thumbParams);
-            thumb.setScaleType(android.widget.ImageView.ScaleType.CENTER_CROP);
-            GradientDrawable thumbBg = new GradientDrawable();
-            thumbBg.setColor(Color.argb(20, 255, 255, 255));
-            thumbBg.setCornerRadius(4f * density);
-            thumb.setBackground(thumbBg);
-            thumb.setClipToOutline(true);
-            row.addView(thumb);
-            String thumbUrl = item.thumbUrl;
-            PlexHttp.runAsync(() -> PlexHttp.fetchBitmapSync(thumbUrl), bitmap -> {
-                if (bitmap != null) thumb.setImageBitmap(bitmap);
-                else thumb.setVisibility(View.GONE);
-            });
-        }
-
-        LinearLayout labelStack = new LinearLayout(activity);
-        labelStack.setOrientation(LinearLayout.VERTICAL);
-        labelStack.setLayoutParams(new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
-
-        TextView label = new TextView(activity);
-        label.setText(item.label);
-        label.setTextColor(Color.WHITE);
-        label.setTextSize(14);
-        labelStack.addView(label);
-
-        TextView valueView = new TextView(activity);
-        valueView.setTextColor(VALUE_TEXT);
-        valueView.setTextSize(11);
-        valueView.setVisibility(item.value != null ? View.VISIBLE : View.GONE);
-        if (item.value != null) valueView.setText(item.value);
-        labelStack.addView(valueView);
-        row.addView(labelStack);
-
-        if (item.toggleChecked != null) {
-            SwitchCompat toggle = new SwitchCompat(activity);
-            toggle.setChecked(item.toggleChecked);
-            toggle.setTrackTintList(toggleTrackTint());
-            toggle.setThumbTintList(toggleThumbTint());
-            toggle.setOnCheckedChangeListener((buttonView, checked) -> {
-                String newValue = item.onToggle != null ? item.onToggle.apply(checked) : null;
-                item.value = newValue;
-                valueView.setVisibility(newValue != null ? View.VISIBLE : View.GONE);
-                if (newValue != null) valueView.setText(newValue);
-            });
-            LinearLayout.LayoutParams toggleParams =
-                new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-            toggleParams.setMarginEnd(item.chevron ? Math.round(8 * density) : 0);
-            toggle.setLayoutParams(toggleParams);
-            row.addView(toggle);
-        }
-
-        if (item.chevron) {
-            TextView chevron = new TextView(activity);
-            chevron.setText("›");
-            chevron.setTextColor(SUBTLE_TEXT);
-            chevron.setTextSize(16);
-            row.addView(chevron);
-        }
-
-        row.setOnClickListener(v -> {
-            if (item.onSelect != null) item.onSelect.run();
-        });
-        return row;
-    }
-
-    private static void openMenuPanel(PlayerActivity activity, View anchor, List<MenuRow> rows, Runnable onBack) {
-        float density = activity.getResources().getDisplayMetrics().density;
-        dismissMenuPopup(activity);
-
-        LinearLayout content = new LinearLayout(activity);
-        content.setOrientation(LinearLayout.VERTICAL);
-        int pad = Math.round(8 * density);
-        content.setPadding(pad, pad, pad, pad);
-        content.setBackground(panelBackground(density));
-        if (onBack != null) content.addView(makeBackRow(activity, density, onBack));
-        for (MenuRow row : rows) content.addView(makeMenuRowView(activity, density, row));
-
-        showPopup(activity, anchor, content, density);
-    }
-
-    /* Wraps `content` in a PopupWindow anchored below the hamburger/back-anchor, matching
-       chrome.js's anchor-below-the-button flyouts. Content taller than maxHeightPx is
-       wrapped in a ScrollView instead - PopupWindow's own width/height govern the actual
-       window size the ScrollView is laid out against, so capping the window height here
-       is what makes the ScrollView actually scroll rather than just growing forever. */
-    private static void showPopup(PlayerActivity activity, View anchor, LinearLayout content, float density) {
-        int widthPx = Math.round(260 * density);
-        int maxHeightPx = Math.round(360 * density);
-        content.measure(View.MeasureSpec.makeMeasureSpec(widthPx, View.MeasureSpec.EXACTLY), View.MeasureSpec.UNSPECIFIED);
-
-        View displayed = content;
-        int height = ViewGroup.LayoutParams.WRAP_CONTENT;
-        if (content.getMeasuredHeight() > maxHeightPx) {
-            ScrollView scroll = new ScrollView(activity);
-            scroll.setVerticalScrollBarEnabled(false);
-            scroll.addView(content, new ScrollView.LayoutParams(ScrollView.LayoutParams.MATCH_PARENT, ScrollView.LayoutParams.WRAP_CONTENT));
-            displayed = scroll;
-            height = maxHeightPx;
-        }
-
-        PopupWindow popup = new PopupWindow(displayed, widthPx, height, true);
-        popup.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
-        popup.setOutsideTouchable(true);
-        popup.setElevation(8 * density);
-        popup.setOnDismissListener(() -> {
-            if (activity.menuPopup == popup) {
-                activity.menuPopup = null;
-                showControlsTemporarily(activity);
-            }
-        });
-
-        activity.menuPopup = popup;
-        activity.controlsFadeHandler.removeCallbacks(activity.controlsFadeRunnable);
-        setControlsVisible(activity, true);
-        /* Right-aligned under the anchor (the hamburger button lives top-right) rather
-           than left-aligned, matching chrome.js's menuAnchorPosition for a right-side
-           anchor - the panel's right edge lines up with the button's right edge instead
-           of overflowing off the right of the screen. */
-        int xOffset = anchor.getWidth() - widthPx;
-        popup.showAsDropDown(anchor, xOffset, Math.round(8 * density));
-    }
-
-    private static void dismissMenuPopup(PlayerActivity activity) {
-        if (activity.menuPopup != null) {
-            PopupWindow popup = activity.menuPopup;
-            activity.menuPopup = null;
-            popup.dismiss();
-        }
     }
 
     static String formatTimestamp(long ms) {
