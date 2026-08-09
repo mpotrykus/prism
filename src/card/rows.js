@@ -110,7 +110,6 @@ export function buildPoster(item, source, { glow = true, landscape = false, item
   if (item.ratingKey != null) el.dataset.ratingKey = item.ratingKey;
   if (itemIndex != null) el.style.animationDelay = `${Math.min(itemIndex, 8) * 30}ms`;
   const src = landscape ? item.art || item.image : item.image;
-  if (glow) el.style.setProperty("--img", `url('${src}')`);
   const canWatchlist = item.type === "movie" || item.type === "show";
   el.innerHTML = `
     ${glow ? '<div class="glow"></div>' : ""}
@@ -143,10 +142,23 @@ export function buildPoster(item, source, { glow = true, landscape = false, item
   } else {
     const img = getPosterImg(src, item.title);
     el.querySelector(".card").prepend(img);
+    /* --img (the blurred .glow halo's background-image) is set only once the poster's
+       own <img> has actually loaded, not eagerly at build time - a CSS background-image
+       isn't subject to the <img>'s loading="lazy", so setting it upfront for every
+       poster in every row (most never scrolled into view) was firing a real network
+       fetch for every single poster on the page immediately, defeating lazy-loading
+       entirely (confirmed empirically: a cold Home load fired ~378 image requests with
+       zero scrolling). Piggybacking on the img's own load event reuses that same
+       already-fetched src - no second request - and naturally inherits its lazy timing. */
+    const markLoaded = () => {
+      if (glow) el.style.setProperty("--img", `url('${src}')`);
+      el.classList.add("img-loaded");
+    };
     if (img.complete) {
-      el.classList.add(img.naturalWidth > 0 ? "img-loaded" : "img-error");
+      if (img.naturalWidth > 0) markLoaded();
+      else el.classList.add("img-error");
     } else {
-      img.addEventListener("load", () => el.classList.add("img-loaded"), { once: true });
+      img.addEventListener("load", markLoaded, { once: true });
       img.addEventListener("error", () => el.classList.add("img-error"), { once: true });
     }
   }
