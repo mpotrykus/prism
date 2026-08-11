@@ -2,6 +2,7 @@
    mouse/hover-only until Xbox needed D-pad support, so unlike normal web focus styling
    (a nice-to-have for keyboard users alongside a mouse), a visible focus indicator here
    is the *only* signal a gamepad-only user has of where they are on screen at all. */
+
 .nav-item:focus-visible,
 .poster:focus-visible,
 .hero-info-btn:focus-visible,
@@ -23,7 +24,11 @@
 .title-info-season-select:focus-visible,
 .more-sheet-item:focus-visible,
 .more-sheet-cancel:focus-visible {
-  outline: 2px solid #e5a00d;
-  outline-offset: 2px;
+    outline: 2px solid #e5a00d88;
+    border-radius: 14px;
+    outline-offset: 2px;
 }
-.nav-item { outline-offset: -2px; }
+
+.nav-item {
+    outline-offset: -2px;
+}
