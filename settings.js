@@ -18,6 +18,7 @@ const DEFAULT_PLAIN_CONFIG = {
   ai_rows_cadence_ms: 7 * 24 * 60 * 60 * 1000,
   max_genre_rows: 12,
   row_size: 20,
+  subtitle_provider: "plex",
 };
 
 const SECTION_TYPE_MAP = { movie: 1, show: 2 };
@@ -115,8 +116,15 @@ class StreamingSettingsModal extends HTMLElement {
               </section>
 
               <section class="group">
-                <div class="group-title">OpenSubtitles (optional)</div>
-                <div class="row-2col">
+                <div class="group-title">Subtitles</div>
+                <div class="field">
+                  <label>Subtitle Provider</label>
+                  <select class="f-subtitle-provider">
+                    <option value="plex">Plex (searches/downloads via your server)</option>
+                    <option value="opensubtitles">OpenSubtitles (direct, needs your own account)</option>
+                  </select>
+                </div>
+                <div class="row-2col opensubtitles-fields">
                   <div class="field">
                     <label>Username</label>
                     <input type="text" class="f-opensubtitles-username" placeholder="Needed to download, not just search" />
@@ -126,11 +134,12 @@ class StreamingSettingsModal extends HTMLElement {
                     <input type="password" class="f-opensubtitles-password" />
                   </div>
                 </div>
-                <div class="field">
+                <div class="field opensubtitles-fields">
                   <label>API Key</label>
-                  <input type="password" class="f-opensubtitles-key" placeholder="Used by the player's subtitle search" />
+                  <input type="password" class="f-opensubtitles-key" />
                 </div>
               </section>
+
             </div>
 
             <div class="tab-panel" data-tab="preferences">
@@ -174,6 +183,7 @@ class StreamingSettingsModal extends HTMLElement {
     this._el(".btn-reauth").addEventListener("click", () => this._reauthenticate());
     this._el(".btn-fetch-libraries").addEventListener("click", () => this._fetchLibraries());
     this._el(".btn-save").addEventListener("click", () => this._save());
+    this._el(".f-subtitle-provider").addEventListener("change", () => this._syncSubtitleProviderFields());
     this.shadowRoot.querySelectorAll(".tab-btn").forEach((btn) => {
       btn.addEventListener("click", () => this._switchTab(btn.dataset.tab));
     });
@@ -192,11 +202,25 @@ class StreamingSettingsModal extends HTMLElement {
     wireLinearNav(
       this.shadowRoot,
       ".modal-close, .tab-btn, .btn-reauth, .btn-fetch-libraries, .section-row .s-enabled, .section-row .s-label, " +
-        ".f-youtube-key, .f-openrouter-key, .f-opensubtitles-username, .f-opensubtitles-password, .f-opensubtitles-key, " +
+        ".f-youtube-key, .f-openrouter-key, .f-subtitle-provider, " +
+        ".f-opensubtitles-username, .f-opensubtitles-password, .f-opensubtitles-key, " +
         ".f-ai-cadence, .f-max-genre-rows, .f-row-size, " +
         ".btn-cancel, .btn-save",
       { orientation: "vertical", onBack: () => this.close() }
     );
+  }
+
+  /* Toggles the OpenSubtitles credential fields' actual display (not just a CSS class)
+     since they're split across two different base layouts (.row-2col's grid, a plain
+     .field's block) - clearing the inline style reverts each to its own default rather
+     than forcing one shared display value onto both. Hiding them via display:none also
+     doubles as excluding them from wireLinearNav's list for free (see _wire's own
+     comment on offsetParent !== null). */
+  _syncSubtitleProviderFields() {
+    const show = this._el(".f-subtitle-provider").value === "opensubtitles";
+    this.shadowRoot.querySelectorAll(".opensubtitles-fields").forEach((el) => {
+      el.style.display = show ? "" : "none";
+    });
   }
 
   _switchTab(key) {
@@ -204,7 +228,7 @@ class StreamingSettingsModal extends HTMLElement {
     this.shadowRoot.querySelectorAll(".tab-panel").forEach((panel) => panel.classList.toggle("active", panel.dataset.tab === key));
   }
 
-  open() {
+  async open() {
     const config = loadPlain();
     /* Secret fields are deliberately left blank rather than pre-filled - no reason to
        ever echo an already-stored API key back into a password input. Left blank +
@@ -217,16 +241,6 @@ class StreamingSettingsModal extends HTMLElement {
       : "Used as a fallback when Plex has no trailer";
     this._el(".f-openrouter-key").value = "";
     this._el(".f-openrouter-key").placeholder = secretsPresent ? "•••••••• (leave blank to keep current)" : "";
-    this._el(".f-opensubtitles-key").value = "";
-    this._el(".f-opensubtitles-key").placeholder = secretsPresent
-      ? "•••••••• (leave blank to keep current)"
-      : "Used by the player's subtitle search";
-    this._el(".f-opensubtitles-username").value = "";
-    this._el(".f-opensubtitles-username").placeholder = secretsPresent
-      ? "•••••••• (leave blank to keep current)"
-      : "Needed to download, not just search";
-    this._el(".f-opensubtitles-password").value = "";
-    this._el(".f-opensubtitles-password").placeholder = secretsPresent ? "•••••••• (leave blank to keep current)" : "";
     this._plexUrl = config.plex_url || "";
     this._el(".plex-server-status").textContent = this._plexUrl ? `Connected — ${this._plexUrl}` : "Not connected.";
     this._el(".plex-server-status").className = this._plexUrl ? "status plex-server-status ok" : "status plex-server-status err";
@@ -239,6 +253,18 @@ class StreamingSettingsModal extends HTMLElement {
        any field left blank this time re-reads from the vault rather than silently
        reusing whatever was decrypted last time this modal was open. */
     this._unlockedSecrets = null;
+    this._el(".f-subtitle-provider").value = config.subtitle_provider || "plex";
+    /* Unlike the YouTube/OpenRouter keys above, these are shown filled in rather than
+       blank+placeholder - the OpenSubtitles credential fields are only visible at all
+       once the user has already opted into this provider, so there's no "don't echo a
+       secret back" concern the same way there is for keys entered once and forgotten;
+       being able to see/edit what's actually saved matters more here since a wrong
+       username/password otherwise only surfaces as an opaque 401 during playback. */
+    const secrets = await this._getEffectiveSecrets();
+    this._el(".f-opensubtitles-username").value = secrets.opensubtitles_username || "";
+    this._el(".f-opensubtitles-password").value = secrets.opensubtitles_password || "";
+    this._el(".f-opensubtitles-key").value = secrets.opensubtitles_api_key || "";
+    this._syncSubtitleProviderFields();
     this._switchTab(TABS[0].key);
     this._renderSectionList();
     this._el(".fetch-status").textContent = "";
@@ -355,12 +381,15 @@ class StreamingSettingsModal extends HTMLElement {
       ai_rows_cadence_ms: Number(this._el(".f-ai-cadence").value),
       max_genre_rows: Number(this._el(".f-max-genre-rows").value) || 12,
       row_size: Number(this._el(".f-row-size").value) || 20,
+      subtitle_provider: this._el(".f-subtitle-provider").value || "plex",
     };
   }
 
-  /* A blank secret field means "keep whatever's already stored", not "clear it" -
-     that's why this needs the decrypted existing values (see _getEffectiveSecrets)
-     rather than just reading the inputs directly. */
+  /* A blank YouTube/OpenRouter field means "keep whatever's already stored", not
+     "clear it" - those are shown blank on open (see open() above), so blank is the
+     passive default, not a deliberate edit. The OpenSubtitles fields are the opposite:
+     they're shown filled with the real value, so whatever's in them now - including
+     blank, if the user actually cleared it - is taken as-is. */
   async _collectSecrets() {
     const existing = await this._getEffectiveSecrets();
     return {
@@ -368,9 +397,9 @@ class StreamingSettingsModal extends HTMLElement {
       youtube_api_key: this._el(".f-youtube-key").value.trim() || existing.youtube_api_key || "",
       openrouter_api_key: this._el(".f-openrouter-key").value.trim() || existing.openrouter_api_key || "",
       plex_account_token: existing.plex_account_token || "",
-      opensubtitles_api_key: this._el(".f-opensubtitles-key").value.trim() || existing.opensubtitles_api_key || "",
-      opensubtitles_username: this._el(".f-opensubtitles-username").value.trim() || existing.opensubtitles_username || "",
-      opensubtitles_password: this._el(".f-opensubtitles-password").value.trim() || existing.opensubtitles_password || "",
+      opensubtitles_username: this._el(".f-opensubtitles-username").value.trim(),
+      opensubtitles_password: this._el(".f-opensubtitles-password").value.trim(),
+      opensubtitles_api_key: this._el(".f-opensubtitles-key").value.trim(),
     };
   }
 

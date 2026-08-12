@@ -138,6 +138,8 @@ public class PlayerActivity extends AppCompatActivity {
         void onEpisodeListRequested();
         void onSubtitleSearchRequested(String query);
         void onSubtitleSelectRequested(String fileId, String label, String languageCode);
+        void onSubtitleCleared();
+        void onSubtitleOffsetChanged(long offsetMs);
     }
 
     private static PlaybackListener listener;
@@ -277,13 +279,14 @@ public class PlayerActivity extends AppCompatActivity {
        room than the More sheet's own capped width). */
     View audioSubtitlesScrim;
     View audioSubtitlesSheet;
-    /* Populated by PlayerActivity.showSubtitleResults once JS resolves an OpenSubtitles
-       search (opensubtitles.js's search(), shared with the web overlay) - Java never
-       calls that API directly, same "JS interprets the external protocol once" split
-       chapters/audioStreams already use. currentSubtitleFileId null means "Off" (no
-       sidecar track attached) - there's no server-side "current subtitle" the way
-       currentAudioStreamId has, since subtitles are searched/attached client-side, not
-       part of the Plex transcode session at all. subtitlePendingFileId/
+    /* Populated by PlayerActivity.showSubtitleResults once JS resolves a Plex subtitle
+       search (plex-subtitles.js's search(), shared with the web overlay) - Java never
+       calls the Plex subtitle endpoints directly, same "JS interprets the external
+       protocol once" split chapters/audioStreams already use. currentSubtitleFileId
+       null means "Off" (no sidecar track attached) - there's no server-side "current
+       subtitle" the way currentAudioStreamId has, since the fetched subtitle text is
+       attached client-side, not part of the Plex transcode session at all.
+       subtitlePendingFileId/
        subtitleApplyErrorFileId/Message track the in-flight or just-failed selection so
        PlayerUiHelper.refreshAudioSubtitlesMenu can show "Applying…"/an inline error on
        the one row that needs it, without threading a mutable TextView reference through
@@ -295,7 +298,7 @@ public class PlayerActivity extends AppCompatActivity {
     String subtitleApplyErrorFileId;
     String subtitleApplyErrorMessage;
     /* The actual sidecar track state, as opposed to currentSubtitleFileId/Label above
-       (OpenSubtitles-search-result bookkeeping for the menu UI). currentSubtitleUri is
+       (Plex-subtitle-search-result bookkeeping for the menu UI). currentSubtitleUri is
        what's actually fed to MediaItem.SubtitleConfiguration - needed as its own field
        (not just re-derived from currentSubtitleSrtText each time) because
        switchAudioStream/switchMediaVersion/switchQualityCap each rebuild the MediaItem
@@ -306,7 +309,7 @@ public class PlayerActivity extends AppCompatActivity {
        a subtitle was applied with no user action in between, wiping it out with no
        visible error. currentSubtitleSrtText/OffsetMs exist so the Sync +/- control
        (writeSubtitleCacheFile/adjustSubtitleOffset below) can re-shift and rewrite the
-       on-disk file without re-hitting OpenSubtitles for every click - mirrors the web
+       on-disk file without re-hitting Plex for every click - mirrors the web
        leg's own Sync control (chrome.js's adjustSubtitleOffset), which can mutate
        already-parsed VTTCue objects directly instead of a source file. */
     private String currentSubtitleSrtText;
@@ -1541,7 +1544,7 @@ public class PlayerActivity extends AppCompatActivity {
     /* Called from PlayerUiHelper's Audio & Subtitles search button, already on the UI
        thread - same "no thread hop needed" reasoning as requestEpisodeList above. query
        is whatever the user typed (falls back to this title in PlayerUiHelper if left
-       untouched) - JS resolves the actual OpenSubtitles search and calls
+       untouched) - JS resolves the actual Plex subtitle search and calls
        showSubtitleResults below with the result. */
     static void requestSubtitleSearch(String query) {
         if (listener != null) {
@@ -1577,7 +1580,7 @@ public class PlayerActivity extends AppCompatActivity {
     }
 
     /* Same org.json.JSONArray/optString parsing idiom as parseEpisodeList/
-       parseAudioStreams - opensubtitles.js's search() result is already resolved/
+       parseAudioStreams - plex-subtitles.js's search() result is already resolved/
        formatted in JS, this just rebuilds it into Java objects. */
     private static List<SubtitleResultEntry> parseSubtitleResults(String json) {
         List<SubtitleResultEntry> results = new ArrayList<>();
@@ -1632,10 +1635,14 @@ public class PlayerActivity extends AppCompatActivity {
         PlayerUiHelper.refreshAudioSubtitlesMenu(this);
     }
 
-    /* The "Off" row - fully native, no JS round trip needed (unlike selecting a real
+    /* The "Off" row - fully native for the apply itself (unlike selecting a real
        result, clearing one has no external download to resolve). Mirrors applySubtitle
        below (rebuild the MediaItem in place, same resumeMs/prepare/notifyReload
-       sequence) but with no SubtitleConfigurations at all, rather than a real one. */
+       sequence) but with no SubtitleConfigurations at all, rather than a real one.
+       Still notifies JS afterward (onSubtitleCleared) - JS remembers the last-applied
+       subtitle per title (src/player/core/subtitle-store.js) to auto-reapply it next
+       time this title plays, and without this notification that memory would never
+       learn the user turned it back off here, silently reapplying every time. */
     void clearSubtitleTrack() {
         if (player == null || currentUrl == null) return;
         long resumeMs = player.getCurrentPosition();
@@ -1655,6 +1662,7 @@ public class PlayerActivity extends AppCompatActivity {
         subtitlePendingFileId = null;
         subtitleApplyErrorFileId = null;
         PlayerUiHelper.refreshAudioSubtitlesMenu(this);
+        if (listener != null) listener.onSubtitleCleared();
     }
 
     private static List<EpisodeEntry> parseEpisodeList(String json) {
@@ -1831,7 +1839,7 @@ public class PlayerActivity extends AppCompatActivity {
        HLS transcode source, see this phase's open risks. Takes the raw .srt TEXT now,
        not a bare URL - the Sync +/- control (adjustSubtitleOffset below) needs the
        original, un-shifted timestamps cached on this side so every click can re-shift
-       and rewrite a local file without re-hitting OpenSubtitles, and ExoPlayer only ever
+       and rewrite a local file without re-hitting Plex, and ExoPlayer only ever
        reads whatever's currently on disk (currentSubtitleUri), never this text directly. */
     public static void setSubtitleText(String srtText, String languageCode, String mimeType) {
         if (activeInstance != null) {
@@ -1868,19 +1876,47 @@ public class PlayerActivity extends AppCompatActivity {
         reloadWithCurrentSubtitle();
     }
 
-    /* Called directly from PlayerUiHelper's Sync +/- buttons, fully native (no JS round
-       trip) - unlike the initial apply above, currentSubtitleSrtText is already cached
-       from that first fetch, so nudging the offset never re-hits OpenSubtitles. Mirrors
-       chrome.js's own adjustSubtitleOffset (250ms/click) on the web leg, which mutates
-       already-parsed VTTCue objects directly instead of a source file - this rewrites
-       the on-disk .srt instead, since ExoPlayer's SubripDecoder parses that itself and
-       there's no equivalent live cue list on this side to mutate in place. */
-    void adjustSubtitleOffset(long deltaMs) {
-        if (player == null || currentSubtitleSrtText == null) return;
-        currentSubtitleOffsetMs += deltaMs;
-        if (!writeSubtitleCacheFile()) return;
+    /* Absolute setter shared by adjustSubtitleOffset (delta, from PlayerUiHelper's Sync
+       +/- buttons) and the static setSubtitleOffsetMs below (absolute, from JS
+       restoring a remembered offset via NativePlayerPlugin.setSubtitleOffset) - both
+       funnel through here so there's one write+reload path, not two. Returns whether
+       it actually took effect, so adjustSubtitleOffset can skip notifying JS of a
+       no-op (player/currentSubtitleSrtText not ready, or the cache file write failed). */
+    private boolean applySubtitleOffset(long offsetMs) {
+        if (player == null || currentSubtitleSrtText == null) return false;
+        currentSubtitleOffsetMs = offsetMs;
+        if (!writeSubtitleCacheFile()) return false;
         reloadWithCurrentSubtitle();
         PlayerUiHelper.refreshAudioSubtitlesMenu(this);
+        return true;
+    }
+
+    /* Called directly from PlayerUiHelper's Sync +/- buttons, fully native for the
+       apply itself (no JS round trip needed there) - unlike the initial apply above,
+       currentSubtitleSrtText is already cached from that first fetch, so nudging the
+       offset never re-hits Plex. Mirrors chrome.js's own adjustSubtitleOffset
+       (250ms/click) on the web leg, which mutates already-parsed VTTCue objects
+       directly instead of a source file - this rewrites the on-disk .srt instead,
+       since ExoPlayer's SubripDecoder parses that itself and there's no equivalent
+       live cue list on this side to mutate in place. Still notifies JS afterward
+       (onSubtitleOffsetChanged), same reasoning as clearSubtitleTrack's
+       onSubtitleCleared - JS persists the offset per title (subtitle-store.js's
+       setAppliedOffsetMs) so it can restore it on the next play, and without this
+       notification it would never learn a native Sync click happened at all. */
+    void adjustSubtitleOffset(long deltaMs) {
+        if (!applySubtitleOffset(currentSubtitleOffsetMs + deltaMs)) return;
+        if (listener != null) listener.onSubtitleOffsetChanged(currentSubtitleOffsetMs);
+    }
+
+    /* Called from NativePlayerPlugin.setSubtitleOffset - JS restoring a remembered Sync
+       offset right after a fresh subtitle apply, same apply-then-restore sequence
+       chrome.js's own applyRememberedSubtitle uses on the web/Xbox leg. No listener
+       notification back out of here (unlike adjustSubtitleOffset above) - JS already
+       knows this value, it's the one that just sent it. */
+    static void setSubtitleOffsetMs(long offsetMs) {
+        if (activeInstance != null) {
+            activeInstance.runOnUiThread(() -> activeInstance.applySubtitleOffset(offsetMs));
+        }
     }
 
     /* currentSubtitleOffsetMs itself is private (only the reload plumbing above should

@@ -20,6 +20,26 @@ export function extractAudioStreams(media, mediaIndex) {
     }));
 }
 
+/* streamType 3 is subtitle. Filtered to entries carrying a `key` - an embedded
+   (in-container) subtitle stream has no `key` at all and can only be played back via a
+   burn-in transcode Prism doesn't support yet, so listing it here would offer a menu
+   item that silently can't be selected. A `key` means an external sidecar file Plex can
+   serve directly (one Prism itself downloaded via plex-subtitles.js's search, one
+   manually uploaded via Plex Web, or one a tool like Bazarr wrote to disk and Plex
+   picked up on its own library scan) - same fetch-and-attach path either way. */
+export function extractSubtitleTracks(media, mediaIndex) {
+  const streams = media?.[mediaIndex]?.Part?.[0]?.Stream || [];
+  return streams
+    .filter((s) => s.streamType === 3 && s.key)
+    .map((s) => ({
+      key: s.key,
+      codec: s.codec || "srt",
+      languageCode: s.languageCode || s.language || "en",
+      label: s.title || s.extendedDisplayTitle || s.displayTitle || s.languageCode || "Unknown",
+      selected: !!s.selected,
+    }));
+}
+
 /* Plex's Media[] describes every version this item has (e.g. a 4K remux alongside a
    1080p encode) - reduced here to {mediaIndex, label} for the player's in-session
    Video Quality menu (see chrome.js's openVersionMenu), the same "resolve Plex's
@@ -365,6 +385,7 @@ export class TitleInfoController {
               markers: ep.Marker || [],
               chapters: ep.Chapter || [],
               audioStreams: extractAudioStreams(ep.Media, 0),
+              subtitleTracks: extractSubtitleTracks(ep.Media, 0),
               bifIndexPath: bifIndexPath(ep.Media, 0),
               ...(queueIndex >= 0 ? { queueRatingKeys, queueIndex } : {}),
             });
@@ -518,6 +539,7 @@ export class TitleInfoController {
       mediaIndex,
       mediaVersions: extractMediaVersions(this._media),
       audioStreams: extractAudioStreams(this._media, mediaIndex),
+      subtitleTracks: extractSubtitleTracks(this._media, mediaIndex),
       bifIndexPath: bifIndexPath(this._media, mediaIndex),
       ...queue,
     });
@@ -567,6 +589,7 @@ export class TitleInfoController {
         chapters: meta.Chapter || [],
         mediaVersions: extractMediaVersions(meta.Media),
         audioStreams: extractAudioStreams(meta.Media, 0),
+        subtitleTracks: extractSubtitleTracks(meta.Media, 0),
         bifIndexPath: bifIndexPath(meta.Media, 0),
         ...(queueIndex >= 0 ? { queueRatingKeys, queueIndex } : {}),
       });
@@ -601,6 +624,7 @@ export class TitleInfoController {
         chapters: meta.Chapter || [],
         mediaVersions: extractMediaVersions(meta.Media),
         audioStreams: extractAudioStreams(meta.Media, 0),
+        subtitleTracks: extractSubtitleTracks(meta.Media, 0),
         bifIndexPath: bifIndexPath(meta.Media, 0),
         queueRatingKeys: rawItems.map((m) => m.ratingKey),
         queueIndex: index,

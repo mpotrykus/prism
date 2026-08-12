@@ -62,6 +62,7 @@ import {
     skipLabelFor,
     updateSkipButton,
     playQueuedTitle,
+    applyRememberedSubtitle,
 } from "./src/player/ui/chrome.js";
 import { openEpisodeListOverlay, closeEpisodeListOverlay } from "./src/player/ui/episode-list.js";
 
@@ -215,8 +216,16 @@ class StreamingPlayerController {
         const { streamUrl, startOffsetMs } = this._prepareSession(item);
         if (Capacitor.isNativePlatform() && Capacitor.getPlatform() === "android") {
             await this._playNative(streamUrl, startOffsetMs);
+            /* Native's own equivalent lives in native-bridge.js's "progress" listener
+               instead of right here - _videoEl exists synchronously the instant
+               _playWeb below returns, but the native player isn't guaranteed ready the
+               instant NativePlayer.play()'s bridge call resolves (a fresh Activity
+               launch, not just an in-place title swap), so it waits for the first real
+               progress tick as proof the native side actually has something to attach
+               a subtitle to. */
         } else {
             this._playWeb(streamUrl, startOffsetMs);
+            applyRememberedSubtitle(this);
         }
         this._reportTimeline("playing");
         this._pingTimer = setInterval(() => this._reportTimeline(this._session?.state || "playing"), TIMELINE_PING_MS);
@@ -275,6 +284,12 @@ class StreamingPlayerController {
             queueIndex: item.queueIndex ?? null,
         };
         this._activeSkipMarker = null;
+        /* Reset per session, not just left to differ naturally from the new ratingKey -
+           replaying the exact same title later would otherwise still equal the value
+           left over from that earlier playback, and native-bridge.js's progress-based
+           auto-reapply check (_subtitleAutoApplyRatingKey !== session.ratingKey) would
+           wrongly read that as "already handled this session" and skip it entirely. */
+        this._subtitleAutoApplyRatingKey = null;
 
         /* detectShaderType still resolves fresh per-video from this title's own genre
            tags - the only part of this that's genuinely per-video. shaderEnabled/

@@ -1,8 +1,9 @@
 import { registerPlugin } from "@capacitor/core";
 import { plexAssetUrl } from "./core/plex-asset-url.js";
-import { playQueuedTitle } from "./ui/chrome.js";
+import { playQueuedTitle, applyRememberedSubtitle } from "./ui/chrome.js";
 import { getQueueItems, formatEpisodeListItem } from "./ui/episode-list.js";
-import * as StreamingSubtitles from "../../opensubtitles.js";
+import * as StreamingSubtitles from "./core/subtitle-provider.js";
+import * as subtitleStore from "./core/subtitle-store.js";
 
 const NativePlayer = registerPlugin("NativePlayer");
 
@@ -18,6 +19,19 @@ export async function playNative(controller, streamUrl, startOffsetMs) {
             if (!controller._session) return;
             controller._session.lastTimeMs = positionMs;
             if (durationMs) controller._session.durationMs = durationMs;
+            /* A real progress tick is proof the native player is actually ready to
+               accept a subtitle - unlike NativePlayer.play()/switchTitle() resolving,
+               which only proves the bridge call reached Java, not that ExoPlayer has
+               finished preparing (PlayerActivity.applySubtitle no-ops silently if
+               player/currentUrl aren't set yet). Keyed by ratingKey rather than a
+               one-shot flag for the whole native session, since this same listener
+               (registered once here) keeps firing across title-prev/title-next
+               switches too (see _switchTitleNative's own comment on why it doesn't
+               re-register listeners) - each new title needs its own auto-apply check. */
+            if (controller._subtitleAutoApplyRatingKey !== controller._session.ratingKey) {
+                controller._subtitleAutoApplyRatingKey = controller._session.ratingKey;
+                applyRememberedSubtitle(controller);
+            }
             const marker = controller._activeMarkerAt(positionMs);
             if (marker !== controller._activeSkipMarker) {
                 controller._activeSkipMarker = marker;
@@ -84,23 +98,21 @@ export async function playNative(controller, streamUrl, startOffsetMs) {
         })
     );
     /* PlayerUiHelper's Audio & Subtitles search button (native-side equivalent of
-       chrome.js's renderSubtitleSection) has no OpenSubtitles result of its own to show
+       chrome.js's renderSubtitleSection) has no Plex subtitle result of its own to show
        yet when tapped - it only reports the typed query back here, same "native reports
-       a bare request, JS resolves the actual external-API call" split as
-       episodeListRequested above. Reuses opensubtitles.js's search() directly rather
-       than re-deriving the query/year/season/episode params in Java. */
+       a bare request, JS resolves the actual Plex API call" split as
+       episodeListRequested above. Reuses plex-subtitles.js's search() directly rather
+       than re-deriving the query param in Java. fileId stays an opaque string to Java
+       (see SubtitleResultEntry.java) but now carries a JSON-encoded copy of everything
+       download() below needs (key/codec/languageCode/providerTitle/hearingImpaired/
+       forced) instead of a single OpenSubtitles file id. */
     controller._nativeListenerHandles.push(
         await NativePlayer.addListener("subtitleSearchRequested", async ({ query }) => {
             const session = controller._session;
             try {
-                const results = await StreamingSubtitles.search({
-                    title: query || session?.title,
-                    year: session?.year,
-                    seasonNumber: session?.seasonNumber,
-                    episodeNumber: session?.episodeNumber,
-                });
+                const results = await StreamingSubtitles.search(session, { title: query || session?.title });
                 await NativePlayer.showSubtitleResults({
-                    items: results.map((r) => ({ fileId: String(r.fileId), label: r.label, languageCode: r.languageCode })),
+                    items: results.map((r) => ({ fileId: JSON.stringify(r), label: r.label, languageCode: r.languageCode })),
                 });
             } catch (e) {
                 await NativePlayer.showSubtitleResults({ items: [], error: e.message });
@@ -108,21 +120,49 @@ export async function playNative(controller, streamUrl, startOffsetMs) {
         })
     );
     /* A subtitle result row tap - fileId is opaque to this bridge too, it only exists to
-       round-trip through opensubtitles.js's download() (the same search-then-download
+       round-trip through plex-subtitles.js's download() (the same search-then-download
        chrome.js's own, currently-unreachable Android branch in applySubtitleResult
        already does) before handing PlayerActivity the raw .srt text via setSubtitle.
        The raw text, not just a download link, is what lets PlayerActivity's Sync +/-
        control re-shift and rewrite a local file natively for every click rather than
-       re-resolving/re-downloading from OpenSubtitles each time. */
+       re-resolving/re-downloading from Plex each time. */
     controller._nativeListenerHandles.push(
         await NativePlayer.addListener("subtitleSelectRequested", async ({ fileId, label, languageCode }) => {
             try {
-                const srtText = await StreamingSubtitles.download(fileId);
-                await setNativeSubtitle(srtText, languageCode, "application/x-subrip");
+                const result = JSON.parse(fileId);
+                const { text, languageCode: resolvedLanguageCode } = await StreamingSubtitles.download(
+                    controller._session,
+                    result
+                );
+                await setNativeSubtitle(text, resolvedLanguageCode || languageCode, "application/x-subrip");
+                /* Remembered per-title (ratingKey) - see subtitle-store.js. Read back at
+                   the start of the next session for the same title (plex-player.js's
+                   applyRememberedSubtitle) so it auto-reapplies without a fresh
+                   search+select. */
+                subtitleStore.setAppliedSubtitle(controller._session?.ratingKey, result);
                 await NativePlayer.notifySubtitleApplied({ fileId, label });
             } catch (e) {
                 await NativePlayer.notifySubtitleApplyFailed({ fileId, message: e.message });
             }
+        })
+    );
+    /* PlayerActivity.clearSubtitleTrack ("Off" row) applies fully natively with no JS
+       round trip needed for the apply itself, but still notifies JS afterward
+       (PlayerActivity's own onSubtitleCleared) so the remembered choice above gets
+       forgotten too - otherwise this title would keep coming back with a subtitle the
+       user explicitly turned off. */
+    controller._nativeListenerHandles.push(
+        await NativePlayer.addListener("subtitleCleared", () => {
+            subtitleStore.clearAppliedSubtitle(controller._session?.ratingKey);
+        })
+    );
+    /* PlayerUiHelper's Sync +/- buttons (PlayerActivity.adjustSubtitleOffset) apply
+       fully natively too, same "notify JS afterward" reasoning as subtitleCleared
+       above - JS persists the offset per title so applyRememberedSubtitle (chrome.js)
+       can restore it via setNativeSubtitleOffset below on the next play. */
+    controller._nativeListenerHandles.push(
+        await NativePlayer.addListener("subtitleOffsetChanged", ({ offsetMs }) => {
+            subtitleStore.setAppliedOffsetMs(controller._session?.ratingKey, offsetMs);
         })
     );
     await NativePlayer.play(buildPlaybackPayload(controller, streamUrl, startOffsetMs));
@@ -230,4 +270,13 @@ export async function setNativePlaybackRate(rate) {
 
 export async function setNativeSubtitle(text, languageCode, mimeType) {
     await NativePlayer.setSubtitle({ text, languageCode, mimeType });
+}
+
+/* Absolute, not a delta - used by chrome.js's applyRememberedSubtitle to restore a
+   Sync offset right after a fresh setNativeSubtitle call above, same
+   apply-then-restore sequence the web/Xbox leg uses. PlayerUiHelper's own Sync +/-
+   buttons never go through this - they call PlayerActivity.adjustSubtitleOffset
+   directly, no bridge involved. */
+export async function setNativeSubtitleOffset(offsetMs) {
+    await NativePlayer.setSubtitleOffset({ offsetMs });
 }

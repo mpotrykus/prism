@@ -2,7 +2,11 @@
 
    Plain client-side calls to the OpenSubtitles REST API (api.opensubtitles.com/api/v1),
    same no-proxy pattern as the existing YouTube/OpenRouter integrations - credentials
-   live in settings.js/vault.js like those do (see SECRET_FIELDS there).
+   live in settings.js/vault.js like those do. This is the opt-in alternative to the
+   default Plex-brokered path (plex-subtitles.js) - selected via Settings' Subtitle
+   Provider dropdown, dispatched by src/player/core/subtitle-provider.js. Trades "no
+   credentials on this client" for "zero extra load on PMS", since every search/download
+   here goes straight to OpenSubtitles instead of through the user's own Plex server.
 
    Confirmed empirically (a real Api-Key-only request against /download came back 401):
    an Api-Key alone is enough for /subtitles search, but /download requires a logged-in

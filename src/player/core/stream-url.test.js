@@ -23,6 +23,11 @@ describe("buildStreamUrl", () => {
     expect(url.searchParams.get("X-Plex-Platform")).toBe("Chrome");
   });
 
+  it("always disables Plex's own subtitle handling so it never burns one in", () => {
+    const url = new URL(buildStreamUrl(base));
+    expect(url.searchParams.get("subtitleStreamID")).toBe("0");
+  });
+
   it("omits maxVideoBitrate/audioStreamID when not given", () => {
     const url = new URL(buildStreamUrl(base));
     expect(url.searchParams.has("maxVideoBitrate")).toBe(false);

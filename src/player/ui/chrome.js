@@ -1,11 +1,12 @@
 import { Capacitor } from "@capacitor/core";
-import * as StreamingSubtitles from "../../../opensubtitles.js";
+import * as StreamingSubtitles from "../core/subtitle-provider.js";
+import * as subtitleStore from "../core/subtitle-store.js";
 import { SHADER_TYPES } from "../shader/shaders.js";
 import { setShaderStrength, setColorBoostStrength, upscaleModeOf, setUpscaleMode, colorBoostModeOf, setColorBoostMode } from "../shader-pipeline.js";
 import { setAmbientEnabled, setAmbientOpacity } from "../ambient-pipeline.js";
 import { reloadWebSource } from "../web-fallback.js";
 import { setAutoQualityEnabled } from "../core/abr.js";
-import { setNativePlaybackRate, setNativeSubtitle } from "../native-bridge.js";
+import { setNativePlaybackRate, setNativeSubtitle, setNativeSubtitleOffset } from "../native-bridge.js";
 import {
     CONTROLS_HIDE_DELAY_MS,
     PLAYBACK_RATES,
@@ -1732,7 +1733,18 @@ export function closeAudioSubtitlesOverlay(controller) {
    renderSubtitleSection's results list otherwise still carries - here that cap is
    exactly what "constrain to the height of the parent" already fixed once
    (renderSubtitleSection's own resultsEl is flex:1/minHeight:0, so it fills whatever
-   height `body` actually has). */
+   height `body` actually has).
+
+   maxHeight is calc(100vh - fixed chrome) rather than a flat vh percentage (a flat 40vh
+   used to cap this well short of the panel's own full height, wasting most of a tall
+   screen on a long subtitle-search-results list) - ~130px covers openAudioSubtitlesOverlay's
+   panel padding (44px) + this column's own heading (~32px) + body's paddingTop (16px)
+   + a margin of safety, so at the cap this genuinely uses close to the entire viewport
+   instead of an arbitrary fraction of it. Short lists (Audio, most Subtitle searches)
+   still size to their own content and sit centered (openAudioSubtitlesOverlay's own
+   panel is justifyContent:"center") - this only changes what happens once content
+   actually wants more room than that, which matters most on a short mobile viewport
+   where 40vh of actual pixels was cramped rather than just "smaller than desktop". */
 function buildAudioSubtitlesColumn(title) {
     const el = document.createElement("div");
     Object.assign(el.style, { flex: "1 1 0", minWidth: "0", display: "flex", flexDirection: "column" });
@@ -1755,7 +1767,16 @@ function buildAudioSubtitlesColumn(title) {
        "visible" while overflowY is "auto" gets it implicitly upgraded to "auto" too,
        which was surfacing a horizontal scrollbar whenever a row's text nudged past the
        column's width. */
-    Object.assign(body.style, { flex: "1 1 auto", minHeight: "0", maxHeight: "40vh", display: "flex", flexDirection: "column", overflowY: "auto", overflowX: "hidden", paddingTop: "16px" });
+    Object.assign(body.style, {
+        flex: "1 1 auto",
+        minHeight: "0",
+        maxHeight: "calc(100vh - 130px)",
+        display: "flex",
+        flexDirection: "column",
+        overflowY: "auto",
+        overflowX: "hidden",
+        paddingTop: "16px",
+    });
     el.appendChild(body);
 
     return { el, body };
@@ -2295,21 +2316,18 @@ function renderSubtitleSection(controller, content, { collapse }) {
         }
         resultsEl.textContent = "Searching…";
         try {
-            const results = await StreamingSubtitles.search({
-                title: input.value,
-                year: controller._session?.year,
-                seasonNumber: controller._session?.seasonNumber,
-                episodeNumber: controller._session?.episodeNumber,
-            });
+            const results = await StreamingSubtitles.search(controller._session, { title: input.value });
             resultsEl.innerHTML = "";
             if (!results.length) {
                 resultsEl.textContent = "No results.";
                 return;
             }
+            const appliedRatingKey = controller._session?.ratingKey;
             results.forEach((r) => {
                 const row = document.createElement("button");
                 row.type = "button";
-                row.textContent = `${r.label} (${r.languageCode})`;
+                const isApplied = subtitleStore.isAppliedResult(appliedRatingKey, r);
+                row.textContent = `${r.label} (${r.languageCode})${isApplied ? "  ✓" : ""}`;
                 Object.assign(row.style, {
                     display: "block",
                     width: "100%",
@@ -2344,12 +2362,13 @@ function renderSubtitleSection(controller, content, { collapse }) {
 
     content.appendChild(input);
     content.appendChild(searchBtn);
-    /* Only shown once a subtitle is actually attached - offsetting a track that doesn't
-       exist yet has nothing to act on. Rebuilt fresh on every render (same as the rest
-       of this section) rather than kept in sync some other way, so reopening the menu
-       after a fresh applySubtitleResult always picks this up. */
+    /* Both only shown once a subtitle is actually attached - offsetting/removing a
+       track that doesn't exist yet has nothing to act on. Rebuilt fresh on every render
+       (same as the rest of this section) rather than kept in sync some other way, so
+       reopening the menu after a fresh applySubtitleResult always picks both up. */
     if (controller._videoEl?.textTracks?.[0]) {
         content.appendChild(buildSubtitleOffsetRow(controller));
+        content.appendChild(buildSubtitleOffButton(controller, collapse));
     }
     content.appendChild(resultsEl);
 
@@ -2419,17 +2438,44 @@ function buildSubtitleOffsetRow(controller) {
     return row;
 }
 
+/* Plain text-button row, matching the rest of this menu's picker style - removes the
+   currently attached subtitle and forgets it (see removeSubtitleResult) rather than
+   just hiding it for this session, so it doesn't come back next time this title plays. */
+function buildSubtitleOffButton(controller, collapse) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.textContent = "Off";
+    Object.assign(btn.style, {
+        display: "block",
+        width: "calc(100% - 32px)",
+        margin: "0 16px 10px",
+        padding: "9px",
+        borderRadius: "8px",
+        border: "1px solid rgba(255,255,255,0.2)",
+        background: "rgba(255,255,255,0.08)",
+        color: "#fff",
+        fontSize: "13px",
+        fontWeight: "600",
+        cursor: "pointer",
+        boxSizing: "border-box",
+    });
+    btn.addEventListener("click", () => removeSubtitleResult(controller, collapse));
+    return btn;
+}
+
 /* Shifts every cue relative to its ORIGINAL parsed time (cue._baseStart/_baseEnd),
    captured lazily on first adjustment here rather than up front when the track loads -
    by the time this menu is reachable a subtitle is already attached and its cues
    already parsed, so a separate <track> "load" listener would just be dead weight.
    Mutating startTime/endTime directly (rather than re-deriving cues from scratch) is
-   what makes the browser's own cuechange timeline immediately reflect the new offset. */
-function adjustSubtitleOffset(controller, deltaMs) {
+   what makes the browser's own cuechange timeline immediately reflect the new offset.
+   Absolute rather than a delta so applyRememberedSubtitle below can restore a
+   previously-saved offset in one call, the same function the +/- buttons use. */
+function setSubtitleOffset(controller, offsetMs) {
     const textTrack = controller._videoEl?.textTracks?.[0];
     if (!textTrack) return;
-    controller._subtitleOffsetMs = (controller._subtitleOffsetMs || 0) + deltaMs;
-    const offsetSec = controller._subtitleOffsetMs / 1000;
+    controller._subtitleOffsetMs = offsetMs;
+    const offsetSec = offsetMs / 1000;
     Array.from(textTrack.cues || []).forEach((cue) => {
         if (cue._baseStart == null) {
             cue._baseStart = cue.startTime;
@@ -2440,23 +2486,46 @@ function adjustSubtitleOffset(controller, deltaMs) {
     });
 }
 
+/* Persisted on every click (subtitle-store.js's setAppliedOffsetMs), not just kept in
+   controller._subtitleOffsetMs - so a sync adjustment survives closing and reopening
+   this title, the same as the subtitle choice itself already does. Web/Xbox only, see
+   subtitle-store.js's own header comment for why Android has no equivalent yet. */
+function adjustSubtitleOffset(controller, deltaMs) {
+    setSubtitleOffset(controller, (controller._subtitleOffsetMs || 0) + deltaMs);
+    subtitleStore.setAppliedOffsetMs(controller._session?.ratingKey, controller._subtitleOffsetMs);
+}
+
+/* Shared by applySubtitleResult below and applyRememberedSubtitle (called from
+   plex-player.js at the start of every session) so the native-vs-web branch only lives
+   in one place. */
+async function attachDownloadedSubtitle(controller, text, languageCode, label) {
+    if (Capacitor.isNativePlatform() && Capacitor.getPlatform() === "android") {
+        await setNativeSubtitle(text, languageCode, "application/x-subrip");
+    } else {
+        await attachSubtitleTrack(controller, text, languageCode, label);
+    }
+}
+
 /* rowEl gets an inline status update on failure instead of the previous
    console.error-only handling - a swallowed error here looked indistinguishable from
-   "the click didn't register" since nothing on screen ever changed. */
+   "the click didn't register" since nothing on screen ever changed. Plex's own download
+   is asynchronous (see plex-subtitles.js) so this can take up to ~20s, not the near-
+   instant round-trip the direct-OpenSubtitles path (opensubtitles.js) makes. */
 async function applySubtitleResult(controller, result, rowEl, collapse) {
     const originalLabel = rowEl?.textContent;
     if (rowEl) {
-        rowEl.textContent = "Applying…";
+        rowEl.textContent = result.provider === "opensubtitles" ? "Downloading…" : "Downloading via Plex…";
         rowEl.disabled = true;
     }
     try {
-        if (Capacitor.isNativePlatform() && Capacitor.getPlatform() === "android") {
-            const srtText = await StreamingSubtitles.download(result.fileId);
-            await setNativeSubtitle(srtText, result.languageCode, "application/x-subrip");
-        } else {
-            const srtText = await StreamingSubtitles.download(result.fileId);
-            attachSubtitleTrack(controller, srtText, result.languageCode, result.label);
-        }
+        const { text, languageCode } = await StreamingSubtitles.download(controller._session, result);
+        await attachDownloadedSubtitle(controller, text, languageCode, result.label);
+        /* Remembered per-title (ratingKey), not per-session - see subtitle-store.js.
+           plex-player.js's applyRememberedSubtitle re-reads this at the start of the
+           next session for the same title, so this same result (served from the cache
+           subtitle-provider.js's download() already populated above, not a fresh
+           network call) auto-reapplies without the user searching/selecting again. */
+        subtitleStore.setAppliedSubtitle(controller._session?.ratingKey, result);
         collapse();
     } catch (e) {
         console.error("StreamingPlayer: subtitle download failed -", e);
@@ -2467,12 +2536,52 @@ async function applySubtitleResult(controller, result, rowEl, collapse) {
     }
 }
 
+/* Re-attaches whatever subtitle was last applied to this title (if any), without the
+   user searching/selecting again - called once per session from plex-player.js right
+   after playback actually starts (native or web), since attaching needs a live
+   <video>/native player to attach to. download() below is normally served from
+   subtitle-provider.js's own cache (subtitle-store.js), not a fresh network call. */
+export async function applyRememberedSubtitle(controller) {
+    const ratingKey = controller._session?.ratingKey;
+    const remembered = subtitleStore.getAppliedSubtitle(ratingKey);
+    if (!remembered) return;
+    try {
+        const { text, languageCode } = await StreamingSubtitles.download(controller._session, remembered);
+        await attachDownloadedSubtitle(controller, text, languageCode, remembered.label);
+        /* A fresh apply resets the offset to 0 on both legs (attachSubtitleTrack's own
+           reset on web; PlayerActivity.applySubtitle's on native) - this restores
+           whatever the user last synced to, only bothering the native bridge when
+           there's actually a non-zero offset to restore. */
+        const offsetMs = subtitleStore.getAppliedOffsetMs(ratingKey);
+        if (offsetMs) {
+            if (Capacitor.isNativePlatform() && Capacitor.getPlatform() === "android") {
+                await setNativeSubtitleOffset(offsetMs);
+            } else {
+                setSubtitleOffset(controller, offsetMs);
+            }
+        }
+    } catch (e) {
+        console.error("StreamingPlayer: failed to reapply remembered subtitle -", e);
+    }
+}
+
+/* The web/Xbox leg's own "Off" row - Android has its own native equivalent
+   (PlayerActivity.clearSubtitleTrack, reachable from PlayerUiHelper's menu; chrome.js's
+   whole hamburger UI never renders on Android in the first place, see applySubtitleResult's
+   history). Clears both the live <track> and the remembered per-title choice, so this
+   title doesn't just come back with a subtitle the next time it plays. */
+function removeSubtitleResult(controller, collapse) {
+    detachSubtitleTrack(controller);
+    subtitleStore.clearAppliedSubtitle(controller._session?.ratingKey);
+    collapse();
+}
+
 /* Only the web/Xbox leg needs this - <video><track> requires WebVTT, while Android's
    Media3 leg (see applySubtitleResult) hands ExoPlayer the raw .srt URL directly, since
    SubripDecoder parses .srt natively and converting it there would be wasted work.
    Revokes the previous track's blob URL rather than leaking one per search. */
 function attachSubtitleTrack(controller, srtText, langCode, label) {
-    if (!controller._videoEl) return;
+    if (!controller._videoEl) return Promise.resolve();
     if (controller._subtitleTrackUrl) URL.revokeObjectURL(controller._subtitleTrackUrl);
     /* A new subtitle file has its own inherent timing - carrying over the previous
        file's offset would misalign this one from the very first cue. */
@@ -2489,7 +2598,7 @@ function attachSubtitleTrack(controller, srtText, langCode, label) {
     track.default = true;
     controller._videoEl.appendChild(track);
     const textTrack = controller._videoEl.textTracks[0];
-    if (!textTrack) return;
+    if (!textTrack) return Promise.resolve();
     /* Rendered through a manual overlay instead of native "showing" mode - the shader
        upscaling/Color Boost canvas (shader-pipeline.js) opacity:0's the <video> element
        and paints from the raw decoded frame instead, which never includes the browser's
@@ -2504,6 +2613,42 @@ function attachSubtitleTrack(controller, srtText, langCode, label) {
         overlay.style.display = cues.length ? "block" : "none";
         overlay.innerHTML = cues.map((c) => renderSubtitleCueHtml(c.text)).join("<br>");
     });
+    /* The <track> loads/parses its VTT asynchronously - textTrack.cues is still empty
+       right after this function returns. A caller applying a remembered sync offset
+       immediately afterward (applyRememberedSubtitle) needs the actual cues to exist
+       before setSubtitleOffset's shift loop has anything to shift; without this wait,
+       that offset silently no-ops (only _subtitleOffsetMs gets set) until some later
+       unrelated +/- click re-runs the loop against by-then-loaded cues. */
+    return new Promise((resolve) => {
+        if (textTrack.cues && textTrack.cues.length) {
+            resolve();
+            return;
+        }
+        const done = () => {
+            track.removeEventListener("load", done);
+            track.removeEventListener("error", done);
+            resolve();
+        };
+        track.addEventListener("load", done, { once: true });
+        track.addEventListener("error", done, { once: true });
+    });
+}
+
+/* Counterpart to attachSubtitleTrack above, used by removeSubtitleResult's "Off" row -
+   removes the live <track> and hides the overlay rather than leaving the last cue's
+   text stuck on screen with nothing left to clear it. */
+function detachSubtitleTrack(controller) {
+    if (!controller._videoEl) return;
+    controller._videoEl.querySelectorAll("track").forEach((t) => t.remove());
+    if (controller._subtitleTrackUrl) {
+        URL.revokeObjectURL(controller._subtitleTrackUrl);
+        controller._subtitleTrackUrl = null;
+    }
+    controller._subtitleOffsetMs = 0;
+    if (controller._subtitleOverlayEl) {
+        controller._subtitleOverlayEl.style.display = "none";
+        controller._subtitleOverlayEl.innerHTML = "";
+    }
 }
 
 /* Escapes everything first (this is untrusted third-party subtitle text), then

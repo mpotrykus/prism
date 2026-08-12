@@ -207,7 +207,7 @@ public class NativePlayerPlugin extends Plugin implements PlayerActivity.Playbac
 
     /* Takes the raw .srt TEXT, not a bare URL - PlayerActivity's Sync +/- control needs
        the original timestamps cached natively so every click can re-shift and rewrite a
-       local file without a JS round trip back to OpenSubtitles for each one. */
+       local file without a JS round trip back to Plex for each one. */
     @PluginMethod
     public void setSubtitle(PluginCall call) {
         String text = call.getString("text");
@@ -221,8 +221,25 @@ public class NativePlayerPlugin extends Plugin implements PlayerActivity.Playbac
         call.resolve();
     }
 
-    /* Counterpart to onSubtitleSearchRequested below - JS resolves the actual
-       OpenSubtitles search (opensubtitles.js's search(), shared with the web overlay)
+    /* JS restoring a remembered Sync offset (subtitle-store.js) right after a fresh
+       setSubtitle call above - same apply-then-restore sequence chrome.js's own
+       applyRememberedSubtitle uses on the web/Xbox leg. Absolute, not a delta - unlike
+       PlayerUiHelper's own Sync +/- buttons (which call PlayerActivity.
+       adjustSubtitleOffset directly, no bridge involved), JS already knows the exact
+       value it wants restored. */
+    @PluginMethod
+    public void setSubtitleOffset(PluginCall call) {
+        Long offsetMs = call.getLong("offsetMs");
+        if (offsetMs == null) {
+            call.reject("Missing required parameter: offsetMs");
+            return;
+        }
+        PlayerActivity.setSubtitleOffsetMs(offsetMs);
+        call.resolve();
+    }
+
+    /* Counterpart to onSubtitleSearchRequested below - JS resolves the actual Plex
+       subtitle search (plex-subtitles.js's search(), shared with the web overlay)
        and hands this pre-formatted JSON blob over to render, same "JS interprets the
        external protocol once, Java just renders it" split showEpisodeList/
        parsePlaybackParams already use. */
@@ -298,9 +315,9 @@ public class NativePlayerPlugin extends Plugin implements PlayerActivity.Playbac
         notifyListeners("episodeListRequested", new JSObject());
     }
 
-    /* PlayerUiHelper's Audio & Subtitles search button has no OpenSubtitles result of
+    /* PlayerUiHelper's Audio & Subtitles search button has no Plex subtitle result of
        its own to show yet when tapped - this reports the typed query back to JS, which
-       resolves the actual search (opensubtitles.js's search()) and calls
+       resolves the actual search (plex-subtitles.js's search()) and calls
        showSubtitleResults() above with the result. */
     @Override
     public void onSubtitleSearchRequested(String query) {
@@ -309,8 +326,8 @@ public class NativePlayerPlugin extends Plugin implements PlayerActivity.Playbac
         notifyListeners("subtitleSearchRequested", data);
     }
 
-    /* A subtitle result row tap - fileId is opaque to Java, JS resolves the real
-       download link (opensubtitles.js's resolveDownloadLink()) and calls setSubtitle
+    /* A subtitle result row tap - fileId is opaque to Java, JS resolves the actual
+       subtitle text from Plex (plex-subtitles.js's download()) and calls setSubtitle
        above, then notifySubtitleApplied/notifySubtitleApplyFailed with the outcome. */
     @Override
     public void onSubtitleSelectRequested(String fileId, String label, String languageCode) {
@@ -319,5 +336,26 @@ public class NativePlayerPlugin extends Plugin implements PlayerActivity.Playbac
         data.put("label", label);
         data.put("languageCode", languageCode);
         notifyListeners("subtitleSelectRequested", data);
+    }
+
+    /* The "Off" row (PlayerActivity.clearSubtitleTrack) applies fully natively with no
+       JS round trip needed for the apply itself, but JS still needs to hear about it -
+       it remembers the last-applied subtitle per title (subtitle-store.js) to
+       auto-reapply on the next play, and without this it would never learn the user
+       turned it back off, silently reapplying every time this title plays again. */
+    @Override
+    public void onSubtitleCleared() {
+        notifyListeners("subtitleCleared", new JSObject());
+    }
+
+    /* PlayerUiHelper's Sync +/- buttons (PlayerActivity.adjustSubtitleOffset) apply
+       fully natively too, same "notify JS afterward" reasoning as onSubtitleCleared
+       above - JS persists the offset per title (subtitle-store.js's
+       setAppliedOffsetMs) to restore on the next play (setSubtitleOffset above). */
+    @Override
+    public void onSubtitleOffsetChanged(long offsetMs) {
+        JSObject data = new JSObject();
+        data.put("offsetMs", offsetMs);
+        notifyListeners("subtitleOffsetChanged", data);
     }
 }

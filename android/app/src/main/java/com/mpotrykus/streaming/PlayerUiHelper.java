@@ -2392,8 +2392,8 @@ final class PlayerUiHelper {
         setControlsVisible(activity, false);
 
         /* Caps the WHOLE card, not just each column's own ScrollView - each column
-           already shrinks its ScrollView to content or a flat 40%-of-screen cap (see
-           buildAudioSubtitlesColumn), but that cap has no idea this method's own
+           already shrinks its ScrollView to content or its own near-full-screen cap
+           (see buildAudioSubtitlesColumn), but that cap has no idea this method's own
            closeRow/card padding sit above/around both columns too, so the combined
            total can still exceed a landscape screen's actual height even though each
            column's own cap was respected - confirmed against a real device: subtitle
@@ -2466,7 +2466,20 @@ final class PlayerUiHelper {
         body.setOrientation(LinearLayout.VERTICAL);
         body.setPadding(0, Math.round(16 * density), 0, 0);
 
-        int maxHeightPx = Math.round(activity.getResources().getDisplayMetrics().heightPixels * 0.4f);
+        /* A flat 40% of screen height used to cap this well short of what's actually
+           available (mirrors the same fix on the web leg's own buildAudioSubtitlesColumn
+           in chrome.js) - ~140dp covers this method's own card padding, closeRow, this
+           column's heading/divider, and body's own top padding, so the cap now
+           represents genuinely close to the full screen instead of an arbitrary 40%
+           slice of it. Short lists (Audio, most Subtitle searches) still shrink to their
+           own content (see the MeasureSpec override below) - this only changes the
+           ceiling for a long list that actually wants more room, which is exactly the
+           mobile case that felt cramped. The card.post() block below (94%-of-screen
+           safety net on the combined card) still exists for the same reason it always
+           did - it clamps the *total* sheet to the physical screen in landscape/short
+           viewports, independent of and unaffected by this per-column cap. */
+        int fixedChromePx = Math.round(140 * density);
+        int maxHeightPx = Math.max(0, activity.getResources().getDisplayMetrics().heightPixels - fixedChromePx);
         /* Capped via an onMeasure override (AT_MOST against maxHeightPx) rather than the
            previous post()-then-check-body.getHeight() approach - that read the body's
            height before this column's very first layout pass had run (scroll.post() is
@@ -2480,9 +2493,9 @@ final class PlayerUiHelper {
            (confirmed against a real device: the fix removes the need to drag at all). A
            MeasureSpec override has no such race - it's re-evaluated on every measure
            pass, including every refreshAudioSubtitlesMenu rebuild, and still shrinks to
-           content instead of always reserving 40% of the screen for a short list (e.g.
-           only two audio tracks), matching clampMenuCardHeight's own "shrink to content,
-           then cap" behavior for the More sheet's card. */
+           content instead of always reserving the full cap for a short list (e.g. only
+           two audio tracks), matching clampMenuCardHeight's own "shrink to content, then
+           cap" behavior for the More sheet's card. */
         ScrollView scroll = new ScrollView(activity) {
             @Override
             protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
