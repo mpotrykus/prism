@@ -237,6 +237,14 @@ export function buildRowSection(row, landscape, rowIndex, ctx) {
    row can in principle stop being part of the "true" desired set on a later pass (e.g.
    once AI rows compete for _getGenreRowsForView's capped shuffle) - it stays visible
    anyway rather than yanking already-seen content out from under the user. */
+/* Collections/Playlists are meant to always sit at the very bottom (see
+   _renderCurrentView), but the AI-rows background pass (data.js's loadBackgroundData)
+   re-renders with merge:true *after* they're already on screen and can introduce new
+   genre-row titles that weren't part of the first pass. Since merge never reorders
+   existing rows, an unpinned append would land those newer rows below Collections/
+   Playlists instead of above them - so they're tracked as a bottom anchor here. */
+const PINNED_BOTTOM_TITLES = new Set(["Collections", "Playlists"]);
+
 export function renderRows(rowsEl, rows, landscapeEveryNth, ctx, { merge = false } = {}) {
   if (!merge) {
     rowsEl.innerHTML = "";
@@ -253,6 +261,9 @@ export function renderRows(rowsEl, rows, landscapeEveryNth, ctx, { merge = false
   /* Keep the loading-more spinner (if any) pinned to the very end - inserting newly-
      merged rows ahead of it rather than appending after it. */
   const loadingMoreEl = merge ? rowsEl.querySelector(".rows-loading-more") : null;
+  const pinnedBottomEl = merge
+    ? Array.from(rowsEl.children).find((el) => PINNED_BOTTOM_TITLES.has(el.querySelector(".row-title")?.textContent))
+    : null;
   rows.forEach((row, i) => {
     if (existingTitles?.has(row.title)) return;
     /* rankNumbers rows are pinned to portrait mode - the rank-number's height is tuned
@@ -261,7 +272,8 @@ export function renderRows(rowsEl, rows, landscapeEveryNth, ctx, { merge = false
        posters and make the number overflow the row's padding. */
     const landscape = row.rankNumbers ? false : !!row.landscape || (!!landscapeEveryNth && (i + 1) % landscapeEveryNth === 0);
     const section = buildRowSection(row, landscape, i, ctx);
-    if (loadingMoreEl) rowsEl.insertBefore(section, loadingMoreEl);
+    if (pinnedBottomEl && !PINNED_BOTTOM_TITLES.has(row.title)) rowsEl.insertBefore(section, pinnedBottomEl);
+    else if (loadingMoreEl) rowsEl.insertBefore(section, loadingMoreEl);
     else rowsEl.appendChild(section);
   });
 }

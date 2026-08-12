@@ -190,6 +190,19 @@ export class TitleInfoController {
     this._watchedBtn.setAttribute("aria-label", watched ? "Mark as unwatched" : "Mark as watched");
   }
 
+  /* The optimistic paint in open() (Play/Restart/Watched labels and visibility) is only
+     a guess from the row/hero item's already-truncated fields - the real detail fetch can
+     flip Restart/Watched from hidden to shown or change Play's label between that paint
+     and _renderDetail landing, which read as the buttons being clickable in a state that's
+     about to change out from under the click. Disabling them for that window (rather than
+     just for the optimistic paint's own accuracy) removes the race entirely. */
+  _setButtonsLoading(loading) {
+    this._playBtn.disabled = loading;
+    this._restartBtn.disabled = loading;
+    this._watchedBtn.disabled = loading;
+    this._watchlistBtn.disabled = loading;
+  }
+
   /* Redirects an episode click to the parent show's info modal, landing on the season/
      episode it came from (via _pendingEpisodeFocus, consumed in _loadSeasons) instead
      of opening a dedicated single-episode modal. item.image/art already resolve to the
@@ -281,6 +294,7 @@ export class TitleInfoController {
        one. */
     if (!this.isOpen()) lockScroll();
     this._overlay.classList.add("open");
+    this._setButtonsLoading(true);
     /* Focusing the overlay shell itself (tabindex="-1", just so a click outside it can
        still blur out of whatever was focused before) would leave document.activeElement
        pointing at an element wireLinearNav's own selector never matches - every D-pad
@@ -299,7 +313,10 @@ export class TitleInfoController {
          that actually exists on this server. */
       item.ratingKey = ratingKey;
     }
-    if (!ratingKey) return;
+    if (!ratingKey) {
+      this._setButtonsLoading(false);
+      return;
+    }
     /* Playlists aren't part of library metadata (see the card's _fetchPlaylistsRaw) -
        their detail lives under /playlists/{ratingKey}, not /library/metadata/{ratingKey}
        like every other item type here. */
@@ -310,6 +327,8 @@ export class TitleInfoController {
       if (meta && this._item === item) this._renderDetail(meta);
     } catch (e) {
       // detail is best-effort - the poster/title painted above stays usable on failure
+    } finally {
+      if (this._item === item) this._setButtonsLoading(false);
     }
   }
 

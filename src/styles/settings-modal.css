@@ -67,6 +67,9 @@ input[type="text"], input[type="password"], input[type="number"], select {
   border: 1px solid rgba(255,255,255,0.15); background: rgba(255,255,255,0.06);
   color: #fff; font-size: 13px; outline: none;
 }
+select { color-scheme: dark; accent-color: #4a4a52; }
+select option { background: #1c1c20; color: #fff; }
+select option:checked { background: #3a3a40; }
 input:focus, select:focus { border-color: #e5a00d; }
 .btn {
   border: none; border-radius: 8px; padding: 9px 16px; font-size: 13px; font-weight: 700;

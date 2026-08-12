@@ -1162,6 +1162,7 @@ public class PlayerActivity extends AppCompatActivity {
         getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().putBoolean(PREF_UPSCALE_ENABLED, enabled).apply();
         shaderType = resolveShaderType();
         applyVideoEffects();
+        nudgeVideoPipelineAfterEffectsChange();
     }
 
     /* Same immediate-persistence model as setShaderEnabled above. Gated to
@@ -1174,6 +1175,7 @@ public class PlayerActivity extends AppCompatActivity {
         getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().putFloat(PREF_UPSCALE_STRENGTH, strength).apply();
         shaderType = resolveShaderType();
         applyVideoEffects();
+        nudgeVideoPipelineAfterEffectsChange();
     }
 
     /* Same immediate-persistence model as setShaderEnabled/setShaderStrength above - only
@@ -1187,6 +1189,7 @@ public class PlayerActivity extends AppCompatActivity {
         shaderType = resolveShaderType();
         updateContentAnalysis();
         applyVideoEffects();
+        nudgeVideoPipelineAfterEffectsChange();
     }
 
     /* Whether the shader actually renders as OFF can't just check upscaleStrength > 0f -
@@ -1210,12 +1213,14 @@ public class PlayerActivity extends AppCompatActivity {
         colorBoostEnabled = enabled;
         getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().putBoolean(PREF_COLOR_BOOST_ENABLED, enabled).apply();
         applyVideoEffects();
+        nudgeVideoPipelineAfterEffectsChange();
     }
 
     void setColorBoostStrength(float strength) {
         colorBoostStrength = strength;
         getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().putFloat(PREF_COLOR_BOOST_STRENGTH, strength).apply();
         applyVideoEffects();
+        nudgeVideoPipelineAfterEffectsChange();
     }
 
     /* Same immediate-persistence model as setColorBoostEnabled/setUpscaleAuto above. */
@@ -1224,6 +1229,22 @@ public class PlayerActivity extends AppCompatActivity {
         getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().putBoolean(PREF_COLOR_BOOST_AUTO, enabled).apply();
         updateContentAnalysis();
         applyVideoEffects();
+        nudgeVideoPipelineAfterEffectsChange();
+    }
+
+    /* Real-device gotcha: calling player.setVideoEffects() mid-playback (every one of the
+       Effects-panel setters above, via applyVideoEffects()) can leave ExoPlayer's video
+       renderer wedged - frames stop advancing and even toggling play/pause again doesn't
+       unstick it (see docs/plezy-player-comparison.md's own account of this). A same-
+       position seekTo forces ExoPlayer to flush and restart feeding the renderer, which
+       does unstick it, and since the position doesn't actually change it's a no-op for
+       anything already buffered. Deliberately NOT called from ContentAnalysisSampler's own
+       ~750ms Auto-mode tick (see onCreate's contentSampler listener) - that path already
+       calls applyVideoEffects() this often without tripping this on a real device, so
+       nudging there too would just add a seek every tick for no benefit. */
+    private void nudgeVideoPipelineAfterEffectsChange() {
+        if (player == null) return;
+        player.seekTo(player.getCurrentPosition());
     }
 
     /* "auto"/"on"/"off" - the three-way state PlayerUiHelper's mode row presents in place
