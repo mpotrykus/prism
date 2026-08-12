@@ -58,6 +58,16 @@ export async function fetchWatchlistRaw(card) {
        server-specific plex_token, so this scopes correctly per switched Home profile
        instead of always reflecting whichever profile originally signed in. */
     url.searchParams.set("X-Plex-Token", card._config.plex_account_token);
+    /* discover.provider.plex.tv defaults to a small page size (20) when
+       X-Plex-Container-Size is omitted, silently truncating the row - unlike every other
+       list endpoint in this file, this one doesn't skip the param "because it returns
+       everything already". Per Plex's own docs, Start and Size must both be sent together
+       to request paginated content. 100 is this endpoint's own hard cap (confirmed
+       empirically - 101+ returns HTTP 400 "Invalid value provided for
+       x-plex-container-size"), not an arbitrary choice - a genuinely 100+ item watchlist
+       would need real pagination (repeat with an incrementing Start) to go further. */
+    url.searchParams.set("X-Plex-Container-Start", 0);
+    url.searchParams.set("X-Plex-Container-Size", 100);
     const res = await fetch(url, { headers: { Accept: "application/json" } });
     if (!res.ok) return [];
     const data = await res.json();

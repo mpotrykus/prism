@@ -6,7 +6,7 @@ import { setShaderStrength, setColorBoostStrength, upscaleModeOf, setUpscaleMode
 import { setAmbientEnabled, setAmbientOpacity } from "../ambient-pipeline.js";
 import { reloadWebSource } from "../web-fallback.js";
 import { setAutoQualityEnabled } from "../core/abr.js";
-import { setNativePlaybackRate, setNativeSubtitle, setNativeSubtitleOffset } from "../native-bridge.js";
+import { setNativePlaybackRate, setNativeSubtitle, setNativeSubtitleOffset, notifyNativeSubtitleApplied } from "../native-bridge.js";
 import {
     CONTROLS_HIDE_DELAY_MS,
     PLAYBACK_RATES,
@@ -2497,12 +2497,18 @@ function adjustSubtitleOffset(controller, deltaMs) {
 
 /* Shared by applySubtitleResult below and applyRememberedSubtitle (called from
    plex-player.js at the start of every session) so the native-vs-web branch only lives
-   in one place. */
-async function attachDownloadedSubtitle(controller, text, languageCode, label) {
+   in one place. result is the raw search-result object (not the JSON-stringified form
+   PlayerUiHelper's list rows carry as fileId) - re-stringified here so the native side
+   learns which result this was, the same fileId shape PlayerActivity already gets from
+   subtitleSearchRequested's own results. Needed so PlayerActivity.currentSubtitleFileId
+   gets set on this path too, not just on a manual pick through
+   native-bridge.js's subtitleSelectRequested listener. */
+async function attachDownloadedSubtitle(controller, text, languageCode, result) {
     if (Capacitor.isNativePlatform() && Capacitor.getPlatform() === "android") {
         await setNativeSubtitle(text, languageCode, "application/x-subrip");
+        await notifyNativeSubtitleApplied(JSON.stringify(result), result.label);
     } else {
-        await attachSubtitleTrack(controller, text, languageCode, label);
+        await attachSubtitleTrack(controller, text, languageCode, result.label);
     }
 }
 
@@ -2519,7 +2525,7 @@ async function applySubtitleResult(controller, result, rowEl, collapse) {
     }
     try {
         const { text, languageCode } = await StreamingSubtitles.download(controller._session, result);
-        await attachDownloadedSubtitle(controller, text, languageCode, result.label);
+        await attachDownloadedSubtitle(controller, text, languageCode, result);
         /* Remembered per-title (ratingKey), not per-session - see subtitle-store.js.
            plex-player.js's applyRememberedSubtitle re-reads this at the start of the
            next session for the same title, so this same result (served from the cache
@@ -2547,7 +2553,7 @@ export async function applyRememberedSubtitle(controller) {
     if (!remembered) return;
     try {
         const { text, languageCode } = await StreamingSubtitles.download(controller._session, remembered);
-        await attachDownloadedSubtitle(controller, text, languageCode, remembered.label);
+        await attachDownloadedSubtitle(controller, text, languageCode, remembered);
         /* A fresh apply resets the offset to 0 on both legs (attachSubtitleTrack's own
            reset on web; PlayerActivity.applySubtitle's on native) - this restores
            whatever the user last synced to, only bothering the native bridge when

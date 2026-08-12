@@ -2574,6 +2574,32 @@ final class PlayerUiHelper {
         return (ms > 0 ? "+" : "") + ms + "ms";
     }
 
+    /* Matches chrome.js's buildSubtitleOffButton - a standalone bordered button next to
+       the Sync row, not a "checked" row mixed in with search results, since unlike a
+       real result "Off" isn't a choice you search for. Only shown once a subtitle is
+       actually attached (see renderSubtitlesColumn's caller), same condition as the
+       Sync row above it - there's nothing to turn off otherwise. */
+    private static TextView buildSubtitleOffButton(PlayerActivity activity, float density) {
+        TextView btn = new TextView(activity);
+        btn.setText("Off");
+        btn.setTextColor(Color.WHITE);
+        btn.setTextSize(13);
+        btn.setTypeface(btn.getTypeface(), android.graphics.Typeface.BOLD);
+        btn.setGravity(Gravity.CENTER);
+        GradientDrawable bg = new GradientDrawable();
+        bg.setColor(Color.argb(20, 255, 255, 255));
+        bg.setStroke(1, Color.argb(51, 255, 255, 255));
+        bg.setCornerRadius(8 * density);
+        btn.setBackground(bg);
+        int padV = Math.round(9 * density);
+        btn.setPadding(0, padV, 0, padV);
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        params.bottomMargin = Math.round(10 * density);
+        btn.setLayoutParams(params);
+        btn.setOnClickListener(v -> activity.clearSubtitleTrack());
+        return btn;
+    }
+
     /* Subtitles column content - search box (defaults to this title, matching
        chrome.js's renderSubtitleSection) plus an "Off" row and whatever
        activity.subtitleResults holds. Fully re-derived from activity's own fields each
@@ -2624,19 +2650,35 @@ final class PlayerUiHelper {
         });
         body.addView(searchBtn);
 
-        /* Only shown once a subtitle is actually attached - offsetting a track that
-           doesn't exist yet has nothing to act on, same condition chrome.js's own
+        /* Matches chrome.js's renderSubtitleSection ("if (input.value) runSearch()") -
+           auto-runs a default search (this title) the first time this column renders
+           for the session, so a search result is already there to check against
+           currentSubtitleFileId instead of requiring an explicit "Search" tap first.
+           Guarded on subtitleSearchQueryText/subtitleSearchStatus still being at their
+           session-start "idle" defaults (see applyTitleSwitch) rather than a separate
+           one-shot flag - that's the same state a completed or in-flight search already
+           moves away from, so this can't re-trigger on every refreshAudioSubtitlesMenu
+           rebuild once the real search is underway or done. Status is set to
+           "searching" before the picker rows/status text below get built, so this same
+           render already shows "Searching..." without a nested refresh call. */
+        if (activity.subtitleSearchQueryText == null && "idle".equals(activity.subtitleSearchStatus)
+                && !defaultQuery.isEmpty()) {
+            activity.subtitleSearchQueryText = defaultQuery;
+            activity.subtitleSearchStatus = "searching";
+            PlayerActivity.requestSubtitleSearch(defaultQuery);
+        }
+
+        /* Only shown once a subtitle is actually attached - offsetting/removing a track
+           that doesn't exist yet has nothing to act on, same condition chrome.js's own
            renderSubtitleSection uses on the web leg. Rebuilt fresh on every render (this
            whole method already fully re-derives body's content each call) rather than
            kept in sync some other way. */
         if (activity.currentSubtitleFileId != null) {
             body.addView(buildSubtitleOffsetRow(activity, density));
+            body.addView(buildSubtitleOffButton(activity, density));
         }
 
         List<PickerItem> items = new ArrayList<>();
-        items.add(new PickerItem("Off" + (activity.currentSubtitleFileId == null ? "  ✓" : ""), () -> {
-            activity.clearSubtitleTrack();
-        }));
         for (SubtitleResultEntry entry : activity.subtitleResults) {
             boolean isCurrent = entry.fileId.equals(activity.currentSubtitleFileId);
             boolean isPending = entry.fileId.equals(activity.subtitlePendingFileId);

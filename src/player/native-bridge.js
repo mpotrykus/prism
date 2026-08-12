@@ -272,6 +272,15 @@ export async function setNativeSubtitle(text, languageCode, mimeType) {
     await NativePlayer.setSubtitle({ text, languageCode, mimeType });
 }
 
+/* Same notifySubtitleApplied call the subtitleSelectRequested listener above makes
+   after a manual pick - chrome.js's applyRememberedSubtitle needs this too so
+   PlayerActivity.currentSubtitleFileId gets set on session-start auto-reapply, not
+   just on a manual selection. Without it, the "Off" row shows falsely checked and the
+   real result never checkmarks even once a fresh search surfaces it again. */
+export async function notifyNativeSubtitleApplied(fileId, label) {
+    await NativePlayer.notifySubtitleApplied({ fileId, label });
+}
+
 /* Absolute, not a delta - used by chrome.js's applyRememberedSubtitle to restore a
    Sync offset right after a fresh setNativeSubtitle call above, same
    apply-then-restore sequence the web/Xbox leg uses. PlayerUiHelper's own Sync +/-

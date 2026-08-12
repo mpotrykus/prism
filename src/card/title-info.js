@@ -91,9 +91,17 @@ function hasAnyHistory(meta) {
   if (meta.type === "show" || meta.type === "season") return (meta.viewedLeafCount || 0) > 0;
   return (meta.viewOffset || 0) > 0 || (meta.viewCount || 0) > 0;
 }
+/* "Has an actual mid-title resume position" - distinct from hasAnyHistory above, which
+   also goes true once something is fully watched (viewCount > 0, viewOffset back at 0).
+   Restart only makes sense when there's real progress to discard by starting over; a
+   show/season container has no viewOffset of its own to resume from at all. */
+function hasProgress(meta) {
+  if (meta.type === "show" || meta.type === "season") return false;
+  return (meta.viewOffset || 0) > 0;
+}
 
 /* The title-info detail overlay: cast/seasons-episodes/collection-playlist items/
-   similar titles, plus the Play/Restart/mark-unwatched/watchlist actions. Version and
+   similar titles, plus the Play/Restart/watched-toggle/watchlist actions. Version and
    quality-cap selection used to live in a picker nested inside this modal - that's now
    an in-player "Video Quality" menu (see chrome.js's openVideoQualityMenu) fed by this
    item's Media[] list, since it changes what's actually decoded, not what gets
@@ -116,7 +124,7 @@ export class TitleInfoController {
     this._metaEl = shadowRoot.querySelector(".title-info-meta");
     this._playBtn = shadowRoot.querySelector(".title-info-play");
     this._restartBtn = shadowRoot.querySelector(".title-info-restart-btn");
-    this._unwatchBtn = shadowRoot.querySelector(".title-info-unwatch-btn");
+    this._watchedBtn = shadowRoot.querySelector(".title-info-watched-btn");
     this._watchlistBtn = shadowRoot.querySelector(".title-info-watchlist-btn");
     this._summaryEl = shadowRoot.querySelector(".title-info-summary");
     this._episodesEl = shadowRoot.querySelector(".title-info-episodes");
@@ -130,6 +138,7 @@ export class TitleInfoController {
     this._duration = null;
     this._viewOffset = 0;
     this._viewCount = 0;
+    this._watched = false;
     this._markers = [];
     this._chapters = [];
     this._media = [];
@@ -156,16 +165,29 @@ export class TitleInfoController {
     this._item = null;
   }
 
-  /* Play/Resume + the Restart/mark-unwatched pair share one on/off switch - "has this
-     been started or finished before" - rather than three separately-derived booleans
-     that could drift out of sync with each other. resumeEpisode ({season, episode}) is
-     only known when this modal stands in for a specific episode (see openForEpisode) -
-     a show opened directly has no single episode to name, so it keeps the plain label. */
-  _updatePlayHistoryUI(hasHistory, resumeEpisode = null) {
+  /* hasHistory (Play vs Resume label) and hasProgress (Restart's own visibility) are
+     related but not the same thing - hasHistory also goes true once a title is fully
+     watched with no resume offset left, where Restart wouldn't do anything meaningful
+     (there's nothing to discard by "starting over"; Play already starts from zero).
+     Defaults hasProgress to hasHistory only so a caller that hasn't been taught the
+     distinction yet (there shouldn't be any) fails toward the old behavior rather than
+     silently hiding Restart. resumeEpisode ({season, episode}) is only known when this
+     modal stands in for a specific episode (see openForEpisode) - a show opened directly
+     has no single episode to name, so it keeps the plain label. */
+  _updatePlayHistoryUI(hasHistory, resumeEpisode = null, hasProgress = hasHistory) {
     const resumeLabel = resumeEpisode ? `▶ Resume S${resumeEpisode.season} E${resumeEpisode.episode}` : "▶ Resume";
     this._playBtn.textContent = hasHistory ? resumeLabel : "▶ Play";
-    this._restartBtn.hidden = !hasHistory;
-    this._unwatchBtn.hidden = !hasHistory;
+    this._restartBtn.hidden = !hasProgress;
+  }
+
+  /* The watched toggle's label/state is driven only by Plex's own watched flag
+     (isFullyWatched - viewCount/viewedLeafCount), never by progress/hasHistory - a
+     title that's merely in-progress isn't "watched" and shouldn't render as if a click
+     would unwatch it. */
+  _updateWatchedUI(watched) {
+    this._watched = watched;
+    this._watchedBtn.classList.toggle("watched", watched);
+    this._watchedBtn.setAttribute("aria-label", watched ? "Mark as unwatched" : "Mark as watched");
   }
 
   /* Redirects an episode click to the parent show's info modal, landing on the season/
@@ -195,7 +217,12 @@ export class TitleInfoController {
          comment) - use the resumed episode's own progress/hasHistory, already known from
          the click that led here, instead. */
       const resumeEpisode = item.seasonNumber != null && item.episodeNumber != null ? { season: item.seasonNumber, episode: item.episodeNumber } : null;
-      this._updatePlayHistoryUI(!!(item.progress > 0 || item.hasHistory), resumeEpisode);
+      this._updatePlayHistoryUI(!!(item.progress > 0 || item.hasHistory), resumeEpisode, !!(item.progress > 0));
+      /* _renderDetail (already run inside the open() call above) just painted the
+         watched button from the show's own overall status - override with the specific
+         resumed episode's own watched flag, since that's the ratingKey the button
+         actually targets once _resumeEpisodeKey is set. */
+      if (!this._watchedBtn.hidden) this._updateWatchedUI(!!item.watched);
     }
   }
 
@@ -224,7 +251,7 @@ export class TitleInfoController {
     this._flatItems = null;
     this._progressEl.hidden = !(item.progress > 0);
     this._progressBar.style.width = `${Math.round((item.progress || 0) * 100)}%`;
-    this._updatePlayHistoryUI(!!(item.progress > 0 || item.hasHistory));
+    this._updatePlayHistoryUI(!!(item.progress > 0 || item.hasHistory), null, !!(item.progress > 0));
     const art = item.art || item.image || "";
     this._artEl.style.backgroundImage = art ? `url('${art}')` : "none";
     this._modal.style.setProperty("--title-info-bg", art ? `url('${art}')` : "none");
@@ -241,6 +268,13 @@ export class TitleInfoController {
     if (canWatchlist) {
       paintWatchlistButton(this._watchlistBtn, this._ctx.isInWatchlist(item));
     }
+    /* Collections/playlists are containers, not a single watchable item on this
+       server - same reasoning as the watchlist gating above, just a different type set
+       (a collection/playlist can still be added to My List, but has no watched state of
+       its own to scrobble). */
+    const canToggleWatched = item.type !== "collection" && item.type !== "playlist";
+    this._watchedBtn.hidden = !canToggleWatched;
+    if (canToggleWatched) this._updateWatchedUI(!!item.watched);
     /* Re-opening for a different item (e.g. clicking a "More Like This" card) while
        already open must not lock scroll a second time - only the matching close() call
        unlocks it once, so a second lock here would leave the counter permanently off by
@@ -286,7 +320,8 @@ export class TitleInfoController {
     this._markers = meta.Marker || [];
     this._chapters = meta.Chapter || [];
     this._media = meta.Media || [];
-    this._updatePlayHistoryUI(hasAnyHistory(meta));
+    this._updatePlayHistoryUI(hasAnyHistory(meta), null, hasProgress(meta));
+    if (!this._watchedBtn.hidden) this._updateWatchedUI(isFullyWatched(meta));
     /* Refines the possibly-truncated Genre list mapItem saw at row-click time (Plex list
        endpoints cap it to ~2 tags) with this fetch's full, untruncated list, so shader
        auto-detection (plex-player.js's detectShaderType) sees every genre tag, not just
@@ -642,9 +677,9 @@ export class TitleInfoController {
   async _markUnwatched() {
     const item = this._item;
     const ratingKey = this._resumeEpisodeKey || item?.ratingKey;
-    if (!ratingKey || this._unwatchBtn.dataset.busy) return;
-    this._unwatchBtn.dataset.busy = "1";
-    this._unwatchBtn.classList.add("busy");
+    if (!ratingKey || this._watchedBtn.dataset.busy) return;
+    this._watchedBtn.dataset.busy = "1";
+    this._watchedBtn.classList.add("busy");
     try {
       await this._ctx.plexFetch("/:/unscrobble", { key: ratingKey, identifier: "com.plexapp.plugins.library" });
       this._viewOffset = 0;
@@ -652,6 +687,7 @@ export class TitleInfoController {
       this._progressEl.hidden = true;
       this._progressBar.style.width = "0%";
       this._updatePlayHistoryUI(false);
+      this._updateWatchedUI(false);
       /* Clearing history here can drop this item out of Continue Watching, and - when
          this modal stands in for a resumed episode - can flip its show's own poster
          badge from "Watched" back off (unwatching any one episode makes "every episode
@@ -661,11 +697,50 @@ export class TitleInfoController {
          reaching into card state. */
       this._ctx.onPlayHistoryMutated?.(item?.ratingKey, false);
     } catch (e) {
-      this._unwatchBtn.classList.add("error");
-      setTimeout(() => this._unwatchBtn.classList.remove("error"), 1500);
+      this._watchedBtn.classList.add("error");
+      setTimeout(() => this._watchedBtn.classList.remove("error"), 1500);
     } finally {
-      this._unwatchBtn.classList.remove("busy");
-      delete this._unwatchBtn.dataset.busy;
+      this._watchedBtn.classList.remove("busy");
+      delete this._watchedBtn.dataset.busy;
+    }
+  }
+
+  /* Plex's own "mark watched" action (/:/scrobble) - the mirror image of
+     _markUnwatched above, same endpoint shape and same resumed-episode ratingKey
+     targeting. Unlike unwatching (which always makes "the whole show watched" false),
+     watching one more episode might or might not newly complete the whole show - so the
+     show's own poster badge needs a real refetch of the show's viewedLeafCount/leafCount
+     rather than assuming true, same as _refreshAfterPlayback does. */
+  async _markWatched() {
+    const item = this._item;
+    const showRatingKey = this._resumeEpisodeKey ? item?.ratingKey : null;
+    const ratingKey = this._resumeEpisodeKey || item?.ratingKey;
+    if (!ratingKey || this._watchedBtn.dataset.busy) return;
+    this._watchedBtn.dataset.busy = "1";
+    this._watchedBtn.classList.add("busy");
+    try {
+      await this._ctx.plexFetch("/:/scrobble", { key: ratingKey, identifier: "com.plexapp.plugins.library" });
+      this._viewOffset = 0;
+      this._progressEl.hidden = true;
+      this._progressBar.style.width = "0%";
+      /* Scrobbling clears the resume offset (this._viewOffset above) - Restart has
+         nothing left to discard, so hasProgress is explicitly false here even though
+         hasHistory is true (see hasProgress's own comment for why those differ). */
+      this._updatePlayHistoryUI(true, null, false);
+      this._updateWatchedUI(true);
+      if (showRatingKey) {
+        const showData = await this._ctx.plexFetch(`/library/metadata/${showRatingKey}`);
+        const showMeta = showData?.MediaContainer?.Metadata?.[0];
+        this._ctx.onPlayHistoryMutated?.(showRatingKey, showMeta ? isFullyWatched(showMeta) : true);
+      } else {
+        this._ctx.onPlayHistoryMutated?.(item?.ratingKey, true);
+      }
+    } catch (e) {
+      this._watchedBtn.classList.add("error");
+      setTimeout(() => this._watchedBtn.classList.remove("error"), 1500);
+    } finally {
+      this._watchedBtn.classList.remove("busy");
+      delete this._watchedBtn.dataset.busy;
     }
   }
 
@@ -690,7 +765,10 @@ export class TitleInfoController {
       this._progressEl.hidden = progress <= 0;
       this._progressBar.style.width = `${Math.round(progress * 100)}%`;
       const resumeEpisode = this._resumeEpisodeKey && meta.parentIndex != null && meta.index != null ? { season: meta.parentIndex, episode: meta.index } : null;
-      this._updatePlayHistoryUI(hasAnyHistory(meta), resumeEpisode);
+      this._updatePlayHistoryUI(hasAnyHistory(meta), resumeEpisode, hasProgress(meta));
+      /* The watched button targets this same ratingKey (see _markWatched/_markUnwatched),
+         so this same meta fetch is exactly the right source for its state too. */
+      if (!this._watchedBtn.hidden) this._updateWatchedUI(isFullyWatched(meta));
       /* A poster's "Watched" badge belongs to the container shown in rows (a show's own
          poster), not to the leaf episode ratingKey just fetched above - watching more of
          one episode can newly complete the whole show, which needs the show's own
@@ -715,7 +793,7 @@ export class TitleInfoController {
     });
     this._nav = wireLinearNav(
       this._shadowRoot,
-      ".title-info-close, .title-info-play, .title-info-restart-btn, .title-info-unwatch-btn, .title-info-watchlist-btn, .title-info-season-select, .title-info-episode, .title-info-similar-item",
+      ".title-info-close, .title-info-play, .title-info-restart-btn, .title-info-watched-btn, .title-info-watchlist-btn, .title-info-season-select, .title-info-episode, .title-info-similar-item",
       { orientation: "vertical", onBack: () => this.close() }
     );
     this._watchlistBtn.addEventListener("click", (e) => {
@@ -736,9 +814,10 @@ export class TitleInfoController {
     });
     this._playBtn.addEventListener("click", () => this._playCurrentItem());
     this._restartBtn.addEventListener("click", () => this._playCurrentItem({ restart: true }));
-    this._unwatchBtn.addEventListener("click", (e) => {
+    this._watchedBtn.addEventListener("click", (e) => {
       e.stopPropagation();
-      this._markUnwatched();
+      if (this._watched) this._markUnwatched();
+      else this._markWatched();
     });
   }
 }
