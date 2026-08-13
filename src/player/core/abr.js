@@ -34,6 +34,20 @@ function currentRungIndex(qualityCapKbps) {
     return index === -1 ? 0 : index;
 }
 
+/* On a confirmed shortfall, jump straight to the best rung the current bandwidth actually
+   supports instead of dropping one rung at a time and re-running the confirm streak against
+   each intermediate rung in turn - a connection that craters from Original to 360p-worthy
+   used to take several DOWNGRADE_CONFIRM_TICKS-gated switches to get there. Falls through to
+   the floor if bandwidth doesn't clear even that. */
+function bestDowngradeTarget(currentIndex, bandwidthKbps) {
+    for (let i = currentIndex + 1; i < QUALITY_CAP_PRESETS.length - 1; i++) {
+        if (bandwidthKbps >= rungKbps(QUALITY_CAP_PRESETS[i]) * STEP_DOWN_THRESHOLD_MULTIPLIER) {
+            return i;
+        }
+    }
+    return QUALITY_CAP_PRESETS.length - 1;
+}
+
 /* Pure decision function, kept separate from the stateful tick loop below so
    abr.test.js can exercise every threshold directly. Index 0 is the ceiling (Original),
    the last index is the floor (360p) - stepping "up" in quality means a LOWER index. */
@@ -45,7 +59,8 @@ export function decideAbrAction({ currentIndex, bandwidthKbps, downgradeStreak, 
     if (bandwidthKbps < currentKbps * STEP_DOWN_THRESHOLD_MULTIPLIER) {
         const nextDowngradeStreak = downgradeStreak + 1;
         if (!atFloor && nextDowngradeStreak >= DOWNGRADE_CONFIRM_TICKS) {
-            return { action: "down", nextIndex: currentIndex + 1, downgradeStreak: 0, stableStreak: 0 };
+            const nextIndex = bestDowngradeTarget(currentIndex, bandwidthKbps);
+            return { action: "down", nextIndex, downgradeStreak: 0, stableStreak: 0 };
         }
         return { action: "none", nextIndex: currentIndex, downgradeStreak: nextDowngradeStreak, stableStreak: 0 };
     }

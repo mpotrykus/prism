@@ -28,6 +28,28 @@ describe("decideAbrAction", () => {
         expect(result.downgradeStreak).toBe(0);
     });
 
+    it("jumps straight to the best-fitting rung instead of stepping down one at a time", () => {
+        const result = decideAbrAction({
+            currentIndex: 0,
+            bandwidthKbps: 5000,
+            downgradeStreak: DOWNGRADE_CONFIRM_TICKS - 1,
+            stableStreak: 0,
+        });
+        expect(result.action).toBe("down");
+        expect(result.nextIndex).toBe(3);
+    });
+
+    it("jumps straight to the floor when bandwidth doesn't clear any rung", () => {
+        const result = decideAbrAction({
+            currentIndex: 0,
+            bandwidthKbps: 100,
+            downgradeStreak: DOWNGRADE_CONFIRM_TICKS - 1,
+            stableStreak: 0,
+        });
+        expect(result.action).toBe("down");
+        expect(result.nextIndex).toBe(4);
+    });
+
     it("never steps down past the floor rung", () => {
         const result = decideAbrAction({
             currentIndex: 4,

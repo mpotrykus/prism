@@ -114,7 +114,7 @@ final class QualityAbrMonitor {
             downgradeStreak++;
             stableStreak = 0;
             if (!atFloor && downgradeStreak >= DOWNGRADE_CONFIRM_TICKS) {
-                switchToRung(currentIndex + 1);
+                switchToRung(bestDowngradeTarget(currentIndex, smoothedBandwidthKbps));
             }
             return;
         }
@@ -153,6 +153,19 @@ final class QualityAbrMonitor {
 
     private static float rungKbps(PlayerUiHelper.QualityCapPreset preset) {
         return preset.kbps != null ? preset.kbps : ORIGINAL_PROXY_KBPS;
+    }
+
+    /* Mirrors core/abr.js's bestDowngradeTarget - on a confirmed shortfall, jump straight to
+       the best rung the current bandwidth actually supports instead of dropping one rung at
+       a time and re-running the confirm streak against each intermediate rung in turn. */
+    private static int bestDowngradeTarget(int currentIndex, float bandwidthKbps) {
+        PlayerUiHelper.QualityCapPreset[] presets = PlayerUiHelper.QUALITY_CAP_PRESETS;
+        for (int i = currentIndex + 1; i < presets.length - 1; i++) {
+            if (bandwidthKbps >= rungKbps(presets[i]) * STEP_DOWN_THRESHOLD_MULTIPLIER) {
+                return i;
+            }
+        }
+        return presets.length - 1;
     }
 
     private boolean withinCooldown() {
