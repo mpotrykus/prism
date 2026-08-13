@@ -1,7 +1,11 @@
-/* Builds the Plex universal-transcode HLS start URL. clientIdentifier and platform are
-   passed in already-resolved rather than read from localStorage/Capacitor here, so this
-   stays a pure function of its inputs. */
-export function buildStreamUrl({
+/* Shared query-param builder behind buildStreamUrl and buildDecisionUrl below - both
+   endpoints need the exact same params to get a consistent answer out of Plex's Media
+   Decision Engine (confirmed empirically: a /decision call with a DIFFERENT param set
+   than the /start call that follows it doesn't reliably predict what /start actually
+   does), so there is deliberately one place these are built, not two copies drifting
+   apart. clientIdentifier and platform are passed in already-resolved rather than read
+   from localStorage/Capacitor here, so this stays a pure function of its inputs. */
+function buildTranscodeUrl(endpoint, {
   plexUrl,
   plexToken,
   key,
@@ -14,7 +18,7 @@ export function buildStreamUrl({
   clientIdentifier,
   platform,
 }) {
-  const url = new URL(`${plexUrl}/video/:/transcode/universal/start.m3u8`);
+  const url = new URL(`${plexUrl}${endpoint}`);
   url.searchParams.set("path", key);
   url.searchParams.set("mediaIndex", String(mediaIndex));
   url.searchParams.set("partIndex", String(partIndex));
@@ -31,6 +35,18 @@ export function buildStreamUrl({
      /library/parts/... URL, not implemented here yet. */
   url.searchParams.set("directPlay", "0");
   url.searchParams.set("directStream", "1");
+  /* Without this, Plex bakes only the single audioStreamID below into the transcode at
+     session start, so switching tracks means restarting the whole HLS session with a
+     new one - the exact restart Plex's own transcode-session cache kept serving stale
+     (see the stopOldSession gotcha in web-fallback.js's reloadWebSource and
+     PlayerActivity.switchAudioStream). Plezy (github.com/edde746/plezy) sends this same
+     flag unconditionally and never restarts a session for an audio switch at all - with
+     it set, Plex remuxes (not re-encodes) EVERY embedded audio track into the running
+     HLS session's segments as its own EXT-X-MEDIA rendition, so every track is already
+     present in the one session and a switch is a local player-side track selection
+     (hls.js's audioTrack setter, ExoPlayer's TrackSelectionParameters) instead of a new
+     request. audioStreamID below still matters as the session's initial/default track. */
+  url.searchParams.set("directStreamAudio", "1");
   url.searchParams.set("subtitleSize", "100");
   /* Prism never wants Plex's own transcode session touching subtitles - they're
      fetched (plex-subtitles.js) and rendered entirely client-side (chrome.js's
@@ -70,4 +86,24 @@ export function buildStreamUrl({
   );
   url.searchParams.set("X-Plex-Token", plexToken);
   return url.toString();
+}
+
+export function buildStreamUrl(opts) {
+  return buildTranscodeUrl("/video/:/transcode/universal/start.m3u8", opts);
+}
+
+/* Every real Plex client (Plex Web, Plezy, etc.) calls /video/:/transcode/universal/
+   decision before /start on a fresh audioStreamID/mediaIndex/qualityCapKbps choice -
+   Prism skipped straight to /start alone. Confirmed empirically against a real server
+   (raspi-server) that this is not just protocol politeness: re-requesting /start alone
+   with a new audioStreamID - even from a brand-new session id, even after explicitly
+   stopping the old session and marking the new stream "selected" via the Part PUT -
+   kept transcoding the PREVIOUS audio selection. Issuing a /decision call with the
+   exact same params first (see buildTranscodeUrl's own comment on why the two share one
+   param builder) is what makes the Media Decision Engine actually re-evaluate; the
+   /start call right after it then honors the new selection immediately. Callers should
+   fire-and-await this (best-effort - a failed decision call shouldn't block the /start
+   attempt that follows) before rebuilding the stream on any reload. */
+export function buildDecisionUrl(opts) {
+  return buildTranscodeUrl("/video/:/transcode/universal/decision", opts);
 }

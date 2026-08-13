@@ -25,7 +25,7 @@ import { Capacitor } from "@capacitor/core";
 import { registerNavHandler } from "./focus-nav.js";
 import { lockScroll, unlockScroll } from "./scroll-lock.js";
 import { detectShaderType } from "./src/player/shader/shaders.js";
-import { buildStreamUrl } from "./src/player/core/stream-url.js";
+import { buildStreamUrl, buildDecisionUrl } from "./src/player/core/stream-url.js";
 import { playNative, switchNative, stopNative, pauseNative, resumeNative } from "./src/player/native-bridge.js";
 import { playWeb, attachSource, reloadWebSource, teardownWeb } from "./src/player/web-fallback.js";
 import { setShaderStrength, setColorBoostStrength, updateShaderPipeline, ensureShaderPipeline, stopShaderLoop } from "./src/player/shader-pipeline.js";
@@ -66,6 +66,9 @@ import {
 } from "./src/player/ui/chrome.js";
 import { openEpisodeListOverlay, closeEpisodeListOverlay } from "./src/player/ui/episode-list.js";
 
+/* native-bridge.js keeps its own local copy of this value (NATIVE_TIMELINE_PING_MS) for
+   its "progress"-listener piggyback ping rather than importing it from here - see that
+   file's own comment for why a circular import back into this module isn't safe here. */
 const TIMELINE_PING_MS = 10000;
 const CLIENT_ID_KEY = "prism_plex_client_identifier";
 
@@ -85,6 +88,10 @@ class StreamingPlayerController {
         this._hls = null;
         this._nativeListenerHandles = [];
         this._pingTimer = null;
+        /* Piggybacked timeline-ping throttle for native playback - see
+           native-bridge.js's "progress" listener for why this exists alongside
+           _pingTimer's own setInterval instead of replacing it. */
+        this._lastNativeTimelinePingAt = 0;
         this._sleepTimer = null;
         this._pushedHistoryState = false;
         this._zoomIndex = 0;
@@ -209,6 +216,11 @@ class StreamingPlayerController {
         const { streamUrl, startOffsetMs } = this._prepareSession(item);
         await this._switchNative(streamUrl, startOffsetMs);
         this._reportTimeline("playing");
+        /* See native-bridge.js's "progress" listener for why native playback can't rely
+           on _pingTimer's own setInterval below - this just avoids that listener's
+           throttled piggyback ping firing again immediately for the same "playing"
+           report this line already just sent. */
+        this._lastNativeTimelinePingAt = Date.now();
         this._pingTimer = setInterval(() => this._reportTimeline(this._session?.state || "playing"), TIMELINE_PING_MS);
     }
 
@@ -228,6 +240,11 @@ class StreamingPlayerController {
             applyRememberedSubtitle(this);
         }
         this._reportTimeline("playing");
+        /* See native-bridge.js's "progress" listener for why native playback can't rely
+           on _pingTimer's own setInterval below - this just avoids that listener's
+           throttled piggyback ping firing again immediately for the same "playing"
+           report this line already just sent. */
+        this._lastNativeTimelinePingAt = Date.now();
         this._pingTimer = setInterval(() => this._reportTimeline(this._session?.state || "playing"), TIMELINE_PING_MS);
     }
 
@@ -403,6 +420,18 @@ class StreamingPlayerController {
 
     _buildStreamUrl(opts) {
         return buildStreamUrl({
+            ...opts,
+            clientIdentifier: clientIdentifier(),
+            platform: Capacitor.isNativePlatform() ? "Android" : "Chrome",
+        });
+    }
+
+    /* Same opts shape as _buildStreamUrl above (deliberately - see buildDecisionUrl's
+       own comment on why /decision and /start need identical params to agree). Used by
+       web-fallback.js's reloadWebSource right before it rebuilds the stream on an audio/
+       version/quality-cap switch. */
+    _buildDecisionUrl(opts) {
+        return buildDecisionUrl({
             ...opts,
             clientIdentifier: clientIdentifier(),
             platform: Capacitor.isNativePlatform() ? "Android" : "Chrome",

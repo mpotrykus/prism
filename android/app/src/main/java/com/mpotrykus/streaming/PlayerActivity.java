@@ -34,6 +34,8 @@ import androidx.media3.common.MediaItem;
 import androidx.media3.common.PlaybackException;
 import androidx.media3.common.PlaybackParameters;
 import androidx.media3.common.Player;
+import androidx.media3.common.TrackGroup;
+import androidx.media3.common.TrackSelectionOverride;
 import androidx.media3.common.Tracks;
 import androidx.media3.common.VideoSize;
 import androidx.media3.common.util.UnstableApi;
@@ -47,6 +49,7 @@ import androidx.media3.exoplayer.source.LoadEventInfo;
 import androidx.media3.exoplayer.source.MediaLoadData;
 import androidx.media3.ui.AspectRatioFrameLayout;
 import androidx.media3.ui.PlayerView;
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -109,6 +112,11 @@ public class PlayerActivity extends AppCompatActivity {
     public static final String EXTRA_QUEUE_INDEX = "queueIndex";
 
     private static final long PROGRESS_INTERVAL_MS = 1000L;
+    /* Matches plex-player.js's own TIMELINE_PING_MS cadence - kept as a separate literal
+       here rather than shared, same "no cross-platform protocol constant" shape as every
+       other Plex URL param this file already builds independently of the JS leg. */
+    private static final long NATIVE_TIMELINE_PING_MS = 10000L;
+    private long lastNativeTimelinePingAt = 0L;
     static final long CONTROLS_HIDE_DELAY_MS = 4000L;
     /* How long the overlay's "Long-press to unlock" message stays up after a tap while
        touch is locked - see setTouchLocked/showLockMessage. */
@@ -255,6 +263,38 @@ public class PlayerActivity extends AppCompatActivity {
     private boolean loggedFirstAmbientLayout = false;
     private ContentAnalysisSampler contentSampler;
     int sleepMinutes = 0;
+    /* Bumped by every switchAudioStreamViaRestart/switchMediaVersion/switchQualityCap
+       call, captured by each call's own async decision-then-apply pipeline before it
+       does any network work - confirmed via a real device's logcat that these can
+       genuinely race: the ABR monitor's own autonomous switchQualityCap can fire while
+       a manual audio switch's decision request is still in flight, and since both are
+       now async (see askDecision's own header comment for why they have to be), whichever
+       one's apply() Runnable reaches the main thread LAST used to win regardless of which
+       one was actually requested most recently - observed as two /start.m3u8 requests
+       firing 34ms apart for what should have been a single switch, and a manual switch
+       to Japanese silently reverting back to English because a slightly-earlier,
+       slower-to-resolve ABR quality reload (which always carries the CURRENT
+       audioStreamID forward unchanged) applied its own MediaItem afterward. Each
+       apply() Runnable checks its own captured generation against this field before
+       touching player/currentUrl, so a superseded reload's result is simply discarded
+       once a newer one has already been requested, instead of racing to overwrite it. */
+    private long reloadGeneration = 0;
+    /* Serializes switchAudioStreamViaRestart/applyReloadedUrlAfterDecision's own network
+       work (PUT/stop/decision/start) so at most one is ever in flight against Plex at a
+       time - reloadGeneration above only controls which one's RESULT the client ends up
+       playing, it does nothing to stop both from actually being sent. Confirmed against
+       a real server this matters on its own, independent of the client-side race: two
+       /start requests for the same source landing within tens of milliseconds of each
+       other (a manual audio switch racing the ABR monitor's own autonomous quality
+       reload) left the server itself transcoding the wrong audio for the session the
+       client kept, even once reloadGeneration correctly discarded the losing response -
+       reproduced with plain sequential curl requests (no overlap) instead reliably
+       honoring the switch every time. runSerializedReload queues at most one pending
+       reload behind whichever is currently in flight, coalescing multiple rapid
+       requests down to just the latest rather than letting any of them overlap on the
+       wire. */
+    private boolean reloadInFlight = false;
+    private Runnable queuedReload = null;
     String currentAudioStreamId;
     /* Nullable - a title with no Part.Stream data at all (see title-info.js's
        extractPartId) just leaves switchAudioStream unable to actually apply a
@@ -1437,10 +1477,62 @@ public class PlayerActivity extends AppCompatActivity {
 
     private void startProgressLoop() {
         progressHandler.postDelayed(progressRunnable, PROGRESS_INTERVAL_MS);
+        reportNativeTimeline("playing");
     }
 
     private void stopProgressLoop() {
         progressHandler.removeCallbacks(progressRunnable);
+    }
+
+    /* plex-player.js's own :/timeline reporting (_reportTimeline, driven by a JS
+       setInterval) NEVER reaches Plex during native playback - confirmed on a real
+       device: PlayerActivity is a genuinely separate Activity (started via
+       startActivityForResult), so launching it backgrounds the Capacitor BridgeActivity
+       hosting the WebView, and Android's WebView.onPause() (which Capacitor's own
+       Activity lifecycle calls automatically) doesn't just freeze JS timers, it
+       suspends the WebView's own network resource loading entirely - confirmed directly
+       by evaluating a plain fetch() inside that backgrounded WebView via its remote
+       debugging socket and observing it never resolve at all, for as long as
+       PlayerActivity stayed in the foreground. An earlier fix attempted to work around
+       just the frozen-timer half of this (piggybacking a throttled ping on native-bridge.js's
+       already-reliable "progress" event, which native code delivers into the WebView
+       directly and which keeps firing regardless of WebView.onPause()) - that still
+       didn't help, because the ping's own fetch() call was itself the thing silently
+       hanging, not the timer that would have scheduled it. Since PlexHttp uses a plain
+       HttpURLConnection from native code, entirely independent of the WebView, this is
+       the only leg of the app that can actually get a :/timeline ping out while this
+       Activity owns the foreground - a deliberate, one-off duplication of plex-player.js's
+       own :/timeline protocol implementation (ratingKey/key/state/time/duration/
+       X-Plex-Client-Identifier/X-Plex-Token), not a stylistic preference, forced by that
+       WebView limitation. Every field it needs is already recoverable from currentUrl's
+       own query params (path IS "/library/metadata/<ratingKey>", already used verbatim
+       as the transcode URL's own path param) rather than needing a new bridge extra. */
+    private void reportNativeTimeline(String state) {
+        if (currentUrl == null) return;
+        Uri uri = Uri.parse(currentUrl);
+        String token = uri.getQueryParameter("X-Plex-Token");
+        String path = uri.getQueryParameter("path");
+        String clientId = uri.getQueryParameter("X-Plex-Client-Identifier");
+        if (token == null || path == null) return;
+        int lastSlash = path.lastIndexOf('/');
+        String ratingKey = lastSlash >= 0 ? path.substring(lastSlash + 1) : path;
+        String plexUrl = uri.getScheme() + "://" + uri.getAuthority();
+        long positionMs = player != null ? player.getCurrentPosition() : 0L;
+        long durationMs = player != null ? player.getDuration() : 0L;
+        if (durationMs == androidx.media3.common.C.TIME_UNSET) durationMs = 0L;
+        Uri timelineUri = Uri.parse(plexUrl + "/:/timeline").buildUpon()
+            .appendQueryParameter("ratingKey", ratingKey)
+            .appendQueryParameter("key", path)
+            .appendQueryParameter("state", state)
+            .appendQueryParameter("time", String.valueOf(positionMs))
+            .appendQueryParameter("duration", String.valueOf(durationMs))
+            .appendQueryParameter("X-Plex-Client-Identifier", clientId != null ? clientId : "")
+            .appendQueryParameter("X-Plex-Token", token)
+            .build();
+        PlexHttp.runAsync(() -> {
+            PlexHttp.getSync(timelineUri.toString());
+            return null;
+        }, ignored -> {});
     }
 
     private void reportProgress() {
@@ -1452,6 +1544,12 @@ public class PlayerActivity extends AppCompatActivity {
                 listener.onProgress(position, safeDuration);
             }
             PlayerUiHelper.updateTransportUi(this, position, safeDuration);
+        }
+        long now = System.currentTimeMillis();
+        if (now - lastNativeTimelinePingAt >= NATIVE_TIMELINE_PING_MS) {
+            lastNativeTimelinePingAt = now;
+            boolean isPlaying = player != null && player.getPlayWhenReady();
+            reportNativeTimeline(isPlaying ? "playing" : "paused");
         }
         /* Piggybacks on this existing ~1s tick rather than its own timer - a debug
            readout doesn't need faster-than-1s refresh, and this is already the
@@ -2027,6 +2125,81 @@ public class PlayerActivity extends AppCompatActivity {
             .build();
     }
 
+    /* Plezy-style fix (see stream-url.js's directStreamAudio comment, mirrored on
+       PlexHttp's own transcode param builder): tries a local, in-place track selection
+       first via TrackSelectionParameters, which touches nothing over the network and
+       needs no setMediaItem/prepare at all, before ever falling back to
+       switchAudioStreamViaRestart's session-restart mechanism below. */
+    void switchAudioStream(String streamId) {
+        if (player == null || currentUrl == null) return;
+        if (switchAudioStreamLocally(streamId)) return;
+        switchAudioStreamViaRestart(streamId);
+    }
+
+    /* directStreamAudio=1 on the transcode start URL (see stream-url.js's own comment
+       for the full reasoning) makes Plex remux every embedded audio track into the
+       running HLS session as its own EXT-X-MEDIA rendition, instead of collapsing to
+       whichever one was selected at session start - so ExoPlayer's HlsMediaSource
+       already exposes one audio TrackGroup per Plex audio stream, and switching is a
+       live TrackSelectionParameters override, not a new session.
+
+       Guarded by a group-count match against `audioStreams`, not just attempted blind:
+       unverified whether Plex's EXT-X-MEDIA group order always matches the Part's own
+       Stream order on every server/source combination (this file's audioStreams list
+       IS that Stream order - see native-bridge.js's buildPlaybackPayload), and a source
+       where directStreamAudio didn't produce a matching rendition per track (still
+       under 2 groups, in particular) needs to fall back to the old restart mechanism
+       rather than silently selecting the wrong track or no-op'ing. Returns whether the
+       local switch actually applied. */
+    private boolean switchAudioStreamLocally(String streamId) {
+        List<TrackGroup> audioGroups = new ArrayList<>();
+        for (Tracks.Group group : player.getCurrentTracks().getGroups()) {
+            if (group.getType() == C.TRACK_TYPE_AUDIO) audioGroups.add(group.getMediaTrackGroup());
+        }
+        if (audioGroups.size() < 2 || audioGroups.size() != audioStreams.size()) return false;
+        int index = -1;
+        for (int i = 0; i < audioStreams.size(); i++) {
+            if (audioStreams.get(i).id.equals(streamId)) {
+                index = i;
+                break;
+            }
+        }
+        if (index < 0) return false;
+        /* Bumped even on this synchronous path - see reloadGeneration's own field
+           comment. Invalidates any restart-based reload that's still in flight from an
+           earlier switch, so its eventual apply() can't stomp on this one once it lands. */
+        ++reloadGeneration;
+        player.setTrackSelectionParameters(
+            player.getTrackSelectionParameters().buildUpon()
+                .clearOverridesOfType(C.TRACK_TYPE_AUDIO)
+                .addOverride(new TrackSelectionOverride(audioGroups.get(index), 0))
+                .build());
+        currentAudioStreamId = streamId;
+        selectAudioStreamOnPlexAsync(streamId);
+        return true;
+    }
+
+    /* Fire-and-forget PUT to keep Plex's own Part-level "selected" bookkeeping in sync
+       for other clients/the next launch - same request switchAudioStreamViaRestart's
+       canSelectStream branch below sends, just with no matching session restart to wait
+       on since switchAudioStreamLocally's caller already applied the switch locally. */
+    private void selectAudioStreamOnPlexAsync(String streamId) {
+        if (currentUrl == null || partId == null || partId.isEmpty()) return;
+        Uri oldUri = Uri.parse(currentUrl);
+        String token = oldUri.getQueryParameter("X-Plex-Token");
+        if (token == null) return;
+        String plexUrl = oldUri.getScheme() + "://" + oldUri.getAuthority();
+        PlexHttp.runAsync(() -> {
+            Uri putUri = Uri.parse(plexUrl + "/library/parts/" + partId).buildUpon()
+                .appendQueryParameter("audioStreamID", streamId)
+                .appendQueryParameter("allParts", "1")
+                .appendQueryParameter("X-Plex-Token", token)
+                .build();
+            PlexHttp.putSync(putUri.toString());
+            return null;
+        }, ignored -> {});
+    }
+
     /* Plex bakes the selected audio stream into the HLS transcode at session start, so
        switching tracks means re-requesting the same transcode URL with a new session -
        but a bare audioStreamID query param on that URL alone is NOT enough to make Plex
@@ -2047,9 +2220,18 @@ public class PlayerActivity extends AppCompatActivity {
        via currentSubtitleConfigOrNull) - a plain MediaItem.Builder with no
        subtitleConfigurations silently dropped it here otherwise, confirmed against a
        real device where the ABR monitor's own switchQualityCap (same rebuild shape) did
-       exactly that with no user action and no visible error in between. */
-    void switchAudioStream(String streamId) {
-        if (player == null || currentUrl == null) return;
+       exactly that with no user action and no visible error in between. Only reached
+       now when switchAudioStreamLocally above couldn't apply the switch in place. */
+    private void switchAudioStreamViaRestart(String streamId) {
+        runSerializedReload(() -> doSwitchAudioStreamViaRestart(streamId));
+    }
+
+    private void doSwitchAudioStreamViaRestart(String streamId) {
+        if (player == null || currentUrl == null) {
+            onReloadComplete();
+            return;
+        }
+        long myGeneration = ++reloadGeneration;
         long resumeMs = player.getCurrentPosition();
         Uri oldUri = Uri.parse(currentUrl);
         String oldSessionId = oldUri.getQueryParameter("session");
@@ -2067,21 +2249,39 @@ public class PlayerActivity extends AppCompatActivity {
         currentAudioStreamId = streamId;
 
         Runnable applyNewUrl = () -> {
-            currentUrl = newUrl;
-            MediaItem.Builder itemBuilder = new MediaItem.Builder().setUri(Uri.parse(currentUrl));
-            MediaItem.SubtitleConfiguration subtitleConfig = currentSubtitleConfigOrNull();
-            if (subtitleConfig != null) itemBuilder.setSubtitleConfigurations(java.util.Collections.singletonList(subtitleConfig));
-            if (player != null) {
-                player.setMediaItem(itemBuilder.build(), resumeMs);
-                player.prepare();
+            /* A newer switch (audio, version, or quality cap) was requested while this
+               one's PUT/stop/decision round trip was still in flight - see
+               reloadGeneration's own field comment. Discard this result rather than
+               letting it stomp on whatever the newer switch already applied (or is
+               about to). */
+            if (myGeneration == reloadGeneration) {
+                currentUrl = newUrl;
+                MediaItem.Builder itemBuilder = new MediaItem.Builder().setUri(Uri.parse(currentUrl));
+                MediaItem.SubtitleConfiguration subtitleConfig = currentSubtitleConfigOrNull();
+                if (subtitleConfig != null) itemBuilder.setSubtitleConfigurations(java.util.Collections.singletonList(subtitleConfig));
+                if (player != null) {
+                    player.setMediaItem(itemBuilder.build(), resumeMs);
+                    player.prepare();
+                }
+                if (abrMonitor != null) abrMonitor.notifyReload();
             }
-            if (abrMonitor != null) abrMonitor.notifyReload();
+            /* Frees the serialization slot for whatever's queued behind this reload -
+               see reloadInFlight's own field comment. Deliberately LAST, not first: this
+               can synchronously run a queued reload right here (runSerializedReload's own
+               body), and that reload reads currentUrl/currentAudioStreamId fresh when it
+               builds its own new URL - calling this before the state updates above ran
+               was a real, confirmed bug: a queued ABR quality reload dequeued this way
+               read the OLD (pre-switch) currentUrl, carried its stale audioStreamID
+               forward into its own request, and - since it dispatched after and so held
+               the newer generation - won and silently reverted the switch this very
+               Runnable was supposed to commit. */
+            onReloadComplete();
         };
 
         String token = oldUri.getQueryParameter("X-Plex-Token");
         boolean canSelectStream = partId != null && !partId.isEmpty() && token != null;
         boolean canStopOldSession = oldSessionId != null && token != null;
-        if (canSelectStream || canStopOldSession) {
+        if (token != null) {
             String plexUrl = oldUri.getScheme() + "://" + oldUri.getAuthority();
             PlexHttp.runAsync(() -> {
                 if (canSelectStream) {
@@ -2099,6 +2299,7 @@ public class PlayerActivity extends AppCompatActivity {
                         .build();
                     PlexHttp.getSync(stopUri.toString());
                 }
+                askDecision(newUrl);
                 return null;
             }, ignored -> applyNewUrl.run());
         } else {
@@ -2106,13 +2307,79 @@ public class PlayerActivity extends AppCompatActivity {
         }
     }
 
+    /* Ensures at most one switchAudioStreamViaRestart/applyReloadedUrlAfterDecision
+       reload is ever in flight against Plex - see reloadInFlight's own field comment
+       for why this matters even though reloadGeneration already exists. A reload
+       requested while one is already running is queued (overwriting any previously
+       queued one, so a burst of rapid requests collapses to just the latest) rather
+       than dispatched immediately alongside it. */
+    private void runSerializedReload(Runnable reload) {
+        if (reloadInFlight) {
+            queuedReload = reload;
+            return;
+        }
+        reloadInFlight = true;
+        reload.run();
+    }
+
+    private void onReloadComplete() {
+        reloadInFlight = false;
+        Runnable next = queuedReload;
+        queuedReload = null;
+        if (next != null) runSerializedReload(next);
+    }
+
+    /* The actual, whole reason a restart-based switch (audio, version, or quality cap)
+       never took effect until backing out and back in - confirmed against a real server
+       (raspi-server), reading Plex's own /status/sessions mid-switch. Everything
+       switchAudioStreamViaRestart above already does (the Part-selection PUT, the
+       explicit old-session stop, a brand-new session id) was already correct and
+       already being done, and STILL wasn't enough on its own: a plain
+       /start.m3u8-equivalent MediaItem alone - even with all of that in place - kept
+       ExoPlayer's request landing on the previous audio selection. Only once a
+       /video/:/transcode/universal/decision request went out FIRST, with the exact same
+       query params the MediaItem's URI carries, did the Media Decision Engine actually
+       re-evaluate and the following playback honor the new selection immediately.
+       Best-effort like the requests around it (see getSync's own IOException handling,
+       swallowed by runAsync) - a failed decision call shouldn't block playback, it just
+       means this particular attempt is back to relying on Plex's own eventual
+       re-evaluation. Called from the same background thread PlexHttp.runAsync already
+       submits switchAudioStreamViaRestart's PUT/stop work to, never from the caller
+       (switchMediaVersion/switchQualityCap) directly - see their own call sites. */
+    private static void askDecision(String newUrl) throws IOException {
+        /* Plain string replacement, not Uri.Builder.path() - confirmed the actual reason
+           this silently never worked on Android despite working on web: path() re-encodes
+           its argument via Uri.encode(path, "/"), which escapes the literal ":" in
+           "/video/:/transcode/universal/decision" into "%3A", turning this into a 404
+           that askDecision's own caller (wrapped in PlexHttp.runAsync's catch-all) just
+           swallowed. newUrl is always a /start.m3u8 URL built from this same endpoint
+           family (see switchAudioStreamViaRestart/applyReloadedUrlAfterDecision), so a
+           literal substring swap is safe and sidesteps Uri.Builder entirely. */
+        String decisionUrl = newUrl.replace(
+            "/video/:/transcode/universal/start.m3u8",
+            "/video/:/transcode/universal/decision"
+        );
+        PlexHttp.getSync(decisionUrl);
+    }
+
     /* Same "rebuild the transcode URL, resume in place" mechanism as switchAudioStream
        above - Plex bakes the selected Media[] entry into the transcode at session
        start via the mediaIndex param, so switching versions means re-requesting the
        same path with a new one, a fresh session id, and an offset resuming where
-       playback left off. Called from PlayerUiHelper's Video Quality > Version menu. */
+       playback left off. Called from PlayerUiHelper's Video Quality > Version menu.
+       Now asks Plex to re-decide first (see askDecision's own header comment on
+       switchAudioStreamViaRestart) - the same MDE staleness that broke audio switching
+       applies to any param baked into the transcode at session start, mediaIndex
+       included, not just audioStreamID. */
     void switchMediaVersion(int mediaIndex) {
-        if (player == null || currentUrl == null) return;
+        runSerializedReload(() -> doSwitchMediaVersion(mediaIndex));
+    }
+
+    private void doSwitchMediaVersion(int mediaIndex) {
+        if (player == null || currentUrl == null) {
+            onReloadComplete();
+            return;
+        }
         long resumeMs = player.getCurrentPosition();
         Uri oldUri = Uri.parse(currentUrl);
         Uri.Builder builder = oldUri.buildUpon().clearQuery();
@@ -2125,14 +2392,9 @@ public class PlayerActivity extends AppCompatActivity {
         builder.appendQueryParameter("mediaIndex", String.valueOf(mediaIndex));
         builder.appendQueryParameter("offset", String.valueOf(resumeMs / 1000));
         builder.appendQueryParameter("session", java.util.UUID.randomUUID().toString());
-        currentUrl = builder.build().toString();
+        String newUrl = builder.build().toString();
         currentMediaIndex = mediaIndex;
-        MediaItem.Builder itemBuilder = new MediaItem.Builder().setUri(Uri.parse(currentUrl));
-        MediaItem.SubtitleConfiguration subtitleConfig = currentSubtitleConfigOrNull();
-        if (subtitleConfig != null) itemBuilder.setSubtitleConfigurations(java.util.Collections.singletonList(subtitleConfig));
-        player.setMediaItem(itemBuilder.build(), resumeMs);
-        player.prepare();
-        if (abrMonitor != null) abrMonitor.notifyReload();
+        applyReloadedUrlAfterDecision(newUrl, resumeMs);
     }
 
     /* Same mechanism again for the bitrate cap (Plex's maxVideoBitrate param) - a null
@@ -2142,9 +2404,17 @@ public class PlayerActivity extends AppCompatActivity {
        Quality Cap menu, and autonomously by QualityAbrMonitor - the latter is exactly
        why carrying the active subtitle forward (see switchAudioStream's own comment)
        matters most here: this can fire with no user action at all, an arbitrary amount
-       of time after a subtitle was applied. */
+       of time after a subtitle was applied. Also asks Plex to re-decide first, same
+       reasoning as switchMediaVersion above. */
     void switchQualityCap(Integer kbps) {
-        if (player == null || currentUrl == null) return;
+        runSerializedReload(() -> doSwitchQualityCap(kbps));
+    }
+
+    private void doSwitchQualityCap(Integer kbps) {
+        if (player == null || currentUrl == null) {
+            onReloadComplete();
+            return;
+        }
         long resumeMs = player.getCurrentPosition();
         Uri oldUri = Uri.parse(currentUrl);
         Uri.Builder builder = oldUri.buildUpon().clearQuery();
@@ -2157,14 +2427,51 @@ public class PlayerActivity extends AppCompatActivity {
         if (kbps != null) builder.appendQueryParameter("maxVideoBitrate", String.valueOf(kbps));
         builder.appendQueryParameter("offset", String.valueOf(resumeMs / 1000));
         builder.appendQueryParameter("session", java.util.UUID.randomUUID().toString());
-        currentUrl = builder.build().toString();
+        String newUrl = builder.build().toString();
         qualityCapKbps = kbps;
-        MediaItem.Builder itemBuilder = new MediaItem.Builder().setUri(Uri.parse(currentUrl));
-        MediaItem.SubtitleConfiguration subtitleConfig = currentSubtitleConfigOrNull();
-        if (subtitleConfig != null) itemBuilder.setSubtitleConfigurations(java.util.Collections.singletonList(subtitleConfig));
-        player.setMediaItem(itemBuilder.build(), resumeMs);
-        player.prepare();
-        if (abrMonitor != null) abrMonitor.notifyReload();
+        applyReloadedUrlAfterDecision(newUrl, resumeMs);
+    }
+
+    /* Shared by switchMediaVersion/switchQualityCap above: ask Plex to re-decide against
+       the new URL's params, then rebuild the MediaItem and resume in place - same
+       "decision before start" sequencing switchAudioStreamViaRestart's own PUT/stop
+       block already does for audio, just with no Part-selection PUT or old-session stop
+       needed here (mediaIndex/maxVideoBitrate aren't a Part-level "selected" stream, and
+       the old session dies on its own the moment ExoPlayer stops requesting its
+       segments). Falls back to applying immediately if this URL carries no token to ask
+       with - same "no data, no-op the network step" shape as switchAudioStreamViaRestart's
+       own canSelectStream/canStopOldSession checks. */
+    private void applyReloadedUrlAfterDecision(String newUrl, long resumeMs) {
+        long myGeneration = ++reloadGeneration;
+        String token = Uri.parse(newUrl).getQueryParameter("X-Plex-Token");
+        Runnable apply = () -> {
+            /* See reloadGeneration's own field comment - a newer switch superseded this
+               one while its decision request was still in flight. */
+            if (myGeneration == reloadGeneration) {
+                currentUrl = newUrl;
+                MediaItem.Builder itemBuilder = new MediaItem.Builder().setUri(Uri.parse(currentUrl));
+                MediaItem.SubtitleConfiguration subtitleConfig = currentSubtitleConfigOrNull();
+                if (subtitleConfig != null) itemBuilder.setSubtitleConfigurations(java.util.Collections.singletonList(subtitleConfig));
+                if (player != null) {
+                    player.setMediaItem(itemBuilder.build(), resumeMs);
+                    player.prepare();
+                }
+                if (abrMonitor != null) abrMonitor.notifyReload();
+            }
+            /* Frees the serialization slot for whatever's queued behind this reload -
+               see reloadInFlight's own field comment, and doSwitchAudioStreamViaRestart's
+               applyNewUrl for why this has to run LAST, after the state updates above,
+               not before them. */
+            onReloadComplete();
+        };
+        if (token != null) {
+            PlexHttp.runAsync(() -> {
+                askDecision(newUrl);
+                return null;
+            }, ignored -> apply.run());
+        } else {
+            apply.run();
+        }
     }
 
     public static void stopPlayback() {
@@ -2242,6 +2549,10 @@ public class PlayerActivity extends AppCompatActivity {
     @Override
     protected void onDestroy() {
         stopProgressLoop();
+        /* Best-effort final ping - see reportNativeTimeline's own header comment for why
+           this leg exists at all. Native, not JS, for the same WebView-suspended-while-
+           foregrounded reason every other native timeline ping in this file is. */
+        reportNativeTimeline("stopped");
         if (ambientSampler != null) {
             ambientSampler.stop();
         }

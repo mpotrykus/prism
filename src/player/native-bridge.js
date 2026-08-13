@@ -6,6 +6,15 @@ import * as StreamingSubtitles from "./core/subtitle-provider.js";
 import * as subtitleStore from "./core/subtitle-store.js";
 
 const NativePlayer = registerPlugin("NativePlayer");
+/* Deliberately a local copy of plex-player.js's own TIMELINE_PING_MS, not a shared
+   import - plex-player.js already imports FROM this file at its own top level, and
+   importing the constant back the other way round-tripped through a live binding that
+   came through as undefined in the production Rollup bundle (confirmed against a real
+   device: `now - x >= undefined` is always false, so the throttle gate below never
+   opened and no native timeline ping ever fired, silently). Not worth chasing exactly
+   why the circular binding failed here when it works elsewhere in this codebase - a
+   duplicated literal is simpler and immune to it either way. */
+const NATIVE_TIMELINE_PING_MS = 10000;
 
 /* Android leg of playback (Capacitor's NativePlayerPlugin -> PlayerActivity/Media3
    ExoPlayer). Takes the StreamingPlayerController instance as an explicit first
@@ -19,6 +28,35 @@ export async function playNative(controller, streamUrl, startOffsetMs) {
             if (!controller._session) return;
             controller._session.lastTimeMs = positionMs;
             if (durationMs) controller._session.durationMs = durationMs;
+            /* _pingTimer's own setInterval (plex-player.js's _beginSession/
+               _switchTitleNative) never actually fires during native playback -
+               confirmed against a real device: PlayerActivity is a genuinely separate
+               Android Activity (started via startActivityForResult, see
+               NativePlayerPlugin), so launching it backgrounds the Capacitor
+               BridgeActivity hosting this WebView, and Android's WebView.onPause()
+               (which Capacitor's own Activity lifecycle calls automatically) explicitly
+               freezes JS timers - setInterval/setTimeout - for as long as PlayerActivity
+               stays in the foreground, i.e. the player's entire runtime. Without a real
+               :/timeline ping ever reaching Plex, it never establishes a tracked "Now
+               Playing" session for this playback at all - confirmed the actual, whole
+               reason a real device's Media Decision Engine kept transcoding the
+               previous audio selection even after the /decision-before-/start fix
+               (stream-url.js's buildDecisionUrl): a /decision call only durably commits
+               its re-evaluation against a session Plex is actively tracking, and an
+               untracked one just answers what it WOULD decide without it ever reaching
+               the real transcode. This progress event, by contrast, is delivered by an
+               explicit native-to-JS bridge call (Java code invoking the WebView's script
+               execution directly) every ~1s regardless of WebView.onPause() - confirmed
+               via logcat continuing to show it fire throughout native playback - so
+               piggybacking a throttled ping on it here is what actually survives the
+               whole time PlayerActivity is in the foreground, instead of firing zero
+               times. Left running alongside _pingTimer rather than replacing it - web's
+               own setInterval isn't affected by any of this and still needs it. */
+            const now = Date.now();
+            if (now - controller._lastNativeTimelinePingAt >= NATIVE_TIMELINE_PING_MS) {
+                controller._lastNativeTimelinePingAt = now;
+                controller._reportTimeline(controller._session.state || "playing");
+            }
             /* A real progress tick is proof the native player is actually ready to
                accept a subtitle - unlike NativePlayer.play()/switchTitle() resolving,
                which only proves the bridge call reached Java, not that ExoPlayer has
@@ -210,8 +248,17 @@ function buildPlaybackPayload(controller, streamUrl, startOffsetMs) {
         /* The Part id backing audioStreams above - PlayerActivity.switchAudioStream
            needs it to PUT /library/parts/<id>?audioStreamID=...&allParts=1 against
            Plex directly (see that method's own comment for why a bare audioStreamID
-           on the transcode URL isn't enough on its own). */
-        partId: controller._session.partId ?? null,
+           on the transcode URL isn't enough on its own). String(...), same as
+           audioStreams[].id above and for the same reason - confirmed the actual, whole
+           reason audio-track switching never worked on a real device despite every
+           server-side fix (directStreamAudio, the /decision call, reload serialization)
+           being correct: extractPartId returns Plex's raw Part.id, a JSON NUMBER, and
+           Capacitor's PluginCall.getString("partId") on the Android side returns null
+           for a type-mismatched (non-string) bridge value - silently, with no error -
+           so partId came through as null, canSelectStream was false, the Part-selection
+           PUT never fired, and Plex's transcode decision correctly kept honoring
+           whatever was last actually selected there instead of the new pick. */
+        partId: controller._session.partId != null ? String(controller._session.partId) : null,
         /* {mediaIndex, label} per Plex Media[] entry (see title-info.js's
            extractMediaVersions) plus the currently-selected index/cap - PlayerUiHelper's
            Video Quality menu rebuilds the transcode URL itself when the user picks one

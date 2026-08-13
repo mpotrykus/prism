@@ -165,7 +165,20 @@ export function attachSource(controller, video, streamUrl) {
         controller._hls.destroy();
         controller._hls = null;
     }
-    if (streamUrl.includes(".m3u8") && !video.canPlayType("application/vnd.apple.mpegurl") && Hls.isSupported()) {
+    /* video.canPlayType("application/vnd.apple.mpegurl") is not a reliable "does this
+       browser have native HLS" check - confirmed against a real Chrome session, it
+       answers the truthy "maybe" despite Chrome having no actual HLS demuxer at all,
+       which made the old `!video.canPlayType(...)` condition here false on Chrome and
+       silently routed it to the plain <video src> branch below instead of hls.js.
+       Playback still displayed (Chrome's own pipeline limped through enough of it to
+       look like it worked), but controller._hls was never set, so nothing that depends
+       on it - hls.js's own multi-audio-track API (see reloadWebSource's
+       trySwitchAudioTrackLocal), the FRAG_LOADED/BUFFER_STALLED_ERROR events
+       core/abr.js's Auto Quality reads - was ever wired up either. Real Safari is the
+       only browser that answers the stronger "probably" for this mime type, which is
+       what actually distinguishes genuine native HLS support from Chromium's false
+       positive. */
+    if (streamUrl.includes(".m3u8") && Hls.isSupported() && video.canPlayType("application/vnd.apple.mpegurl") !== "probably") {
         const hls = new Hls();
         hls.on(Hls.Events.ERROR, (event, data) => {
             console.error("StreamingPlayer: hls.js error -", data.type, data.details, data.fatal ? "(fatal)" : "");
@@ -202,16 +215,56 @@ export function attachSource(controller, video, streamUrl) {
     }
 }
 
-/* Restarts the Plex transcode session with a new audioStreamID/mediaIndex/
-   qualityCapKbps, resuming at the current position - Plex bakes the selected audio
-   stream, version, and bitrate cap into the HLS transcode at session start, so
-   there's no way to change any of them without re-requesting the playlist. A fresh
-   session id avoids Plex reusing/confusing the just-abandoned transcode session's own
-   state. Shared by chrome.js's Audio Track/Video Quality menus - only the override
-   actually being changed is passed, everything else falls back to the current
-   session value. qualityCapKbps needs its own `in` check (unlike the others): null is
-   a valid explicit override (Quality Cap's "Original" option), so `??`-against-
-   undefined would wrongly treat "clear the cap" the same as "don't touch it". */
+/* Switches the audio track without restarting the transcode session at all - the
+   Plezy-style fix (see stream-url.js's directStreamAudio comment) for what used to be
+   this file's reloadWebSource audio path. Because directStreamAudio=1 makes Plex remux
+   every embedded audio track into the running session's HLS segments as its own
+   EXT-X-MEDIA rendition, hls.js already knows about all of them - this is a pure
+   client-side selection (hls.js's own audioTrack setter), not a new request, so there's
+   no new session for Plex's transcode cache to ever go stale on.
+
+   Only usable when hls.js is actually attached (controller._hls) - the native-HLS
+   fallback branch (Safari, or any browser without hls.js support) hands the <video> a
+   raw src URL with no equivalent multi-audio-track API, so that path has to keep using
+   reloadWebSource's session-restart mechanism below. Also only usable when hls.js
+   actually exposes as many audio tracks as Plex's Part carries - unverified whether
+   Plex's EXT-X-MEDIA group order always matches the Part's own Stream order on every
+   server/source combination, so a mismatched count (or an unresolved index) bails out
+   and lets the caller fall back to reloadWebSource instead of silently picking the
+   wrong track. Returns whether the local switch actually applied. */
+export function trySwitchAudioTrackLocal(controller, audioStreamID) {
+    const hls = controller._hls;
+    const s = controller._session;
+    if (!hls || !s) return false;
+    const streams = s.audioStreams || [];
+    const index = streams.findIndex((stream) => stream.id === audioStreamID);
+    if (index < 0 || hls.audioTracks.length !== streams.length) return false;
+    hls.audioTrack = index;
+    s.audioStreamId = audioStreamID;
+    /* Fire-and-forget, same as reloadWebSource's own selectAudio below - keeps Plex's
+       server-side "selected" bookkeeping in sync for other clients/the next launch, but
+       nothing here waits on it since no new session is being requested. */
+    if (s.partId) {
+        const putUrl = new URL(`${s.plexUrl}/library/parts/${s.partId}`);
+        putUrl.searchParams.set("audioStreamID", String(audioStreamID));
+        putUrl.searchParams.set("allParts", "1");
+        putUrl.searchParams.set("X-Plex-Token", s.plexToken);
+        fetch(putUrl, { method: "PUT" }).catch(() => {});
+    }
+    return true;
+}
+
+/* Restarts the Plex transcode session with a new mediaIndex/qualityCapKbps (and, as a
+   fallback path, audioStreamID - see trySwitchAudioTrackLocal above for the normal
+   case), resuming at the current position - Plex bakes the version and bitrate cap into
+   the HLS transcode at session start, so there's no way to change either without
+   re-requesting the playlist. A fresh session id avoids Plex reusing/confusing the
+   just-abandoned transcode session's own state. Shared by chrome.js's Audio Track/Video
+   Quality menus - only the override actually being changed is passed, everything else
+   falls back to the current session value. qualityCapKbps needs its own `in` check
+   (unlike the others): null is a valid explicit override (Quality Cap's "Original"
+   option), so `??`-against-undefined would wrongly treat "clear the cap" the same as
+   "don't touch it". */
 export function reloadWebSource(controller, overrides = {}) {
     const video = controller._videoEl;
     const s = controller._session;
@@ -225,18 +278,24 @@ export function reloadWebSource(controller, overrides = {}) {
     s.qualityCapKbps = nextQualityCapKbps;
     s.audioStreamId = nextAudioStreamID;
 
+    /* Generated once up front, not inside rebuild() - askDecision below needs the exact
+       same session id /start will use (see buildDecisionUrl's own comment: a /decision
+       call only reliably predicts what /start does when every param, session id
+       included, matches). */
+    const sessionId = crypto.randomUUID();
+    const urlOpts = {
+        plexUrl: s.plexUrl,
+        plexToken: s.plexToken,
+        key: s.key,
+        sessionId,
+        startOffsetMs: offsetMs,
+        mediaIndex: nextMediaIndex,
+        qualityCapKbps: nextQualityCapKbps,
+        audioStreamID: nextAudioStreamID,
+    };
+
     const rebuild = () => {
-        const sessionId = crypto.randomUUID();
-        const streamUrl = controller._buildStreamUrl({
-            plexUrl: s.plexUrl,
-            plexToken: s.plexToken,
-            key: s.key,
-            sessionId,
-            startOffsetMs: offsetMs,
-            mediaIndex: nextMediaIndex,
-            qualityCapKbps: nextQualityCapKbps,
-            audioStreamID: nextAudioStreamID,
-        });
+        const streamUrl = controller._buildStreamUrl(urlOpts);
         s.transcodeSessionId = sessionId;
         attachSource(controller, video, streamUrl);
         video.currentTime = offsetMs / 1000;
@@ -278,7 +337,22 @@ export function reloadWebSource(controller, overrides = {}) {
         ? fetch(`${s.plexUrl}/video/:/transcode/universal/stop?session=${encodeURIComponent(oldSessionId)}&X-Plex-Token=${encodeURIComponent(s.plexToken)}`).catch(() => {})
         : Promise.resolve();
 
-    Promise.all([selectAudio, stopOldSession]).then(rebuild, rebuild);
+    /* The actual, whole reason a switch never took effect until backing out and back in
+       - confirmed against a real server (raspi-server), reading Plex's own session state
+       via /status/sessions mid-switch. Everything above this comment (the Part-selection
+       PUT, the explicit old-session stop, a brand-new session id) was already correct
+       and already being done, and STILL wasn't enough on its own: a /start request alone
+       - even with all of that in place - kept transcoding the previous audio selection.
+       Only once a /video/:/transcode/universal/decision call went out FIRST, with the
+       exact same params /start was about to use (see buildDecisionUrl's own comment),
+       did the Media Decision Engine actually re-evaluate and the following /start honor
+       the new selection immediately. Best-effort like the requests above it - a failed
+       decision call shouldn't block the /start attempt that follows, it just means this
+       particular attempt is back to relying on Plex's own eventual re-evaluation. */
+    const askDecision = () =>
+        fetch(controller._buildDecisionUrl(urlOpts)).catch(() => {});
+
+    Promise.all([selectAudio, stopOldSession]).then(askDecision, askDecision).then(rebuild, rebuild);
 }
 
 export function teardownWeb(controller) {

@@ -1,7 +1,7 @@
 import { Capacitor } from "@capacitor/core";
 import * as StreamingSubtitles from "../core/subtitle-provider.js";
 import * as subtitleStore from "../core/subtitle-store.js";
-import { reloadWebSource } from "../web-fallback.js";
+import { reloadWebSource, trySwitchAudioTrackLocal } from "../web-fallback.js";
 import { setNativeSubtitle, setNativeSubtitleOffset, notifyNativeSubtitleApplied } from "../native-bridge.js";
 import { hideControls, showControls } from "./chrome-controls.js";
 import { closeInlineMenu, renderPickerList } from "./chrome-menu.js";
@@ -25,7 +25,14 @@ function renderAudioSection(controller, content, { setValue, collapse }) {
     renderPickerList(content, streams.map((stream) => ({
         label: `${stream.label}${stream.id === current ? "  ✓" : ""}`,
         onSelect: () => {
-            reloadWebSource(controller, { audioStreamID: stream.id });
+            /* Local switch first (see trySwitchAudioTrackLocal's own header comment) -
+               falls back to the old full-session-restart path only when hls.js can't
+               offer the same track count Plex's Part advertises (e.g. the native-HLS
+               <video> fallback, or a server/source combination where directStreamAudio
+               didn't produce one EXT-X-MEDIA rendition per audio stream). */
+            if (!trySwitchAudioTrackLocal(controller, stream.id)) {
+                reloadWebSource(controller, { audioStreamID: stream.id });
+            }
             setValue(stream.label);
             collapse();
             /* reloadWebSource updates controller._session.audioStreamId synchronously,

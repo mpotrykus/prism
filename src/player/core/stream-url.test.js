@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildStreamUrl } from "./stream-url.js";
+import { buildStreamUrl, buildDecisionUrl } from "./stream-url.js";
 
 const base = {
   plexUrl: "http://192.168.1.5:32400",
@@ -17,6 +17,7 @@ describe("buildStreamUrl", () => {
     expect(url.pathname).toBe("/video/:/transcode/universal/start.m3u8");
     expect(url.searchParams.get("directPlay")).toBe("0");
     expect(url.searchParams.get("directStream")).toBe("1");
+    expect(url.searchParams.get("directStreamAudio")).toBe("1");
     expect(url.searchParams.get("path")).toBe("/library/metadata/123");
     expect(url.searchParams.get("offset")).toBe("45");
     expect(url.searchParams.get("X-Plex-Token")).toBe("TOKEN");
@@ -44,5 +45,17 @@ describe("buildStreamUrl", () => {
     const url = new URL(buildStreamUrl(base));
     expect(url.searchParams.get("mediaIndex")).toBe("0");
     expect(url.searchParams.get("partIndex")).toBe("0");
+  });
+});
+
+describe("buildDecisionUrl", () => {
+  it("targets the decision endpoint with the same params as buildStreamUrl", () => {
+    const opts = { ...base, qualityCapKbps: 4000, audioStreamID: 7 };
+    const decisionUrl = new URL(buildDecisionUrl(opts));
+    const streamUrl = new URL(buildStreamUrl(opts));
+    expect(decisionUrl.pathname).toBe("/video/:/transcode/universal/decision");
+    for (const key of streamUrl.searchParams.keys()) {
+      expect(decisionUrl.searchParams.get(key)).toBe(streamUrl.searchParams.get(key));
+    }
   });
 });
