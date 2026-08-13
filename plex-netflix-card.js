@@ -242,6 +242,7 @@ class PlexNetflixCard extends HTMLElement {
               <button type="button" class="title-info-watched-btn" aria-label="Mark as watched" hidden>${WATCHED_ICON_SVG}</button>
               <button type="button" class="title-info-watchlist-btn" aria-label="Add to My List">+</button>
             </div>
+            <div class="title-info-actions-loading" hidden><span class="spinner"></span></div>
             <div class="title-info-summary"></div>
             <div class="title-info-episodes"></div>
             <div class="title-info-cast-wrap" hidden>

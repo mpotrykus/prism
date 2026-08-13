@@ -135,6 +135,8 @@ export class TitleInfoController {
     this._restartBtn = shadowRoot.querySelector(".title-info-restart-btn");
     this._watchedBtn = shadowRoot.querySelector(".title-info-watched-btn");
     this._watchlistBtn = shadowRoot.querySelector(".title-info-watchlist-btn");
+    this._actionsEl = shadowRoot.querySelector(".title-info-actions");
+    this._actionsLoadingEl = shadowRoot.querySelector(".title-info-actions-loading");
     this._summaryEl = shadowRoot.querySelector(".title-info-summary");
     this._episodesEl = shadowRoot.querySelector(".title-info-episodes");
     this._castWrap = shadowRoot.querySelector(".title-info-cast-wrap");
@@ -203,13 +205,12 @@ export class TitleInfoController {
      a guess from the row/hero item's already-truncated fields - the real detail fetch can
      flip Restart/Watched from hidden to shown or change Play's label between that paint
      and _renderDetail landing, which read as the buttons being clickable in a state that's
-     about to change out from under the click. Disabling them for that window (rather than
-     just for the optimistic paint's own accuracy) removes the race entirely. */
+     about to change out from under the click. Swapping the whole actions row for a
+     spinner for that window (rather than just disabling the buttons in place) removes the
+     race entirely and avoids flashing buttons in a state that's about to change. */
   _setButtonsLoading(loading) {
-    this._playBtn.disabled = loading;
-    this._restartBtn.disabled = loading;
-    this._watchedBtn.disabled = loading;
-    this._watchlistBtn.disabled = loading;
+    this._actionsEl.hidden = loading;
+    this._actionsLoadingEl.hidden = !loading;
   }
 
   /* Redirects an episode click to the parent show's info modal, landing on the season/

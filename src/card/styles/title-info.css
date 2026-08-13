@@ -73,6 +73,7 @@
 .title-info-meta { font-size: 13px; color: rgba(255,255,255,0.65); margin-bottom: 18px; }
 .title-info-meta span:not(:last-child)::after { content: "•"; margin: 0 8px; color: rgba(255,255,255,0.3); }
 .title-info-actions { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; }
+.title-info-actions[hidden] { display: none; }
 .title-info-play {
   border: none; border-radius: 8px; padding: 11px 26px; font-size: 14px; font-weight: 700;
   cursor: pointer; background: #fff; color: #161619;
@@ -102,10 +103,14 @@
 }
 .title-info-watchlist-btn:hover { background: rgba(255,255,255,0.1); }
 .title-info-watchlist-btn[hidden] { display: none; }
-.title-info-play:disabled,
-.title-info-restart-btn:disabled,
-.title-info-watched-btn:disabled,
-.title-info-watchlist-btn:disabled { opacity: 0.5; pointer-events: none; cursor: default; }
+.title-info-actions-loading { display: flex; align-items: center; justify-content: center; height: 40px; margin-bottom: 20px; }
+.title-info-actions-loading[hidden] { display: none; }
+.title-info-actions-loading .spinner {
+  width: 32px; height: 32px; border-radius: 50%;
+  border: 3px solid rgba(255,255,255,0.25); border-top-color: #fff;
+  animation: title-info-spin 0.7s linear infinite;
+}
+@keyframes title-info-spin { to { transform: rotate(360deg); } }
 .title-info-summary { font-size: 14px; line-height: 1.6; color: rgba(255,255,255,0.85); margin-bottom: 28px; max-width: 640px; }
 .title-info-section-title { font-size: 14px; font-weight: 700; margin: 40px 0 16px; }
 .title-info-cast-wrap[hidden], .title-info-similar-wrap[hidden] { display: none; }
