@@ -256,6 +256,16 @@ class StreamingPlayerController {
             key,
             plexUrl,
             plexToken,
+            /* The `session` query param baked into the transcode URL above - needed by
+               reloadWebSource (web-fallback.js) to explicitly stop THIS transcode
+               session before starting the next one on an audio/version/quality-cap
+               switch. Confirmed against a real server that skipping this matters: Plex
+               kept serving the still-warm old session's audio selection to an in-place
+               reload even though a brand new `session` id and a successful Part-
+               selection PUT were both already in place - only actually switched once
+               the old session had died off (e.g. after a full stop()+replay gave it
+               time to expire), so an explicit stop is what makes it immediate. */
+            transcodeSessionId: sessionId,
             durationMs: item.durationMs || 0,
             lastTimeMs: startOffsetMs,
             state: "playing",
@@ -276,6 +286,10 @@ class StreamingPlayerController {
             mediaVersions: item.mediaVersions || [],
             audioStreams,
             audioStreamId: audioStreams.find((s) => s.selected)?.id ?? null,
+            /* The Part id backing audioStreams above - needed to actually apply an
+               audio-track switch (see web-fallback.js's reloadWebSource and
+               native-bridge.js's buildPlaybackPayload), not just request one. */
+            partId: item.partId ?? null,
             /* Ordered sibling ratingKeys (a show's full episode order, or a playlist/
                collection's own order) this title came from, if any - see title-info.js's
                _getShowEpisodeQueue/_flatQueueContext. Powers the title-prev/title-next

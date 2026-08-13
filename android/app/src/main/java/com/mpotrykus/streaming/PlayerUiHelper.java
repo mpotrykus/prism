@@ -1963,6 +1963,7 @@ final class PlayerUiHelper {
     }
 
     private static void renderAudioSection(PlayerActivity activity, LinearLayout content, Consumer<String> setValue, Runnable collapse) {
+        content.removeAllViews();
         float density = activity.getResources().getDisplayMetrics().density;
         List<PickerItem> items = new ArrayList<>();
         for (AudioStreamEntry entry : activity.audioStreams) {
@@ -1971,6 +1972,12 @@ final class PlayerUiHelper {
                 activity.switchAudioStream(entry.id);
                 setValue.accept(entry.label);
                 collapse.run();
+                /* switchAudioStream updates activity.currentAudioStreamId synchronously
+                   even though applying it to the player itself may still be waiting on
+                   the PUT-to-Plex round trip (see that method) - re-render in place so
+                   the ✓ moves to the new selection immediately instead of only after
+                   this menu is closed and reopened. */
+                renderAudioSection(activity, content, setValue, collapse);
             }));
         }
         renderPickerRows(activity, content, density, items);

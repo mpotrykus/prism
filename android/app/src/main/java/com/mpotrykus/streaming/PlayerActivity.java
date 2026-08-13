@@ -61,6 +61,9 @@ public class PlayerActivity extends AppCompatActivity {
     public static final String EXTRA_START_POSITION_MS = "startPositionMs";
     public static final String EXTRA_CHAPTERS_JSON = "chaptersJson";
     public static final String EXTRA_AUDIO_STREAMS_JSON = "audioStreamsJson";
+    /* The Part id backing EXTRA_AUDIO_STREAMS_JSON above - see switchAudioStream's own
+       comment for why this is needed to actually apply a track switch. */
+    public static final String EXTRA_PART_ID = "partId";
     /* {mediaIndex, label} per Plex Media[] entry (see native-bridge.js's
        buildPlaybackPayload) plus the currently-selected index/cap - feeds
        PlayerUiHelper's Video Quality menu the same way EXTRA_AUDIO_STREAMS_JSON/
@@ -253,6 +256,10 @@ public class PlayerActivity extends AppCompatActivity {
     private ContentAnalysisSampler contentSampler;
     int sleepMinutes = 0;
     String currentAudioStreamId;
+    /* Nullable - a title with no Part.Stream data at all (see title-info.js's
+       extractPartId) just leaves switchAudioStream unable to actually apply a
+       selection, same "no data, no-op" handling as an empty audioStreams list. */
+    String partId;
     /* The More options bottom sheet (see PlayerUiHelper.showPlayerMenu/closePlayerMenu) -
        tracked here, not just a PlayerUiHelper-local variable, since PlayerActivity.
        onDestroy needs a way to know none is leaked, the same "shared session state lives
@@ -402,6 +409,7 @@ public class PlayerActivity extends AppCompatActivity {
         long startPositionMs = getIntent().getLongExtra(EXTRA_START_POSITION_MS, 0L);
         parseChapters(getIntent().getStringExtra(EXTRA_CHAPTERS_JSON));
         parseAudioStreams(getIntent().getStringExtra(EXTRA_AUDIO_STREAMS_JSON));
+        partId = getIntent().getStringExtra(EXTRA_PART_ID);
         parseMediaVersions(getIntent().getStringExtra(EXTRA_MEDIA_VERSIONS_JSON));
         currentMediaIndex = getIntent().getIntExtra(EXTRA_CURRENT_MEDIA_INDEX, 0);
         qualityCapKbps = getIntent().hasExtra(EXTRA_QUALITY_CAP_KBPS) ? getIntent().getIntExtra(EXTRA_QUALITY_CAP_KBPS, 0) : null;
@@ -1722,11 +1730,11 @@ public class PlayerActivity extends AppCompatActivity {
     public static void loadTitle(String url, long startPositionMs, String shaderType, String title,
             String episodeTitle, Integer year, Integer seasonNumber, Integer episodeNumber,
             Integer queueLength, Integer queueIndex, String chaptersJson, String bifUrl, String audioStreamsJson,
-            String mediaVersionsJson, Integer currentMediaIndex, Integer qualityCapKbps) {
+            String partId, String mediaVersionsJson, Integer currentMediaIndex, Integer qualityCapKbps) {
         if (activeInstance != null) {
             activeInstance.runOnUiThread(() -> activeInstance.applyTitleSwitch(url, startPositionMs, shaderType,
                 title, episodeTitle, year, seasonNumber, episodeNumber, queueLength, queueIndex,
-                chaptersJson, bifUrl, audioStreamsJson, mediaVersionsJson, currentMediaIndex, qualityCapKbps));
+                chaptersJson, bifUrl, audioStreamsJson, partId, mediaVersionsJson, currentMediaIndex, qualityCapKbps));
         }
     }
 
@@ -1741,7 +1749,7 @@ public class PlayerActivity extends AppCompatActivity {
     void applyTitleSwitch(String url, long startPositionMs, String shaderTypeName, String newTitle,
             String newEpisodeTitle, Integer newYear, Integer newSeasonNumber, Integer newEpisodeNumber,
             Integer newQueueLength, Integer newQueueIndex, String chaptersJson, String bifUrl, String audioStreamsJson,
-            String mediaVersionsJson, Integer newCurrentMediaIndex, Integer newQualityCapKbps) {
+            String newPartId, String mediaVersionsJson, Integer newCurrentMediaIndex, Integer newQualityCapKbps) {
         if (player == null) return;
 
         PlayerUiHelper.closePlayerMenu(this);
@@ -1775,6 +1783,7 @@ public class PlayerActivity extends AppCompatActivity {
 
         parseChapters(chaptersJson);
         parseAudioStreams(audioStreamsJson);
+        partId = newPartId;
         parseMediaVersions(mediaVersionsJson);
         /* A title switch already drops any active sidecar subtitle track (see
            applySubtitle's own header comment) - reset the bookkeeping alongside it
@@ -2019,13 +2028,23 @@ public class PlayerActivity extends AppCompatActivity {
     }
 
     /* Plex bakes the selected audio stream into the HLS transcode at session start, so
-       switching tracks means re-requesting the same transcode URL with a new
-       audioStreamID (best-known param name for this, unverified against a live request -
-       same caveat plex-player.js's _buildStreamUrl already carries for maxVideoBitrate)
-       plus a fresh session id and an offset resuming where playback left off. Reuses the
-       same "rebuild MediaItem, resume in place" mechanism applySubtitle uses above,
-       including carrying over whatever subtitle is currently active (currentSubtitleUri
-       et al, via currentSubtitleConfigOrNull) - a plain MediaItem.Builder with no
+       switching tracks means re-requesting the same transcode URL with a new session -
+       but a bare audioStreamID query param on that URL alone is NOT enough to make Plex
+       actually mux the requested track, confirmed against a real server (it kept
+       playing whatever was already selected regardless). The verified mechanism is
+       marking the stream "selected" on the Part first via PUT /library/parts/<id>?
+       audioStreamID=...&allParts=1 (plexUrl/token pulled off the existing transcode URL
+       itself, partId from EXTRA_PART_ID - see native-bridge.js's buildPlaybackPayload) -
+       the transcode decision then honors whatever's currently selected there. A fresh
+       `session` id alone isn't enough either, even combined with that PUT - confirmed
+       against a real server, it kept serving the OLD, still-warm session's audio
+       regardless, and only actually switched once that old session had time to expire
+       on its own (e.g. a full stop()+replay). Explicitly stopping the old session via
+       GET /video/:/transcode/universal/stop?session=<id> makes the switch immediate
+       instead of leaving it to Plex's own idle-timeout. Reuses the same "rebuild
+       MediaItem, resume in place" mechanism applySubtitle uses above, including
+       carrying over whatever subtitle is currently active (currentSubtitleUri et al,
+       via currentSubtitleConfigOrNull) - a plain MediaItem.Builder with no
        subtitleConfigurations silently dropped it here otherwise, confirmed against a
        real device where the ABR monitor's own switchQualityCap (same rebuild shape) did
        exactly that with no user action and no visible error in between. */
@@ -2033,6 +2052,7 @@ public class PlayerActivity extends AppCompatActivity {
         if (player == null || currentUrl == null) return;
         long resumeMs = player.getCurrentPosition();
         Uri oldUri = Uri.parse(currentUrl);
+        String oldSessionId = oldUri.getQueryParameter("session");
         Uri.Builder builder = oldUri.buildUpon().clearQuery();
         for (String name : oldUri.getQueryParameterNames()) {
             if (name.equals("audioStreamID") || name.equals("offset") || name.equals("session")) continue;
@@ -2043,14 +2063,47 @@ public class PlayerActivity extends AppCompatActivity {
         builder.appendQueryParameter("audioStreamID", streamId);
         builder.appendQueryParameter("offset", String.valueOf(resumeMs / 1000));
         builder.appendQueryParameter("session", java.util.UUID.randomUUID().toString());
-        currentUrl = builder.build().toString();
+        String newUrl = builder.build().toString();
         currentAudioStreamId = streamId;
-        MediaItem.Builder itemBuilder = new MediaItem.Builder().setUri(Uri.parse(currentUrl));
-        MediaItem.SubtitleConfiguration subtitleConfig = currentSubtitleConfigOrNull();
-        if (subtitleConfig != null) itemBuilder.setSubtitleConfigurations(java.util.Collections.singletonList(subtitleConfig));
-        player.setMediaItem(itemBuilder.build(), resumeMs);
-        player.prepare();
-        if (abrMonitor != null) abrMonitor.notifyReload();
+
+        Runnable applyNewUrl = () -> {
+            currentUrl = newUrl;
+            MediaItem.Builder itemBuilder = new MediaItem.Builder().setUri(Uri.parse(currentUrl));
+            MediaItem.SubtitleConfiguration subtitleConfig = currentSubtitleConfigOrNull();
+            if (subtitleConfig != null) itemBuilder.setSubtitleConfigurations(java.util.Collections.singletonList(subtitleConfig));
+            if (player != null) {
+                player.setMediaItem(itemBuilder.build(), resumeMs);
+                player.prepare();
+            }
+            if (abrMonitor != null) abrMonitor.notifyReload();
+        };
+
+        String token = oldUri.getQueryParameter("X-Plex-Token");
+        boolean canSelectStream = partId != null && !partId.isEmpty() && token != null;
+        boolean canStopOldSession = oldSessionId != null && token != null;
+        if (canSelectStream || canStopOldSession) {
+            String plexUrl = oldUri.getScheme() + "://" + oldUri.getAuthority();
+            PlexHttp.runAsync(() -> {
+                if (canSelectStream) {
+                    Uri putUri = Uri.parse(plexUrl + "/library/parts/" + partId).buildUpon()
+                        .appendQueryParameter("audioStreamID", streamId)
+                        .appendQueryParameter("allParts", "1")
+                        .appendQueryParameter("X-Plex-Token", token)
+                        .build();
+                    PlexHttp.putSync(putUri.toString());
+                }
+                if (canStopOldSession) {
+                    Uri stopUri = Uri.parse(plexUrl + "/video/:/transcode/universal/stop").buildUpon()
+                        .appendQueryParameter("session", oldSessionId)
+                        .appendQueryParameter("X-Plex-Token", token)
+                        .build();
+                    PlexHttp.getSync(stopUri.toString());
+                }
+                return null;
+            }, ignored -> applyNewUrl.run());
+        } else {
+            applyNewUrl.run();
+        }
     }
 
     /* Same "rebuild the transcode URL, resume in place" mechanism as switchAudioStream

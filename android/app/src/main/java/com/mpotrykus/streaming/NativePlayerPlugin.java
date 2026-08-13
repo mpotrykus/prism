@@ -27,6 +27,7 @@ public class NativePlayerPlugin extends Plugin implements PlayerActivity.Playbac
         long startPositionMs;
         JSArray chapters;
         JSArray audioStreams;
+        String partId;
         JSArray mediaVersions;
         Integer currentMediaIndex;
         Integer qualityCapKbps;
@@ -47,6 +48,7 @@ public class NativePlayerPlugin extends Plugin implements PlayerActivity.Playbac
         p.startPositionMs = call.getLong("startPositionMs", 0L);
         p.chapters = call.getArray("chapters");
         p.audioStreams = call.getArray("audioStreams");
+        p.partId = call.getString("partId");
         p.mediaVersions = call.getArray("mediaVersions");
         p.currentMediaIndex = call.getInt("currentMediaIndex");
         p.qualityCapKbps = call.getInt("qualityCapKbps");
@@ -95,6 +97,9 @@ public class NativePlayerPlugin extends Plugin implements PlayerActivity.Playbac
         if (p.audioStreams != null) {
             intent.putExtra(PlayerActivity.EXTRA_AUDIO_STREAMS_JSON, p.audioStreams.toString());
         }
+        if (p.partId != null && !p.partId.isEmpty()) {
+            intent.putExtra(PlayerActivity.EXTRA_PART_ID, p.partId);
+        }
         if (p.mediaVersions != null) {
             intent.putExtra(PlayerActivity.EXTRA_MEDIA_VERSIONS_JSON, p.mediaVersions.toString());
         }
@@ -130,6 +135,7 @@ public class NativePlayerPlugin extends Plugin implements PlayerActivity.Playbac
             p.chapters != null ? p.chapters.toString() : null,
             p.bifUrl,
             p.audioStreams != null ? p.audioStreams.toString() : null,
+            p.partId,
             p.mediaVersions != null ? p.mediaVersions.toString() : null,
             p.currentMediaIndex, p.qualityCapKbps);
         call.resolve();

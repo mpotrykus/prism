@@ -45,6 +45,41 @@ final class PlexHttp {
         }
     }
 
+    /* Fire-and-forget-shaped but still synchronous/throwing like the other *Sync
+       methods here - callers run it via runAsync and only care that it completed, not
+       about any response body. Used to mark a Stream "selected" on a Part (see
+       PlayerActivity.switchAudioStream) - Plex returns 200 with an empty body for this. */
+    static void putSync(String url) throws IOException {
+        HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
+        try {
+            conn.setRequestMethod("PUT");
+            conn.setConnectTimeout(15000);
+            conn.setReadTimeout(15000);
+            int code = conn.getResponseCode();
+            if (code < 200 || code >= 300) throw new IOException("HTTP " + code);
+        } finally {
+            conn.disconnect();
+        }
+    }
+
+    /* Same fire-and-forget shape as putSync above - used to explicitly stop a Plex
+       universal-transcode session (see PlayerActivity.switchAudioStream) rather than
+       just abandoning it, confirmed necessary against a real server: an in-place track
+       switch kept getting served the old, still-warm session's audio regardless of a
+       fresh `session` id and a successful Part-selection PUT, until the old session was
+       explicitly stopped or had timed out on its own. */
+    static void getSync(String url) throws IOException {
+        HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
+        try {
+            conn.setConnectTimeout(15000);
+            conn.setReadTimeout(15000);
+            int code = conn.getResponseCode();
+            if (code < 200 || code >= 300) throw new IOException("HTTP " + code);
+        } finally {
+            conn.disconnect();
+        }
+    }
+
     static Bitmap fetchBitmapSync(String url) throws IOException {
         HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
         try {

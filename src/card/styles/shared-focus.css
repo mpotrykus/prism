@@ -24,9 +24,33 @@
 .title-info-season-select:focus-visible,
 .more-sheet-item:focus-visible,
 .more-sheet-cancel:focus-visible {
-    outline: 2px solid #e5a00d88;
-    border-radius: 14px;
+    outline: 2px solid #e5a00daa;
+}
+
+.nav-item,
+.poster,
+.hero-info-btn,
+.hero-watchlist-btn,
+.hero-mute-btn,
+.hero-play-btn,
+.scroll-arrow,
+.pin-key,
+.pin-cancel,
+.profile-switch-btn,
+.profile-cancel,
+.title-info-close,
+.title-info-play,
+.title-info-restart-btn,
+.title-info-watched-btn,
+.title-info-watchlist-btn,
+.title-info-episode,
+.title-info-similar-item,
+.title-info-season-select,
+.more-sheet-item,
+.more-sheet-cancel {
+    outline: 2px solid #e5a00d00;
     outline-offset: 2px;
+    transition: .125s;
 }
 
 .nav-item {

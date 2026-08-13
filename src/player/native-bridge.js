@@ -207,6 +207,11 @@ function buildPlaybackPayload(controller, streamUrl, startOffsetMs) {
             label: s.label || "Unknown",
             selected: !!s.selected,
         })),
+        /* The Part id backing audioStreams above - PlayerActivity.switchAudioStream
+           needs it to PUT /library/parts/<id>?audioStreamID=...&allParts=1 against
+           Plex directly (see that method's own comment for why a bare audioStreamID
+           on the transcode URL isn't enough on its own). */
+        partId: controller._session.partId ?? null,
         /* {mediaIndex, label} per Plex Media[] entry (see title-info.js's
            extractMediaVersions) plus the currently-selected index/cap - PlayerUiHelper's
            Video Quality menu rebuilds the transcode URL itself when the user picks one

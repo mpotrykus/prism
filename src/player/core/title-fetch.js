@@ -1,4 +1,4 @@
-import { extractAudioStreams, extractMediaVersions, bifIndexPath } from "../../card/title-info.js";
+import { extractAudioStreams, extractMediaVersions, bifIndexPath, extractPartId } from "../../card/title-info.js";
 
 /* Fetches full metadata for an adjacent queued title (a title-prev/title-next jump - see
    chrome.js's seekToAdjacentTitle) so the player can hand it straight to
@@ -27,6 +27,7 @@ export async function fetchQueuedTitle(plexUrl, plexToken, ratingKey) {
         mediaVersions: extractMediaVersions(meta.Media),
         audioStreams: extractAudioStreams(meta.Media, 0),
         bifIndexPath: bifIndexPath(meta.Media, 0),
+        partId: extractPartId(meta.Media, 0),
         title: meta.grandparentTitle || meta.title || "",
         /* Only set for a genuine episode (grandparentTitle present) - same convention
            plex-netflix-card.js's _playItem uses (episodeTitle: item.seasonNumber != null

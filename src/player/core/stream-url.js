@@ -45,10 +45,6 @@ export function buildStreamUrl({
      param but unconfirmed against a real request from this codebase - verify via
      Plex Web's own network tab before relying on this for anything user-facing. */
   if (qualityCapKbps) url.searchParams.set("maxVideoBitrate", String(qualityCapKbps));
-  /* audioStreamID is the same "best-known param name for this endpoint, unverified
-     against a live request" situation as maxVideoBitrate above - only ever sent when
-     the user actively switches tracks, never on first load, so an initial play() is
-     unaffected if this assumption turns out to be wrong. */
   if (audioStreamID != null) url.searchParams.set("audioStreamID", String(audioStreamID));
   url.searchParams.set("offset", String(Math.floor(startOffsetMs / 1000)));
   url.searchParams.set("session", sessionId);
@@ -56,6 +52,22 @@ export function buildStreamUrl({
   url.searchParams.set("X-Plex-Product", "Prism");
   url.searchParams.set("X-Plex-Version", "1.0");
   url.searchParams.set("X-Plex-Platform", platform);
+  /* This was the actual, whole reason audio-track switching silently never worked -
+     confirmed by reading Plex Media Server's own logs on the real box (raspi-server):
+     without this param, its Media Decision Engine falls back to some broken default
+     that ignores audioStreamID AND the Part's own "selected" Stream flag entirely - it
+     built the literal same ffmpeg command (mapping the same hardcoded source stream,
+     force-downmixed to mono) no matter which track was requested, despite correctly
+     parsing and logging the requested id first. Adding this - the capabilities
+     declaration every real Plex client sends and Prism never did - made the same MDE
+     log line resolve to the actually-requested stream instead. Every symptom chased
+     before finding this (checkmark not updating, stale transcode sessions, the video
+     element needing a hard reset) was chasing effects of this one missing param, not
+     separate bugs. */
+  url.searchParams.set(
+    "X-Plex-Client-Capabilities",
+    "protocols=http-live-streaming,http-mp4-streaming,http-mp4-video,http-mp4-video-720p,http-mp4-video-1080p&videoDecoders=h264{profile:high&resolution:1080&level:51}&audioDecoders=mp3,aac,ac3,eac3,dts"
+  );
   url.searchParams.set("X-Plex-Token", plexToken);
   return url.toString();
 }

@@ -71,6 +71,15 @@ export function bifIndexPath(media, mediaIndex) {
   return part?.indexes ? `/library/parts/${part.id}/indexes/sd` : null;
 }
 
+/* The Part's own id - needed to PUT /library/parts/<id>?audioStreamID=...&allParts=1
+   when the player's Audio Track menu switches streams (see web-fallback.js's
+   reloadWebSource and PlayerActivity.switchAudioStream) - Plex's transcode start URL
+   doesn't reliably honor a bare audioStreamID query param on its own, but does honor
+   whichever stream is currently marked "selected" on the Part. */
+export function extractPartId(media, mediaIndex) {
+  return media?.[mediaIndex]?.Part?.[0]?.id ?? null;
+}
+
 export function formatRuntime(ms) {
   const mins = Math.round(ms / 60000);
   const h = Math.floor(mins / 60);
@@ -427,22 +436,18 @@ export class TitleInfoController {
           })
           .join("");
         list.querySelectorAll(".title-info-episode").forEach((row) => {
+          /* Delegates to _playEpisodeByRatingKey (same as the show-level Play button
+             resuming into an episode) instead of building the play payload straight off
+             `ep` - `ep` is this row's entry from the season's /children listing, and
+             Plex list endpoints truncate/omit nested Media[].Part[].Stream[] data the
+             same way they truncate Genre (see this repo's CLAUDE.md) - audioStreams/
+             mediaVersions extracted from it here used to come back empty or partial for
+             many episodes. _playEpisodeByRatingKey does a full single-item fetch first,
+             which always carries complete Stream data. */
           row.addEventListener("click", async () => {
             const ep = episodes.find((e) => String(e.ratingKey) === row.dataset.ratingKey);
             if (!ep) return;
-            const queueRatingKeys = await this._getShowEpisodeQueue(showRatingKey);
-            const queueIndex = queueRatingKeys.findIndex((k) => String(k) === String(ep.ratingKey));
-            this._ctx.onPlayItem(this._ctx.mapItem(ep, true), {
-              durationMs: ep.duration || null,
-              startOffsetMs: ep.viewOffset || 0,
-              source: "local",
-              markers: ep.Marker || [],
-              chapters: ep.Chapter || [],
-              audioStreams: extractAudioStreams(ep.Media, 0),
-              subtitleTracks: extractSubtitleTracks(ep.Media, 0),
-              bifIndexPath: bifIndexPath(ep.Media, 0),
-              ...(queueIndex >= 0 ? { queueRatingKeys, queueIndex } : {}),
-            });
+            await this._playEpisodeByRatingKey(ep.ratingKey);
           });
         });
         if (focusEpisodeRatingKey) {
@@ -595,6 +600,7 @@ export class TitleInfoController {
       audioStreams: extractAudioStreams(this._media, mediaIndex),
       subtitleTracks: extractSubtitleTracks(this._media, mediaIndex),
       bifIndexPath: bifIndexPath(this._media, mediaIndex),
+      partId: extractPartId(this._media, mediaIndex),
       ...queue,
     });
   }
@@ -645,6 +651,7 @@ export class TitleInfoController {
         audioStreams: extractAudioStreams(meta.Media, 0),
         subtitleTracks: extractSubtitleTracks(meta.Media, 0),
         bifIndexPath: bifIndexPath(meta.Media, 0),
+        partId: extractPartId(meta.Media, 0),
         ...(queueIndex >= 0 ? { queueRatingKeys, queueIndex } : {}),
       });
     } catch (e) {
@@ -680,6 +687,7 @@ export class TitleInfoController {
         audioStreams: extractAudioStreams(meta.Media, 0),
         subtitleTracks: extractSubtitleTracks(meta.Media, 0),
         bifIndexPath: bifIndexPath(meta.Media, 0),
+        partId: extractPartId(meta.Media, 0),
         queueRatingKeys: rawItems.map((m) => m.ratingKey),
         queueIndex: index,
       });

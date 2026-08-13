@@ -194,6 +194,7 @@
     isolation: isolate;
     flex: 0 0 160px;
     cursor: pointer;
+    border-radius: 14px;
 }
 
 .poster .glow {

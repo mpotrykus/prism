@@ -12,6 +12,36 @@ export const QUALITY_CAP_PRESETS = [
     { label: "480p (4 Mbps)", kbps: 4000 },
     { label: "360p (2 Mbps)", kbps: 2000 },
 ];
+/* Full-height right-side drawer gradient shared by both chrome-menu.js's hamburger sheet
+   and chrome-subtitles.js's Audio & Subtitles panel - same fade-from-the-right look, just
+   different panel widths. */
+export const SHEET_GRADIENT = "linear-gradient(to left, rgba(0,0,0,0.92) 0%, rgba(0,0,0,0.88) 55%, rgba(0,0,0,0.5) 85%, transparent 100%)";
+
+export const MENU_SCROLL_CLASS = "streaming-player-menu-scroll";
+
+/* A slim, on-theme scrollbar for any flyout content that overflows (subtitle search
+   results, a long chapter/audio-track list) instead of the browser's default wide
+   scrollbar clashing with the glass-panel look above. Injected once, lazily, rather than
+   at module load - nothing needs it until a panel actually overflows. Shared by
+   chrome-menu.js and chrome-subtitles.js so both panels use the exact same scrollbar
+   styling instead of each carrying its own copy. */
+export function ensureMenuScrollStyle() {
+    if (document.getElementById("streaming-player-menu-scroll-style")) return;
+    const style = document.createElement("style");
+    style.id = "streaming-player-menu-scroll-style";
+    style.textContent = `
+        .${MENU_SCROLL_CLASS} {
+            scrollbar-width: thin;
+            scrollbar-color: rgba(255,255,255,0.25) transparent;
+        }
+        .${MENU_SCROLL_CLASS}::-webkit-scrollbar { width: 6px; }
+        .${MENU_SCROLL_CLASS}::-webkit-scrollbar-track { background: transparent; }
+        .${MENU_SCROLL_CLASS}::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.25); border-radius: 3px; }
+        .${MENU_SCROLL_CLASS}::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.4); }
+    `;
+    document.head.appendChild(style);
+}
+
 export const VOLUME_STORAGE_KEY = "prism_player_volume";
 export const AMBIENT_STORAGE_KEY = "prism_player_ambient_enabled";
 export const AMBIENT_OPACITY_STORAGE_KEY = "prism_player_ambient_opacity";

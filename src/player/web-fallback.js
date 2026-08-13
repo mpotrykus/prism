@@ -17,7 +17,15 @@ import { closeAudioSubtitlesOverlay } from "./ui/chrome.js";
    UI-chrome/shader-pipeline methods (still defined on the class as thin delegates) for
    everything that isn't this path's own concern - the transport bar, shader pipeline,
    and skip-marker UI aren't separable from a playback session's own lifecycle. */
-export function playWeb(controller, streamUrl, startOffsetMs) {
+/* Shared by playWeb (cold start) and reloadWebSource (audio/version/quality-cap
+   switch) - every listener below checks controller._videoEl against its own closed-
+   over `video` before acting, the same guard _switchTitle's teardown-then-rebegin
+   already relied on for its own outgoing element (see the old comment this replaced):
+   hls.js's destroy() (or, on a native-HLS browser, the plain <video> "error" event)
+   can fire asynchronously on an element that's already been superseded, and that
+   stray event must not reach back into the controller for a title/switch it's no
+   longer about. */
+function createVideoElement(controller) {
     const video = document.createElement("video");
     video.className = "streaming-player-video";
     video.controls = false;
@@ -35,13 +43,6 @@ export function playWeb(controller, streamUrl, startOffsetMs) {
         background: "#000",
         zIndex: "10000",
     });
-    /* _switchTitle's teardown-then-rebegin (see plex-player.js) replaces controller._videoEl
-       with a fresh element, but the outgoing one's own listeners stay attached - hls.js's
-       destroy() clears the old video's src and calls load() on it, which fires this browser's
-       'error' event asynchronously, landing after the new title has already started playing.
-       Every listener below has to check it's still the current element before acting on the
-       controller, or that stray event on the torn-down video kills the title switch it wasn't
-       even about. */
     video.addEventListener("timeupdate", () => {
         if (controller._videoEl !== video || !controller._session) return;
         controller._session.lastTimeMs = Math.round(video.currentTime * 1000);
@@ -67,6 +68,21 @@ export function playWeb(controller, streamUrl, startOffsetMs) {
     });
     video.volume = storedVolume();
 
+    /* Tapping the video itself toggles play/pause, matching every mainstream player -
+       only when not zoomed in, since zoomed-in drag is already claimed by pan (see
+       _wireZoomPan) and would otherwise fight this for the same gesture. */
+    video.addEventListener("click", () => {
+        if (ZOOM_LEVELS[controller._zoomIndex] > 1) return;
+        if (video.paused) video.play();
+        else video.pause();
+    });
+    video.addEventListener("mousemove", () => controller._showControls());
+    video.addEventListener("touchstart", () => controller._showControls());
+    return video;
+}
+
+export function playWeb(controller, streamUrl, startOffsetMs) {
+    const video = createVideoElement(controller);
     attachSource(controller, video, streamUrl);
     video.currentTime = startOffsetMs / 1000;
     document.body.appendChild(video);
@@ -137,21 +153,6 @@ export function playWeb(controller, streamUrl, startOffsetMs) {
        native-HLS branch above (controller._hls stays null there) - see core/abr.js. */
     updateAbrMonitor(controller);
 
-    /* Tapping the video itself toggles play/pause, matching every mainstream player -
-       only when not zoomed in, since zoomed-in drag is already claimed by pan (see
-       _wireZoomPan) and would otherwise fight this for the same gesture. */
-    video.addEventListener("click", () => {
-        if (ZOOM_LEVELS[controller._zoomIndex] > 1) return;
-        if (video.paused) video.play();
-        else video.pause();
-    });
-
-    /* Mirrors how native player chrome behaves - visible on activity, fades after a few
-       seconds idle. This custom chrome (transport bar + top buttons) replaces
-       video.controls entirely now, so it owns show/hide itself rather than trying to
-       piggyback on the browser's own (now-disabled) control bar. */
-    video.addEventListener("mousemove", () => controller._showControls());
-    video.addEventListener("touchstart", () => controller._showControls());
     controller._scheduleHideControls();
 }
 
@@ -219,27 +220,65 @@ export function reloadWebSource(controller, overrides = {}) {
     const nextMediaIndex = overrides.mediaIndex ?? s.mediaIndex;
     const nextQualityCapKbps = "qualityCapKbps" in overrides ? overrides.qualityCapKbps : s.qualityCapKbps;
     const nextAudioStreamID = overrides.audioStreamID ?? s.audioStreamId;
-    const streamUrl = controller._buildStreamUrl({
-        plexUrl: s.plexUrl,
-        plexToken: s.plexToken,
-        key: s.key,
-        sessionId: crypto.randomUUID(),
-        startOffsetMs: offsetMs,
-        mediaIndex: nextMediaIndex,
-        qualityCapKbps: nextQualityCapKbps,
-        audioStreamID: nextAudioStreamID,
-    });
-    attachSource(controller, video, streamUrl);
-    video.currentTime = offsetMs / 1000;
+    const oldSessionId = s.transcodeSessionId;
     s.mediaIndex = nextMediaIndex;
     s.qualityCapKbps = nextQualityCapKbps;
     s.audioStreamId = nextAudioStreamID;
-    /* A fresh transcode session means whatever Auto Quality streak/cooldown state was
-       building against the old one no longer applies - see core/abr.js's notifyReload.
-       Also re-checks whether the monitor should be running at all, since attachSource
-       above just replaced controller._hls with a fresh instance. */
-    notifyReload(controller);
-    updateAbrMonitor(controller);
+
+    const rebuild = () => {
+        const sessionId = crypto.randomUUID();
+        const streamUrl = controller._buildStreamUrl({
+            plexUrl: s.plexUrl,
+            plexToken: s.plexToken,
+            key: s.key,
+            sessionId,
+            startOffsetMs: offsetMs,
+            mediaIndex: nextMediaIndex,
+            qualityCapKbps: nextQualityCapKbps,
+            audioStreamID: nextAudioStreamID,
+        });
+        s.transcodeSessionId = sessionId;
+        attachSource(controller, video, streamUrl);
+        video.currentTime = offsetMs / 1000;
+        /* A fresh transcode session means whatever Auto Quality streak/cooldown state
+           was building against the old one no longer applies - see core/abr.js's
+           notifyReload. Also re-checks whether the monitor should be running at all,
+           since attachSource above just replaced controller._hls with a fresh
+           instance. */
+        notifyReload(controller);
+        updateAbrMonitor(controller);
+    };
+
+    /* audioStreamID on the transcode start URL alone doesn't reliably make Plex
+       actually mux the requested track - confirmed against a real server, it kept
+       playing the previously-selected audio regardless of this param. The verified
+       mechanism (same one python-plexapi's own users landed on) is marking the stream
+       "selected" on the Part first via PUT /library/parts/<id>?audioStreamID=...
+       &allParts=1 - the transcode decision then honors whatever's currently selected
+       there. Only done when actually switching audio (not on a mediaIndex/qualityCap-
+       only reload) and only when a partId was resolved for this item at play() time. */
+    const selectAudio =
+        overrides.audioStreamID != null && s.partId
+            ? (() => {
+                  const putUrl = new URL(`${s.plexUrl}/library/parts/${s.partId}`);
+                  putUrl.searchParams.set("audioStreamID", String(overrides.audioStreamID));
+                  putUrl.searchParams.set("allParts", "1");
+                  putUrl.searchParams.set("X-Plex-Token", s.plexToken);
+                  return fetch(putUrl, { method: "PUT" }).catch(() => {});
+              })()
+            : Promise.resolve();
+
+    /* A new `session` id alone isn't enough either - confirmed against a real server,
+       an in-place reload kept getting served the OLD, still-warm transcode session's
+       audio selection even with a fresh session id and a successful Part-selection PUT
+       both in place, and only actually reflected the switch once the old session had
+       had time to expire on its own (e.g. a full stop()+replay). Explicitly stopping it
+       here makes the switch immediate instead of leaving it to Plex's own idle-timeout. */
+    const stopOldSession = oldSessionId
+        ? fetch(`${s.plexUrl}/video/:/transcode/universal/stop?session=${encodeURIComponent(oldSessionId)}&X-Plex-Token=${encodeURIComponent(s.plexToken)}`).catch(() => {})
+        : Promise.resolve();
+
+    Promise.all([selectAudio, stopOldSession]).then(rebuild, rebuild);
 }
 
 export function teardownWeb(controller) {
