@@ -3,6 +3,7 @@ import { lockScroll, unlockScroll } from "../../scroll-lock.js";
 import { paintWatchlistButton } from "./watchlist.js";
 import { WATCHED_ICON_SVG } from "./rows.js";
 import { PROFILE_ICON_SVG } from "./profile.js";
+import { pickNextEpisode } from "./logic/catalog.js";
 
 /* Plex's Media[].Part[].Stream[] carries every stream on a version (video/audio/
    subtitle, distinguished by streamType - 2 is audio). Only surfaced for the player's
@@ -158,6 +159,7 @@ export class TitleInfoController {
     this._resumeEpisodeKey = null;
     this._flatQueueContext = null;
     this._episodeQueueCache = null;
+    this._nextEpisodeCache = null;
 
     this._wire();
   }
@@ -317,11 +319,15 @@ export class TitleInfoController {
     if (source === "watchlist") {
       ratingKey = await this._ctx.resolveLocalRatingKey(item);
       if (this._item !== item) return;
-      /* Swap the item's Discover-scoped ratingKey for the resolved local one so
-         downstream staleness checks (_loadSimilar/_loadSeasons compare against
+      /* Swap the item's Discover-scoped ratingKey (and key) for the resolved local ones
+         so downstream staleness checks (_loadSimilar/_loadSeasons compare against
          this._item.ratingKey) and Play's native playback request both key off the ID
-         that actually exists on this server. */
+         that actually exists on this server. item.key must move with ratingKey -
+         plex-player.js's _prepareSession prefers item.key over deriving the path from
+         ratingKey, so leaving the old Discover-scoped key in place here silently sends
+         playback requests at a path that doesn't exist on this server. */
       item.ratingKey = ratingKey;
+      item.key = ratingKey ? `/library/metadata/${ratingKey}` : item.key;
     }
     if (!ratingKey) {
       this._setButtonsLoading(false);
@@ -386,8 +392,10 @@ export class TitleInfoController {
       })
       .join("");
 
-    if (meta.type === "show") this._loadSeasons(meta.ratingKey);
-    else if (meta.type === "collection") this._loadCollectionItems(meta.ratingKey);
+    if (meta.type === "show") {
+      this._loadSeasons(meta.ratingKey);
+      this._loadShowResumeLabel(meta);
+    } else if (meta.type === "collection") this._loadCollectionItems(meta.ratingKey);
     else if (meta.type === "playlist") this._loadPlaylistItems(meta.ratingKey);
     this._loadSimilar(meta.ratingKey);
   }
@@ -577,6 +585,18 @@ export class TitleInfoController {
     if (item.type === "collection" || item.type === "playlist") {
       return this._playFirstFlatItem();
     }
+    /* A show has no Media[] of its own either - this only runs when _resumeEpisodeKey
+       wasn't already set above, i.e. the modal was opened directly off the show's own
+       poster/row (browsing "TV Shows", search, etc.) rather than redirected here from an
+       on-deck/continue-watching episode (see openForEpisode). Previously this fell
+       straight through to onPlayItem(item, ...) with the show container itself as the
+       "item" - not a playable thing on this server, so playback silently failed for any
+       show whose modal wasn't opened via an episode. Plex has no per-show on-deck lookup
+       (confirmed empirically - /library/metadata/<ratingKey>/onDeck 404s), so this pulls
+       every episode via allLeaves and picks one with pickNextEpisode instead. */
+    if (item.type === "show") {
+      return this._playShow(item.ratingKey, { restart });
+    }
     /* Always starts on the first Media[] entry with no cap - Version/Quality Cap are
        now an in-player "Video Quality" menu (see chrome.js's openVideoQualityMenu) fed
        by mediaVersions below, not a pre-play choice made here. */
@@ -604,6 +624,55 @@ export class TitleInfoController {
       partId: extractPartId(this._media, mediaIndex),
       ...queue,
     });
+  }
+
+  /* Resolves which episode a show's own top-level Play button should start on (see the
+     _playCurrentItem branch above), then hands off to _playEpisodeByRatingKey exactly
+     like clicking that episode's row in the season list would. Shares _getNextEpisode's
+     cache with _loadShowResumeLabel below so the button's "Resume S# E#" label and what
+     actually plays can never disagree about which episode is next. */
+  async _playShow(showRatingKey, { restart = false } = {}) {
+    const episode = await this._getNextEpisode(showRatingKey);
+    if (!episode || this._item?.ratingKey !== showRatingKey) return;
+    await this._playEpisodeByRatingKey(episode.ratingKey, { restart });
+  }
+
+  /* Cached per show for as long as this modal stays open on it (same pattern as
+     _getShowEpisodeQueue) - _playShow and _loadShowResumeLabel both need "which episode
+     is next", and a show's allLeaves listing doesn't change mid-session. */
+  _getNextEpisode(showRatingKey) {
+    if (this._nextEpisodeCache?.showRatingKey === showRatingKey) return this._nextEpisodeCache.promise;
+    const promise = this._fetchNextEpisode(showRatingKey);
+    this._nextEpisodeCache = { showRatingKey, promise };
+    return promise;
+  }
+
+  async _fetchNextEpisode(showRatingKey) {
+    try {
+      const data = await this._ctx.plexFetch(`/library/metadata/${showRatingKey}/allLeaves`);
+      const episodes = data?.MediaContainer?.Metadata || [];
+      const ratingKey = pickNextEpisode(episodes);
+      return episodes.find((ep) => String(ep.ratingKey) === String(ratingKey)) || null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /* A show's Play/Resume button only showed "Resume S# E#" (instead of a bare "Resume")
+     when this modal was opened via an on-deck episode redirect (openForEpisode already
+     knows the episode from the click that led here) - not when opened directly off the
+     show's own poster/row, even though _playCurrentItem's show branch resolves and
+     plays that exact same next episode either way. Resolves it here too, async (so it
+     doesn't block the modal's initial paint) and only when there's some history to
+     resume - a never-started show already correctly shows a bare "▶ Play" (see
+     _updatePlayHistoryUI), which doesn't need a season/episode number. */
+  async _loadShowResumeLabel(meta) {
+    if (!hasAnyHistory(meta)) return;
+    const showRatingKey = meta.ratingKey;
+    const episode = await this._getNextEpisode(showRatingKey);
+    if (!episode || this._item?.ratingKey !== showRatingKey) return;
+    const resumeEpisode = episode.parentIndex != null && episode.index != null ? { season: episode.parentIndex, episode: episode.index } : null;
+    this._updatePlayHistoryUI(true, resumeEpisode, false);
   }
 
   /* Full show-wide episode order (every season flattened, ratingKeys only) so the

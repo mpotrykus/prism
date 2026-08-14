@@ -58,6 +58,24 @@ export function mapItem(m, withProgress, { plexImageUrl, plexThumbUrl = plexImag
   return item;
 }
 
+/* A show's top-level Play button has no single episode to hand off to the way a movie
+   hands off to its own Media[] - Plex's list endpoints have no per-show "on deck"
+   lookup (confirmed empirically: /library/metadata/<ratingKey>/onDeck 404s, unlike the
+   library-wide /library/onDeck), so this walks the show's full episode list (as
+   returned by /library/metadata/<ratingKey>/allLeaves) in season/episode order and
+   picks the first one that's either mid-progress or not yet watched. A fully-watched
+   series falls back to its very first episode - restarting from the top, the same
+   behavior Netflix's own Play button has on a completed series - rather than doing
+   nothing. */
+export function pickNextEpisode(episodes) {
+  if (!episodes?.length) return null;
+  const sorted = [...episodes].sort(
+    (a, b) => (a.parentIndex || 0) - (b.parentIndex || 0) || (a.index || 0) - (b.index || 0)
+  );
+  const next = sorted.find((ep) => (ep.viewOffset || 0) > 0 || !ep.viewCount);
+  return (next || sorted[0]).ratingKey;
+}
+
 export function mergeGenreRows(sections, { genreBySection, mapItem: mapItemFn, shuffle: shuffleFn, rowSize }) {
   const merged = new Map();
   for (const s of sections) {

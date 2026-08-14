@@ -8,6 +8,7 @@ import {
   buildCollectionRows,
   buildAiRows,
   parseAiSectionIdeas,
+  pickNextEpisode,
 } from "./catalog.js";
 
 describe("shuffle", () => {
@@ -45,6 +46,55 @@ describe("mapItem", () => {
     expect(withIt.progress).toBe(0.5);
     const withoutIt = mapItem({ type: "movie", viewOffset: 50, duration: 100 }, false, { plexImageUrl });
     expect(withoutIt.progress).toBeUndefined();
+  });
+});
+
+describe("pickNextEpisode", () => {
+  it("returns null for an empty/missing list", () => {
+    expect(pickNextEpisode([])).toBeNull();
+    expect(pickNextEpisode(undefined)).toBeNull();
+  });
+
+  it("picks the first episode of a never-started show", () => {
+    const episodes = [
+      { ratingKey: "1", parentIndex: 1, index: 1, viewCount: 0, viewOffset: 0 },
+      { ratingKey: "2", parentIndex: 1, index: 2, viewCount: 0, viewOffset: 0 },
+    ];
+    expect(pickNextEpisode(episodes)).toBe("1");
+  });
+
+  it("picks the in-progress episode over later unwatched ones", () => {
+    const episodes = [
+      { ratingKey: "1", parentIndex: 1, index: 1, viewCount: 1, viewOffset: 0 },
+      { ratingKey: "2", parentIndex: 1, index: 2, viewCount: 0, viewOffset: 12000 },
+      { ratingKey: "3", parentIndex: 1, index: 3, viewCount: 0, viewOffset: 0 },
+    ];
+    expect(pickNextEpisode(episodes)).toBe("2");
+  });
+
+  it("picks the first unwatched episode after a run of watched ones, crossing season boundaries", () => {
+    const episodes = [
+      { ratingKey: "1", parentIndex: 1, index: 1, viewCount: 1, viewOffset: 0 },
+      { ratingKey: "2", parentIndex: 1, index: 2, viewCount: 1, viewOffset: 0 },
+      { ratingKey: "3", parentIndex: 2, index: 1, viewCount: 0, viewOffset: 0 },
+    ];
+    expect(pickNextEpisode(episodes)).toBe("3");
+  });
+
+  it("restarts from the first episode when the whole series is fully watched", () => {
+    const episodes = [
+      { ratingKey: "1", parentIndex: 1, index: 1, viewCount: 1, viewOffset: 0 },
+      { ratingKey: "2", parentIndex: 1, index: 2, viewCount: 1, viewOffset: 0 },
+    ];
+    expect(pickNextEpisode(episodes)).toBe("1");
+  });
+
+  it("sorts out-of-order input by season/episode index", () => {
+    const episodes = [
+      { ratingKey: "2", parentIndex: 1, index: 2, viewCount: 0, viewOffset: 0 },
+      { ratingKey: "1", parentIndex: 1, index: 1, viewCount: 0, viewOffset: 0 },
+    ];
+    expect(pickNextEpisode(episodes)).toBe("1");
   });
 });
 
