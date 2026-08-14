@@ -139,7 +139,7 @@ export class HeroController {
     } catch (e) {
       // fall through to the youtube fallback below
     }
-    if (!config.youtube_api_key) return null;
+    if (!config.trailers_enabled || !config.youtube_api_key) return null;
     const title = item.title || item.grandparentTitle || "";
     const query = `${title} ${item.year || ""} trailer`.trim();
     try {

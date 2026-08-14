@@ -59,6 +59,21 @@ section.group:first-child { margin-top: 18px; }
   font-size: 12px; font-weight: 700; text-transform: uppercase;
   letter-spacing: 0.06em; color: rgba(255,255,255,0.45); margin-bottom: 10px;
 }
+.group-title-row { display: flex; align-items: center; justify-content: space-between; }
+.group-title-row .group-title { margin-bottom: 0; }
+.switch { position: relative; display: inline-block; width: 34px; height: 20px; flex: none; cursor: pointer; }
+.switch input { position: absolute; inset: 0; opacity: 0; margin: 0; cursor: pointer; }
+.switch-track {
+  position: absolute; inset: 0; border-radius: 999px;
+  background: rgba(255,255,255,0.18); transition: background-color 0.15s ease;
+}
+.switch-track::before {
+  content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px;
+  border-radius: 50%; background: #fff; transition: transform 0.15s ease;
+}
+.switch input:checked + .switch-track { background: #e5a00d; }
+.switch input:checked + .switch-track::before { transform: translateX(14px); }
+.switch input:focus-visible + .switch-track { outline: 2px solid #e5a00d; outline-offset: 2px; }
 label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 6px; color: rgba(255,255,255,0.85); }
 .field { margin-bottom: 12px; }
 .field-row { display: flex; gap: 10px; align-items: center; }

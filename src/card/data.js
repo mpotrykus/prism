@@ -226,7 +226,7 @@ async function loadGenreDataBySection(card) {
 
 async function loadAiIdeas(card) {
   const key = card._config.openrouter_api_key;
-  if (!key) return [];
+  if (!card._config.ai_rows_enabled || !key) return [];
   const cacheKey = "prism.aiIdeasCache";
   const cadenceMs = card._config.ai_rows_cadence_ms;
   let cached = null;

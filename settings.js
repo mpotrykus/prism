@@ -19,6 +19,8 @@ const DEFAULT_PLAIN_CONFIG = {
   max_genre_rows: 12,
   row_size: 20,
   subtitle_provider: "plex",
+  trailers_enabled: true,
+  ai_rows_enabled: true,
 };
 
 const SECTION_TYPE_MAP = { movie: 1, show: 2 };
@@ -91,16 +93,28 @@ class StreamingSettingsModal extends HTMLElement {
 
             <div class="tab-panel" data-tab="integrations">
               <section class="group">
-                <div class="group-title">Trailers (optional)</div>
-                <div class="field">
+                <div class="group-title-row">
+                  <div class="group-title">Trailers</div>
+                  <label class="switch">
+                    <input type="checkbox" class="f-trailers-enabled" />
+                    <span class="switch-track"></span>
+                  </label>
+                </div>
+                <div class="field trailers-fields">
                   <label>YouTube Data API Key</label>
                   <input type="password" class="f-youtube-key" placeholder="Used as a fallback when Plex has no trailer" />
                 </div>
               </section>
 
               <section class="group">
-                <div class="group-title">AI Rows (optional)</div>
-                <div class="row-2col">
+                <div class="group-title-row">
+                  <div class="group-title">AI Rows</div>
+                  <label class="switch">
+                    <input type="checkbox" class="f-ai-enabled" />
+                    <span class="switch-track"></span>
+                  </label>
+                </div>
+                <div class="row-2col ai-fields">
                   <div class="field">
                     <label>OpenRouter API Key</label>
                     <input type="password" class="f-openrouter-key" />
@@ -184,6 +198,8 @@ class StreamingSettingsModal extends HTMLElement {
     this._el(".btn-fetch-libraries").addEventListener("click", () => this._fetchLibraries());
     this._el(".btn-save").addEventListener("click", () => this._save());
     this._el(".f-subtitle-provider").addEventListener("change", () => this._syncSubtitleProviderFields());
+    this._el(".f-trailers-enabled").addEventListener("change", () => this._syncIntegrationToggleFields());
+    this._el(".f-ai-enabled").addEventListener("change", () => this._syncIntegrationToggleFields());
     this.shadowRoot.querySelectorAll(".tab-btn").forEach((btn) => {
       btn.addEventListener("click", () => this._switchTab(btn.dataset.tab));
     });
@@ -202,7 +218,7 @@ class StreamingSettingsModal extends HTMLElement {
     wireLinearNav(
       this.shadowRoot,
       ".modal-close, .tab-btn, .btn-reauth, .btn-fetch-libraries, .section-row .s-enabled, .section-row .s-label, " +
-        ".f-youtube-key, .f-openrouter-key, .f-subtitle-provider, " +
+        ".f-trailers-enabled, .f-youtube-key, .f-ai-enabled, .f-openrouter-key, .f-subtitle-provider, " +
         ".f-opensubtitles-username, .f-opensubtitles-password, .f-opensubtitles-key, " +
         ".f-ai-cadence, .f-max-genre-rows, .f-row-size, " +
         ".btn-cancel, .btn-save",
@@ -223,6 +239,19 @@ class StreamingSettingsModal extends HTMLElement {
     });
   }
 
+  /* Toggling Trailers/AI Rows off only hides their input fields - it doesn't clear the
+     underlying secret, so flipping back on later still has the credential in place (see
+     _collectSecrets below, which reads the field values directly rather than clearing
+     them on toggle-off). */
+  _syncIntegrationToggleFields() {
+    this.shadowRoot.querySelectorAll(".trailers-fields").forEach((el) => {
+      el.style.display = this._el(".f-trailers-enabled").checked ? "" : "none";
+    });
+    this.shadowRoot.querySelectorAll(".ai-fields").forEach((el) => {
+      el.style.display = this._el(".f-ai-enabled").checked ? "" : "none";
+    });
+  }
+
   _switchTab(key) {
     this.shadowRoot.querySelectorAll(".tab-btn").forEach((btn) => btn.classList.toggle("active", btn.dataset.tab === key));
     this.shadowRoot.querySelectorAll(".tab-panel").forEach((panel) => panel.classList.toggle("active", panel.dataset.tab === key));
@@ -230,17 +259,6 @@ class StreamingSettingsModal extends HTMLElement {
 
   async open() {
     const config = loadPlain();
-    /* Secret fields are deliberately left blank rather than pre-filled - no reason to
-       ever echo an already-stored API key back into a password input. Left blank +
-       saved, they're treated as "keep whatever's already stored" (see
-       _getEffectiveSecrets/_save below); only a typed value overrides. */
-    const secretsPresent = hasSecrets();
-    this._el(".f-youtube-key").value = "";
-    this._el(".f-youtube-key").placeholder = secretsPresent
-      ? "•••••••• (leave blank to keep current)"
-      : "Used as a fallback when Plex has no trailer";
-    this._el(".f-openrouter-key").value = "";
-    this._el(".f-openrouter-key").placeholder = secretsPresent ? "•••••••• (leave blank to keep current)" : "";
     this._plexUrl = config.plex_url || "";
     this._el(".plex-server-status").textContent = this._plexUrl ? `Connected — ${this._plexUrl}` : "Not connected.";
     this._el(".plex-server-status").className = this._plexUrl ? "status plex-server-status ok" : "status plex-server-status err";
@@ -249,22 +267,26 @@ class StreamingSettingsModal extends HTMLElement {
     this._el(".f-row-size").value = config.row_size ?? 20;
     this._machineId = config.machine_id || "";
     this._sections = config.sections || [];
+    this._el(".f-trailers-enabled").checked = config.trailers_enabled !== false;
+    this._el(".f-ai-enabled").checked = config.ai_rows_enabled !== false;
     /* Reset per-open so a stale in-memory copy from a previous session never lingers -
-       any field left blank this time re-reads from the vault rather than silently
-       reusing whatever was decrypted last time this modal was open. */
+       fields re-read from the vault rather than silently reusing whatever was decrypted
+       last time this modal was open. */
     this._unlockedSecrets = null;
     this._el(".f-subtitle-provider").value = config.subtitle_provider || "plex";
-    /* Unlike the YouTube/OpenRouter keys above, these are shown filled in rather than
-       blank+placeholder - the OpenSubtitles credential fields are only visible at all
-       once the user has already opted into this provider, so there's no "don't echo a
-       secret back" concern the same way there is for keys entered once and forgotten;
-       being able to see/edit what's actually saved matters more here since a wrong
-       username/password otherwise only surfaces as an opaque 401 during playback. */
+    /* All credential fields below are shown filled in with the real stored value rather
+       than blank+placeholder - the toggle above is what lets a credential stay saved
+       while unused, so there's no "don't echo a secret back" concern; being able to
+       see/edit what's actually saved matters more, since a stale/wrong key otherwise
+       only surfaces as an opaque failure later. */
     const secrets = await this._getEffectiveSecrets();
+    this._el(".f-youtube-key").value = secrets.youtube_api_key || "";
+    this._el(".f-openrouter-key").value = secrets.openrouter_api_key || "";
     this._el(".f-opensubtitles-username").value = secrets.opensubtitles_username || "";
     this._el(".f-opensubtitles-password").value = secrets.opensubtitles_password || "";
     this._el(".f-opensubtitles-key").value = secrets.opensubtitles_api_key || "";
     this._syncSubtitleProviderFields();
+    this._syncIntegrationToggleFields();
     this._switchTab(TABS[0].key);
     this._renderSectionList();
     this._el(".fetch-status").textContent = "";
@@ -382,20 +404,20 @@ class StreamingSettingsModal extends HTMLElement {
       max_genre_rows: Number(this._el(".f-max-genre-rows").value) || 12,
       row_size: Number(this._el(".f-row-size").value) || 20,
       subtitle_provider: this._el(".f-subtitle-provider").value || "plex",
+      trailers_enabled: this._el(".f-trailers-enabled").checked,
+      ai_rows_enabled: this._el(".f-ai-enabled").checked,
     };
   }
 
-  /* A blank YouTube/OpenRouter field means "keep whatever's already stored", not
-     "clear it" - those are shown blank on open (see open() above), so blank is the
-     passive default, not a deliberate edit. The OpenSubtitles fields are the opposite:
-     they're shown filled with the real value, so whatever's in them now - including
-     blank, if the user actually cleared it - is taken as-is. */
+  /* Every credential field is now shown filled with its real stored value (see open()),
+     so whatever's in each one now - including blank, if the user actually cleared it -
+     is taken as-is rather than falling back to the existing stored value. */
   async _collectSecrets() {
     const existing = await this._getEffectiveSecrets();
     return {
       plex_token: existing.plex_token || "",
-      youtube_api_key: this._el(".f-youtube-key").value.trim() || existing.youtube_api_key || "",
-      openrouter_api_key: this._el(".f-openrouter-key").value.trim() || existing.openrouter_api_key || "",
+      youtube_api_key: this._el(".f-youtube-key").value.trim(),
+      openrouter_api_key: this._el(".f-openrouter-key").value.trim(),
       plex_account_token: existing.plex_account_token || "",
       opensubtitles_username: this._el(".f-opensubtitles-username").value.trim(),
       opensubtitles_password: this._el(".f-opensubtitles-password").value.trim(),

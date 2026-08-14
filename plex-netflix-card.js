@@ -87,6 +87,8 @@ class PlexNetflixCard extends HTMLElement {
       title: "Streaming",
       landscape_every_nth: 4,
       ai_rows_cadence_ms: 7 * 24 * 60 * 60 * 1000,
+      trailers_enabled: true,
+      ai_rows_enabled: true,
       ...config,
     };
     if (!this._built) {
