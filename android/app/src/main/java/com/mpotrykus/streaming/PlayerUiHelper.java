@@ -167,14 +167,16 @@ final class PlayerUiHelper {
        GestureDetector and every button underneath once locked, rather than needing a
        locked-check threaded through each of those separately. Built once, toggled
        VISIBLE/GONE by setTouchLocked rather than added/removed from the view tree per
-       lock/unlock cycle. A tap surfaces the "long-press to unlock" message; the overlay's
-       own GestureDetector.onLongPress is the only way out. */
+       lock/unlock cycle. A tap anywhere surfaces the "long-press here to unlock" pill, but
+       onLongPress only actually unlocks if the press lands within that pill's own bounds
+       (see the bounds check below) - a long-press anywhere else on the locked screen is a
+       no-op, same as an accidental in-pocket press. */
     static void buildLockOverlay(PlayerActivity activity, float density) {
         FrameLayout overlay = new FrameLayout(activity);
         overlay.setVisibility(View.GONE);
 
         TextView message = new TextView(activity);
-        message.setText("Long-press to unlock");
+        message.setText("Long-press here to unlock");
         message.setTextColor(Color.WHITE);
         message.setTextSize(14);
         GradientDrawable messageBg = new GradientDrawable();
@@ -205,7 +207,15 @@ final class PlayerUiHelper {
 
             @Override
             public void onLongPress(MotionEvent e) {
-                activity.setTouchLocked(false);
+                /* message's Left/Top/Right/Bottom are in overlay's own coordinate space
+                   (it's a direct child laid out via CENTER gravity), same space e.getX()/
+                   getY() arrive in since the detector is fed from overlay's own touch
+                   listener - no coordinate translation needed. */
+                if (message.getVisibility() == View.VISIBLE
+                        && e.getX() >= message.getLeft() && e.getX() <= message.getRight()
+                        && e.getY() >= message.getTop() && e.getY() <= message.getBottom()) {
+                    activity.setTouchLocked(false);
+                }
             }
         });
         /* Always returns true - this overlay is the only touch consumer once visible,
