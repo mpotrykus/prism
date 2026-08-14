@@ -155,9 +155,28 @@ public class PlayerActivity extends AppCompatActivity {
 
     private static PlaybackListener listener;
     private static PlayerActivity activeInstance;
+    private boolean isCurrentlyPip;
 
     public static void setListener(PlaybackListener l) {
         listener = l;
+    }
+
+    /* MainActivity's onResume checks this to immediately moveTaskToBack itself rather
+       than staying visible - otherwise Android's documented "activity below a PiP window
+       becomes resumed and interactable" behavior (developer.android.com/develop/ui/views/
+       picture-in-picture) would let the browsing UI show/act as a separate surface behind
+       the floating player, which is exactly what PiP mode here is meant to prevent.
+
+       Deliberately NOT based on isCurrentlyPip/onPictureInPictureModeChanged - confirmed
+       via logcat (device: SM_X710) that callback fires AFTER MainActivity.onResume() on
+       real hardware, not before, so a flag set from it always reads stale here. isFinishing()
+       is set synchronously by finish()/onBackPressed() before onPause() runs, and MainActivity
+       only ever gets resumed out from under the player in the two cases: (1) it's genuinely
+       exiting (isFinishing() true - let MainActivity show normally), or (2) it just got
+       reparented into PiP's own task and paused in place (isFinishing() false - bounce
+       MainActivity back). */
+    static boolean isActiveAndNotFinishing() {
+        return activeInstance != null && !activeInstance.isFinishing();
     }
 
     /* Package-private (not private) rather than exposed via getters/setters - PlayerUiHelper
@@ -939,6 +958,7 @@ public class PlayerActivity extends AppCompatActivity {
     @Override
     public void onPictureInPictureModeChanged(boolean isInPictureInPictureMode, Configuration newConfig) {
         super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig);
+        isCurrentlyPip = isInPictureInPictureMode;
         if (isInPictureInPictureMode) {
             controlsFadeHandler.removeCallbacks(controlsFadeRunnable);
             setControlsVisible(false);
@@ -2543,6 +2563,34 @@ public class PlayerActivity extends AppCompatActivity {
             if (listener != null) {
                 listener.onStopped(position);
             }
+        }
+    }
+
+    /* Confirmed via logcat (SM_X710) that live PiP playback only ever reaches onPause(),
+       never onStop() - the pinned window keeps the activity visible, just not focused.
+       onStop() firing at all therefore means either a normal finish (isFinishing() already
+       true, nothing to do) or the activity just went fully invisible without finishing -
+       which on this device is exactly what happens when the user taps PiP's system "X":
+       it calls onStop() but never finish()/onDestroy(), leaving the ExoPlayer instance
+       alive and playing audio with nothing on screen. Finishing here closes that gap for
+       both that case and plain backgrounding (e.g. Home/Recents) without PiP - this app
+       has no background-audio/MediaSession story, so "not visible and not pinned" should
+       always mean playback is over. */
+    @Override
+    protected void onStop() {
+        super.onStop();
+        /* Captured before finish() below - onPictureInPictureModeChanged(false) hasn't
+           run yet at this point (confirmed via logcat: it fires right after this onStop,
+           not before), so isCurrentlyPip is still whatever it was while pinned. Only a
+           pip-close should also tear down MainActivity's task - a plain fullscreen
+           back-out reaches this same finish() a line below with isCurrentlyPip already
+           false, and MainActivity is expected to resume normally there, not disappear. */
+        boolean wasPinned = isCurrentlyPip;
+        if (!isFinishing()) {
+            finish();
+        }
+        if (wasPinned) {
+            MainActivity.finishIfRunning();
         }
     }
 
