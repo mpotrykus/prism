@@ -23,7 +23,11 @@ export function buildGenreMatchHubs(query, limit, { genreBySection }) {
   const q = query.trim().toLowerCase();
   if (!q) return [];
   const merged = new Map();
-  for (const entries of genreBySection.values()) {
+  /* genreBySection is undefined until loadBackgroundData finishes (search is wired up
+     and usable well before that resolves) - treating it as empty here lets title/actor/
+     year/facet matches still come back correctly instead of the whole search throwing
+     and showing "Search failed". */
+  for (const entries of (genreBySection || new Map()).values()) {
     for (const g of entries) {
       if (!g.title.toLowerCase().includes(q)) continue;
       const norm = g.title.trim().toLowerCase();

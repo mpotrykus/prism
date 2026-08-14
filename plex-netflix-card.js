@@ -131,6 +131,7 @@ class PlexNetflixCard extends HTMLElement {
     this._currentView = "home";
     this._lastSearchQuery = null;
     this._lastSearchHubs = null;
+    this._searchSeq = 0;
     this.attachShadow({ mode: "open" });
     this.shadowRoot.innerHTML = `
       <style>${STYLE}</style>

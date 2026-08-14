@@ -339,7 +339,15 @@ export async function loadAll(card) {
     card._recommendedRowCache = {};
     const view = card._currentView || "home";
     await card._hero.loadInitialItem(card._buildHeroInitialPool(view));
-    card._renderCurrentView();
+    /* The user can start typing into search well before this first paint (and the
+       background load below) resolve - card._currentView flips to "search" and its own
+       render pipeline (search-page.js) owns _rowsEl from then on. Without this check,
+       this unconditional re-render stomps the search results back to the home/section
+       grid while _currentView still says "search", leaving nav/search state and what's
+       on screen out of sync until the next explicit exitSearch(). The underlying data
+       this assigns above is still picked up correctly whenever the user does back out of
+       search, since exitSearch() itself calls _renderCurrentView(). */
+    if (card._currentView !== "search") card._renderCurrentView();
   } catch (err) {
     card._renderMessage(`Couldn't load Plex: ${err.message}`);
     return;
@@ -382,10 +390,13 @@ async function loadBackgroundData(card) {
   card._genreRowsCache = {};
   card._recommendedRowCache = {};
   await card._hero.fillFromGenresIfStillEmpty(sectionsForView(card, card._currentView));
-  card._renderCurrentView({ showHero: false });
+  /* Same "don't stomp an active search view" guard as loadAll above - the user may well
+     still be searching by the time this background load (or the AI-rows pass after it)
+     resolves. */
+  if (card._currentView !== "search") card._renderCurrentView({ showHero: false });
 
   const aiIdeas = await loadAiIdeas(card);
   card._aiRowsRaw = aiIdeas.length ? await fetchAiRowsRaw(card, aiIdeas) : [];
   card._genreRowsCache = {};
-  card._renderCurrentView({ showHero: false });
+  if (card._currentView !== "search") card._renderCurrentView({ showHero: false });
 }

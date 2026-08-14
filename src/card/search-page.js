@@ -1,5 +1,6 @@
 import { parseYearQuery, buildGenreMatchHubs, buildReasonMatchHubs, SEARCH_REASON_LABELS } from "./logic/search.js";
 import { plexFetch } from "./data.js";
+import { releasePosterImgClaims } from "./rows.js";
 
 /* Search: the search-box input handling, the /hubs/search + genre/year/facet hub
    building, and the results-page render. Takes the PlexNetflixCard instance as an
@@ -40,14 +41,22 @@ export function exitSearch(card) {
 }
 
 async function runSearch(card, q) {
+  /* Typing slowly lets each keystroke's own 300ms debounce fully elapse before the next
+     one lands, so onSearchInput's clearTimeout never gets a chance to cancel anything -
+     every intermediate query (e.g. "R", "Ri", "Rid", ...) fires its own independent
+     in-flight fetch. Those responses can resolve out of order (an earlier, broader query
+     taking longer than a later, narrower one), so without a sequence check the LAST
+     response to land wins the render even if it's for a stale query - confirmed
+     empirically: "Riddi" typed slowly showed "R"'s broader result set. */
+  const seq = ++card._searchSeq;
   try {
     const hubs = await buildSearchHubs(card, q, SEARCH_HUB_LIMIT, card._config.row_size);
-    if (card._currentView !== "search") return;
+    if (card._currentView !== "search" || seq !== card._searchSeq) return;
     card._lastSearchQuery = q;
     card._lastSearchHubs = hubs;
     renderSearchPage(card, hubs);
   } catch (e) {
-    if (card._currentView !== "search") return;
+    if (card._currentView !== "search" || seq !== card._searchSeq) return;
     card._rowsEl.innerHTML = `<div class="empty">${card._emptyStateHtml("Search failed")}</div>`;
   }
 }
@@ -191,6 +200,13 @@ export function renderSearchPage(card, hubs, { expanded = false } = {}) {
     card._rowsEl.innerHTML = `<div class="empty">${card._emptyStateHtml("No results")}</div>`;
     return;
   }
+  /* The whole page (every hub's posters) is built fully detached below and only attached
+     to card._rowsEl once at the very end - release claims now, before any poster in this
+     pass is built, so a title that shows up in more than one hub (title match + genre
+     match + collection match, etc. - common in search) gets a real clone for its repeat
+     appearances instead of getPosterImg mistaking an earlier, still-detached sibling
+     poster's img for "free" and stealing it. */
+  releasePosterImgClaims();
   const page = document.createElement("div");
   page.className = "search-page";
   if (expanded) {

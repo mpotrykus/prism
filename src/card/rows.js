@@ -24,6 +24,21 @@ export const WATCHED_ICON_SVG =
    a full-row wipe); otherwise clone it - cloning an already-loaded <img> is a browser
    memory-cache hit, not a real fetch, so it doesn't defeat the point of the cache. */
 const posterImgCache = new Map();
+/* Tracks which cached imgs are currently "spoken for" by some poster - either actually on
+   screen, or mid-construction inside a detached tree that hasn't been attached to the
+   document yet (e.g. renderSearchPage builds every hub's posters before appending the
+   whole page once at the end). img.isConnected can't tell those two cases apart from "not
+   in use at all" (also not connected) - it was wrongly treating an earlier, still-detached
+   sibling poster's img as free, ripping it out from under that poster when the same title
+   appeared in a second search hub within the same render pass, leaving the first instance
+   permanently imageless. Cleared via releasePosterImgClaims() whenever a render is about
+   to fully replace what's currently in rowsEl, so those now-orphaned imgs become reusable
+   again instead of triggering a pointless duplicate fetch. */
+const claimedImgs = new Set();
+
+export function releasePosterImgClaims() {
+  claimedImgs.clear();
+}
 
 function getPosterImg(src, alt) {
   let img = posterImgCache.get(src);
@@ -32,9 +47,10 @@ function getPosterImg(src, alt) {
     img.loading = "lazy";
     img.src = src;
     posterImgCache.set(src, img);
-  } else if (img.isConnected) {
+  } else if (claimedImgs.has(img)) {
     img = img.cloneNode();
   }
+  claimedImgs.add(img);
   img.alt = alt;
   return img;
 }
@@ -247,6 +263,7 @@ const PINNED_BOTTOM_TITLES = new Set(["Collections", "Playlists"]);
 
 export function renderRows(rowsEl, rows, landscapeEveryNth, ctx, { merge = false } = {}) {
   if (!merge) {
+    releasePosterImgClaims();
     rowsEl.innerHTML = "";
     if (!rows.length) {
       rowsEl.innerHTML = `<div class="empty">${emptyStateHtml("Nothing to show yet.", ctx.escape)}</div>`;
