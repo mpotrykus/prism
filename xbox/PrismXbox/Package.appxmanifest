@@ -4,7 +4,8 @@
   xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
   xmlns:mp="http://schemas.microsoft.com/appx/2014/phone/manifest"
   xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
-  IgnorableNamespaces="uap mp">
+  xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+  IgnorableNamespaces="uap mp rescap">
 
   <Identity
     Name="com.mpotrykus.prismxbox"
@@ -70,10 +71,37 @@
     -->
     <Capability Name="internetClient" />
     <!--
-      Not requested yet - this shell has no native player bridge (Phase 4, deferred). Add
-      hevcPlayback / PlayReady DeviceCapability once MediaPlayerElement/HLS native playback
-      is implemented; see https://learn.microsoft.com/windows/uwp/audio-video-camera/hevc-xbox
-      and https://learn.microsoft.com/windows/uwp/audio-video-camera/playready-client-sdk
+      Required for NATIVE code to reach a Plex server on the LAN. The WebView2-hosted web app
+      does not need it - WebView2 runs its own network stack in a separate process, outside the
+      app container's network isolation - which is why the browser leg has always worked against
+      a private-network server with only internetClient declared.
+
+      Native WinRT networking is inside the container, and without this it fails on any private
+      address: AdaptiveMediaSource.CreateFromUriAsync returned ManifestDownloadFailure /
+      0x80070005 (E_ACCESSDENIED) against https://192-168-0-224.<hash>.plex.direct:32400 while
+      the same URL played fine in the WebView. Note plex.direct is a public DNS name that
+      resolves to a private IP, so the isolation applies to the resolved address, not the name.
+      moonlight-xbox declares this same capability for the same reason.
     -->
+    <Capability Name="privateNetworkClientServer" />
+    <!--
+      hevcPlayback (the restricted capability that enables 4K/HDR10 playback per
+      https://learn.microsoft.com/windows/uwp/audio-video-camera/hevc-xbox). A prior attempt
+      declared this capability WITHOUT the xmlns:rescap namespace declaration/IgnorableNamespaces
+      entry now above, and the app failed activation on the console with 0xc000027b
+      (STATUS_STOWED_EXCEPTION), crashing before Microsoft.UI.Xaml.Markup.winmd had even loaded -
+      i.e. before any first-party code in App or MainPage runs.
+
+      moonlight-xbox (C++/CX, TargetDeviceFamily MinVersion 10.0.0.0) declares hevcPlayback the
+      same way and works on this same console, and its manifest DOES declare xmlns:rescap - this
+      build's previous attempt didn't. This is candidate #1 from the prior investigation. If this
+      still crashes with 0xc000027b, remaining candidates: declaring a Windows.Xbox
+      TargetDeviceFamily alongside Windows.Universal, or checking decode support at runtime via
+      ProtectionCapabilities.IsTypeSupported instead - though that reports support rather than
+      enabling the 4K path.
+
+      PlayReady is not requested: nothing here plays DRM-protected content.
+    -->
+    <rescap:Capability Name="hevcPlayback" />
   </Capabilities>
 </Package>

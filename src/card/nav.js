@@ -1,4 +1,5 @@
-import { registerNavHandler } from "../../focus-nav.js";
+import { focusAfterPaint, registerNavHandler } from "../../focus-nav.js";
+import { player } from "../../plex-player.js";
 
 /* Sidenav: rendering one tab per fetched library, wiring each tab's click, and the
    2D D-pad/gamepad navigation across sidenav + hero + poster rows (there's no single
@@ -67,6 +68,51 @@ export function renderNavSections(card) {
     card._currentView = "home";
   }
   card._navItems.forEach((n) => n.classList.toggle("active", n.dataset.view === card._currentView));
+}
+
+/* Gamepad Y toggles the header search box in and out of focus. Every other command in this
+   app is focus-scoped (only meaningful to whichever handler currently owns focus), but "jump
+   to search" is meaningful from anywhere in the browsing UI, so this one has to be gated on
+   app scope explicitly - suppressed while any overlay or the player is up - rather than
+   deciding by focus membership the way wireHomeNav below does. */
+export function wireSearchToggle(card) {
+  const inMainApp = () =>
+    !card._titleInfo.isOpen() &&
+    !card._pin.isOpen() &&
+    !card._profileOverlay.classList.contains("open") &&
+    !card._moreOverlay.classList.contains("open") &&
+    !document.querySelector("streaming-settings-modal")?.isOpen() &&
+    !document.querySelector("streaming-plex-signin-modal")?.isOpen() &&
+    !player.isOpen();
+
+  registerNavHandler((command, e, active) => {
+    if (command !== "search") return false;
+    if (!inMainApp()) return false;
+
+    if (active !== card._searchInput) {
+      card._searchReturnFocusEl = active;
+      card._searchWrap.classList.add("expanded");
+      focusAfterPaint(card._searchInput);
+      return true;
+    }
+
+    card._searchInput.blur();
+    /* Same condition as the input's own blur listener: the box stays expanded while the
+       search results page is what's on screen. */
+    if (card._currentView !== "search") card._searchWrap.classList.remove("expanded");
+    /* Blurring alone would leave focus on nothing at all, so the next D-pad press would
+       restart from wireHomeNav's lazy first-press fallback instead of resuming where the
+       user was. The remembered element is often not a usable target by now - typing a query
+       re-renders .rows over whatever row was focused, and it's the card host or <body> in
+       the first place if nothing was focused when search was opened - hence the
+       still-focusable check and the sidenav fallback, the sidenav being the one thing always
+       on screen and always D-pad navigable. */
+    const prev = card._searchReturnFocusEl;
+    card._searchReturnFocusEl = null;
+    const usable = prev?.isConnected && prev.tabIndex >= 0 && prev.offsetParent !== null;
+    focusAfterPaint(usable ? prev : card._navItems[0]);
+    return true;
+  });
 }
 
 /* The home screen (sidenav + hero + a 2D grid of poster rows) isn't a single list -

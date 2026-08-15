@@ -31,7 +31,7 @@ import { TitleInfoController } from "./src/card/title-info.js";
 import { HeroController } from "./src/card/hero.js";
 import { plexFetch, loadAll, sectionForView, sectionsForView, fetchWatchlistRaw, fetchOnDeckRaw } from "./src/card/data.js";
 import { onSearchInput, exitSearch, renderSearchPage } from "./src/card/search-page.js";
-import { wireNavItem, renderNavSections, wireHomeNav } from "./src/card/nav.js";
+import { wireNavItem, renderNavSections, wireHomeNav, wireSearchToggle } from "./src/card/nav.js";
 
 import hostResetCss from "./src/card/styles/host-reset.css?inline";
 import sidenavCss from "./src/card/styles/sidenav.css?inline";
@@ -385,6 +385,7 @@ class PlexNetflixCard extends HTMLElement {
         this._searchInput.blur();
       }
     });
+    wireSearchToggle(this);
   }
 
   _wireNavItem(el) {

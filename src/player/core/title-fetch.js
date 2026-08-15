@@ -1,4 +1,4 @@
-import { extractAudioStreams, extractMediaVersions, bifIndexPath, extractPartId } from "../../card/title-info.js";
+import { extractAudioStreams, extractMediaVersions, bifIndexPath, extractPartId, isHdrVideo } from "../../card/title-info.js";
 
 /* Fetches full metadata for an adjacent queued title (a title-prev/title-next jump - see
    chrome.js's seekToAdjacentTitle) so the player can hand it straight to
@@ -26,6 +26,7 @@ export async function fetchQueuedTitle(plexUrl, plexToken, ratingKey) {
         chapters: meta.Chapter || [],
         mediaVersions: extractMediaVersions(meta.Media),
         audioStreams: extractAudioStreams(meta.Media, 0),
+        isHdr: isHdrVideo(meta.Media, 0),
         bifIndexPath: bifIndexPath(meta.Media, 0),
         partId: extractPartId(meta.Media, 0),
         title: meta.grandparentTitle || meta.title || "",

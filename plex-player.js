@@ -21,12 +21,15 @@
    method for every one of them so every existing internal cross-reference between
    concerns (e.g. the shader pipeline reaching into applyZoomTransform, the web fallback
    reaching into the shared control-row/menu chrome) keeps working unchanged. */
-import { Capacitor } from "@capacitor/core";
 import { registerNavHandler } from "./focus-nav.js";
 import { lockScroll, unlockScroll } from "./scroll-lock.js";
 import { detectShaderType } from "./src/player/shader/shaders.js";
+import { hasNativePlayer, platformTag, plexPlatformTag, usesProgressiveStream, supportsHdr } from "./src/player/core/platform.js";
+import { media } from "./src/player/core/media-facade.js";
+import { reportStreamUrl } from "./src/player/xbox-spike.js";
 import { buildStreamUrl, buildDecisionUrl } from "./src/player/core/stream-url.js";
-import { playNative, switchNative, stopNative, pauseNative, resumeNative } from "./src/player/native-bridge.js";
+import { playNative, switchNative, stopNative, pauseNative, resumeNative, buildPlaybackPayload } from "./src/player/native-bridge.js";
+import { playXbox, switchXbox, stopXbox, pauseXbox, resumeXbox, reloadXboxSource } from "./src/player/xbox-bridge.js";
 import { playWeb, attachSource, reloadWebSource, teardownWeb } from "./src/player/web-fallback.js";
 import { setShaderStrength, setColorBoostStrength, updateShaderPipeline, ensureShaderPipeline, stopShaderLoop } from "./src/player/shader-pipeline.js";
 import { setAmbientEnabled, setAmbientOpacity, updateAmbientPipeline, stopAmbientLoop } from "./src/player/ambient-pipeline.js";
@@ -70,6 +73,11 @@ import { openEpisodeListOverlay, closeEpisodeListOverlay } from "./src/player/ui
    its "progress"-listener piggyback ping rather than importing it from here - see that
    file's own comment for why a circular import back into this module isn't safe here. */
 const TIMELINE_PING_MS = 10000;
+/* 10s per press, matching the transport bar's own +/- seek buttons. */
+const NAV_SEEK_STEP_MS = 10000;
+/* Long enough to absorb a burst of D-pad repeats into one transcode restart, short enough not to feel
+   like lag on a single press. */
+const NAV_SEEK_COMMIT_MS = 600;
 const CLIENT_ID_KEY = "prism_plex_client_identifier";
 
 function clientIdentifier() {
@@ -86,6 +94,10 @@ class StreamingPlayerController {
         this._session = null;
         this._videoEl = null;
         this._hls = null;
+        /* Whatever object core/abr.js reads `bandwidthEstimate` off for Auto Quality -
+           the hls.js instance itself on web, null on a backend that can't measure
+           bandwidth. Registered via setBandwidthSource, never assigned directly. */
+        this._bandwidthSource = null;
         this._nativeListenerHandles = [];
         this._pingTimer = null;
         /* Piggybacked timeline-ping throttle for native playback - see
@@ -149,14 +161,39 @@ class StreamingPlayerController {
         this._abrStableStreak = 0;
         this._abrHasRealSample = false;
         this._onPopState = this._onPopState.bind(this);
-        /* A player has no sidenav/rows to navigate - the only D-pad/gamepad action it
-           needs is an exit, same effect as the visible close button. Registered once,
-           for the module's lifetime, and simply no-ops whenever nothing is playing. */
+        /* Registered once, for the module's lifetime, and no-ops whenever nothing is playing.
+           `back` applies on every platform - same effect as the visible close button. The rest is
+           gated to the Xbox leg for now, because that is the only platform where the player has no
+           pointer at all: the chrome is mouse/touch-driven on web, and native on Android. Without it
+           a console can start playback and then reach nothing but the exit.
+
+           Not enabled everywhere yet purely to avoid slipping a keyboard-behaviour change into the web
+           player as a side effect; arrow-key seek would be a reasonable thing to offer there too, but
+           that is a deliberate decision to make on its own. */
         registerNavHandler((command) => {
-            if (command !== "back" || !this._session) return false;
-            this.stop();
-            return true;
+            if (!this._session) return false;
+            /* Yield entirely while one of the player's own overlays is open. focus-nav.js consults every
+               registered handler for the same keypress (it memoizes the cooldown on the event so no
+               handler can starve another), so without this the player would act on the same press the
+               open overlay is acting on: `back` would stop playback instead of closing the sheet -
+               which left the chrome orphaned on screen - and up/down would scrub while also moving the
+               menu selection. The convention this module is following is focus-nav.js's own: only the
+               handler whose scope currently owns focus should act. */
+            if (this._inlineMenuEl || this._audioSubtitlesEl || this._episodeListEl) return false;
+            if (command === "back") {
+                this.stop();
+                return true;
+            }
+            if (platformTag() !== "xbox") return false;
+            return this._handlePlayerNavCommand(command);
         });
+    }
+
+    /* Same "is playback up" test the nav handler above uses, exposed for the card's own
+       app-level shortcuts (see nav.js's wireSearchToggle), which have to stay inert while
+       the player overlay covers the app. */
+    isOpen() {
+        return !!this._session;
     }
 
     async play(item) {
@@ -199,7 +236,7 @@ class StreamingPlayerController {
        the next title, a visible swipe-out/in Activity transition for what should read as
        one continuous player staying on screen. */
     async _switchTitle(item) {
-        if (Capacitor.isNativePlatform() && Capacitor.getPlatform() === "android") {
+        if (hasNativePlayer()) {
             await this._switchTitleNative(item);
             return;
         }
@@ -226,7 +263,7 @@ class StreamingPlayerController {
 
     async _beginSession(item) {
         const { streamUrl, startOffsetMs } = this._prepareSession(item);
-        if (Capacitor.isNativePlatform() && Capacitor.getPlatform() === "android") {
+        if (hasNativePlayer()) {
             await this._playNative(streamUrl, startOffsetMs);
             /* Native's own equivalent lives in native-bridge.js's "progress" listener
                instead of right here - _videoEl exists synchronously the instant
@@ -307,6 +344,10 @@ class StreamingPlayerController {
                audio-track switch (see web-fallback.js's reloadWebSource and
                native-bridge.js's buildPlaybackPayload), not just request one. */
             partId: item.partId ?? null,
+            /* Read from Plex's own video-stream metadata before playback starts (title-info.js's
+               isHdrVideo). The Xbox leg needs it up front to switch the console's HDMI output into an
+               HDR mode before the first frame - see HdrDisplayController. Harmless everywhere else. */
+            isHdr: !!item.isHdr,
             /* Ordered sibling ratingKeys (a show's full episode order, or a playlist/
                collection's own order) this title came from, if any - see title-info.js's
                _getShowEpisodeQueue/_flatQueueContext. Powers the title-prev/title-next
@@ -389,8 +430,8 @@ class StreamingPlayerController {
                refresh, the card's Continue Watching row refresh) would otherwise race the
                fire-and-forget ping and read the pre-stop position. */
             await this._reportTimeline("stopped");
-            if (Capacitor.isNativePlatform() && Capacitor.getPlatform() === "android") {
-                await stopNative(this);
+            if (hasNativePlayer()) {
+                await (platformTag() === "xbox" ? stopXbox(this) : stopNative(this));
             } else {
                 this._teardownWeb();
             }
@@ -419,11 +460,17 @@ class StreamingPlayerController {
     }
 
     _buildStreamUrl(opts) {
-        return buildStreamUrl({
+        const url = buildStreamUrl({
             ...opts,
             clientIdentifier: clientIdentifier(),
-            platform: Capacitor.isNativePlatform() ? "Android" : "Chrome",
+            platform: plexPlatformTag(),
+            progressive: usesProgressiveStream(),
+            hdr: supportsHdr(),
         });
+        /* Phase 0 spike only, no-op everywhere but the Xbox shell - hands native a real
+           tokened URL to probe AdaptiveMediaSource with. Remove with xbox-spike.js. */
+        reportStreamUrl(url);
+        return url;
     }
 
     /* Same opts shape as _buildStreamUrl above (deliberately - see buildDecisionUrl's
@@ -434,15 +481,33 @@ class StreamingPlayerController {
         return buildDecisionUrl({
             ...opts,
             clientIdentifier: clientIdentifier(),
-            platform: Capacitor.isNativePlatform() ? "Android" : "Chrome",
+            platform: plexPlatformTag(),
+            progressive: usesProgressiveStream(),
+            hdr: supportsHdr(),
         });
     }
 
+    /* The two native backends are dispatched here rather than behind one abstraction, because they
+       genuinely differ in transport (Capacitor plugin vs WebView2 messages) while sharing the method
+       and event NAMES - see xbox-bridge.js's header. buildPlaybackPayload is Android's, reused
+       deliberately: it owns the String() coercions for Plex's numeric ids that a bridge must not lose. */
     _playNative(streamUrl, startOffsetMs) {
+        if (platformTag() === "xbox") {
+            return playXbox(
+                this,
+                streamUrl,
+                startOffsetMs,
+                buildPlaybackPayload(this, streamUrl, startOffsetMs),
+                (url, offsetMs) => buildPlaybackPayload(this, url, offsetMs)
+            );
+        }
         return playNative(this, streamUrl, startOffsetMs);
     }
 
     _switchNative(streamUrl, startOffsetMs) {
+        if (platformTag() === "xbox") {
+            return switchXbox(this, streamUrl, startOffsetMs, buildPlaybackPayload(this, streamUrl, startOffsetMs));
+        }
         return switchNative(this, streamUrl, startOffsetMs);
     }
 
@@ -454,7 +519,74 @@ class StreamingPlayerController {
         return attachSource(this, video, streamUrl);
     }
 
-    _reloadWebSource(overrides) {
+    /* Restarts the Plex transcode session with new mediaIndex/qualityCapKbps/audioStreamID, or (on the
+       progressive path only) a new position. Dispatches per platform because only the final "hand the
+       new URL to the player" step differs - the Plex protocol sequence itself lives once in
+       core/session-reload.js. Called by core/abr.js, chrome-menu.js's Version/Quality menus and
+       chrome-subtitles.js's audio picker, none of which need to know which backend is playing. */
+    /* Gamepad control for a player whose chrome is DOM built for mouse/touch. Deliberately the
+       standard TV scheme (arrows scrub, A toggles playback, Up opens the menu) rather than moving a
+       focus ring between chrome elements - on a 10-foot display, arrows-scrub is what viewers expect,
+       and it needs no focusable-element traversal through a chrome that was never built for it.
+
+       Up opens the options menu because that sheet is the only route to Chapters, Version, Quality Cap,
+       Audio & Subtitles, Effects and Extras. */
+    _handlePlayerNavCommand(command) {
+        const el = media(this);
+        if (!el) return false;
+        this._showControls();
+        switch (command) {
+            case "activate":
+                if (el.paused) this.resume();
+                else this.pause();
+                return true;
+            case "left":
+                this._queueNavSeek(-NAV_SEEK_STEP_MS);
+                return true;
+            case "right":
+                this._queueNavSeek(NAV_SEEK_STEP_MS);
+                return true;
+            case "up":
+                if (this._menuButtonEl) this._openHamburgerMenu(this._menuButtonEl);
+                return true;
+            case "down":
+                /* Just waking the chrome. Showing it is already done above, so this exists to claim the
+                   command rather than let it fall through to another handler. */
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    /* Seeks are accumulated and committed after a short idle rather than applied per press. On the
+       progressive path every seek is a full Plex transcode restart (see xbox-bridge.js's
+       reloadXboxSource), so holding right would otherwise fire a restart per repeat and thrash the
+       server - the exact orphaned-session problem the Phase 0 spikes ran into, but self-inflicted and
+       once per keypress. */
+    _queueNavSeek(deltaMs) {
+        const el = media(this);
+        if (!el) return;
+        const durationMs = (el.duration || 0) * 1000;
+        const fromMs = this._navSeekTargetMs != null ? this._navSeekTargetMs : (el.currentTime || 0) * 1000;
+        const target = Math.max(0, durationMs ? Math.min(fromMs + deltaMs, durationMs - 1000) : fromMs + deltaMs);
+        this._navSeekTargetMs = target;
+        /* Reflected immediately so the scrub bar tracks each press even though the actual seek is still
+           pending - otherwise the UI looks frozen for the whole coalescing window. */
+        this._session.lastTimeMs = Math.round(target);
+        clearTimeout(this._navSeekTimer);
+        this._navSeekTimer = setTimeout(() => {
+            const commitMs = this._navSeekTargetMs;
+            this._navSeekTargetMs = null;
+            if (commitMs != null && media(this)) media(this).currentTime = commitMs / 1000;
+        }, NAV_SEEK_COMMIT_MS);
+    }
+
+    _reloadSource(overrides) {
+        if (platformTag() === "xbox") {
+            return reloadXboxSource(this, overrides, (streamUrl, offsetMs) =>
+                buildPlaybackPayload(this, streamUrl, offsetMs)
+            );
+        }
         return reloadWebSource(this, overrides);
     }
 
@@ -602,19 +734,19 @@ class StreamingPlayerController {
 
     async pause() {
         if (!this._session) return;
-        if (Capacitor.isNativePlatform() && Capacitor.getPlatform() === "android") {
-            await pauseNative();
-        } else if (this._videoEl) {
-            this._videoEl.pause();
+        if (hasNativePlayer()) {
+            await (platformTag() === "xbox" ? pauseXbox() : pauseNative());
+        } else {
+            media(this)?.pause();
         }
     }
 
     async resume() {
         if (!this._session) return;
-        if (Capacitor.isNativePlatform() && Capacitor.getPlatform() === "android") {
-            await resumeNative();
-        } else if (this._videoEl) {
-            this._videoEl.play();
+        if (hasNativePlayer()) {
+            await (platformTag() === "xbox" ? resumeXbox() : resumeNative());
+        } else {
+            media(this)?.play();
         }
     }
 

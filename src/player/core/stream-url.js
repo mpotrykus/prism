@@ -5,6 +5,37 @@
    does), so there is deliberately one place these are built, not two copies drifting
    apart. clientIdentifier and platform are passed in already-resolved rather than read
    from localStorage/Capacitor here, so this stays a pure function of its inputs. */
+/* What this client tells Plex it can decode. Plex's Media Decision Engine uses it to choose between
+   direct play, direct stream (remux, video copied) and a full transcode - so it is the single thing
+   that decides whether HDR survives.
+
+   The baseline is deliberately conservative: h264 High up to 1080p. That is what every existing leg
+   sends, and it is why Plex tone-maps and re-encodes 4K HEVC HDR down to 1080p SDR before any player
+   ever sees it - no renderer can recover HDR from that.
+
+   `hdr` widens it to HEVC Main 10 at 2160p and declares the BT.2020/PQ colour support Plex looks for,
+   which is what makes the MDE choose direct stream and copy the video untouched. Only passed on a
+   backend that can actually present HDR (see core/platform.js's supportsHdr) - advertising it from a
+   player that cannot would make Plex hand over HDR frames to be displayed as washed-out SDR, which is
+   worse than the tone-mapped transcode it replaces. */
+function clientCapabilities(hdr) {
+  const protocols =
+    "protocols=http-live-streaming,http-mp4-streaming,http-mp4-video,http-mp4-video-720p,http-mp4-video-1080p";
+  const audio = "audioDecoders=mp3,aac,ac3,eac3,dts,truehd";
+  if (!hdr) {
+    return `${protocols}&videoDecoders=h264{profile:high&resolution:1080&level:51}&${audio}`;
+  }
+  /* hevc listed before h264: Plex takes the order as preference, and the point of this branch is to
+     have HEVC chosen when the source is HEVC rather than falling back to an h264 transcode. */
+  return (
+    `${protocols},http-mp4-video-2160p` +
+    "&videoDecoders=hevc{profile:main10&resolution:2160&level:153&colorSpace:bt2020nc&colorTrc:smpte2084}," +
+    "hevc{profile:main&resolution:2160&level:153}," +
+    "h264{profile:high&resolution:1080&level:51}" +
+    `&${audio}`
+  );
+}
+
 function buildTranscodeUrl(endpoint, {
   plexUrl,
   plexToken,
@@ -17,12 +48,23 @@ function buildTranscodeUrl(endpoint, {
   audioStreamID = null,
   clientIdentifier,
   platform,
+  progressive = false,
+  hdr = false,
 }) {
   const url = new URL(`${plexUrl}${endpoint}`);
   url.searchParams.set("path", key);
   url.searchParams.set("mediaIndex", String(mediaIndex));
   url.searchParams.set("partIndex", String(partIndex));
-  url.searchParams.set("protocol", "hls");
+  /* protocol=http is Plex's progressive (single continuous response) output; protocol=hls is the
+     segmented playlist one. Passed in by the caller rather than derived here, so this stays a pure
+     function of its inputs like clientIdentifier/platform above.
+
+     Xbox uses progressive because HLS does not work there, measured on hardware: Plex serves empty
+     single-packet TS segments for a fresh session regardless of token, and UWP's AdaptiveMediaSource
+     additionally mis-seeks on Plex's #EXT-X-START:TIME-OFFSET (reading an absolute media position as
+     an offset into a playlist that already begins there). Progressive plays and sustains. Full
+     evidence in docs/xbox-native-hdr-player/05-phase0-spike-results.md. */
+  url.searchParams.set("protocol", progressive ? "http" : "hls");
   url.searchParams.set("fastSeek", "1");
   /* directPlay=0 is deliberate, not a missed optimization: this same URL always
      requests an .m3u8 HLS playlist, and asking Plex for a literal direct-play
@@ -80,16 +122,20 @@ function buildTranscodeUrl(endpoint, {
      before finding this (checkmark not updating, stale transcode sessions, the video
      element needing a hard reset) was chasing effects of this one missing param, not
      separate bugs. */
-  url.searchParams.set(
-    "X-Plex-Client-Capabilities",
-    "protocols=http-live-streaming,http-mp4-streaming,http-mp4-video,http-mp4-video-720p,http-mp4-video-1080p&videoDecoders=h264{profile:high&resolution:1080&level:51}&audioDecoders=mp3,aac,ac3,eac3,dts"
-  );
+  url.searchParams.set("X-Plex-Client-Capabilities", clientCapabilities(hdr));
   url.searchParams.set("X-Plex-Token", plexToken);
   return url.toString();
 }
 
 export function buildStreamUrl(opts) {
-  return buildTranscodeUrl("/video/:/transcode/universal/start.m3u8", opts);
+  /* start.mp4 goes with protocol=http and start.m3u8 with protocol=hls - Plex keys off both, and
+     mismatching them produces a response the requesting player can't use. Note the extension is
+     nominal: Plex answered start.mp4 with Content-Type: video/x-matroska and MediaFoundation played
+     it regardless. */
+  const endpoint = opts.progressive
+    ? "/video/:/transcode/universal/start.mp4"
+    : "/video/:/transcode/universal/start.m3u8";
+  return buildTranscodeUrl(endpoint, opts);
 }
 
 /* Every real Plex client (Plex Web, Plezy, etc.) calls /video/:/transcode/universal/

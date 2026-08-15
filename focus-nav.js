@@ -37,6 +37,11 @@ const REPEAT_DELAY_MS = 400;
 const REPEAT_RATE_MS = 150;
 const DEADZONE = 0.5;
 
+/* "GamepadY" is not a real keyboard key and no keyboard produces it - the gamepad poller
+   below is its only source. Y has no keyboard equivalent worth binding (any letter key
+   would fire while typing in the search box it toggles), so rather than give the Y button
+   its own separate dispatch path it gets an invented key name fed through this same
+   pathway, borrowing Windows' own GamepadY virtual-key naming. */
 export const KEY_TO_COMMAND = {
   ArrowUp: "up",
   ArrowDown: "down",
@@ -45,6 +50,7 @@ export const KEY_TO_COMMAND = {
   Enter: "activate",
   Escape: "back",
   Backspace: "back",
+  GamepadY: "search",
 };
 
 const COMMAND_TO_KEY = {
@@ -54,6 +60,7 @@ const COMMAND_TO_KEY = {
   right: "ArrowRight",
   activate: "Enter",
   back: "Escape",
+  search: "GamepadY",
 };
 
 const lastCommandAt = Object.create(null);
@@ -173,7 +180,7 @@ export function wireLinearNav(root, selector, { orientation = "vertical", onActi
 const AXIS_DIRECTIONS = ["up", "down", "left", "right"];
 const directionState = Object.fromEntries(AXIS_DIRECTIONS.map((d) => [d, { active: false, heldSince: 0, lastRepeatAt: 0 }]));
 const buttonState = Object.create(null);
-const GAMEPAD_BUTTONS = { 0: "activate", 1: "back" }; // standard mapping: A, B
+const GAMEPAD_BUTTONS = { 0: "activate", 1: "back", 3: "search" }; // standard mapping: A, B, Y
 
 function dispatchSyntheticKey(key) {
   const target = document.activeElement && document.activeElement !== document.body ? document.activeElement : document;

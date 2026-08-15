@@ -1,7 +1,10 @@
-import { Capacitor } from "@capacitor/core";
+import { hasNativePlayer } from "../core/platform.js";
+import { wireLinearNav } from "../../../focus-nav.js";
+import { media } from "../core/media-facade.js";
+import { parseSubtitleCues, activeCuesAt } from "../core/subtitle-cues.js";
 import * as StreamingSubtitles from "../core/subtitle-provider.js";
 import * as subtitleStore from "../core/subtitle-store.js";
-import { reloadWebSource, trySwitchAudioTrackLocal } from "../web-fallback.js";
+import { trySwitchAudioTrackLocal } from "../web-fallback.js";
 import { setNativeSubtitle, setNativeSubtitleOffset, notifyNativeSubtitleApplied } from "../native-bridge.js";
 import { hideControls, showControls } from "./chrome-controls.js";
 import { closeInlineMenu, renderPickerList } from "./chrome-menu.js";
@@ -15,8 +18,10 @@ import { SHEET_GRADIENT, MENU_SCROLL_CLASS } from "./shared.js";
 
    Circular with web-fallback.js (which imports closeAudioSubtitlesOverlay from this
    file) - safe here for the same reason documented in web-fallback.js's own header
-   comment: reloadWebSource is only ever called from inside a click handler below, never
+   comment: trySwitchAudioTrackLocal is only ever called from inside a click handler below, never
    at module-top-level evaluation time. */
+
+const AUDIO_SUBTITLES_CLASS = "streaming-player-audio-subtitles";
 
 function renderAudioSection(controller, content, { setValue, collapse }) {
     content.innerHTML = "";
@@ -31,11 +36,11 @@ function renderAudioSection(controller, content, { setValue, collapse }) {
                <video> fallback, or a server/source combination where directStreamAudio
                didn't produce one EXT-X-MEDIA rendition per audio stream). */
             if (!trySwitchAudioTrackLocal(controller, stream.id)) {
-                reloadWebSource(controller, { audioStreamID: stream.id });
+                controller._reloadSource({ audioStreamID: stream.id });
             }
             setValue(stream.label);
             collapse();
-            /* reloadWebSource updates controller._session.audioStreamId synchronously,
+            /* _reloadSource updates controller._session.audioStreamId synchronously,
                but this picker list was already built above with the old `current` -
                re-render in place so the ✓ moves to the new selection immediately
                instead of only after the overlay/menu is closed and reopened. */
@@ -122,6 +127,18 @@ export function openAudioSubtitlesOverlay(controller) {
     document.body.appendChild(scrim);
     document.body.appendChild(panel);
     controller._audioSubtitlesEl = { scrim, panel };
+    panel.classList.add(AUDIO_SUBTITLES_CLASS);
+    /* Gamepad navigation for this overlay. `document` is the root rather than the panel because
+       wireLinearNav reads root.activeElement, which only exists on Document/ShadowRoot - a plain
+       <div> reports undefined and the handler would never consider itself in scope. focusFirst() is
+       required: the handler ignores every command until focus is already inside its own list. */
+    const nav = wireLinearNav(document, `.${AUDIO_SUBTITLES_CLASS} button`, {
+        orientation: "vertical",
+        loop: true,
+        onBack: () => closeAudioSubtitlesOverlay(controller),
+    });
+    nav.focusFirst();
+    controller._audioSubtitlesNav = nav;
     hideControls(controller);
     requestAnimationFrame(() => {
         panel.style.opacity = "1";
@@ -130,6 +147,10 @@ export function openAudioSubtitlesOverlay(controller) {
 }
 
 export function closeAudioSubtitlesOverlay(controller) {
+    if (controller._audioSubtitlesNav) {
+        controller._audioSubtitlesNav.destroy();
+        controller._audioSubtitlesNav = null;
+    }
     if (!controller._audioSubtitlesEl) return;
     controller._audioSubtitlesEl.scrim.remove();
     controller._audioSubtitlesEl.panel.remove();
@@ -308,7 +329,7 @@ function renderSubtitleSection(controller, content, { collapse }) {
        track that doesn't exist yet has nothing to act on. Rebuilt fresh on every render
        (same as the rest of this section) rather than kept in sync some other way, so
        reopening the menu after a fresh applySubtitleResult always picks both up. */
-    if (controller._videoEl?.textTracks?.[0]) {
+    if (hasSubtitleTrack(controller)) {
         content.appendChild(buildSubtitleOffsetRow(controller));
         content.appendChild(buildSubtitleOffButton(controller, collapse));
     }
@@ -405,27 +426,17 @@ function buildSubtitleOffButton(controller, collapse) {
     return btn;
 }
 
-/* Shifts every cue relative to its ORIGINAL parsed time (cue._baseStart/_baseEnd),
-   captured lazily on first adjustment here rather than up front when the track loads -
-   by the time this menu is reachable a subtitle is already attached and its cues
-   already parsed, so a separate <track> "load" listener would just be dead weight.
-   Mutating startTime/endTime directly (rather than re-deriving cues from scratch) is
-   what makes the browser's own cuechange timeline immediately reflect the new offset.
+/* Just records the offset - activeCuesAt applies it when looking up what's on screen, so
+   there are no already-parsed cue times to mutate and no dependency on the track having
+   finished loading. _subtitleRenderedKey is cleared so the next rAF tick repaints even if
+   the active cue set happens to be unchanged by the shift.
+
    Absolute rather than a delta so applyRememberedSubtitle below can restore a
    previously-saved offset in one call, the same function the +/- buttons use. */
 function setSubtitleOffset(controller, offsetMs) {
-    const textTrack = controller._videoEl?.textTracks?.[0];
-    if (!textTrack) return;
     controller._subtitleOffsetMs = offsetMs;
-    const offsetSec = offsetMs / 1000;
-    Array.from(textTrack.cues || []).forEach((cue) => {
-        if (cue._baseStart == null) {
-            cue._baseStart = cue.startTime;
-            cue._baseEnd = cue.endTime;
-        }
-        cue.startTime = cue._baseStart + offsetSec;
-        cue.endTime = cue._baseEnd + offsetSec;
-    });
+    controller._subtitleRenderedKey = null;
+    renderSubtitleFrame(controller);
 }
 
 /* Persisted on every click (subtitle-store.js's setAppliedOffsetMs), not just kept in
@@ -446,11 +457,11 @@ function adjustSubtitleOffset(controller, deltaMs) {
    gets set on this path too, not just on a manual pick through
    native-bridge.js's subtitleSelectRequested listener. */
 async function attachDownloadedSubtitle(controller, text, languageCode, result) {
-    if (Capacitor.isNativePlatform() && Capacitor.getPlatform() === "android") {
+    if (hasNativePlayer()) {
         await setNativeSubtitle(text, languageCode, "application/x-subrip");
         await notifyNativeSubtitleApplied(JSON.stringify(result), result.label);
     } else {
-        await attachSubtitleTrack(controller, text, languageCode, result.label);
+        await attachSubtitleTrack(controller, text);
     }
 }
 
@@ -502,7 +513,7 @@ export async function applyRememberedSubtitle(controller) {
            there's actually a non-zero offset to restore. */
         const offsetMs = subtitleStore.getAppliedOffsetMs(ratingKey);
         if (offsetMs) {
-            if (Capacitor.isNativePlatform() && Capacitor.getPlatform() === "android") {
+            if (hasNativePlayer()) {
                 await setNativeSubtitleOffset(offsetMs);
             } else {
                 setSubtitleOffset(controller, offsetMs);
@@ -524,78 +535,85 @@ function removeSubtitleResult(controller, collapse) {
     collapse();
 }
 
-/* Only the web/Xbox leg needs this - <video><track> requires WebVTT, while Android's
-   Media3 leg (see applySubtitleResult) hands ExoPlayer the raw .srt URL directly, since
-   SubripDecoder parses .srt natively and converting it there would be wasted work.
-   Revokes the previous track's blob URL rather than leaking one per search. */
-function attachSubtitleTrack(controller, srtText, langCode, label) {
-    if (!controller._videoEl) return Promise.resolve();
-    if (controller._subtitleTrackUrl) URL.revokeObjectURL(controller._subtitleTrackUrl);
+/* Only the non-Android leg needs this - Android's Media3 leg (see applySubtitleResult)
+   hands ExoPlayer the raw .srt text directly, since SubripDecoder parses it natively.
+
+   Cues are parsed into plain objects (core/subtitle-cues.js) and drawn by this module's
+   own rAF loop off the current playback position, rather than going through a WebVTT blob
+   URL attached as a <video><track> and driven by the browser's `cuechange` event. See
+   subtitle-cues.js's header for why: a <track> needs a real <video> element (the Xbox
+   shell's native player has none), and a sync offset used to require mutating already-
+   parsed cue times, which is what forced this function to return a load promise so a
+   remembered offset applied right afterward had cues to shift. Neither applies now.
+
+   The language code and label the caller has are deliberately not taken: they only ever fed
+   the <track> element's srclang/label attributes, which existed for a browser caption menu
+   this player never exposes (the <video> runs with controls = false). The remembered result
+   object in subtitle-store.js is what carries the label the UI actually shows. */
+function attachSubtitleTrack(controller, srtText) {
+    /* Nothing to render against yet - same guard as the old `!controller._videoEl`, but on
+       the facade, since a native backend has no element. */
+    if (!media(controller)) return Promise.resolve();
     /* A new subtitle file has its own inherent timing - carrying over the previous
        file's offset would misalign this one from the very first cue. */
     controller._subtitleOffsetMs = 0;
-    const vtt = srtToVtt(srtText);
-    const url = URL.createObjectURL(new Blob([vtt], { type: "text/vtt" }));
-    controller._subtitleTrackUrl = url;
-    controller._videoEl.querySelectorAll("track").forEach((t) => t.remove());
-    const track = document.createElement("track");
-    track.kind = "subtitles";
-    track.srclang = langCode || "en";
-    track.label = label || langCode || "Subtitles";
-    track.src = url;
-    track.default = true;
-    controller._videoEl.appendChild(track);
-    const textTrack = controller._videoEl.textTracks[0];
-    if (!textTrack) return Promise.resolve();
-    /* Rendered through a manual overlay instead of native "showing" mode - the shader
-       upscaling/Color Boost canvas (shader-pipeline.js) opacity:0's the <video> element
-       and paints from the raw decoded frame instead, which never includes the browser's
-       own separately-composited caption layer. Native rendering would work whenever
-       neither is active and silently vanish the instant either turns on, so this always
-       draws cues itself rather than having two divergent code paths depending on
-       whatever the shader state happens to be. */
-    textTrack.mode = "hidden";
-    const overlay = ensureSubtitleOverlay(controller);
-    textTrack.addEventListener("cuechange", () => {
-        const cues = Array.from(textTrack.activeCues || []);
-        overlay.style.display = cues.length ? "block" : "none";
-        overlay.innerHTML = cues.map((c) => renderSubtitleCueHtml(c.text)).join("<br>");
-    });
-    /* The <track> loads/parses its VTT asynchronously - textTrack.cues is still empty
-       right after this function returns. A caller applying a remembered sync offset
-       immediately afterward (applyRememberedSubtitle) needs the actual cues to exist
-       before setSubtitleOffset's shift loop has anything to shift; without this wait,
-       that offset silently no-ops (only _subtitleOffsetMs gets set) until some later
-       unrelated +/- click re-runs the loop against by-then-loaded cues. */
-    return new Promise((resolve) => {
-        if (textTrack.cues && textTrack.cues.length) {
-            resolve();
-            return;
-        }
-        const done = () => {
-            track.removeEventListener("load", done);
-            track.removeEventListener("error", done);
-            resolve();
-        };
-        track.addEventListener("load", done, { once: true });
-        track.addEventListener("error", done, { once: true });
-    });
+    controller._subtitleCues = parseSubtitleCues(srtText);
+    controller._subtitleRenderedKey = null;
+    ensureSubtitleOverlay(controller);
+    startSubtitleLoop(controller);
+    return Promise.resolve();
 }
 
 /* Counterpart to attachSubtitleTrack above, used by removeSubtitleResult's "Off" row -
-   removes the live <track> and hides the overlay rather than leaving the last cue's
-   text stuck on screen with nothing left to clear it. */
+   drops the cues and hides the overlay rather than leaving the last cue's text stuck on
+   screen with nothing left to clear it. */
 function detachSubtitleTrack(controller) {
-    if (!controller._videoEl) return;
-    controller._videoEl.querySelectorAll("track").forEach((t) => t.remove());
-    if (controller._subtitleTrackUrl) {
-        URL.revokeObjectURL(controller._subtitleTrackUrl);
-        controller._subtitleTrackUrl = null;
-    }
+    stopSubtitleLoop(controller);
+    controller._subtitleCues = null;
+    controller._subtitleRenderedKey = null;
     controller._subtitleOffsetMs = 0;
     if (controller._subtitleOverlayEl) {
         controller._subtitleOverlayEl.style.display = "none";
         controller._subtitleOverlayEl.innerHTML = "";
+    }
+}
+
+/* True once a subtitle is attached - what the Sync/Off rows key off instead of probing
+   controller._videoEl.textTracks[0], which no longer exists. */
+function hasSubtitleTrack(controller) {
+    return !!controller._subtitleCues?.length;
+}
+
+/* rAF rather than the <video>'s own `timeupdate` (which only fires ~4x/second, enough to
+   put a cue up to ~250ms late) or a fixed interval. The DOM write is guarded by a key
+   built from the active cue set, so a normal frame costs one activeCuesAt scan and a
+   string compare - innerHTML is only touched when what's on screen actually changes. */
+function renderSubtitleFrame(controller) {
+    const overlay = controller._subtitleOverlayEl;
+    const cues = controller._subtitleCues;
+    if (!overlay || !cues?.length) return;
+    const positionMs = (media(controller)?.currentTime ?? 0) * 1000;
+    const active = activeCuesAt(cues, positionMs, controller._subtitleOffsetMs || 0);
+    const key = active.map((c) => c.startMs).join(",");
+    if (key === controller._subtitleRenderedKey) return;
+    controller._subtitleRenderedKey = key;
+    overlay.style.display = active.length ? "block" : "none";
+    overlay.innerHTML = active.map((c) => renderSubtitleCueHtml(c.text)).join("<br>");
+}
+
+function startSubtitleLoop(controller) {
+    if (controller._subtitleRafId) return;
+    const tick = () => {
+        controller._subtitleRafId = requestAnimationFrame(tick);
+        renderSubtitleFrame(controller);
+    };
+    controller._subtitleRafId = requestAnimationFrame(tick);
+}
+
+export function stopSubtitleLoop(controller) {
+    if (controller._subtitleRafId) {
+        cancelAnimationFrame(controller._subtitleRafId);
+        controller._subtitleRafId = null;
     }
 }
 
@@ -617,7 +635,14 @@ function renderSubtitleCueHtml(text) {
 /* Lazily created (and reused across subtitle-result picks) rather than built alongside
    the video in web-fallback.js's playWeb - most sessions never touch subtitles at all.
    z-index 10001 matches every other always-on-top-of-the-shader-canvas overlay in this
-   chrome (e.g. updateSkipButton) - the canvas itself sits at 10000 (shader-pipeline.js). */
+   chrome (e.g. updateSkipButton) - the canvas itself sits at 10000 (shader-pipeline.js).
+
+   Cues are drawn into this overlay rather than letting the browser render them natively
+   (a <track> in "showing" mode): the shader upscaling/Color Boost canvas
+   (shader-pipeline.js) opacity:0's the <video> element and paints from the raw decoded
+   frame instead, which never includes the browser's separately-composited caption layer.
+   Native rendering would work whenever neither effect is active and silently vanish the
+   instant either turned on. */
 function ensureSubtitleOverlay(controller) {
     if (controller._subtitleOverlayEl) return controller._subtitleOverlayEl;
     const overlay = document.createElement("div");
@@ -643,6 +668,3 @@ function ensureSubtitleOverlay(controller) {
     return overlay;
 }
 
-function srtToVtt(srtText) {
-    return "WEBVTT\n\n" + srtText.replace(/\r+/g, "").replace(/(\d\d:\d\d:\d\d),(\d\d\d)/g, "$1.$2");
-}

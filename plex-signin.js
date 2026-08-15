@@ -70,6 +70,10 @@ class StreamingPlexSigninModal extends HTMLElement {
     this._overlay.classList.remove("open");
   }
 
+  isOpen() {
+    return this._overlay.classList.contains("open");
+  }
+
   /* Fire TV (Silk browser) and the Xbox WebView2 shell are remote/gamepad-only - there's no
      pointer at all, so opening a second browser tab for Plex's full sign-in form means typing
      a username/password with a D-pad, which is exactly the unintuitive flow this branches

@@ -54,6 +54,10 @@
     <Compile Include="MainPage.xaml.cs">
       <DependentUpon>MainPage.xaml</DependentUpon>
     </Compile>
+    <Compile Include="Player\HdrDisplayController.cs" />
+    <Compile Include="Player\NativePlayerHost.cs" />
+    <Compile Include="Player\NativePlayerSpike.cs" />
+    <Compile Include="Player\PlayerBridge.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
   </ItemGroup>
   <ItemGroup>

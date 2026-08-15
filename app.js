@@ -1,7 +1,12 @@
 import { loadFull, isConfigured } from "./settings.js";
 import "./input-mode.js";
+import { initXboxSpike } from "./src/player/xbox-spike.js";
 
 (async function () {
+  /* No-ops off the Xbox WebView2 shell - see xbox-spike.js. Temporary Phase 0 harness;
+     remove once the hardware answers are recorded. */
+  initXboxSpike();
+
   if ("serviceWorker" in navigator) {
     navigator.serviceWorker.register("./sw.js").catch((err) => console.warn("[app] SW registration failed:", err));
   }

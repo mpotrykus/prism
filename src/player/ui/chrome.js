@@ -31,6 +31,6 @@ export { openHamburgerMenu, closeInlineMenu } from "./chrome-menu.js";
 
 export { applyZoomTransform, wireZoomPan } from "./chrome-menu-extras.js";
 
-export { openAudioSubtitlesOverlay, closeAudioSubtitlesOverlay, applyRememberedSubtitle } from "./chrome-subtitles.js";
+export { openAudioSubtitlesOverlay, closeAudioSubtitlesOverlay, applyRememberedSubtitle, stopSubtitleLoop } from "./chrome-subtitles.js";
 
 export { activeMarkerAt, skipLabelFor, updateSkipButton } from "./chrome-skip.js";

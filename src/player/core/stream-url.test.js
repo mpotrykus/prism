@@ -59,3 +59,39 @@ describe("buildDecisionUrl", () => {
     }
   });
 });
+
+describe("progressive output", () => {
+  const base = {
+    plexUrl: "http://plex.local:32400",
+    plexToken: "tok",
+    key: "/library/metadata/1",
+    sessionId: "sess",
+    startOffsetMs: 0,
+    clientIdentifier: "cid",
+    platform: "Chrome",
+  };
+
+  it("uses start.m3u8 and protocol=hls by default", () => {
+    const url = new URL(buildStreamUrl(base));
+    expect(url.pathname).toBe("/video/:/transcode/universal/start.m3u8");
+    expect(url.searchParams.get("protocol")).toBe("hls");
+  });
+
+  it("uses start.mp4 and protocol=http when progressive", () => {
+    const url = new URL(buildStreamUrl({ ...base, progressive: true }));
+    expect(url.pathname).toBe("/video/:/transcode/universal/start.mp4");
+    expect(url.searchParams.get("protocol")).toBe("http");
+  });
+
+  /* The decision endpoint must agree with the start call on every param, protocol included - see
+     buildDecisionUrl's comment on why a mismatched /decision doesn't predict what /start does. */
+  it("carries the same protocol through to the decision URL", () => {
+    expect(new URL(buildDecisionUrl({ ...base, progressive: true })).searchParams.get("protocol")).toBe("http");
+    expect(new URL(buildDecisionUrl(base)).searchParams.get("protocol")).toBe("hls");
+  });
+
+  it("leaves the decision endpoint path alone regardless of progressive", () => {
+    expect(new URL(buildDecisionUrl({ ...base, progressive: true })).pathname)
+      .toBe("/video/:/transcode/universal/decision");
+  });
+});

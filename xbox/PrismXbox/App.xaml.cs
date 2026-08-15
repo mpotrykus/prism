@@ -22,9 +22,17 @@ namespace PrismXbox
             // to exercise against the WebView2 gamepad-focus-trap bug.
             this.RequiresPointerMode = ApplicationRequiresPointerMode.WhenRequested;
 
-            // The WebView2 control's own draw color can briefly show before content loads. Match
-            // the app shell's background so that doesn't produce a flash.
-            Environment.SetEnvironmentVariable("WEBVIEW2_DEFAULT_BACKGROUND_COLOR", "FF0A0A0C");
+            // SPIKE (Phase 0, S1): fully transparent (alpha 00) instead of the opaque shell color
+            // this used to carry, so a video surface behind the WebView2 can show through at all.
+            // Nothing visible changes in normal use - MainPage's own Page.Background is the same
+            // #0a0a0c the WebView2 used to paint, and the web app paints its own background over
+            // that - but if this turns out NOT to produce real transparency on Xbox, the whole
+            // "reuse the JS chrome over native video" plan needs revisiting, which is what S1 is
+            // for. UWP is documented as the one WebView2 host where a transparent
+            // DefaultBackgroundColor works, and this env var is the only way to set it from the
+            // WinUI2 2.8.7 XAML control (see the ADDITIONAL_BROWSER_ARGUMENTS note below for why).
+            // Revert to "FF0A0A0C" if the spike says transparency is unusable.
+            Environment.SetEnvironmentVariable("WEBVIEW2_DEFAULT_BACKGROUND_COLOR", "00000000");
 
             // Remote DevTools (Console/Elements/etc. from a PC's Edge/Chrome at
             // http://<xbox-ip>:9222) - there's no keyboard/mouse on the console itself to

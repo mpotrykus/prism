@@ -1,6 +1,6 @@
 import { hideControls, showControls } from "./chrome-controls.js";
-import { reloadWebSource } from "../web-fallback.js";
-import { setAutoQualityEnabled } from "../core/abr.js";
+import { wireLinearNav } from "../../../focus-nav.js";
+import { setAutoQualityEnabled, bandwidthSource } from "../core/abr.js";
 import {
     QUALITY_CAP_PRESETS,
     SHEET_GRADIENT,
@@ -34,6 +34,8 @@ import { renderExtrasList } from "./chrome-menu-extras.js";
 /* Shared row look for every tap-to-pick item inside an expanded accordion section
    (speed/sleep/zoom/audio/chapters/quality-cap/version presets) - one visual
    definition instead of each render function styling its own. */
+const INLINE_MENU_CLASS = "streaming-player-inline-menu";
+
 export function renderPickerList(content, items, { rowGap = 0 } = {}) {
     items.forEach((item, index) => {
         const row = document.createElement("button");
@@ -427,6 +429,23 @@ export function openHamburgerMenu(controller, anchor) {
     document.body.appendChild(sheet);
     controller._inlineMenuEl = sheet;
     controller._inlineMenuScrim = scrim;
+    /* A stable class so gamepad navigation can scope a selector to this sheet. wireLinearNav is given
+       `document` as its root rather than the sheet itself: it reads root.activeElement, which only
+       exists on Document and ShadowRoot - a plain <div> would report undefined and the handler would
+       never consider itself in scope. */
+    sheet.classList.add(INLINE_MENU_CLASS);
+    /* Without this the sheet opens with focus still nowhere, so wireLinearNav's own "is focus inside my
+       list" guard never passes and D-pad input does nothing. */
+    const menuNav = wireLinearNav(document, `.${INLINE_MENU_CLASS} button`, {
+        orientation: "vertical",
+        loop: true,
+        onBack: () => closeInlineMenu(controller),
+    });
+    /* wireLinearNav does not focus anything itself - it returns focusFirst for the caller to call.
+       Required here: its handler ignores every command unless focus is already inside its list, so
+       without this the sheet would open and swallow nothing. */
+    menuNav.focusFirst();
+    controller._inlineMenuNav = menuNav;
     controller._inlineMenuAnchor = anchor;
     hideControls(controller);
     requestAnimationFrame(() => {
@@ -449,7 +468,7 @@ function renderVersionSection(controller, content, { setValue, collapse }) {
     renderPickerList(content, versions.map((v) => ({
         label: `${v.label}${v.mediaIndex === session.mediaIndex ? "  ✓" : ""}`,
         onSelect: () => {
-            reloadWebSource(controller, { mediaIndex: v.mediaIndex });
+            controller._reloadSource({ mediaIndex: v.mediaIndex });
             setValue(v.label);
             collapse();
         },
@@ -460,12 +479,12 @@ function renderQualityCapSection(controller, content, { setValue, collapse }) {
     const session = controller._session;
     const current = session?.qualityCapKbps ?? null;
     const autoOn = controller._autoQualityEnabled;
-    /* No bandwidth signal exists on the native-HLS <video> branch (controller._hls is
-       null there, see web-fallback.js's attachSource) - Auto Quality has nothing to
+    /* No bandwidth signal exists on Safari's native-HLS <video> branch (no source is
+       registered there, see web-fallback.js's attachSource) - Auto Quality has nothing to
        evaluate against, so the row is omitted entirely rather than shown disabled.
        The persisted flag itself is untouched either way, so it still takes effect on
-       a future session/device that does use hls.js. */
-    const autoAvailable = !!controller._hls;
+       a future session/device whose backend can measure bandwidth. */
+    const autoAvailable = !!bandwidthSource(controller) || !!controller._abrStallDriven;
     const items = [];
     if (autoAvailable) {
         items.push({
@@ -485,7 +504,7 @@ function renderQualityCapSection(controller, content, { setValue, collapse }) {
                 label: `${preset.label}${!autoOn && (preset.kbps ?? null) === current ? "  ✓" : ""}`,
                 onSelect: () => {
                     setAutoQualityEnabled(controller, false);
-                    reloadWebSource(controller, { qualityCapKbps: preset.kbps });
+                    controller._reloadSource({ qualityCapKbps: preset.kbps });
                     setValue(qualityCapMenuLabel(controller));
                     collapse();
                 },
@@ -553,6 +572,10 @@ export function makeToggleSwitch(checked, onChange) {
 
 export function closeInlineMenu(controller) {
     const wasOpen = !!controller._inlineMenuEl;
+    if (controller._inlineMenuNav) {
+        controller._inlineMenuNav.destroy();
+        controller._inlineMenuNav = null;
+    }
     if (controller._inlineMenuEl) {
         controller._inlineMenuEl.remove();
         controller._inlineMenuEl = null;

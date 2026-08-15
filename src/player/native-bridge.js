@@ -210,7 +210,7 @@ export async function playNative(controller, streamUrl, startOffsetMs) {
    seasonNumber/episodeNumber, queueLength/queueIndex} shape both a cold play() and an
    in-place switchTitle() send over the bridge - shared so the two never drift apart on
    what Java expects a title's metadata to look like. */
-function buildPlaybackPayload(controller, streamUrl, startOffsetMs) {
+export function buildPlaybackPayload(controller, streamUrl, startOffsetMs) {
     return {
         url: streamUrl,
         startPositionMs: startOffsetMs,
@@ -284,6 +284,12 @@ function buildPlaybackPayload(controller, streamUrl, startOffsetMs) {
            module's own queueRatingKeys copy. */
         queueLength: controller._session.queueRatingKeys?.length ?? 0,
         queueIndex: controller._session.queueIndex ?? null,
+        /* Only the Xbox leg acts on this (it switches the console's HDMI output into an HDR mode before
+           the first frame - see HdrDisplayController). Android ignores it: its HDR handling is limited
+           to skipping SDR shader passes on HDR content, decided natively from ExoPlayer's own Format.
+           Carried in the shared payload rather than an Xbox-only one so both legs keep using one
+           builder, which is what keeps the String() coercions above in a single place. */
+        isHdr: !!controller._session.isHdr,
     };
 }
 

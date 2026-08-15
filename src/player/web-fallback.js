@@ -1,14 +1,16 @@
 import Hls from "hls.js";
 import { ZOOM_LEVELS, storedVolume } from "./ui/shared.js";
-import { updateContentAnalysis } from "./content-analysis.js";
 import { releaseBifIndex } from "./core/bif.js";
+import { setMediaFacade } from "./core/media-facade.js";
 import { closeEpisodeListOverlay, closeChapterListOverlay } from "./ui/episode-list.js";
-import { updateAbrMonitor, stopAbrLoop, notifyStall, notifyReload } from "./core/abr.js";
+import { updateAbrMonitor, stopAbrLoop, notifyStall, setBandwidthSource } from "./core/abr.js";
+import { reloadTranscodeSession } from "./core/session-reload.js";
+import { mountPlayerChrome, unmountPlayerChrome } from "./ui/player-chrome.js";
 /* Circular with chrome.js (which already imports reloadWebSource from this file) - safe
    here for the same reason that one is: closeAudioSubtitlesOverlay is only ever called
    from inside teardownWeb's own function body below, never at module-top-level
    evaluation time. */
-import { closeAudioSubtitlesOverlay } from "./ui/chrome.js";
+import { closeAudioSubtitlesOverlay, stopSubtitleLoop } from "./ui/chrome.js";
 
 /* <video>+hls.js fallback path - used everywhere WebView2/Chrome/Xbox/Android-web has
    no native player available (see native-bridge.js for the Android/ExoPlayer leg).
@@ -87,73 +89,19 @@ export function playWeb(controller, streamUrl, startOffsetMs) {
     video.currentTime = startOffsetMs / 1000;
     document.body.appendChild(video);
     controller._videoEl = video;
-    controller._buildLoadingSpinner(video);
-
-    /* Not just a convenience: on the Xbox WebView2 shell there's no browser chrome and
-       no back button to fall back on at all, so an explicit close control isn't
-       optional the way it might seem on desktop web. Styled as a back chevron,
-       top-left, rather than an "✕" - same close-the-player action, just matching where
-       a streaming app's own back affordance normally sits. */
-    const closeBtn = controller._makeControlButton({
-        ariaLabel: "Close player",
-        content: "‹",
-        onClick: () => controller.stop(),
-    });
-    controller._registerControlButton(closeBtn, { side: "left" });
-
-    /* Every custom option (speed, sleep timer, zoom, chapters, subtitles) lives behind
-       this single button instead of one circular button each - see openHamburgerMenu.
-       Opposite corner from the close button. Toggles closed on a second tap - re-opening
-       would otherwise be the only reachable outcome of tapping this button again, since
-       openHamburgerMenu (like every submenu) closes and immediately rebuilds the flyout
-       rather than no-op'ing when one is already open. */
-    const menuBtn = controller._makeControlButton({
-        ariaLabel: "Player options",
-        content: "☰",
-        onClick: () => {
-            if (controller._inlineMenuEl && controller._inlineMenuAnchor === menuBtn) {
-                controller._closeInlineMenu();
-            } else {
-                controller._openHamburgerMenu(menuBtn);
-            }
-        },
-    });
-    controller._registerControlButton(menuBtn, { side: "right" });
-
-    controller._zoomIndex = 0;
-    controller._zoomPanX = 0;
-    controller._zoomPanY = 0;
-    controller._sleepMinutes = 0;
-    controller._wireZoomPan();
-    /* Transport bar first: it builds the bottom chrome's center cell that
-       _buildCenterControls fills with play/pause + chapter nav (see chrome.js), rather
-       than that row floating mid-screen on its own. */
-    controller._buildTransportBar(video);
-    controller._buildCenterControls(video);
-    /* _shaderType/_shaderStrength were already resolved in play() (global setting +
-       this title's auto-detected type) before playWeb was called - this just spins up
-       the WebGL pipeline for that starting state, same as any other change made
-       through the hamburger menu later in the session. */
-    controller._updateShaderPipeline();
-    /* Same "already-resolved global default, just spin up the pipeline" reasoning as
-       the shader call above - controller._ambientEnabled was set from
-       storedAmbientEnabled() in play() before playWeb was called. */
-    controller._updateAmbientPipeline();
-    /* Same "already-resolved global default, just spin up the pipeline" reasoning as
-       the calls above - controller._statsOverlayEnabled was set from
-       storedStatsOverlayEnabled() in play() before playWeb was called. */
-    controller._updateStatsOverlayPipeline();
-    /* Same "already-resolved global default, just spin up the pipeline" reasoning as
-       the calls above - controller._upscaleAuto/_colorBoostAuto were set from
-       storedUpscaleAuto()/storedColorBoostAuto() in play() before playWeb was called. */
-    updateContentAnalysis(controller);
-    /* Same "already-resolved global default, just spin up the pipeline" reasoning as
-       the calls above - controller._autoQualityEnabled was set from
-       storedAutoQualityEnabled() in play() before playWeb was called. No-ops on the
-       native-HLS branch above (controller._hls stays null there) - see core/abr.js. */
+    /* The element itself is the media facade on this leg - it already satisfies the whole
+       playback-state surface the chrome reads (see core/media-facade.js), so registering it
+       is the entire web-side implementation. Everything below that still wants the real
+       DOM element (the GPU pipelines, the zoom transform) keeps using controller._videoEl. */
+    setMediaFacade(controller, video);
+    /* The chrome itself lives in ui/player-chrome.js so the Xbox leg can mount the identical thing
+       over native video - see that file's header. gpuPipelines:true because this leg has a real
+       <video> element for the shader/ambient/content-analysis passes to read pixels from. */
+    mountPlayerChrome(controller, video, { gpuPipelines: true });
+    /* Auto Quality's monitor is started here rather than inside mountPlayerChrome because what it
+       depends on is this leg's bandwidth source (the hls.js instance attachSource just created), not
+       the chrome. No-ops on the native-HLS branch, which registers no source - see core/abr.js. */
     updateAbrMonitor(controller);
-
-    controller._scheduleHideControls();
 }
 
 /* Shared by the initial load (playWeb) and reloadWebSource (audio-track switch) so the
@@ -190,10 +138,12 @@ export function attachSource(controller, video, streamUrl) {
             else if (data.details === Hls.ErrorDetails.BUFFER_STALLED_ERROR) notifyStall(controller);
         });
         /* hls.js's own bandwidthEstimate starts at a synthetic default before any real
-           fragment has loaded (see core/abr.js's evaluateAbrTick) - reset the "do we have
-           a real sample yet" flag on every fresh instance, flip it once a fragment
-           actually finishes. */
-        controller._abrHasRealSample = false;
+           fragment has loaded (see core/abr.js's evaluateAbrTick) - registering the
+           instance as the bandwidth source also resets the "do we have a real sample yet"
+           flag, which this flips once a fragment actually finishes. The Hls instance IS the
+           source object here: its bandwidthEstimate property already has exactly the shape
+           core/abr.js reads. */
+        setBandwidthSource(controller, hls);
         hls.on(Hls.Events.FRAG_LOADED, () => {
             controller._abrHasRealSample = true;
         });
@@ -201,6 +151,10 @@ export function attachSource(controller, video, streamUrl) {
         hls.attachMedia(video);
         controller._hls = hls;
     } else {
+        /* Safari's native-HLS path measures nothing abr.js can read, so Auto Quality stays
+           correctly unavailable rather than deciding off a stale estimate from the hls.js
+           instance a previous reload may have registered. */
+        setBandwidthSource(controller, null);
         /* Only this branch needs crossOrigin, not the hls.js branch above - hls.js
            attaches media via a same-origin blob: URL and feeds it segments through
            MediaSource.appendBuffer(), so the video element's own origin (as far as
@@ -254,109 +208,27 @@ export function trySwitchAudioTrackLocal(controller, audioStreamID) {
     return true;
 }
 
-/* Restarts the Plex transcode session with a new mediaIndex/qualityCapKbps (and, as a
-   fallback path, audioStreamID - see trySwitchAudioTrackLocal above for the normal
-   case), resuming at the current position - Plex bakes the version and bitrate cap into
-   the HLS transcode at session start, so there's no way to change either without
-   re-requesting the playlist. A fresh session id avoids Plex reusing/confusing the
-   just-abandoned transcode session's own state. Shared by chrome.js's Audio Track/Video
-   Quality menus - only the override actually being changed is passed, everything else
-   falls back to the current session value. qualityCapKbps needs its own `in` check
-   (unlike the others): null is a valid explicit override (Quality Cap's "Original"
-   option), so `??`-against-undefined would wrongly treat "clear the cap" the same as
-   "don't touch it". */
+/* The web leg's rebuild step for a transcode-session restart. Everything about the restart itself -
+   resume position, the Part-selection PUT, stopping the old session, the /decision call that is what
+   actually makes Plex re-evaluate - lives in core/session-reload.js, because none of it is
+   web-specific and the Xbox leg needs the identical sequence. All this adds is "point the <video> and
+   hls.js at the new URL".
+
+   Shared by chrome-menu.js's Version/Quality Cap menus and chrome-subtitles.js's audio picker via the
+   controller's _reloadSource delegate, which dispatches per platform - only the override actually
+   being changed is passed, everything else falls back to the current session value. */
 export function reloadWebSource(controller, overrides = {}) {
     const video = controller._videoEl;
-    const s = controller._session;
-    if (!video || !s) return;
-    const offsetMs = Math.round((video.currentTime || 0) * 1000);
-    const nextMediaIndex = overrides.mediaIndex ?? s.mediaIndex;
-    const nextQualityCapKbps = "qualityCapKbps" in overrides ? overrides.qualityCapKbps : s.qualityCapKbps;
-    const nextAudioStreamID = overrides.audioStreamID ?? s.audioStreamId;
-    const oldSessionId = s.transcodeSessionId;
-    s.mediaIndex = nextMediaIndex;
-    s.qualityCapKbps = nextQualityCapKbps;
-    s.audioStreamId = nextAudioStreamID;
-
-    /* Generated once up front, not inside rebuild() - askDecision below needs the exact
-       same session id /start will use (see buildDecisionUrl's own comment: a /decision
-       call only reliably predicts what /start does when every param, session id
-       included, matches). */
-    const sessionId = crypto.randomUUID();
-    const urlOpts = {
-        plexUrl: s.plexUrl,
-        plexToken: s.plexToken,
-        key: s.key,
-        sessionId,
-        startOffsetMs: offsetMs,
-        mediaIndex: nextMediaIndex,
-        qualityCapKbps: nextQualityCapKbps,
-        audioStreamID: nextAudioStreamID,
-    };
-
-    const rebuild = () => {
-        const streamUrl = controller._buildStreamUrl(urlOpts);
-        s.transcodeSessionId = sessionId;
+    if (!video || !controller._session) return;
+    reloadTranscodeSession(controller, overrides, (streamUrl, offsetMs) => {
         attachSource(controller, video, streamUrl);
         video.currentTime = offsetMs / 1000;
-        /* A fresh transcode session means whatever Auto Quality streak/cooldown state
-           was building against the old one no longer applies - see core/abr.js's
-           notifyReload. Also re-checks whether the monitor should be running at all,
-           since attachSource above just replaced controller._hls with a fresh
-           instance. */
-        notifyReload(controller);
-        updateAbrMonitor(controller);
-    };
-
-    /* audioStreamID on the transcode start URL alone doesn't reliably make Plex
-       actually mux the requested track - confirmed against a real server, it kept
-       playing the previously-selected audio regardless of this param. The verified
-       mechanism (same one python-plexapi's own users landed on) is marking the stream
-       "selected" on the Part first via PUT /library/parts/<id>?audioStreamID=...
-       &allParts=1 - the transcode decision then honors whatever's currently selected
-       there. Only done when actually switching audio (not on a mediaIndex/qualityCap-
-       only reload) and only when a partId was resolved for this item at play() time. */
-    const selectAudio =
-        overrides.audioStreamID != null && s.partId
-            ? (() => {
-                  const putUrl = new URL(`${s.plexUrl}/library/parts/${s.partId}`);
-                  putUrl.searchParams.set("audioStreamID", String(overrides.audioStreamID));
-                  putUrl.searchParams.set("allParts", "1");
-                  putUrl.searchParams.set("X-Plex-Token", s.plexToken);
-                  return fetch(putUrl, { method: "PUT" }).catch(() => {});
-              })()
-            : Promise.resolve();
-
-    /* A new `session` id alone isn't enough either - confirmed against a real server,
-       an in-place reload kept getting served the OLD, still-warm transcode session's
-       audio selection even with a fresh session id and a successful Part-selection PUT
-       both in place, and only actually reflected the switch once the old session had
-       had time to expire on its own (e.g. a full stop()+replay). Explicitly stopping it
-       here makes the switch immediate instead of leaving it to Plex's own idle-timeout. */
-    const stopOldSession = oldSessionId
-        ? fetch(`${s.plexUrl}/video/:/transcode/universal/stop?session=${encodeURIComponent(oldSessionId)}&X-Plex-Token=${encodeURIComponent(s.plexToken)}`).catch(() => {})
-        : Promise.resolve();
-
-    /* The actual, whole reason a switch never took effect until backing out and back in
-       - confirmed against a real server (raspi-server), reading Plex's own session state
-       via /status/sessions mid-switch. Everything above this comment (the Part-selection
-       PUT, the explicit old-session stop, a brand-new session id) was already correct
-       and already being done, and STILL wasn't enough on its own: a /start request alone
-       - even with all of that in place - kept transcoding the previous audio selection.
-       Only once a /video/:/transcode/universal/decision call went out FIRST, with the
-       exact same params /start was about to use (see buildDecisionUrl's own comment),
-       did the Media Decision Engine actually re-evaluate and the following /start honor
-       the new selection immediately. Best-effort like the requests above it - a failed
-       decision call shouldn't block the /start attempt that follows, it just means this
-       particular attempt is back to relying on Plex's own eventual re-evaluation. */
-    const askDecision = () =>
-        fetch(controller._buildDecisionUrl(urlOpts)).catch(() => {});
-
-    Promise.all([selectAudio, stopOldSession]).then(askDecision, askDecision).then(rebuild, rebuild);
+    });
 }
 
 export function teardownWeb(controller) {
     stopAbrLoop(controller);
+    setBandwidthSource(controller, null);
     if (controller._hls) {
         controller._hls.destroy();
         controller._hls = null;
@@ -387,59 +259,15 @@ export function teardownWeb(controller) {
     controller._contentSampleCtx = null;
     controller._contentSmoothedSaturation = null;
     controller._contentSmoothedEdgeEnergy = null;
-    if (controller._statsOverlayIntervalId) {
-        clearInterval(controller._statsOverlayIntervalId);
-        controller._statsOverlayIntervalId = null;
-    }
-    if (controller._statsOverlayEl) {
-        controller._statsOverlayEl.remove();
-        controller._statsOverlayEl = null;
-    }
-    controller._closeInlineMenu();
-    closeEpisodeListOverlay(controller);
-    closeChapterListOverlay(controller);
-    closeAudioSubtitlesOverlay(controller);
-    clearTimeout(controller._controlsHideTimer);
-    controller._controlsHideTimer = null;
-    controller._controlsHovering = false;
-    controller._controlButtons.forEach((b) => b.remove());
-    controller._controlButtons = [];
-    if (controller._fullscreenChangeHandler) {
-        document.removeEventListener("fullscreenchange", controller._fullscreenChangeHandler);
-        document.removeEventListener("webkitfullscreenchange", controller._fullscreenChangeHandler);
-        controller._fullscreenChangeHandler = null;
-    }
-    /* The fullscreen button (chrome.js) requests fullscreen on document.documentElement,
-       not a player-scoped container - leaving the player without exiting fullscreen first
-       would strand the whole app fullscreen behind the now-gone player chrome. */
-    if (document.fullscreenElement || document.webkitFullscreenElement) {
-        (document.exitFullscreen || document.webkitExitFullscreen)?.call(document);
-    }
-    if (controller._skipBtnEl) {
-        controller._skipBtnEl.remove();
-        controller._skipBtnEl = null;
-    }
-    controller._activeSkipMarker = null;
-    if (controller._volumePopoutEl) {
-        controller._volumePopoutEl.remove();
-        controller._volumePopoutEl = null;
-    }
-    if (controller._spinnerEl) {
-        controller._spinnerEl.remove();
-        controller._spinnerEl = null;
-    }
-    if (controller._subtitleTrackUrl) {
-        URL.revokeObjectURL(controller._subtitleTrackUrl);
-        controller._subtitleTrackUrl = null;
-    }
-    if (controller._subtitleOverlayEl) {
-        controller._subtitleOverlayEl.remove();
-        controller._subtitleOverlayEl = null;
-    }
+    /* The chrome half of teardown lives in ui/player-chrome.js, so the Xbox leg tears down exactly
+       the same things it mounted - a missing unmount there left the transport bar, center controls and
+       options sheet on screen after backing out of native playback. */
+    unmountPlayerChrome(controller);
     if (controller._bifIndex) {
         releaseBifIndex(controller._bifIndex);
         controller._bifIndex = null;
     }
+    setMediaFacade(controller, null);
     if (controller._videoEl) {
         controller._videoEl.pause();
         controller._videoEl.remove();

@@ -1,4 +1,6 @@
 import { playQueuedTitle, formatTime } from "./chrome.js";
+import { wireLinearNav } from "../../../focus-nav.js";
+import { media } from "../core/media-facade.js";
 import { plexAssetUrl } from "../core/plex-asset-url.js";
 import { fetchQueueItemsMetadata } from "../core/title-fetch.js";
 import { WATCHED_ICON_SVG } from "../../card/rows.js";
@@ -14,6 +16,9 @@ import { formatRuntime } from "../../card/title-info.js";
    order), so one flat list works for both cases with no season concept needed here. */
 
 const ACCENT_COLOR = "#e5a00d";
+/* Scoped selectors for gamepad navigation - see openEpisodeListOverlay. */
+const EPISODE_LIST_CLASS = "streaming-player-episode-list";
+const CHAPTER_LIST_CLASS = "streaming-player-chapter-list";
 const SCROLL_CLASS = "streaming-player-episode-scroll";
 const SPINNER_STYLE_ID = "streaming-player-episode-spinner-style";
 /* Approximates one real row of buildEpisodeCard's cards (135px thumb + title + subtitle +
@@ -222,6 +227,15 @@ export async function openEpisodeListOverlay(controller) {
     document.body.appendChild(scrim);
     document.body.appendChild(panel);
     controller._episodeListEl = { scrim, panel };
+    panel.classList.add(EPISODE_LIST_CLASS);
+    /* Horizontal: these are scrolling card rows, so left/right is the axis that matches what is on
+       screen. See the audio overlay for why the root is `document`. */
+    const epNav = wireLinearNav(document, `.${EPISODE_LIST_CLASS} button`, {
+        orientation: "horizontal",
+        onBack: () => closeEpisodeListOverlay(controller),
+    });
+    epNav.focusFirst();
+    controller._episodeListNav = epNav;
     controller._hideControls();
     requestAnimationFrame(() => {
         panel.style.opacity = "1";
@@ -266,6 +280,10 @@ export async function openEpisodeListOverlay(controller) {
 }
 
 export function closeEpisodeListOverlay(controller) {
+    if (controller._episodeListNav) {
+        controller._episodeListNav.destroy();
+        controller._episodeListNav = null;
+    }
     if (!controller._episodeListEl) return;
     controller._episodeListEl.scrim.remove();
     controller._episodeListEl.panel.remove();
@@ -358,14 +376,15 @@ export function openChapterListOverlay(controller) {
        boundary could in principle be crossed while the user is browsing, but re-
        deriving it live isn't worth the complexity for a highlight that's just meant to
        orient "you are roughly here" at a glance. */
-    const positionMs = (controller._videoEl?.currentTime || 0) * 1000;
+    const positionMs = (media(controller)?.currentTime || 0) * 1000;
     let currentCard = null;
     chapters.forEach((chapter, index) => {
         const next = chapters[index + 1];
         const isCurrent = (chapter.startTimeOffset ?? 0) <= positionMs && (!next || (next.startTimeOffset ?? 0) > positionMs);
         const card = buildChapterCard(session, chapter, isCurrent, () => {
             closeChapterListOverlay(controller);
-            if (controller._videoEl) controller._videoEl.currentTime = (chapter.startTimeOffset ?? 0) / 1000;
+            const el = media(controller);
+            if (el) el.currentTime = (chapter.startTimeOffset ?? 0) / 1000;
         });
         scroll.appendChild(card);
         if (isCurrent) currentCard = card;
@@ -374,6 +393,13 @@ export function openChapterListOverlay(controller) {
     document.body.appendChild(scrim);
     document.body.appendChild(panel);
     controller._chapterListEl = { scrim, panel };
+    panel.classList.add(CHAPTER_LIST_CLASS);
+    const chNav = wireLinearNav(document, `.${CHAPTER_LIST_CLASS} button`, {
+        orientation: "horizontal",
+        onBack: () => closeChapterListOverlay(controller),
+    });
+    chNav.focusFirst();
+    controller._chapterListNav = chNav;
     controller._hideControls();
     requestAnimationFrame(() => {
         panel.style.opacity = "1";
@@ -385,6 +411,10 @@ export function openChapterListOverlay(controller) {
 }
 
 export function closeChapterListOverlay(controller) {
+    if (controller._chapterListNav) {
+        controller._chapterListNav.destroy();
+        controller._chapterListNav = null;
+    }
     if (!controller._chapterListEl) return;
     controller._chapterListEl.scrim.remove();
     controller._chapterListEl.panel.remove();

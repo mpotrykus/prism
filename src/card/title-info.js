@@ -21,6 +21,28 @@ export function extractAudioStreams(media, mediaIndex) {
     }));
 }
 
+/* Whether this version's video stream is HDR, read from Plex's own stream metadata. streamType 1 is
+   video.
+
+   Needed BEFORE playback starts, which is why it comes from Plex rather than from the decoder: the
+   Xbox leg has to switch the console's HDMI output into an HDR mode before the first frame arrives
+   (see HdrDisplayController), and waiting for the player to report its own format would be too late.
+   The native side re-reports what the output actually ended up doing afterwards.
+
+   Checks colorTrc first because that is the property that actually distinguishes HDR transfer
+   functions; `smpte2084` is HDR10/PQ and `arib-std-b67` is HLG. bt2020 primaries alone are treated as
+   HDR too, since a bt2020 video stream in practice is HDR - but Dolby Vision profiles are NOT detected
+   here, matching Android's own isHdrContent(), so a DV-only source falls through as SDR rather than
+   being wrongly promised HDR. */
+export function isHdrVideo(media, mediaIndex) {
+  const streams = media?.[mediaIndex]?.Part?.[0]?.Stream || [];
+  const video = streams.find((s) => s.streamType === 1);
+  if (!video) return false;
+  const trc = String(video.colorTrc || "").toLowerCase();
+  if (trc === "smpte2084" || trc === "arib-std-b67") return true;
+  return String(video.colorSpace || "").toLowerCase().startsWith("bt2020");
+}
+
 /* streamType 3 is subtitle. Filtered to entries carrying a `key` - an embedded
    (in-container) subtitle stream has no `key` at all and can only be played back via a
    burn-in transcode Prism doesn't support yet, so listing it here would offer a menu
@@ -619,6 +641,7 @@ export class TitleInfoController {
       mediaIndex,
       mediaVersions: extractMediaVersions(this._media),
       audioStreams: extractAudioStreams(this._media, mediaIndex),
+      isHdr: isHdrVideo(this._media, mediaIndex),
       subtitleTracks: extractSubtitleTracks(this._media, mediaIndex),
       bifIndexPath: bifIndexPath(this._media, mediaIndex),
       partId: extractPartId(this._media, mediaIndex),
@@ -719,6 +742,7 @@ export class TitleInfoController {
         chapters: meta.Chapter || [],
         mediaVersions: extractMediaVersions(meta.Media),
         audioStreams: extractAudioStreams(meta.Media, 0),
+        isHdr: isHdrVideo(meta.Media, 0),
         subtitleTracks: extractSubtitleTracks(meta.Media, 0),
         bifIndexPath: bifIndexPath(meta.Media, 0),
         partId: extractPartId(meta.Media, 0),
@@ -755,6 +779,7 @@ export class TitleInfoController {
         chapters: meta.Chapter || [],
         mediaVersions: extractMediaVersions(meta.Media),
         audioStreams: extractAudioStreams(meta.Media, 0),
+        isHdr: isHdrVideo(meta.Media, 0),
         subtitleTracks: extractSubtitleTracks(meta.Media, 0),
         bifIndexPath: bifIndexPath(meta.Media, 0),
         partId: extractPartId(meta.Media, 0),

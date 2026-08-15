@@ -1,6 +1,7 @@
 import { SHADER_TYPES } from "./shader/shaders.js";
 import { STATS_OVERLAY_STORAGE_KEY } from "./ui/shared.js";
-import { COOLDOWN_MS, DOWNGRADE_CONFIRM_TICKS, STABILITY_WINDOW_TICKS } from "./core/abr.js";
+import { COOLDOWN_MS, DOWNGRADE_CONFIRM_TICKS, STABILITY_WINDOW_TICKS, bandwidthSource } from "./core/abr.js";
+import { media } from "./core/media-facade.js";
 
 /* "Performance Overlay" hamburger-menu toggle - a small monospace stats readout pinned
    to the top-left corner, same "toggle IS the persisted setting" immediate-persistence
@@ -114,13 +115,34 @@ function resolutionLine(controller, video, quality) {
     return `${video.videoWidth || 0}x${video.videoHeight || 0}${fpsPart}`;
 }
 
-/* Only meaningful on the hls.js path abr.js actually drives - see updateAbrMonitor. */
+/* Only meaningful when abr.js has a registered bandwidth source - see updateAbrMonitor. */
+/* The web leg genuinely cannot answer this: a browser has no way to read a <video>'s colour space or
+   transfer function without WebCodecs, which is why this line was hardcoded "n/a (browser)". A native
+   backend reports what its output is ACTUALLY doing (see NativePlayerHost's loadedMetadata), so on Xbox
+   this distinguishes three real states rather than one placeholder: HDR requested by the source and
+   active on the display, requested but not achieved (SDR TV, or no HDR mode at the current
+   resolution), and plain SDR content. */
+function hdrStatusLine(controller) {
+    if (controller._xboxIsHdr === undefined) {
+        return controller._session?.isHdr ? "HDR: source is HDR, output n/a (browser)" : "HDR: n/a (browser)";
+    }
+    if (controller._xboxIsHdr) return "HDR: HDR10 active";
+    return controller._session?.isHdr ? "HDR: source is HDR, display did not switch" : "HDR: off (SDR source)";
+}
+
 function abrDebugLine(controller) {
-    if (!controller._autoQualityEnabled || !controller._hls) return null;
-    if (!controller._abrHasRealSample) return "ABR: measuring bandwidth...";
-    const bandwidthKbps = Math.round(controller._hls.bandwidthEstimate / 1000);
+    const source = bandwidthSource(controller);
+    if (!controller._autoQualityEnabled) return null;
     const cooldownLeftMs = COOLDOWN_MS - (Date.now() - controller._abrLastSwitchAt);
     const cooldown = cooldownLeftMs > 0 ? `cooldown ${Math.ceil(cooldownLeftMs / 1000)}s` : "ready";
+    /* Stall-driven backends have no kbps to show - saying so is more useful than an empty line or a
+       fabricated number (see core/abr.js's setStallDrivenAbr). */
+    if (!source) {
+        if (!controller._abrStallDriven) return null;
+        return `ABR: stall-driven, stable ${controller._abrStableStreak}/${STABILITY_WINDOW_TICKS}, ${cooldown}`;
+    }
+    if (!controller._abrHasRealSample) return "ABR: measuring bandwidth...";
+    const bandwidthKbps = Math.round(source.bandwidthEstimate / 1000);
     return `ABR: ${bandwidthKbps}kbps, down ${controller._abrDowngradeStreak}/${DOWNGRADE_CONFIRM_TICKS}, stable ${controller._abrStableStreak}/${STABILITY_WINDOW_TICKS}, ${cooldown}`;
 }
 
@@ -152,12 +174,16 @@ function bufferHealthLine(video) {
 
 export function renderStatsOverlayFrame(controller) {
     const el = controller._statsOverlayEl;
-    const video = controller._videoEl;
+    /* Reads playback state through the facade rather than the <video> element, so a native
+       backend can feed the same overlay. getVideoPlaybackQuality is already feature-detected
+       below, which is what lets a backend that can't report frame counts degrade to omitting
+       the fps/dropped-frame lines instead of breaking the whole overlay. */
+    const video = media(controller);
     if (!el || !video) return;
     const quality = typeof video.getVideoPlaybackQuality === "function" ? video.getVideoPlaybackQuality() : null;
     const lines = [
         resolutionLine(controller, video, quality),
-        "HDR: n/a (browser)",
+        hdrStatusLine(controller),
         quality ? `Dropped frames: ${quality.droppedVideoFrames}/${quality.totalVideoFrames}` : null,
         audioStatusLine(controller),
         `Shader Upscaling: ${shaderStatusLine(controller)}`,

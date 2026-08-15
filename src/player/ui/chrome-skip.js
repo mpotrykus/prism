@@ -1,6 +1,7 @@
 /* Bottom-center skip-intro/credits button and its marker-range helpers. Deliberately
    independent of the idle-fade control row in chrome-controls.js - see updateSkipButton
    below for why. */
+import { media } from "../core/media-facade.js";
 
 /* Shared by both playback paths so the marker-range check isn't duplicated even though
    web/native render totally different skip-button UI. Assumes Plex's Marker objects use
@@ -44,8 +45,9 @@ export function updateSkipButton(controller, marker) {
             cursor: "pointer",
         });
         btn.addEventListener("click", () => {
-            if (controller._videoEl && controller._activeSkipMarker) {
-                controller._videoEl.currentTime = (controller._activeSkipMarker.endTimeOffset ?? 0) / 1000;
+            const el = media(controller);
+            if (el && controller._activeSkipMarker) {
+                el.currentTime = (controller._activeSkipMarker.endTimeOffset ?? 0) / 1000;
             }
         });
         document.body.appendChild(btn);

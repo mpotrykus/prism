@@ -1,4 +1,5 @@
-import { Capacitor } from "@capacitor/core";
+import { hasNativePlayer } from "../core/platform.js";
+import { media } from "../core/media-facade.js";
 import { setNativePlaybackRate } from "../native-bridge.js";
 import { PLAYBACK_RATES, SLEEP_TIMER_PRESETS_MIN, ZOOM_LEVELS, speedIconMarkup, zoomIconMarkup, sleepIconMarkup } from "./shared.js";
 /* Circular with chrome-menu.js (which imports renderExtrasList/applyZoomTransform from
@@ -31,10 +32,11 @@ function renderSpeedSection(controller, content, { setValue, collapse }) {
 async function setPlaybackRate(controller, rate) {
     if (!controller._session) return;
     controller._session.playbackRate = rate;
-    if (Capacitor.isNativePlatform() && Capacitor.getPlatform() === "android") {
+    if (hasNativePlayer()) {
         await setNativePlaybackRate(rate);
-    } else if (controller._videoEl) {
-        controller._videoEl.playbackRate = rate;
+    } else {
+        const el = media(controller);
+        if (el) el.playbackRate = rate;
     }
 }
 

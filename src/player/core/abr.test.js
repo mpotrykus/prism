@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { decideAbrAction, STABILITY_WINDOW_TICKS, DOWNGRADE_CONFIRM_TICKS } from "./abr.js";
+import {
+    decideAbrAction,
+    decideStallDrivenAction,
+    notifyStall,
+    STABILITY_WINDOW_TICKS,
+    DOWNGRADE_CONFIRM_TICKS,
+} from "./abr.js";
 
 // Ladder indices: 0 Original(20000 proxy), 1 1080p(20000), 2 720p(10000), 3 480p(4000), 4 360p(2000)
 
@@ -99,5 +105,58 @@ describe("decideAbrAction", () => {
     it("resets the downgrade streak the moment bandwidth recovers above the shortfall threshold", () => {
         const result = decideAbrAction({ currentIndex: 2, bandwidthKbps: 12000, downgradeStreak: 1, stableStreak: 0 });
         expect(result.downgradeStreak).toBe(0);
+    });
+});
+
+describe("decideStallDrivenAction (no bandwidth signal)", () => {
+    it("accumulates a stable streak without switching before STABILITY_WINDOW_TICKS", () => {
+        const result = decideStallDrivenAction({ currentIndex: 2, stableStreak: 0 });
+        expect(result.action).toBe("none");
+        expect(result.stableStreak).toBe(1);
+    });
+
+    it("steps up one rung once the stable streak reaches STABILITY_WINDOW_TICKS", () => {
+        const result = decideStallDrivenAction({ currentIndex: 2, stableStreak: STABILITY_WINDOW_TICKS - 1 });
+        expect(result.action).toBe("up");
+        expect(result.nextIndex).toBe(1);
+        expect(result.stableStreak).toBe(0);
+    });
+
+    it("never steps up past the ceiling, and does not accumulate there", () => {
+        const result = decideStallDrivenAction({ currentIndex: 0, stableStreak: STABILITY_WINDOW_TICKS });
+        expect(result.action).toBe("none");
+        expect(result.stableStreak).toBe(0);
+    });
+});
+
+describe("notifyStall in stall-driven mode", () => {
+    function makeController(qualityCapKbps, lastSwitchAt) {
+        const reloads = [];
+        return {
+            _session: { qualityCapKbps },
+            _autoQualityEnabled: true,
+            _abrStallDriven: true,
+            _abrStableStreak: STABILITY_WINDOW_TICKS - 1,
+            _abrDowngradeStreak: 0,
+            _abrLastSwitchAt: lastSwitchAt,
+            _reloadSource: (overrides) => reloads.push(overrides),
+            reloads,
+        };
+    }
+
+    it("steps down a rung on a real stall", () => {
+        const c = makeController(10000, 0);
+        notifyStall(c);
+        expect(c.reloads).toEqual([{ qualityCapKbps: 4000 }]);
+    });
+
+    /* The reason the streak reset sits before the cooldown check: in stall-driven mode the streak IS
+       the step-up trigger, so a connection stalling once per cooldown window would otherwise keep
+       climbing the ladder. */
+    it("cancels progress toward stepping up even when the cooldown blocks the switch", () => {
+        const c = makeController(10000, Date.now());
+        notifyStall(c);
+        expect(c.reloads).toHaveLength(0);
+        expect(c._abrStableStreak).toBe(0);
     });
 });
