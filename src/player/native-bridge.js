@@ -98,12 +98,11 @@ export async function playNative(controller, streamUrl, startOffsetMs) {
     controller._nativeListenerHandles.push(
         await NativePlayer.addListener("stopped", () => controller.stop())
     );
-    /* PlayerUiHelper's own title-prev/title-next buttons (mirroring chrome.js's
-       makeTitleNavButton) only need queueLength/queueIndex to decide whether to grey
-       "next" out and whether "prev" should restart vs jump back - the actual Plex
-       metadata fetch for whichever adjacent title gets requested stays here, reusing
-       chrome.js's playQueuedTitle rather than reimplementing that fetch-then-_switchTitle
-       sequence in Java. */
+    /* PlayerUiHelper's own title-prev/title-next buttons only need queueLength/queueIndex
+       to decide whether to grey "next" out and whether "prev" should restart vs jump back
+       - the actual Plex metadata fetch for whichever adjacent title gets requested stays
+       here, reusing chrome-transport.js's playQueuedTitle rather than reimplementing that
+       fetch-then-_switchTitle sequence in Java. */
     controller._nativeListenerHandles.push(
         await NativePlayer.addListener("titleNav", ({ index }) => {
             const queue = controller._session?.queueRatingKeys || [];

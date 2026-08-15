@@ -133,6 +133,12 @@ export function wireHomeNav(card) {
     Array.from(card.shadowRoot.querySelectorAll(".row-section")).filter((s) => s.offsetParent !== null);
   const postersIn = (section) =>
     section ? Array.from(section.querySelectorAll(".poster")).filter((el) => el.offsetParent !== null) : [];
+  /* Preferred landing spot for a fresh D-pad/gamepad press with nothing focused yet -
+     the in-progress item a returning viewer almost always wants, not the sidenav's own
+     top entry. Falls back to the sidenav below when there's no Continue Watching row at
+     all (empty on-deck, or the current view isn't Home) rather than focusing nothing. */
+  const continueWatchingFirstPoster = () =>
+    postersIn(card.shadowRoot.querySelector('.row-section[data-row-key="on-deck"]'))[0] || null;
 
   registerNavHandler((command, e, active) => {
     const inSidenav = sidenavItems().includes(active);
@@ -150,7 +156,7 @@ export function wireHomeNav(card) {
          this handler stealing focus mid-interaction with some other overlay. */
       const nothingFocusedYet = !active || active === document.body || active === card;
       if (nothingFocusedYet && ["up", "down", "left", "right"].includes(command)) {
-        sidenavItems()[0]?.focus();
+        (continueWatchingFirstPoster() || sidenavItems()[0])?.focus();
         return true;
       }
       return false;

@@ -1,12 +1,16 @@
 import { hideControls, showControls } from "./chrome-controls.js";
-import { wireLinearNav } from "../../../focus-nav.js";
+import { wireLinearNav, focusAfterPaint } from "../../../focus-nav.js";
 import { setAutoQualityEnabled, bandwidthSource } from "../core/abr.js";
 import {
     QUALITY_CAP_PRESETS,
     SHEET_GRADIENT,
     MENU_SCROLL_CLASS,
+    OVERLAY_CLOSE_BTN_CLASS,
+    PLAYER_FOCUSABLE_CLASS,
     ensureMenuScrollStyle,
+    episodesIconMarkup,
     chaptersIconMarkup,
+    audioSubtitlesIconMarkup,
     versionIconMarkup,
     qualityCapIconMarkup,
     effectsIconMarkup,
@@ -16,15 +20,21 @@ import {
 } from "./shared.js";
 /* Circular with episode-list.js (which imports playQueuedTitle/formatTime from
    chrome-transport.js) - safe here because both sides only reference the other module's
-   export from inside a function body (openChapterListOverlay is called from a click
-   handler, long after both modules have finished loading), never at top-level module-
-   evaluation time. */
-import { openChapterListOverlay } from "./episode-list.js";
+   export from inside a function body (openChapterListOverlay/openEpisodeListOverlay are
+   called from a click handler, long after both modules have finished loading), never at
+   top-level module-evaluation time. */
+import { openChapterListOverlay, openEpisodeListOverlay } from "./episode-list.js";
+/* Same circularity reasoning as episode-list.js above - chrome-subtitles.js imports
+   closeInlineMenu/renderPickerList from this file, and this file's own use of
+   openAudioSubtitlesOverlay is confined to a `nav` callback below, never called until long
+   after both modules have finished loading. */
+import { openAudioSubtitlesOverlay } from "./chrome-subtitles.js";
 import { renderEffectsList } from "./chrome-menu-effects.js";
 import { renderExtrasList } from "./chrome-menu-extras.js";
 
-/* The hamburger "More" sheet: its top-level accordion list (Chapters/Version/Quality Cap/
-   Auto-Play/Effects/Extras/Performance Overlay), the accordion-row/picker-list primitives
+/* The hamburger "More" sheet: its top-level accordion list (Episodes/Chapters/Audio &
+   Subtitles/Version/Quality Cap/Auto-Play/Effects/Extras/Performance Overlay), the
+   accordion-row/picker-list primitives
    shared with its Effects (chrome-menu-effects.js) and Extras (chrome-menu-extras.js)
    sub-screens, and the Version/Quality Cap pickers that stay inline here. Takes the
    StreamingPlayerController instance as an explicit first argument (see native-bridge.js/
@@ -40,6 +50,7 @@ export function renderPickerList(content, items, { rowGap = 0 } = {}) {
     items.forEach((item, index) => {
         const row = document.createElement("button");
         row.type = "button";
+        row.classList.add(PLAYER_FOCUSABLE_CLASS);
         Object.assign(row.style, {
             display: "flex",
             alignItems: "center",
@@ -107,6 +118,7 @@ export function buildAccordionRow(list, state, section) {
 
     const header = document.createElement("button");
     header.type = "button";
+    header.classList.add(PLAYER_FOCUSABLE_CLASS);
     Object.assign(header.style, {
         display: "flex",
         alignItems: "center",
@@ -117,7 +129,7 @@ export function buildAccordionRow(list, state, section) {
         padding: "14px 16px",
         background: "transparent",
         border: "none",
-        cursor: section.render || section.nav ? "pointer" : "default",
+        cursor: section.render || section.nav || section.toggle ? "pointer" : "default",
         fontFamily: '"Roboto", sans-serif',
     });
 
@@ -160,8 +172,10 @@ export function buildAccordionRow(list, state, section) {
 
     const rightSide = document.createElement("span");
     Object.assign(rightSide.style, { display: "flex", alignItems: "center", gap: "12px", flex: "0 0 auto" });
+    let toggleEl = null;
     if (section.toggle) {
-        rightSide.appendChild(makeToggleSwitch(section.toggle.checked, (checked) => setValue(section.toggle.onChange(checked))));
+        toggleEl = makeToggleSwitch(section.toggle.checked, (checked) => setValue(section.toggle.onChange(checked)));
+        rightSide.appendChild(toggleEl);
     }
 
     let chevronEl = null;
@@ -187,6 +201,15 @@ export function buildAccordionRow(list, state, section) {
             chevronEl.style.transform = "rotate(0deg)";
             header.setAttribute("aria-expanded", "false");
             if (state.expandedCollapse === collapse) state.expandedCollapse = null;
+            /* Whatever was focused when this ran was a button inside `content` (a picker row's
+               onSelect calls setValue+collapse right after the viewer activates it) - display:none
+               drops a focused descendant out of the focus order entirely, same as removing it from
+               the DOM outright (see refocusList's own comment above), and nothing else claims focus
+               in its place. Left alone, the very next command (including B) would stop responding:
+               wireLinearNav's handler only acts when focus is already inside its list. header stays
+               visible and focusable either way (collapsing never hides it), so it's always a safe
+               landing spot regardless of which row this collapse belongs to. */
+            focusAfterPaint(header);
         };
         header.addEventListener("click", () => {
             if (content.style.display !== "none") {
@@ -205,6 +228,17 @@ export function buildAccordionRow(list, state, section) {
         });
     } else if (section.nav) {
         header.addEventListener("click", () => section.nav());
+    } else if (toggleEl) {
+        /* Sections with only `toggle` (Auto-Play, Performance Overlay) never wired the header
+           itself to do anything - the switch's own click handler is the only thing that ever
+           flipped it, which works fine for a mouse click landing directly on the switch but left
+           the row completely inert for D-pad/keyboard: wireLinearNav only ever focuses `header`
+           (the switch is a plain div, not a button - see makeToggleSwitch - so it's never a focus
+           target itself), and activating an unwired button does nothing. Delegating to the switch's
+           own click() reuses its existing flip-the-UI-and-call-onChange logic instead of duplicating
+           it here; that handler's own stopPropagation keeps a direct mouse click on the switch from
+           looping back through this same listener. */
+        header.addEventListener("click", () => toggleEl.click());
     }
 
     list.appendChild(wrap);
@@ -217,6 +251,7 @@ export function buildAccordionRow(list, state, section) {
 export function makeBackRow(onClick) {
     const row = document.createElement("button");
     row.type = "button";
+    row.classList.add(PLAYER_FOCUSABLE_CLASS);
     row.textContent = "‹  Back";
     Object.assign(row.style, {
         display: "block",
@@ -241,6 +276,20 @@ export function makeBackRow(onClick) {
     });
     row.addEventListener("click", onClick);
     return row;
+}
+
+/* Rebuilding a screen's list (a full nav swap - Quality Cap/Effects/Extras and Extras' own
+   Playback Speed/Zoom/Sleep Timer screens - or renderMainList itself) replaces whatever button
+   was focused with a brand-new DOM subtree - the old element is gone, and nothing else claims
+   focus in its place, so the browser drops it to <body>. Left alone, that silently breaks every
+   subsequent D-pad/keyboard command: wireLinearNav's handler only ever acts when focus is
+   already inside its own list, so the whole sheet would stop responding to B *and*
+   Up/Down/Left/Right the moment a viewer navigated anywhere - it just happened to read as "B
+   doesn't back out" because that's the one thing a mouse user would notice too. Exported (rather
+   than a private helper closing over one `list`) so chrome-menu-extras.js's own nested screens
+   can call it too - see its renderExtrasList. */
+export function refocusList(list) {
+    focusAfterPaint(list.querySelector("button"));
 }
 
 export function openHamburgerMenu(controller, anchor) {
@@ -294,6 +343,7 @@ export function openHamburgerMenu(controller, anchor) {
     header.appendChild(heading);
     const closeBtn = document.createElement("button");
     closeBtn.type = "button";
+    closeBtn.classList.add(OVERLAY_CLOSE_BTN_CLASS, PLAYER_FOCUSABLE_CLASS);
     closeBtn.setAttribute("aria-label", "Close menu");
     closeBtn.textContent = "✕";
     Object.assign(closeBtn.style, {
@@ -318,15 +368,47 @@ export function openHamburgerMenu(controller, anchor) {
     Object.assign(list.style, { flex: "1 1 auto", minHeight: "0", overflowY: "auto", padding: "0 0 20px" });
     card.appendChild(list);
 
+    /* Tracks "what should B/Escape do right now" - closeInlineMenu at the main list, or back up to
+       the main list from whichever sub-screen (Quality Cap/Effects/Extras) is currently showing in
+       this same `list` element. Reassigned by renderMainList and by each sub-screen's own `nav`
+       entry below, rather than menuNav's onBack hardcoding one or the other, so gamepad/keyboard
+       "back" matches exactly what the mouse-driven "‹ Back" row (makeBackRow) already does.
+       Extras nests one level deeper still (its own Playback Speed/Zoom/Sleep Timer screens) - see
+       setGoBack below for why a plain reassignment here isn't enough on its own for that case. */
+    let goBack = () => closeInlineMenu(controller);
+    /* Passed into renderExtrasList so its own nav callbacks can point `goBack` at Extras' own
+       screen (not all the way back to Main) when the viewer drills one level deeper still, then
+       back at `renderMainList` again once they return to Extras' top screen - chrome-menu.js owns
+       `goBack` itself, so a sub-screen module has no other way to redirect it correctly for its own
+       nested "back" targets. */
+    function setGoBack(fn) {
+        goBack = fn;
+    }
+
     function renderMainList() {
     list.innerHTML = "";
+    goBack = () => closeInlineMenu(controller);
     const state = { expandedCollapse: null };
-    /* Ordered by how often a row is actually touched, not the order features shipped
-       in: what-you're-watching controls (Chapters/Audio & Subtitles) first, since
-       those get touched per-video; source/quality (Version/Quality Cap) and the
-       Auto-Play toggle next; Effects/Extras/Performance Overlay last, in that order -
-       the three rows here most people set once and never revisit. */
+    /* Ordered to match the Android native player's own More menu (PlayerUiHelper.java) so the
+       two platforms read as the same app: what-you're-watching controls (Episodes/Chapters/
+       Audio & Subtitles) first, since those get touched per-video; source/quality (Version/
+       Quality Cap) and the Auto-Play toggle next; Effects/Extras/Performance Overlay last, in
+       that order - the three rows here most people set once and never revisit. */
     const sections = [];
+    /* Used to be a standalone transport-bar button (chrome-transport.js's leftCell) - moved here
+       to match Android, whose chrome has no standalone Episodes icon either. Same "seasonNumber
+       present means a TV episode with siblings to browse" wording that button and episode-list.js's
+       own overlay heading already used - see formatEpisodeListItem's neighbouring reasoning. */
+    if (session?.queueRatingKeys?.length > 1) {
+        sections.push({
+            key: "episodes",
+            label: session.seasonNumber != null ? "Episodes" : "Up Next",
+            icon: episodesIconMarkup(),
+            /* openEpisodeListOverlay already closes this sheet itself (same pattern as Chapters
+               below), so there's nothing else to do here. */
+            nav: () => openEpisodeListOverlay(controller),
+        });
+    }
     if (session?.chapters?.length) {
         sections.push({
             /* Opens the same horizontally-scrolling card overlay episode-list.js uses
@@ -341,6 +423,16 @@ export function openHamburgerMenu(controller, anchor) {
             nav: () => openChapterListOverlay(controller),
         });
     }
+    sections.push({
+        /* Used to be its own standalone transport-bar icon (chrome-transport.js's rightCell) -
+           moved here to match Android, whose chrome puts this in its More menu too rather than a
+           top-level icon (see PlayerUiHelper.java). openAudioSubtitlesOverlay already closes this
+           sheet itself, same as Chapters/Episodes above. */
+        key: "audiosubtitles",
+        label: "Audio & Subtitles",
+        icon: audioSubtitlesIconMarkup(),
+        nav: () => openAudioSubtitlesOverlay(controller),
+    });
     /* Version and Quality Cap used to live one level deeper, behind a "Video Quality"
        row - flattened to their own top-level rows (Version only shown when this item
        actually has more than one Media[] entry, same "never an empty/dead affordance"
@@ -362,7 +454,11 @@ export function openHamburgerMenu(controller, anchor) {
         label: "Quality Cap",
         icon: qualityCapIconMarkup(),
         getValue: () => qualityCapMenuLabel(controller),
-        nav: () => renderQualityCapList(controller, list, renderMainList),
+        nav: () => {
+            goBack = renderMainList;
+            renderQualityCapList(controller, list, renderMainList);
+            refocusList(list);
+        },
     });
     sections.push({
         key: "autoplay",
@@ -389,7 +485,11 @@ export function openHamburgerMenu(controller, anchor) {
         key: "effects",
         label: "Effects",
         icon: effectsIconMarkup(),
-        nav: () => renderEffectsList(controller, list, renderMainList),
+        nav: () => {
+            goBack = renderMainList;
+            renderEffectsList(controller, list, renderMainList);
+            refocusList(list);
+        },
     });
     sections.push({
         /* Same "own dedicated screen" reasoning as Effects above, for Playback Speed/
@@ -402,7 +502,15 @@ export function openHamburgerMenu(controller, anchor) {
         key: "extras",
         label: "Extras",
         icon: extrasIconMarkup(),
-        nav: () => renderExtrasList(controller, list, renderMainList),
+        nav: () => {
+            goBack = renderMainList;
+            /* Extras nests one level deeper than Effects/Quality Cap - its own three rows (Playback
+               Speed/Zoom/Sleep Timer) each navigate to their own screen too, rather than expanding
+               in place - so it needs a way to point `goBack` at its own top screen (not all the way
+               to Main) while one of those is open. See setGoBack's own comment above. */
+            renderExtrasList(controller, list, renderMainList, setGoBack);
+            refocusList(list);
+        },
     });
     sections.push({
         key: "stats",
@@ -421,6 +529,7 @@ export function openHamburgerMenu(controller, anchor) {
     });
 
     sections.forEach((section) => buildAccordionRow(list, state, section));
+    refocusList(list);
     }
 
     renderMainList();
@@ -436,10 +545,13 @@ export function openHamburgerMenu(controller, anchor) {
     sheet.classList.add(INLINE_MENU_CLASS);
     /* Without this the sheet opens with focus still nowhere, so wireLinearNav's own "is focus inside my
        list" guard never passes and D-pad input does nothing. */
-    const menuNav = wireLinearNav(document, `.${INLINE_MENU_CLASS} button`, {
+    const menuNav = wireLinearNav(document, `.${INLINE_MENU_CLASS} button:not(.${OVERLAY_CLOSE_BTN_CLASS})`, {
         orientation: "vertical",
         loop: true,
-        onBack: () => closeInlineMenu(controller),
+        /* Back up a screen (Quality Cap/Effects/Extras -> the main list) if one is open, else close
+           the whole sheet - see `goBack`'s own comment above for why this is a reassignable variable
+           rather than always closeInlineMenu directly. */
+        onBack: () => goBack(),
     });
     /* wireLinearNav does not focus anything itself - it returns focusFirst for the caller to call.
        Required here: its handler ignores every command unless focus is already inside its list, so

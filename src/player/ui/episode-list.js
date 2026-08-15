@@ -5,6 +5,7 @@ import { plexAssetUrl } from "../core/plex-asset-url.js";
 import { fetchQueueItemsMetadata } from "../core/title-fetch.js";
 import { WATCHED_ICON_SVG } from "../../card/rows.js";
 import { formatRuntime } from "../../card/title-info.js";
+import { OVERLAY_CLOSE_BTN_CLASS, PLAYER_FOCUSABLE_CLASS } from "./shared.js";
 
 /* In-player episode/queue list overlay (HBO Max-style) - a bottom sheet over the still-
    playing video (see the "keep playing behind overlay" decision) listing every title in
@@ -64,6 +65,7 @@ function ensureScrollStyle() {
 function buildQueueScrollArrow(direction, scroller) {
     const btn = document.createElement("button");
     btn.type = "button";
+    btn.classList.add(PLAYER_FOCUSABLE_CLASS);
     btn.setAttribute("aria-label", direction === "left" ? "Scroll left" : "Scroll right");
     btn.innerHTML =
         direction === "left" ?
@@ -85,7 +87,7 @@ function buildQueueScrollArrow(direction, scroller) {
         zIndex: "1",
         opacity: "0",
         pointerEvents: "none",
-        transition: "opacity 0.15s ease",
+        transition: "opacity 0.15s ease, outline-color 0.125s ease",
         background: direction === "left" ?
             "linear-gradient(90deg, rgba(10,10,12,0.9), rgba(10,10,12,0))" :
             "linear-gradient(270deg, rgba(10,10,12,0.9), rgba(10,10,12,0))",
@@ -155,8 +157,8 @@ export async function openEpisodeListOverlay(controller) {
     Object.assign(header.style, { display: "flex", alignItems: "center", justifyContent: "space-between", flex: "0 0 auto", padding: "0 24px" });
 
     const heading = document.createElement("div");
-    /* Same seasonNumber-present check buildTransportBar already uses to decide whether
-       a session is a TV episode vs a movie/collection item - reused here purely for
+    /* Same seasonNumber-present check chrome-menu.js's Episodes/Up Next row uses to decide
+       whether a session is a TV episode vs a movie/collection item - reused here purely for
        label wording, nothing structural depends on it. */
     heading.textContent = session.seasonNumber != null ? "Episodes" : "Up Next";
     Object.assign(heading.style, { color: "#fff", fontSize: "18px", fontWeight: "700" });
@@ -164,6 +166,7 @@ export async function openEpisodeListOverlay(controller) {
 
     const closeBtn = document.createElement("button");
     closeBtn.type = "button";
+    closeBtn.classList.add(OVERLAY_CLOSE_BTN_CLASS, PLAYER_FOCUSABLE_CLASS);
     closeBtn.setAttribute("aria-label", "Close episode list");
     closeBtn.textContent = "✕";
     Object.assign(closeBtn.style, {
@@ -230,10 +233,15 @@ export async function openEpisodeListOverlay(controller) {
     panel.classList.add(EPISODE_LIST_CLASS);
     /* Horizontal: these are scrolling card rows, so left/right is the axis that matches what is on
        screen. See the audio overlay for why the root is `document`. */
-    const epNav = wireLinearNav(document, `.${EPISODE_LIST_CLASS} button`, {
+    const epNav = wireLinearNav(document, `.${EPISODE_LIST_CLASS} button:not(.${OVERLAY_CLOSE_BTN_CLASS})`, {
         orientation: "horizontal",
         onBack: () => closeEpisodeListOverlay(controller),
     });
+    /* No-ops for now - the only thing on screen is the loading spinner (not a button), so
+       items()[0] is undefined. Called again below once the real cards actually exist; without
+       that second call, D-pad/keyboard input (including Back) would never work on this overlay
+       at all - not just after a selection, from the moment it opens - since wireLinearNav's
+       handler only acts when focus is already inside its own list. */
     epNav.focusFirst();
     controller._episodeListNav = epNav;
     controller._hideControls();
@@ -277,6 +285,9 @@ export async function openEpisodeListOverlay(controller) {
     /* Wired after the real cards land (not right after scrollWrap is built) - scrollWidth
        is meaningless against the empty "Loading…" placeholder that was there before. */
     wireQueueArrowVisibility(scroll, leftArrow, rightArrow);
+    /* The cards this overlay actually browses didn't exist yet when focusFirst() was first
+       called above (loading spinner only) - see that call's own comment. */
+    epNav.focusFirst();
 }
 
 export function closeEpisodeListOverlay(controller) {
@@ -337,6 +348,7 @@ export function openChapterListOverlay(controller) {
     header.appendChild(heading);
     const closeBtn = document.createElement("button");
     closeBtn.type = "button";
+    closeBtn.classList.add(OVERLAY_CLOSE_BTN_CLASS, PLAYER_FOCUSABLE_CLASS);
     closeBtn.setAttribute("aria-label", "Close chapter list");
     closeBtn.textContent = "✕";
     Object.assign(closeBtn.style, {
@@ -394,7 +406,7 @@ export function openChapterListOverlay(controller) {
     document.body.appendChild(panel);
     controller._chapterListEl = { scrim, panel };
     panel.classList.add(CHAPTER_LIST_CLASS);
-    const chNav = wireLinearNav(document, `.${CHAPTER_LIST_CLASS} button`, {
+    const chNav = wireLinearNav(document, `.${CHAPTER_LIST_CLASS} button:not(.${OVERLAY_CLOSE_BTN_CLASS})`, {
         orientation: "horizontal",
         onBack: () => closeChapterListOverlay(controller),
     });
@@ -429,6 +441,7 @@ export function closeChapterListOverlay(controller) {
 function buildChapterCard(session, chapter, isCurrent, onSelect) {
     const card = document.createElement("button");
     card.type = "button";
+    card.classList.add(PLAYER_FOCUSABLE_CLASS);
     Object.assign(card.style, {
         flex: "0 0 auto",
         width: "240px",
@@ -538,6 +551,7 @@ export function formatEpisodeListItem(session, item) {
 function buildEpisodeCard(item, onSelect) {
     const card = document.createElement("button");
     card.type = "button";
+    card.classList.add(PLAYER_FOCUSABLE_CLASS);
     Object.assign(card.style, {
         flex: "0 0 auto",
         width: "240px",

@@ -6,10 +6,10 @@
    independent state):
 
      chrome-controls.js   - the shared idle-fade control-button row + buffering spinner
-     chrome-transport.js  - the bottom transport bar (scrub bar/chapter segments/BIF
-                             preview, volume, fullscreen) and center play/seek/chapter/
-                             title-nav controls
-     chrome-menu.js       - the hamburger "More" sheet's top-level list plus the
+     chrome-transport.js  - the bottom transport bar (title/time info, scrub bar/chapter
+                             segments/BIF preview) and the floating center play/pause button
+     chrome-menu.js       - the hamburger "More" sheet's top-level list (Episodes, Chapters,
+                             Audio & Subtitles, Version, Quality Cap, ...) plus the
                              accordion-row/picker-list primitives shared with:
      chrome-menu-effects.js - its Effects sub-screen (Shader Upscaling/Color Boost/
                                Ambient Lighting)
@@ -25,7 +25,7 @@
 
 export { makeControlButton, registerControlButton, showControls, hideControls, scheduleHideControls, buildLoadingSpinner } from "./chrome-controls.js";
 
-export { buildCenterControls, buildTransportBar, playQueuedTitle, formatTime } from "./chrome-transport.js";
+export { buildFloatingPlayButton, buildTransportBar, playQueuedTitle, formatTime, seekToAdjacentChapter } from "./chrome-transport.js";
 
 export { openHamburgerMenu, closeInlineMenu } from "./chrome-menu.js";
 

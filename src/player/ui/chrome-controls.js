@@ -1,4 +1,4 @@
-import { CONTROLS_HIDE_DELAY_MS } from "./shared.js";
+import { CONTROLS_HIDE_DELAY_MS, PLAYER_FOCUSABLE_CLASS } from "./shared.js";
 
 /* The idle-fade control row: every corner button and the transport bar share one fade
    timer instead of each reinventing idle-hide logic, plus the buffering spinner - the one
@@ -14,6 +14,11 @@ export function makeControlButton({ ariaLabel, content, onClick }) {
     btn.type = "button";
     btn.textContent = content;
     btn.setAttribute("aria-label", ariaLabel);
+    /* Focus-ring styling (see shared.js's PLAYER_FOCUSABLE_CLASS) - no border-radius set
+       inline here (unlike before) so that class's own rounded-corner outline applies;
+       these buttons have no visible resting background/border of their own, so leaving
+       their corners un-set has no visual effect except on the focus ring itself. */
+    btn.classList.add(PLAYER_FOCUSABLE_CLASS);
     Object.assign(btn.style, {
         position: "fixed",
         top: "24px",
@@ -23,7 +28,6 @@ export function makeControlButton({ ariaLabel, content, onClick }) {
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        borderRadius: "0",
         border: "none",
         background: "transparent",
         color: "#fff",
@@ -33,7 +37,7 @@ export function makeControlButton({ ariaLabel, content, onClick }) {
         cursor: "pointer",
         opacity: "1",
         textShadow: "0 1px 4px rgba(0,0,0,0.85)",
-        transition: "opacity 0.25s ease",
+        transition: "opacity 0.25s ease, outline-color 0.125s ease",
     });
     if (onClick) btn.addEventListener("click", onClick);
     return btn;
@@ -96,6 +100,12 @@ export function scheduleHideControls(controller) {
     clearTimeout(controller._controlsHideTimer);
     if (controller._controlsHovering || controller._inlineMenuEl || controller._episodeListEl || controller._chapterListEl || controller._audioSubtitlesEl) return;
     controller._controlsHideTimer = setTimeout(() => {
+        /* An in-progress left-stick scrub (see plex-player.js's _adjustScrub/_cancelScrub)
+           has no meaning once its own preview UI is about to disappear with the rest of the
+           chrome - idling out is treated the same as the user pressing B, snapping the
+           transport bar back to wherever playback actually is rather than leaving a stale
+           pending seek that a later A could still commit unexpectedly. */
+        if (controller._scrubActive) controller._cancelScrub();
         controller._controlButtons.forEach((b) => {
             b.style.opacity = "0";
             b.style.pointerEvents = "none";

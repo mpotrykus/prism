@@ -1,4 +1,4 @@
-import { wireLinearNav, registerNavHandler } from "../../focus-nav.js";
+import { wireLinearNav, registerNavHandler, focusAfterPaint, isControllerActive } from "../../focus-nav.js";
 import { lockScroll, unlockScroll } from "../../scroll-lock.js";
 import { paintWatchlistButton } from "./watchlist.js";
 import { WATCHED_ICON_SVG } from "./rows.js";
@@ -182,6 +182,7 @@ export class TitleInfoController {
     this._flatQueueContext = null;
     this._episodeQueueCache = null;
     this._nextEpisodeCache = null;
+    this._focusPlayOnceLoaded = false;
 
     this._wire();
   }
@@ -235,6 +236,15 @@ export class TitleInfoController {
   _setButtonsLoading(loading) {
     this._actionsEl.hidden = loading;
     this._actionsLoadingEl.hidden = !loading;
+    /* Deferred from open() - Play/Resume was hidden (still loading) at the point a
+       controller user's open() call wanted to land focus on it, so it's done here
+       instead, once the button just became visible/focusable again. One-shot: only the
+       open() call that requested it consumes the flag, so a later unrelated loading
+       toggle (e.g. re-opening for a different item) doesn't yank focus back to Play. */
+    if (!loading && this._focusPlayOnceLoaded) {
+      this._focusPlayOnceLoaded = false;
+      focusAfterPaint(this._playBtn);
+    }
   }
 
   /* Redirects an episode click to the parent show's info modal, landing on the season/
@@ -334,8 +344,16 @@ export class TitleInfoController {
        pointing at an element wireLinearNav's own selector never matches - every D-pad
        command then falls straight through as unhandled, since registerNavHandler's
        handler here only acts when the active element is one of its own watched items.
-       focusFirst() lands on the actual first nav target (.title-info-close) instead. */
+       focusFirst() lands on the actual first nav target (.title-info-close) instead -
+       always taken here, even for controller users, since Play/Resume itself is hidden
+       behind _setButtonsLoading(true) right up above and .focus() on a hidden element is
+       a silent no-op, not a deferred one: landing the deferred focusAfterPaint call on it
+       directly here raced the detail fetch below and intermittently left focus behind the
+       modal on whatever was focused before it opened. Controller users still get
+       Play/Resume once it's actually visible - see the _setButtonsLoading(false) call
+       sites below. */
     this._nav.focusFirst();
+    this._focusPlayOnceLoaded = isControllerActive();
 
     let ratingKey = item.ratingKey;
     if (source === "watchlist") {
@@ -908,7 +926,15 @@ export class TitleInfoController {
   }
 
   _wire() {
-    window.addEventListener("streaming-player-close", () => this._refreshAfterPlayback());
+    /* The player is a full-screen overlay on top of this modal, not a replacement for it -
+       closing it leaves document.activeElement pointing at whatever the player itself last
+       focused (now torn down), so D-pad/gamepad nav silently stops responding to anything
+       until a click forces focus somewhere new. Landing back on Play/Resume mirrors what
+       open() already does for a freshly-opened modal (_nav.focusFirst() above). */
+    window.addEventListener("streaming-player-close", () => {
+      this._refreshAfterPlayback();
+      if (this.isOpen() && isControllerActive()) focusAfterPaint(this._playBtn);
+    });
     this._closeBtn.addEventListener("click", () => this.close());
     this._overlay.addEventListener("click", (e) => {
       if (e.target === this._overlay) this.close();

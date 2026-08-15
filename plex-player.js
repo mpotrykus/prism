@@ -55,7 +55,7 @@ import {
     hideControls,
     scheduleHideControls,
     buildLoadingSpinner,
-    buildCenterControls,
+    buildFloatingPlayButton,
     buildTransportBar,
     openHamburgerMenu,
     applyZoomTransform,
@@ -66,6 +66,7 @@ import {
     updateSkipButton,
     playQueuedTitle,
     applyRememberedSubtitle,
+    seekToAdjacentChapter,
 } from "./src/player/ui/chrome.js";
 import { openEpisodeListOverlay, closeEpisodeListOverlay } from "./src/player/ui/episode-list.js";
 
@@ -75,9 +76,18 @@ import { openEpisodeListOverlay, closeEpisodeListOverlay } from "./src/player/ui
 const TIMELINE_PING_MS = 10000;
 /* 10s per press, matching the transport bar's own +/- seek buttons. */
 const NAV_SEEK_STEP_MS = 10000;
-/* Long enough to absorb a burst of D-pad repeats into one transcode restart, short enough not to feel
-   like lag on a single press. */
+/* Long enough to absorb a burst of trigger-held repeats into one transcode restart, short enough not
+   to feel like lag on a single press. */
 const NAV_SEEK_COMMIT_MS = 600;
+/* Once the left stick has been held in one direction for SCRUB_SPEEDUP_INTERVAL_MS straight,
+   _adjustScrub jumps its per-tick step to SCRUB_MAX_SPEED_MULTIPLIER (configurable if that
+   ceiling needs to move later). SCRUB_HOLD_GAP_MS is how big a gap between consecutive
+   left/right nav commands still counts as "held through" rather than a fresh press - see
+   _adjustScrubHoldStep's own comment for why this needs to be bigger than focus-nav.js's
+   REPEAT_DELAY_MS (400ms). */
+const SCRUB_SPEEDUP_INTERVAL_MS = 3000;
+const SCRUB_MAX_SPEED_MULTIPLIER = 8;
+const SCRUB_HOLD_GAP_MS = 500;
 const CLIENT_ID_KEY = "prism_plex_client_identifier";
 
 function clientIdentifier() {
@@ -120,6 +130,17 @@ class StreamingPlayerController {
         this._episodeListEl = null;
         this._episodeListCache = null;
         this._bifIndex = null;
+        /* Left-stick gamepad scrub-preview state (Xbox only, see _adjustScrub/_commitScrub/
+           _cancelScrub below) - _transportScrub itself is assigned by chrome-transport.js's
+           buildTransportBar, rebuilt fresh each time the transport bar is. */
+        this._transportScrub = null;
+        this._scrubActive = false;
+        this._scrubTargetMs = null;
+        /* Tracks how long left/right has been held in one direction, purely for the
+           speed-up in _adjustScrub - see that method's own comment. */
+        this._scrubHoldDirection = 0;
+        this._scrubHoldStartAt = 0;
+        this._scrubHoldLastAt = 0;
         this._ambientEnabled = false;
         this._ambientOpacity = 0.5;
         this._ambientGlowContainer = null;
@@ -168,8 +189,9 @@ class StreamingPlayerController {
            a console can start playback and then reach nothing but the exit.
 
            Not enabled everywhere yet purely to avoid slipping a keyboard-behaviour change into the web
-           player as a side effect; arrow-key seek would be a reasonable thing to offer there too, but
-           that is a deliberate decision to make on its own. */
+           player as a side effect; some equivalent (arrow-key chrome navigation, a keyboard seek
+           shortcut) would be reasonable to offer there too, but that is a deliberate decision to make
+           on its own. */
         registerNavHandler((command) => {
             if (!this._session) return false;
             /* Yield entirely while one of the player's own overlays is open. focus-nav.js consults every
@@ -179,8 +201,15 @@ class StreamingPlayerController {
                which left the chrome orphaned on screen - and up/down would scrub while also moving the
                menu selection. The convention this module is following is focus-nav.js's own: only the
                handler whose scope currently owns focus should act. */
-            if (this._inlineMenuEl || this._audioSubtitlesEl || this._episodeListEl) return false;
+            if (this._inlineMenuEl || this._audioSubtitlesEl || this._episodeListEl || this._chapterListEl) return false;
             if (command === "back") {
+                /* B cancels an in-progress left-stick scrub instead of stopping playback -
+                   only ever true on Xbox, since that's the only place _adjustScrub ever sets
+                   it (see _handlePlayerNavCommand). */
+                if (this._scrubActive) {
+                    this._cancelScrub();
+                    return true;
+                }
                 this.stop();
                 return true;
             }
@@ -226,9 +255,9 @@ class StreamingPlayerController {
        without touching the pushed history entry or the hero-trailer open/close events -
        those belong to the player overlay's own lifecycle, not to any one title inside
        it, so calling play() again here would wrongly push a second history entry (and
-       have stop()'s history.back() unwind the first one instead). Used by the title-nav
-       prev/next buttons (see chrome.js's seekToAdjacentTitle) to jump to an adjacent
-       queued title mid-session.
+       have stop()'s history.back() unwind the first one instead). Used by
+       episode-list.js's playQueuedTitle to jump to an adjacent/selected queued title
+       mid-session.
 
        Android native takes its own path (_switchTitleNative) rather than this
        teardown-then-rebegin one - _teardownMedia's stopNative finish()es the running
@@ -423,6 +452,12 @@ class StreamingPlayerController {
             clearInterval(this._pingTimer);
             this._pingTimer = null;
         }
+        /* Reset here (not just on B/A) so a session torn down mid-scrub by some other path
+           (e.g. an error, or a title switch) can't leave the next session's constructor-level
+           registerNavHandler thinking a scrub is still active before it's ever pressed left/right. */
+        this._scrubActive = false;
+        this._scrubTargetMs = null;
+        this._scrubHoldDirection = 0;
         if (this._session) {
             /* Awaited (unlike the periodic pings during playback) so Plex's own
                viewOffset/viewCount are committed before streaming-player-close fires below -
@@ -524,45 +559,132 @@ class StreamingPlayerController {
        new URL to the player" step differs - the Plex protocol sequence itself lives once in
        core/session-reload.js. Called by core/abr.js, chrome-menu.js's Version/Quality menus and
        chrome-subtitles.js's audio picker, none of which need to know which backend is playing. */
-    /* Gamepad control for a player whose chrome is DOM built for mouse/touch. Deliberately the
-       standard TV scheme (arrows scrub, A toggles playback, Up opens the menu) rather than moving a
-       focus ring between chrome elements - on a 10-foot display, arrows-scrub is what viewers expect,
-       and it needs no focusable-element traversal through a chrome that was never built for it.
+    /* Gamepad control for a player whose chrome is DOM built for mouse/touch. Standard console
+       transport scheme: bumpers skip chapters, triggers rewind/fast-forward, Start opens the
+       options menu, A plays/pauses, left stick traverses the scrub bar with a BIF preview (see
+       _adjustScrub below) - every action reachable from the bare player screen already has its
+       own dedicated button/stick, so nothing here is left for D-pad to navigate between; that's
+       only meaningful once a menu/overlay is open, where wireLinearNav (focus-nav.js) already
+       handles it independently of this handler (see the constructor's registerNavHandler call,
+       which yields to those overlays entirely before ever reaching here).
 
-       Up opens the options menu because that sheet is the only route to Chapters, Version, Quality Cap,
-       Audio & Subtitles, Effects and Extras. */
+       "back" (B) is handled one level up, in that same constructor call - it cancels an
+       in-progress scrub if one is active, otherwise stops playback, but yields first to
+       whichever of the player's own overlays (hamburger menu, Audio & Subtitles, episode/chapter
+       list) is currently open, closing or backing that overlay up a screen instead. */
     _handlePlayerNavCommand(command) {
         const el = media(this);
         if (!el) return false;
         this._showControls();
         switch (command) {
             case "activate":
+                if (this._scrubActive) {
+                    this._commitScrub();
+                    return true;
+                }
                 if (el.paused) this.resume();
                 else this.pause();
                 return true;
             case "left":
-                this._queueNavSeek(-NAV_SEEK_STEP_MS);
+                this._adjustScrub(-NAV_SEEK_STEP_MS);
                 return true;
             case "right":
+                this._adjustScrub(NAV_SEEK_STEP_MS);
+                return true;
+            case "chapterPrev":
+                this._seekToAdjacentChapter("prev");
+                return true;
+            case "chapterNext":
+                this._seekToAdjacentChapter("next");
+                return true;
+            case "rewind":
+                this._queueNavSeek(-NAV_SEEK_STEP_MS);
+                return true;
+            case "forward":
                 this._queueNavSeek(NAV_SEEK_STEP_MS);
                 return true;
-            case "up":
+            case "menu":
                 if (this._menuButtonEl) this._openHamburgerMenu(this._menuButtonEl);
-                return true;
-            case "down":
-                /* Just waking the chrome. Showing it is already done above, so this exists to claim the
-                   command rather than let it fall through to another handler. */
                 return true;
             default:
                 return false;
         }
     }
 
+    /* Left-stick scrub-preview: unlike _queueNavSeek's trigger-driven coalesced jump (which
+       always commits itself after a short idle), holding left/right only advances a pending
+       preview position - the transport bar's BIF tooltip and seek fill move (see
+       chrome-transport.js's controller._transportScrub), but video.currentTime is never
+       touched until commitScrub (A). B (_cancelScrub, wired one level up in the constructor)
+       drops the pending position without seeking at all. focus-nav.js already repeats
+       left/right at a steady rate while the stick/D-pad is held (see its REPEATABLE_COMMANDS),
+       so each call here only needs to advance by one step, not implement its own repeat timer -
+       it just jumps that step to SCRUB_MAX_SPEED_MULTIPLIER once the same direction has been
+       held continuously for SCRUB_SPEEDUP_INTERVAL_MS, tracked via _adjustScrubHoldStep below. */
+    _adjustScrub(deltaMs) {
+        const el = media(this);
+        if (!el) return;
+        const durationMs = (el.duration || 0) * 1000;
+        const fromMs = this._scrubActive ? this._scrubTargetMs : (el.currentTime || 0) * 1000;
+        const step = this._adjustScrubHoldStep(deltaMs);
+        this._scrubTargetMs = Math.max(0, durationMs ? Math.min(fromMs + step, durationMs - 1000) : fromMs + step);
+        this._scrubActive = true;
+        this._transportScrub?.setPreview(this._scrubTargetMs);
+    }
+
+    /* Multiplies deltaMs by SCRUB_MAX_SPEED_MULTIPLIER once left/right has been held in the
+       same direction for SCRUB_SPEEDUP_INTERVAL_MS straight (1x, then straight to max - no
+       intermediate tiers). A gap between calls bigger than SCRUB_HOLD_GAP_MS - larger than
+       focus-nav.js's own repeat cadence (REPEAT_DELAY_MS/REPEAT_RATE_MS) - means the stick was
+       released and re-pressed rather than held through, so the hold timer restarts; so does a
+       direction reversal. */
+    _adjustScrubHoldStep(deltaMs) {
+        const now = performance.now();
+        const direction = deltaMs > 0 ? 1 : -1;
+        const gapMs = now - this._scrubHoldLastAt;
+        if (direction !== this._scrubHoldDirection || gapMs > SCRUB_HOLD_GAP_MS) {
+            this._scrubHoldStartAt = now;
+        }
+        this._scrubHoldDirection = direction;
+        this._scrubHoldLastAt = now;
+        const held = now - this._scrubHoldStartAt >= SCRUB_SPEEDUP_INTERVAL_MS;
+        return held ? deltaMs * SCRUB_MAX_SPEED_MULTIPLIER : deltaMs;
+    }
+
+    /* A: commits the pending scrub position - seeks there (a full transcode restart on the
+       progressive/Xbox path, same as any other seek - see reloadXboxSource) and resumes
+       playback if it was paused, matching "plays from the selected spot". */
+    _commitScrub() {
+        const el = media(this);
+        const targetMs = this._scrubTargetMs;
+        this._scrubActive = false;
+        this._scrubTargetMs = null;
+        this._scrubHoldDirection = 0;
+        this._transportScrub?.endPreview();
+        if (!el || targetMs == null) return;
+        const wasPaused = el.paused;
+        el.currentTime = targetMs / 1000;
+        if (wasPaused) this.resume();
+    }
+
+    /* B: drops the pending scrub position and snaps the transport bar back to wherever
+       playback actually is, without ever touching video.currentTime. */
+    _cancelScrub() {
+        this._scrubActive = false;
+        this._scrubTargetMs = null;
+        this._scrubHoldDirection = 0;
+        this._transportScrub?.endPreview();
+    }
+
+    _seekToAdjacentChapter(direction) {
+        return seekToAdjacentChapter(this, direction, media(this));
+    }
+
     /* Seeks are accumulated and committed after a short idle rather than applied per press. On the
        progressive path every seek is a full Plex transcode restart (see xbox-bridge.js's
-       reloadXboxSource), so holding right would otherwise fire a restart per repeat and thrash the
-       server - the exact orphaned-session problem the Phase 0 spikes ran into, but self-inflicted and
-       once per keypress. */
+       reloadXboxSource), so holding a trigger would otherwise fire a restart per repeat and thrash
+       the server - the exact orphaned-session problem the Phase 0 spikes ran into, but self-inflicted
+       and once per keypress. */
     _queueNavSeek(deltaMs) {
         const el = media(this);
         if (!el) return;
@@ -643,8 +765,8 @@ class StreamingPlayerController {
     }
 
     /* Used by web-fallback.js's <video> "ended" listener - advances to the next queued
-       title exactly like the title-next button (chrome.js's seekToAdjacentTitle) when
-       Auto-Play is on and one exists, falling back to the normal stop() otherwise.
+       title (episode-list.js's playQueuedTitle) when Auto-Play is on and one exists,
+       falling back to the normal stop() otherwise.
        Android's native-bridge.js doesn't go through this: PlayerActivity's own
        STATE_ENDED handler makes the same decision natively, before its own finish()
        call, using its own SharedPreferences-persisted autoPlayEnabled flag - see that
@@ -688,8 +810,8 @@ class StreamingPlayerController {
         return buildLoadingSpinner(this, video);
     }
 
-    _buildCenterControls(video) {
-        return buildCenterControls(this, video);
+    _buildFloatingPlayButton(video) {
+        return buildFloatingPlayButton(this, video);
     }
 
     _buildTransportBar(video) {

@@ -5,18 +5,22 @@ import { PLAYBACK_RATES, SLEEP_TIMER_PRESETS_MIN, ZOOM_LEVELS, speedIconMarkup, 
 /* Circular with chrome-menu.js (which imports renderExtrasList/applyZoomTransform from
    this file for its "Extras" row and its Zoom picker's onSelect) - safe here because
    both sides only reference the other module's export from inside a function body
-   (renderPickerList/buildAccordionRow/makeBackRow are only called once renderExtrasList
-   itself actually runs, well after both modules have finished loading), never at
-   top-level module-evaluation time. */
-import { renderPickerList, buildAccordionRow, makeBackRow } from "./chrome-menu.js";
+   (renderPickerList/buildAccordionRow/makeBackRow/refocusList are only called once
+   renderExtrasList itself actually runs, well after both modules have finished loading),
+   never at top-level module-evaluation time. */
+import { renderPickerList, buildAccordionRow, makeBackRow, refocusList } from "./chrome-menu.js";
 
-/* The hamburger "More" sheet's Extras sub-screen: Playback Speed/Zoom/Sleep Timer, each
-   an accordion section (see renderExtrasList) - grouped together since none of the three
-   relate to each other the way Effects' three GPU-pipeline controls do, but each is
-   simple/single-picker enough that squeezing all three top-level rows down to one still
-   reads as a sensible cluster. Also owns zoom pan/transform, since Zoom is one of these
-   pickers. */
+/* The hamburger "More" sheet's Extras sub-screen: Playback Speed/Zoom/Sleep Timer, each its
+   own dedicated screen (see renderExtrasList) - grouped together under one "Extras" row since
+   none of the three relate to each other the way Effects' three GPU-pipeline controls do, but
+   each is simple/single-picker enough that squeezing all three top-level rows down to one
+   still reads as a sensible cluster. Also owns zoom pan/transform, since Zoom is one of these
+   pickers.
 
+   Each picker used to expand in place as an accordion (buildAccordionRow's `render` case)
+   rather than navigating to its own screen - reverted back to its own screen (matching
+   Quality Cap/Effects/Version) since a picker inside an already-nested "Extras" screen read as
+   a mismatched third interaction style, not because the accordion itself was broken. */
 function renderSpeedSection(controller, content, { setValue, collapse }) {
     const current = controller._session?.playbackRate || 1;
     renderPickerList(content, PLAYBACK_RATES.map((rate) => ({
@@ -86,8 +90,24 @@ export function applyZoomTransform(controller) {
 }
 
 /* "Extras" - same dedicated-screen pattern as chrome-menu-effects.js's renderEffectsList,
-   for Playback Speed/Zoom/Sleep Timer instead of the shader/color/ambient trio. */
-export function renderExtrasList(controller, list, onBack) {
+   for Playback Speed/Zoom/Sleep Timer instead of the shader/color/ambient trio. Each of the
+   three is itself a `nav` target rather than an in-place accordion expand, exactly like
+   Quality Cap/Version/Effects at the main list's own level - one consistent "tap a row, land
+   on its own screen, Back returns you" interaction everywhere in this sheet, rather than
+   accordion expand-in-place being a second, different pattern one level down.
+
+   `onBack` is what Back should do at THIS screen (return to the main list) - `setGoBack` is
+   chrome-menu.js's own goBack setter, needed here because entering Playback Speed/Zoom/Sleep
+   Timer has to point `goBack` at showThisScreen (return to Extras) instead, then back at
+   `onBack` again once the viewer returns here - see chrome-menu.js's own setGoBack comment for
+   why a sub-screen module can't just reassign that variable directly. */
+export function renderExtrasList(controller, list, onBack, setGoBack) {
+    const showThisScreen = () => {
+        setGoBack(onBack);
+        renderExtrasList(controller, list, onBack, setGoBack);
+        refocusList(list);
+    };
+
     list.innerHTML = "";
     list.appendChild(makeBackRow(onBack));
     const state = { expandedCollapse: null };
@@ -96,22 +116,56 @@ export function renderExtrasList(controller, list, onBack) {
         label: "Playback Speed",
         icon: speedIconMarkup(),
         getValue: () => `${controller._session?.playbackRate || 1}x`,
-        render: (content, helpers) => renderSpeedSection(controller, content, helpers),
+        nav: () => {
+            setGoBack(showThisScreen);
+            renderSpeedList(controller, list, showThisScreen);
+            refocusList(list);
+        },
     });
     buildAccordionRow(list, state, {
         key: "zoom",
         label: "Zoom",
         icon: zoomIconMarkup(),
         getValue: () => `${ZOOM_LEVELS[controller._zoomIndex]}x`,
-        render: (content, helpers) => renderZoomSection(controller, content, helpers),
+        nav: () => {
+            setGoBack(showThisScreen);
+            renderZoomList(controller, list, showThisScreen);
+            refocusList(list);
+        },
     });
     buildAccordionRow(list, state, {
         key: "sleep",
         label: "Sleep Timer",
         icon: sleepIconMarkup(),
         getValue: () => (controller._sleepMinutes ? `${controller._sleepMinutes}m` : null),
-        render: (content, helpers) => renderSleepSection(controller, content, helpers),
+        nav: () => {
+            setGoBack(showThisScreen);
+            renderSleepList(controller, list, showThisScreen);
+            refocusList(list);
+        },
     });
+}
+
+/* Reuses renderSpeedSection/renderZoomSection/renderSleepSection's picker-list body unchanged
+   (same "own dedicated screen" wiring as chrome-menu.js's renderQualityCapList) - `onBack`
+   stands in for the accordion's own `collapse`, so picking a rate/zoom/sleep-duration returns
+   straight to the Extras screen instead of needing a separate "update this row's value" step. */
+function renderSpeedList(controller, list, onBack) {
+    list.innerHTML = "";
+    list.appendChild(makeBackRow(onBack));
+    renderSpeedSection(controller, list, { setValue: () => {}, collapse: onBack });
+}
+
+function renderZoomList(controller, list, onBack) {
+    list.innerHTML = "";
+    list.appendChild(makeBackRow(onBack));
+    renderZoomSection(controller, list, { setValue: () => {}, collapse: onBack });
+}
+
+function renderSleepList(controller, list, onBack) {
+    list.innerHTML = "";
+    list.appendChild(makeBackRow(onBack));
+    renderSleepSection(controller, list, { setValue: () => {}, collapse: onBack });
 }
 
 /* Pan only engages once zoomed past 1x, and only within the padding introduced by that

@@ -2,6 +2,7 @@
    independent of the idle-fade control row in chrome-controls.js - see updateSkipButton
    below for why. */
 import { media } from "../core/media-facade.js";
+import { PLAYER_FOCUSABLE_CLASS } from "./shared.js";
 
 /* Shared by both playback paths so the marker-range check isn't duplicated even though
    web/native render totally different skip-button UI. Assumes Plex's Marker objects use
@@ -29,6 +30,7 @@ export function updateSkipButton(controller, marker) {
     if (!controller._skipBtnEl) {
         const btn = document.createElement("button");
         btn.type = "button";
+        btn.classList.add(PLAYER_FOCUSABLE_CLASS);
         Object.assign(btn.style, {
             position: "fixed",
             bottom: "170px",

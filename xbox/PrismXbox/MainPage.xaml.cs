@@ -65,20 +65,17 @@ namespace PrismXbox
         // spike build, and "our handler never ran" and "those keys never arrive" look identical
         // from the outside.
         private readonly HashSet<VirtualKey> keysSeen = new HashSet<VirtualKey>();
-        // Second, independent route to the X/Y triggers. Xbox synthesizes keyboard equivalents
+        // Second, independent route to the X trigger. Xbox synthesizes keyboard equivalents
         // for D-pad/A/B (arrows/Enter/Escape), which is why the existing forwarding works, but
-        // X and Y have no keyboard equivalent and may therefore never surface as a
+        // X has no keyboard equivalent and may therefore never surface as a
         // CoreWindow.KeyDown at all - a plausible explanation for the first spike build appearing
-        // to ignore them. Windows.Gaming.Input reads the pad directly and bypasses the question.
+        // to ignore it. Windows.Gaming.Input reads the pad directly and bypasses the question.
         // It has no event for button presses, hence the poll and the edge detection.
         private DispatcherTimer padPollTimer;
         private bool padXWasDown;
-        private bool padYWasDown;
-        private bool padMenuWasDown;
-        // Set the first time X or Y arrives as a CoreWindow key event, which switches the polling
+        // Set the first time X arrives as a CoreWindow key event, which switches the polling
         // fallback off. Without this both routes would act on the same press - the double-handled
-        // input trap this project already hit once on the moonlight-xbox side, and it would show up
-        // here as Y appearing to do nothing because playback was started and immediately stopped.
+        // input trap this project already hit once on the moonlight-xbox side.
         private bool padTriggersArriveAsKeys;
         private int padTickCount;
 
@@ -281,7 +278,7 @@ namespace PrismXbox
             grid.Children.Add(diagnosticsPanel);
 
             Log($"{SpikeBuild} loaded. Press any button - every new key is logged below.");
-            Log("Y = HLS test, Menu = progressive-MP4 test, X = hide this panel.");
+            Log("X = hide this panel.");
             StartPadPolling();
             return grid;
         }
@@ -402,7 +399,7 @@ namespace PrismXbox
                     Log($"JS {root.GetNamedString("message", "(none)")}");
                     break;
                 case "spikeReady":
-                    Log("JS harness ready. Y = play/stop native, X = toggle diagnostics.");
+                    Log("JS harness ready. X = toggle diagnostics.");
                     break;
                 case "spikeStreamUrl":
                     lastStreamUrl = root.GetNamedString("url", "");
@@ -411,13 +408,7 @@ namespace PrismXbox
                         Log("spikeStreamUrl arrived with no usable url");
                         break;
                     }
-                    // Deliberately does NOT auto-probe any more. "Probing does not start playback"
-                    // was wrong: requesting start.m3u8 makes Plex spin up a real ffmpeg transcode
-                    // session, and doing that on every URL message left three orphaned sessions
-                    // running on the server, which starved the web player's own session badly
-                    // enough to fail it with fragLoadError. Probing is Y-only now, and the session
-                    // gets stopped afterwards.
-                    Log("Stream URL received. Press Y to probe + play natively.");
+                    Log("Stream URL received.");
                     break;
                 case "spikeHeartbeat":
                     OnHeartbeat(root);
@@ -463,24 +454,8 @@ namespace PrismXbox
                 if (pads.Count == 0) return;
                 Windows.Gaming.Input.GamepadReading reading = pads[0].GetCurrentReading();
                 bool xDown = (reading.Buttons & Windows.Gaming.Input.GamepadButtons.X) != 0;
-                bool yDown = (reading.Buttons & Windows.Gaming.Input.GamepadButtons.Y) != 0;
-                bool menuDown = (reading.Buttons & Windows.Gaming.Input.GamepadButtons.Menu) != 0;
-
-                // Menu = the progressive-MP4 path, so both stacks can be compared in one run
-                // without redeploying.
-                if (menuDown && !padMenuWasDown)
-                {
-                    Log("Menu -> progressive MP4 test");
-                    StartProgressive();
-                }
-                padMenuWasDown = menuDown;
 
                 // Edge-triggered: a held button would otherwise fire every 100ms.
-                if (yDown && !padYWasDown)
-                {
-                    Log("Y (via Windows.Gaming.Input)");
-                    ToggleNativePlayback();
-                }
                 if (xDown && !padXWasDown && diagnosticsPanel != null)
                 {
                     diagnosticsPanel.Visibility = diagnosticsPanel.Visibility == Visibility.Visible
@@ -488,7 +463,6 @@ namespace PrismXbox
                         : Visibility.Visible;
                 }
                 padXWasDown = xDown;
-                padYWasDown = yDown;
 
                 // SPIKE, S3 via the proven channel. Pulling the heartbeat rather than waiting to
                 // be told it means S3 is answerable even with the outbound postMessage channel
@@ -505,27 +479,6 @@ namespace PrismXbox
                 }
             };
             padPollTimer.Start();
-        }
-
-        // SPIKE
-        private async System.Threading.Tasks.Task<string> PullStreamUrlAsync()
-        {
-            try
-            {
-                // ExecuteScriptAsync returns the result JSON-encoded, so a string comes back
-                // quoted and has to be unwrapped before use.
-                string raw = await webView.CoreWebView2.ExecuteScriptAsync(
-                    "window.__prismSpikeStreamUrl || ''");
-                if (string.IsNullOrEmpty(raw) || raw == "null") return null;
-                JsonValue value = JsonValue.Parse(raw);
-                string url = value.ValueType == JsonValueType.String ? value.GetString() : null;
-                return string.IsNullOrEmpty(url) ? null : url;
-            }
-            catch (Exception ex)
-            {
-                Log($"URL pull failed: {ex.GetType().Name} / {ex.Message}");
-                return null;
-            }
         }
 
         // SPIKE, S3
@@ -571,64 +524,6 @@ namespace PrismXbox
             }
         }
 
-        // SPIKE
-        private void PostToJs(string type)
-        {
-            var message = new JsonObject { ["type"] = JsonValue.CreateStringValue(type) };
-            webView?.CoreWebView2?.PostWebMessageAsJson(message.Stringify());
-        }
-
-        // SPIKE
-        private async void StartProgressive()
-        {
-            if (nativeSpike == null) return;
-            if (nativeSpike.IsPlaying) nativeSpike.Stop();
-            if (string.IsNullOrEmpty(lastStreamUrl))
-            {
-                lastStreamUrl = await PullStreamUrlAsync();
-                if (string.IsNullOrEmpty(lastStreamUrl))
-                {
-                    Log("No URL yet - play a title in the app first.");
-                    return;
-                }
-            }
-            PostToJs("spikePlaybackStarted");
-            await nativeSpike.PlayProgressiveAsync(lastStreamUrl);
-        }
-
-        // SPIKE
-        private async void ToggleNativePlayback()
-        {
-            if (nativeSpike == null) return;
-            if (nativeSpike.IsPlaying)
-            {
-                nativeSpike.Stop();
-                PostToJs("spikePlaybackStopped");
-                lastHeartbeatAt = DateTime.MinValue;
-                return;
-            }
-            if (string.IsNullOrEmpty(lastStreamUrl))
-            {
-                // Fall back to pulling it out of the page rather than waiting to be told. See
-                // xbox-spike.js's reportStreamUrl: ExecuteScriptAsync is the channel already
-                // proven to work on this shell, so this keeps S2 answerable even if postMessage
-                // is the broken half.
-                Log("No pushed URL - pulling from page via ExecuteScriptAsync...");
-                lastStreamUrl = await PullStreamUrlAsync();
-                if (string.IsNullOrEmpty(lastStreamUrl))
-                {
-                    Log("Still no URL. Start playback in the app once, then press Y.");
-                    return;
-                }
-                Log("Pulled URL from page OK - postMessage is the broken half.");
-            }
-            // Told before playback starts so the page is already transparent with its markers
-            // drawn when the first video frame lands - otherwise S1 can't distinguish "video
-            // never appeared" from "the page hadn't gone transparent yet".
-            PostToJs("spikePlaybackStarted");
-            await nativeSpike.PlayAsync(lastStreamUrl);
-        }
-
         private void OnNavigationCompleted(WebView2 sender, CoreWebView2NavigationCompletedEventArgs args)
         {
             if (!args.IsSuccess)
@@ -667,17 +562,12 @@ namespace PrismXbox
                 Log($"key seen: {args.VirtualKey} ({(int)args.VirtualKey})");
             }
 
-            // SPIKE: X and Y are unmapped below, so they fall through to the page today and
-            // are free to drive the harness without colliding with anything the app uses.
-            // RightShoulder is accepted as a second play/stop trigger purely as a fallback in
-            // case X/Y turn out not to be delivered here.
-            if (args.VirtualKey == VirtualKey.GamepadY || args.VirtualKey == VirtualKey.GamepadRightShoulder)
-            {
-                args.Handled = true;
-                padTriggersArriveAsKeys = true;
-                ToggleNativePlayback();
-                return;
-            }
+            // SPIKE: X is unmapped below, so it falls through to the page today and is free to
+            // drive the harness without colliding with anything the app uses. Y/RightShoulder and
+            // Menu/Start used to be spike-only debug triggers here too (native play/stop and the
+            // progressive-MP4 test) - removed now that the real app binds them (Y = search,
+            // RightShoulder = next chapter, Menu/Start = options menu - see focus-nav.js/
+            // plex-player.js), so they no longer get hijacked before ever reaching the page.
             if (args.VirtualKey == VirtualKey.GamepadX || args.VirtualKey == VirtualKey.GamepadLeftShoulder)
             {
                 args.Handled = true;

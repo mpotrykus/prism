@@ -1,6 +1,7 @@
 import { updateContentAnalysis } from "../content-analysis.js";
 import { closeEpisodeListOverlay, closeChapterListOverlay } from "./episode-list.js";
 import { closeAudioSubtitlesOverlay, stopSubtitleLoop } from "./chrome-subtitles.js";
+import { ensurePlayerFocusStyle } from "./shared.js";
 
 /* Circular with web-fallback.js (which imports mountPlayerChrome/unmountPlayerChrome from here, while
    chrome-subtitles.js above imports trySwitchAudioTrackLocal from it) - safe for the same reason the
@@ -8,7 +9,7 @@ import { closeAudioSubtitlesOverlay, stopSubtitleLoop } from "./chrome-subtitles
    at call time, never at module-evaluation time. */
 
 /* Mounts the player's on-screen chrome: the idle-fade control row (close + options), the transport
-   bar and its center controls, the buffering spinner, and the per-session pipelines.
+   bar, the floating center play/pause button, the buffering spinner, and the per-session pipelines.
 
    Extracted from web-fallback.js's playWeb so the Xbox leg can mount the identical chrome over native
    video. That is the whole point of the Xbox architecture - the video surface is a sibling of a
@@ -23,6 +24,7 @@ import { closeAudioSubtitlesOverlay, stopSubtitleLoop } from "./chrome-subtitles
    drawImage), which a native surface cannot provide - those get native equivalents in a later phase.
    The stats overlay is included either way: it is plain DOM reading the facade. */
 export function mountPlayerChrome(controller, mediaEl, { gpuPipelines }) {
+    ensurePlayerFocusStyle();
     controller._buildLoadingSpinner(mediaEl);
 
     /* Not just a convenience: on the Xbox WebView2 shell there's no browser chrome and no back button
@@ -63,11 +65,8 @@ export function mountPlayerChrome(controller, mediaEl, { gpuPipelines }) {
     controller._zoomPanY = 0;
     controller._sleepMinutes = 0;
     if (gpuPipelines) controller._wireZoomPan();
-    /* Transport bar first: it builds the bottom chrome's center cell that _buildCenterControls fills
-       with play/pause + chapter nav (see chrome.js), rather than that row floating mid-screen on its
-       own. */
     controller._buildTransportBar(mediaEl);
-    controller._buildCenterControls(mediaEl);
+    controller._buildFloatingPlayButton(mediaEl);
 
     if (gpuPipelines) {
         /* _shaderType/_shaderStrength were already resolved in play() (global setting + this title's
@@ -116,26 +115,11 @@ export function unmountPlayerChrome(controller) {
     controller._controlsHovering = false;
     controller._controlButtons.forEach((b) => b.remove());
     controller._controlButtons = [];
-    if (controller._fullscreenChangeHandler) {
-        document.removeEventListener("fullscreenchange", controller._fullscreenChangeHandler);
-        document.removeEventListener("webkitfullscreenchange", controller._fullscreenChangeHandler);
-        controller._fullscreenChangeHandler = null;
-    }
-    /* The fullscreen button (chrome.js) requests fullscreen on document.documentElement,
-       not a player-scoped container - leaving the player without exiting fullscreen first
-       would strand the whole app fullscreen behind the now-gone player chrome. */
-    if (document.fullscreenElement || document.webkitFullscreenElement) {
-        (document.exitFullscreen || document.webkitExitFullscreen)?.call(document);
-    }
     if (controller._skipBtnEl) {
         controller._skipBtnEl.remove();
         controller._skipBtnEl = null;
     }
     controller._activeSkipMarker = null;
-    if (controller._volumePopoutEl) {
-        controller._volumePopoutEl.remove();
-        controller._volumePopoutEl = null;
-    }
     if (controller._spinnerEl) {
         controller._spinnerEl.remove();
         controller._spinnerEl = null;

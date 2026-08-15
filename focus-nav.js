@@ -41,7 +41,9 @@ const DEADZONE = 0.5;
    below is its only source. Y has no keyboard equivalent worth binding (any letter key
    would fire while typing in the search box it toggles), so rather than give the Y button
    its own separate dispatch path it gets an invented key name fed through this same
-   pathway, borrowing Windows' own GamepadY virtual-key naming. */
+   pathway, borrowing Windows' own GamepadY virtual-key naming. Same reasoning for the
+   bumper/trigger/Start entries below - chapter-skip, seek, and "open the player's more
+   menu" have no sensible keyboard equivalent either, only a gamepad. */
 export const KEY_TO_COMMAND = {
   ArrowUp: "up",
   ArrowDown: "down",
@@ -51,6 +53,11 @@ export const KEY_TO_COMMAND = {
   Escape: "back",
   Backspace: "back",
   GamepadY: "search",
+  GamepadLB: "chapterPrev",
+  GamepadRB: "chapterNext",
+  GamepadLT: "rewind",
+  GamepadRT: "forward",
+  GamepadStart: "menu",
 };
 
 const COMMAND_TO_KEY = {
@@ -61,7 +68,32 @@ const COMMAND_TO_KEY = {
   activate: "Enter",
   back: "Escape",
   search: "GamepadY",
+  chapterPrev: "GamepadLB",
+  chapterNext: "GamepadRB",
+  rewind: "GamepadLT",
+  forward: "GamepadRT",
+  menu: "GamepadStart",
 };
+
+/* Tracks whether the most recent input was D-pad/gamepad/keyboard nav (real or synthetic
+   key events through this module) vs. a mouse/touch pointer - the only signal available
+   for "is a controller/remote driving this session," since there's no Gamepad-vs-Fire TV-
+   vs-keyboard distinction worth making (see the file header) and touch/mouse never fire
+   the keys in KEY_TO_COMMAND. Consulted by modals that want to land focus on a different
+   default target for controller users than they would for a mouse/touch tap (e.g.
+   title-info.js landing on Play/Resume instead of its own first nav item). */
+let controllerActive = false;
+export function isControllerActive() {
+  return controllerActive;
+}
+document.addEventListener(
+  "keydown",
+  (e) => {
+    if (KEY_TO_COMMAND[e.key]) controllerActive = true;
+  },
+  true
+);
+document.addEventListener("pointerdown", () => (controllerActive = false), true);
 
 const lastCommandAt = Object.create(null);
 
@@ -177,10 +209,15 @@ export function wireLinearNav(root, selector, { orientation = "vertical", onActi
    real keyboard would produce, dispatched on whatever currently has focus (falling back to
    document if nothing does yet, e.g. before a modal's first auto-focus runs). --- */
 
-const AXIS_DIRECTIONS = ["up", "down", "left", "right"];
-const directionState = Object.fromEntries(AXIS_DIRECTIONS.map((d) => [d, { active: false, heldSince: 0, lastRepeatAt: 0 }]));
+/* Directions repeat while held (D-pad/left-stick, same as before) - triggers join them here rather
+   than living in GAMEPAD_BUTTONS below, because holding LT/RT to fast-seek needs the same
+   held/repeat treatment a directional press gets, not a single edge-triggered fire like a button
+   press. Bumpers and Start stay one-shot (GAMEPAD_BUTTONS below) - jumping a chapter or opening the
+   menu on every repeat tick while the button is held would be a bug, not a feature. */
+const REPEATABLE_COMMANDS = ["up", "down", "left", "right", "rewind", "forward"];
+const repeatState = Object.fromEntries(REPEATABLE_COMMANDS.map((c) => [c, { active: false, heldSince: 0, lastRepeatAt: 0 }]));
 const buttonState = Object.create(null);
-const GAMEPAD_BUTTONS = { 0: "activate", 1: "back", 3: "search" }; // standard mapping: A, B, Y
+const GAMEPAD_BUTTONS = { 0: "activate", 1: "back", 3: "search", 4: "chapterPrev", 5: "chapterNext", 9: "menu" }; // standard mapping: A, B, Y, LB, RB, Start
 
 function dispatchSyntheticKey(key) {
   const target = document.activeElement && document.activeElement !== document.body ? document.activeElement : document;
@@ -198,18 +235,20 @@ function pollGamepads(now) {
       down: !!gp.buttons[13]?.pressed || axisY > DEADZONE,
       left: !!gp.buttons[14]?.pressed || axisX < -DEADZONE,
       right: !!gp.buttons[15]?.pressed || axisX > DEADZONE,
+      rewind: !!gp.buttons[6]?.pressed,
+      forward: !!gp.buttons[7]?.pressed,
     };
-    for (const dir of AXIS_DIRECTIONS) {
-      const state = directionState[dir];
-      if (active[dir]) {
+    for (const command of REPEATABLE_COMMANDS) {
+      const state = repeatState[command];
+      if (active[command]) {
         if (!state.active) {
           state.active = true;
           state.heldSince = now;
           state.lastRepeatAt = now;
-          dispatchSyntheticKey(COMMAND_TO_KEY[dir]);
+          dispatchSyntheticKey(COMMAND_TO_KEY[command]);
         } else if (now - state.heldSince > REPEAT_DELAY_MS && now - state.lastRepeatAt > REPEAT_RATE_MS) {
           state.lastRepeatAt = now;
-          dispatchSyntheticKey(COMMAND_TO_KEY[dir]);
+          dispatchSyntheticKey(COMMAND_TO_KEY[command]);
         }
       } else {
         state.active = false;

@@ -1,7 +1,7 @@
 import { SHADER_TYPES } from "../shader/shaders.js";
 import { setShaderStrength, setColorBoostStrength, upscaleModeOf, setUpscaleMode, colorBoostModeOf, setColorBoostMode } from "../shader-pipeline.js";
 import { setAmbientOpacity } from "../ambient-pipeline.js";
-import { fullscreenIconMarkup, colorBoostIconMarkup, ambientIconMarkup } from "./shared.js";
+import { fullscreenIconMarkup, colorBoostIconMarkup, ambientIconMarkup, PLAYER_FOCUSABLE_CLASS } from "./shared.js";
 /* Circular with chrome-menu.js (which imports renderEffectsList from this file for its
    "Effects" row) - safe here because both sides only reference the other module's
    export from inside a function body (makeBackRow/makeToggleSwitch are only called once
@@ -71,6 +71,7 @@ function buildModeRow({ mode, onModeChange, getAutoValue, getManualValue, streng
     const buttons = MODE_OPTIONS.map((opt) => {
         const btn = document.createElement("button");
         btn.type = "button";
+        btn.classList.add(PLAYER_FOCUSABLE_CLASS);
         btn.textContent = opt.label;
         Object.assign(btn.style, {
             width: "44px",
@@ -139,14 +140,40 @@ function startLiveAutoRefresh(el, refresh) {
    under the label) on the left, whatever control(s) belong at a glance (mode buttons or
    a toggle) on the right, matching chrome-menu.js's buildAccordionRow header layout
    minus the chevron/click-to-expand behavior. Returns `rightSide` for the caller to drop
-   its control into, and the row itself (`wrap`) for the caller to append full-width
-   content (e.g. a slider) below the header line. */
-function buildEffectRow(list, { icon, label, caption }) {
+   its control into, `header` for the caller to wire up (see `toggleReachable` below), and
+   the row itself (`wrap`) for the caller to append full-width content (e.g. a slider) below
+   the header line.
+
+   `header` is a plain, unclickable div unless `toggleReachable` is set - Shader Upscaling
+   and Color Boost don't need it: their Auto/On/Off mode buttons (buildModeRow) are real
+   `<button>`s already reachable by chrome-menu.js's wireLinearNav. Ambient Lighting has no
+   such button, only a bare on/off toggle switch (a div, see makeToggleSwitch - never a
+   focus target itself), which left it completely unreachable via D-pad/keyboard - the same
+   bug buildAccordionRow's toggle-only rows (Auto-Play/Performance Overlay) had, fixed there
+   by making the row's own header a real, wired-up button instead of leaving the switch as
+   the only way to flip it. */
+function buildEffectRow(list, { icon, label, caption, toggleReachable = false }) {
     const wrap = document.createElement("div");
     Object.assign(wrap.style, { borderBottom: "1px solid rgba(255,255,255,0.07)", padding: "14px 16px" });
 
-    const header = document.createElement("div");
-    Object.assign(header.style, { display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px" });
+    const header = document.createElement(toggleReachable ? "button" : "div");
+    if (toggleReachable) {
+        header.type = "button";
+        header.classList.add(PLAYER_FOCUSABLE_CLASS);
+    }
+    Object.assign(header.style, {
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        gap: "12px",
+        width: "100%",
+        textAlign: "left",
+        border: "none",
+        background: "transparent",
+        padding: "0",
+        cursor: toggleReachable ? "pointer" : "default",
+        fontFamily: '"Roboto", sans-serif',
+    });
 
     const leftSide = document.createElement("span");
     Object.assign(leftSide.style, { display: "flex", alignItems: "center", gap: "12px", minWidth: "0", flex: "1 1 auto" });
@@ -176,7 +203,7 @@ function buildEffectRow(list, { icon, label, caption }) {
 
     wrap.appendChild(header);
     list.appendChild(wrap);
-    return { wrap, rightSide };
+    return { wrap, rightSide, header };
 }
 
 /* Reuses fullscreenIconMarkup's expand-corners glyph - upscaling is, visually, the same
@@ -259,7 +286,7 @@ function buildColorBoostEffectRow(controller, list) {
    tappable picker rows) - simpler, since there's no auto-detected type to show as read-
    only info here, just the one opacity control plus the on/off toggle. */
 function buildAmbientEffectRow(controller, list) {
-    const { wrap, rightSide } = buildEffectRow(list, { icon: ambientIconMarkup(), label: "Ambient Lighting" });
+    const { wrap, rightSide, header } = buildEffectRow(list, { icon: ambientIconMarkup(), label: "Ambient Lighting", toggleReachable: true });
 
     const opacityLabel = document.createElement("div");
     opacityLabel.textContent = `Opacity: ${Math.round(controller._ambientOpacity * 100)}%`;
@@ -286,10 +313,16 @@ function buildAmbientEffectRow(controller, list) {
     };
     applyOpacityEnabled(controller._ambientEnabled);
 
-    rightSide.appendChild(makeToggleSwitch(controller._ambientEnabled, (checked) => {
+    const toggleEl = makeToggleSwitch(controller._ambientEnabled, (checked) => {
         controller._setAmbientEnabled(checked);
         applyOpacityEnabled(checked);
-    }));
+    });
+    rightSide.appendChild(toggleEl);
+    /* Delegates to the switch's own click() rather than duplicating its flip-the-UI-and-call-
+       onChange logic here - same pattern and same reasoning as chrome-menu.js's toggle-only
+       accordion rows (its own stopPropagation keeps a direct mouse click on the switch from
+       looping back through this listener). */
+    header.addEventListener("click", () => toggleEl.click());
     wrap.appendChild(opacityLabel);
     wrap.appendChild(opacityInput);
 }

@@ -83,10 +83,26 @@ function createVideoElement(controller) {
     return video;
 }
 
+/* Assigning video.currentTime immediately after attachSource() (the previous approach here and in
+   reloadWebSource below) is unreliable: readyState is still HAVE_NOTHING at that point - hls.js's
+   loadSource()/attachMedia() and the plain `video.src =` assignment both resolve asynchronously - and
+   a seek requested that early is a well-known case browsers silently drop rather than queue. The
+   symptom is exactly "playback (and therefore the scrub bar, which just reads video.currentTime/
+   video.duration) starts from true zero every time," regardless of the real resume position, since
+   the dropped seek never gets retried. loadedmetadata is the first point a seek is spec-guaranteed to
+   actually take effect. `once: true` needs no manual removal - the listener is used up after firing
+   once, same lifetime as the seek it performs. */
+function seekOnceReady(video, offsetMs) {
+    if (!offsetMs) return;
+    video.addEventListener("loadedmetadata", () => {
+        video.currentTime = offsetMs / 1000;
+    }, { once: true });
+}
+
 export function playWeb(controller, streamUrl, startOffsetMs) {
     const video = createVideoElement(controller);
     attachSource(controller, video, streamUrl);
-    video.currentTime = startOffsetMs / 1000;
+    seekOnceReady(video, startOffsetMs);
     document.body.appendChild(video);
     controller._videoEl = video;
     /* The element itself is the media facade on this leg - it already satisfies the whole
@@ -222,7 +238,7 @@ export function reloadWebSource(controller, overrides = {}) {
     if (!video || !controller._session) return;
     reloadTranscodeSession(controller, overrides, (streamUrl, offsetMs) => {
         attachSource(controller, video, streamUrl);
-        video.currentTime = offsetMs / 1000;
+        seekOnceReady(video, offsetMs);
     });
 }
 

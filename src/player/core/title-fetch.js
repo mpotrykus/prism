@@ -1,8 +1,9 @@
 import { extractAudioStreams, extractMediaVersions, bifIndexPath, extractPartId, isHdrVideo } from "../../card/title-info.js";
 
-/* Fetches full metadata for an adjacent queued title (a title-prev/title-next jump - see
-   chrome.js's seekToAdjacentTitle) so the player can hand it straight to
-   controller._switchTitle. The queue itself (plex-player.js's queueRatingKeys) only ever
+/* Fetches full metadata for a selected queued title (episode-list.js's overlay, or an
+   Android title-prev/title-next press - see native-bridge.js's "titleNav" listener) so the
+   player can hand it straight to controller._switchTitle. The queue itself
+   (plex-player.js's queueRatingKeys) only ever
    carries bare ratingKeys - building it happens well before any given title in it is
    actually navigated to - so this is the same "resolve a ratingKey to a playable item"
    fetch title-info.js's _playEpisodeByRatingKey already does, just reachable from inside

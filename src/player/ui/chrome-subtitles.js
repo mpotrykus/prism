@@ -1,5 +1,5 @@
 import { hasNativePlayer } from "../core/platform.js";
-import { wireLinearNav } from "../../../focus-nav.js";
+import { wireLinearNav, focusAfterPaint } from "../../../focus-nav.js";
 import { media } from "../core/media-facade.js";
 import { parseSubtitleCues, activeCuesAt } from "../core/subtitle-cues.js";
 import * as StreamingSubtitles from "../core/subtitle-provider.js";
@@ -8,18 +8,20 @@ import { trySwitchAudioTrackLocal } from "../web-fallback.js";
 import { setNativeSubtitle, setNativeSubtitleOffset, notifyNativeSubtitleApplied } from "../native-bridge.js";
 import { hideControls, showControls } from "./chrome-controls.js";
 import { closeInlineMenu, renderPickerList } from "./chrome-menu.js";
-import { SHEET_GRADIENT, MENU_SCROLL_CLASS } from "./shared.js";
+import { SHEET_GRADIENT, MENU_SCROLL_CLASS, OVERLAY_CLOSE_BTN_CLASS, PLAYER_FOCUSABLE_CLASS } from "./shared.js";
 
-/* Audio Track/Subtitles picker (its own right-anchored overlay, opened from the
-   transport bar's dedicated icon - see chrome-transport.js) plus everything about
+/* Audio Track/Subtitles picker (its own right-anchored overlay, opened from the More menu's
+   "Audio & Subtitles" row - see chrome-menu.js's renderMainList) plus everything about
    attaching/offsetting/rendering a subtitle track on the web/Xbox <video> leg. Takes the
    StreamingPlayerController instance as an explicit first argument (see native-bridge.js/
    shader-pipeline.js for why) rather than owning independent state.
 
-   Circular with web-fallback.js (which imports closeAudioSubtitlesOverlay from this
-   file) - safe here for the same reason documented in web-fallback.js's own header
-   comment: trySwitchAudioTrackLocal is only ever called from inside a click handler below, never
-   at module-top-level evaluation time. */
+   Circular with web-fallback.js (which imports closeAudioSubtitlesOverlay from this file)
+   and with chrome-menu.js (which imports openAudioSubtitlesOverlay from this file, while
+   this file imports closeInlineMenu/renderPickerList from chrome-menu.js) - safe here for
+   the same reason documented in web-fallback.js's own header comment: every cross-reference
+   is only ever called from inside a click handler/`nav` callback, never at module-top-level
+   evaluation time. */
 
 const AUDIO_SUBTITLES_CLASS = "streaming-player-audio-subtitles";
 
@@ -45,6 +47,11 @@ function renderAudioSection(controller, content, { setValue, collapse }) {
                re-render in place so the ✓ moves to the new selection immediately
                instead of only after the overlay/menu is closed and reopened. */
             renderAudioSection(controller, content, { setValue, collapse });
+            /* content.innerHTML="" above just destroyed the button the viewer had focus on to
+               build fresh ones - left alone, focus falls to <body> and the whole overlay stops
+               responding to any further D-pad/keyboard command, including Back (same bug and fix
+               as chrome-menu.js's refocusList/buildAccordionRow's collapse). */
+            focusAfterPaint(content.querySelector("button"));
         },
     })));
 }
@@ -86,6 +93,7 @@ export function openAudioSubtitlesOverlay(controller) {
 
     const closeBtn = document.createElement("button");
     closeBtn.type = "button";
+    closeBtn.classList.add(OVERLAY_CLOSE_BTN_CLASS, PLAYER_FOCUSABLE_CLASS);
     closeBtn.setAttribute("aria-label", "Close");
     closeBtn.textContent = "✕";
     Object.assign(closeBtn.style, {
@@ -132,7 +140,7 @@ export function openAudioSubtitlesOverlay(controller) {
        wireLinearNav reads root.activeElement, which only exists on Document/ShadowRoot - a plain
        <div> reports undefined and the handler would never consider itself in scope. focusFirst() is
        required: the handler ignores every command until focus is already inside its own list. */
-    const nav = wireLinearNav(document, `.${AUDIO_SUBTITLES_CLASS} button`, {
+    const nav = wireLinearNav(document, `.${AUDIO_SUBTITLES_CLASS} button:not(.${OVERLAY_CLOSE_BTN_CLASS})`, {
         orientation: "vertical",
         loop: true,
         onBack: () => closeAudioSubtitlesOverlay(controller),
@@ -239,6 +247,7 @@ function renderSubtitleSection(controller, content, { collapse }) {
 
     const searchBtn = document.createElement("button");
     searchBtn.type = "button";
+    searchBtn.classList.add(PLAYER_FOCUSABLE_CLASS);
     searchBtn.textContent = "Search";
     Object.assign(searchBtn.style, {
         flex: "0 0 auto",
@@ -289,6 +298,7 @@ function renderSubtitleSection(controller, content, { collapse }) {
             results.forEach((r) => {
                 const row = document.createElement("button");
                 row.type = "button";
+                row.classList.add(PLAYER_FOCUSABLE_CLASS);
                 const isApplied = subtitleStore.isAppliedResult(appliedRatingKey, r);
                 row.textContent = `${r.label} (${r.languageCode})${isApplied ? "  ✓" : ""}`;
                 Object.assign(row.style, {
@@ -369,6 +379,7 @@ function buildSubtitleOffsetRow(controller) {
     const makeStepBtn = (glyph, delta) => {
         const btn = document.createElement("button");
         btn.type = "button";
+        btn.classList.add(PLAYER_FOCUSABLE_CLASS);
         btn.textContent = glyph;
         btn.setAttribute("aria-label", delta < 0 ? "Subtitles earlier" : "Subtitles later");
         Object.assign(btn.style, {
@@ -407,6 +418,7 @@ function buildSubtitleOffsetRow(controller) {
 function buildSubtitleOffButton(controller, collapse) {
     const btn = document.createElement("button");
     btn.type = "button";
+    btn.classList.add(PLAYER_FOCUSABLE_CLASS);
     btn.textContent = "Off";
     Object.assign(btn.style, {
         display: "block",

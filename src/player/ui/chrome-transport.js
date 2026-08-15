@@ -1,130 +1,73 @@
-import { registerControlButton, showControls, scheduleHideControls } from "./chrome-controls.js";
-import { openAudioSubtitlesOverlay } from "./chrome-subtitles.js";
-import { VOLUME_STORAGE_KEY, volumeIconMarkup, seekIconMarkup, skipIconMarkup, fullscreenIconMarkup, audioSubtitlesIconMarkup } from "./shared.js";
+import { registerControlButton } from "./chrome-controls.js";
+import { PLAYER_FOCUSABLE_CLASS } from "./shared.js";
 import { loadBifIndex, findNearestBifFrame, fetchBifFrameUrl } from "../core/bif.js";
 import { plexAssetUrl } from "../core/plex-asset-url.js";
 import { fetchQueuedTitle } from "../core/title-fetch.js";
 
-/* Bottom transport bar: scrub bar/chapter segments/BIF scrub-preview, play/pause +
-   chapter/title nav (buildCenterControls, called separately - see web-fallback.js), and
-   the volume/audio-subtitles/fullscreen icon row. Takes the StreamingPlayerController
-   instance as an explicit first argument (see native-bridge.js/shader-pipeline.js for why)
-   rather than owning independent state - the idle-fade timer and session state are shared
-   with the rest of the player chrome, not cleanly separable per element. */
+/* Bottom transport bar (title/subtitle + remaining time, scrub bar/chapter segments/BIF
+   scrub-preview) and the floating center play/pause button, mirroring the Android native
+   player's layout (see PlayerUiHelper.java): a single large play/pause control floating
+   over the video, a scrub bar pinned to the bottom, nothing else in either. Chapter nav,
+   title nav, the 5s seek buttons, volume, Audio & Subtitles and fullscreen used to live
+   here too - all removed rather than ported, since Android's own chrome doesn't have them
+   either (volume/fullscreen have no Android equivalent to begin with; chapter/title/5s nav
+   is still reachable - chapters via the More menu's Chapters row and Xbox's bumpers/
+   triggers (see plex-player.js's _handlePlayerNavCommand), any queued title via the
+   Episodes overlay - just not as dedicated transport-bar buttons; Audio & Subtitles moved
+   into the More menu, see chrome-menu.js). Takes the StreamingPlayerController instance as
+   an explicit first argument (see native-bridge.js/shader-pipeline.js for why) rather than
+   owning independent state - the idle-fade timer and session state are shared with the
+   rest of the player chrome, not cleanly separable per element. */
 
-/* Play/pause flanked by back-5s/forward-5s seek buttons (matching HBO's own transport
-   row) with chapter nav further out on each side, only when the session actually has
-   chapters - same "never an empty/dead affordance" rule the hamburger's Chapters entry
-   follows - and title nav (prev/next episode, playlist/collection item, or just "play
-   this movie from the start") further out still. Title nav is always shown, unlike
-   chapter nav: prev is always a real action (restart, even with no queue at all) and
-   next disables itself rather than disappearing when there's nothing queued after this
-   title (see makeTitleNavButton) - a movie played on its own still gets both buttons,
-   just with next greyed out. Appended into the bottom transport bar's own center cell
-   (built first, see buildTransportBar) rather than floating mid-screen, matching a
-   premium-streaming-app transport row instead of a YouTube-style center overlay. */
-export function buildCenterControls(controller, video) {
-    const row = controller._centerControlsSlot;
-    if (!row) return null;
-
-    row.appendChild(makeTitleNavButton(controller, "prev", video));
-
-    const chapters = controller._session?.chapters || [];
-    if (chapters.length) row.appendChild(makeChapterNavButton(controller, "prev", video));
-
-    row.appendChild(makeSeekButton(controller, "back", video));
-
-    const playBtn = document.createElement("button");
-    playBtn.type = "button";
-    playBtn.setAttribute("aria-label", "Play/Pause");
-    Object.assign(playBtn.style, {
-        width: "32px",
-        height: "32px",
+/* The one on-screen playback control this chrome has left, centered over the video rather
+   than living in the transport bar - matches Android's buildFloatingPlaybackControls (a
+   60dp play/pause, title-prev/next only on non-touch devices - dropped here per the same
+   "no title nav buttons" decision as the transport bar's own header comment above). */
+export function buildFloatingPlayButton(controller, video) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.classList.add(PLAYER_FOCUSABLE_CLASS);
+    btn.setAttribute("aria-label", "Play/Pause");
+    Object.assign(btn.style, {
+        position: "fixed",
+        top: "50%",
+        left: "50%",
+        transform: "translate(-50%, -50%)",
+        zIndex: "10001",
+        width: "76px",
+        height: "76px",
+        borderRadius: "50%",
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        borderRadius: "0",
         border: "none",
-        background: "transparent",
+        background: "rgba(20,20,20,0.4)",
         color: "#fff",
-        fontSize: "22px",
+        fontSize: "32px",
         cursor: "pointer",
         padding: "0",
     });
     const syncPlayIcon = () => {
-        playBtn.textContent = video.paused ? "▶" : "❙❙";
+        btn.textContent = video.paused ? "▶" : "❙❙";
     };
     syncPlayIcon();
-    playBtn.addEventListener("click", () => {
+    btn.addEventListener("click", () => {
         if (video.paused) video.play();
         else video.pause();
     });
     video.addEventListener("play", syncPlayIcon);
     video.addEventListener("pause", syncPlayIcon);
-    row.appendChild(playBtn);
-
-    row.appendChild(makeSeekButton(controller, "forward", video));
-
-    if (chapters.length) row.appendChild(makeChapterNavButton(controller, "next", video));
-    row.appendChild(makeTitleNavButton(controller, "next", video));
-
-    return row;
-}
-
-function makeSeekButton(controller, direction, video) {
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.setAttribute("aria-label", direction === "back" ? "Back 5 seconds" : "Forward 5 seconds");
-    btn.innerHTML = seekIconMarkup(direction);
-    Object.assign(btn.style, {
-        width: "34px",
-        height: "34px",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        borderRadius: "0",
-        border: "none",
-        background: "transparent",
-        color: "#fff",
-        cursor: "pointer",
-        padding: "0",
-    });
-    btn.addEventListener("click", () => {
-        if (!video.duration) {
-            video.currentTime = Math.max(0, (video.currentTime || 0) + (direction === "back" ? -5 : 5));
-            return;
-        }
-        video.currentTime = Math.min(video.duration, Math.max(0, video.currentTime + (direction === "back" ? -5 : 5)));
-    });
-    return btn;
-}
-
-function makeChapterNavButton(controller, direction, video) {
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.setAttribute("aria-label", direction === "prev" ? "Previous chapter" : "Next chapter");
-    btn.innerHTML = skipIconMarkup(direction, { double: true });
-    Object.assign(btn.style, {
-        width: "26px",
-        height: "26px",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        borderRadius: "0",
-        border: "none",
-        background: "transparent",
-        color: "#fff",
-        cursor: "pointer",
-        padding: "0",
-    });
-    btn.addEventListener("click", () => seekToAdjacentChapter(controller, direction, video));
+    document.body.appendChild(btn);
+    registerControlButton(controller, btn, { anchor: false });
     return btn;
 }
 
 /* "Previous" restarts the current chapter once more than a few seconds into it (rather
    than always jumping two chapters at once) - the same convention as prev-track buttons
-   on physical media remotes. */
-function seekToAdjacentChapter(controller, direction, video) {
+   on physical media remotes. No on-screen button calls this anymore (see this file's own
+   header comment) - it's reached via the Xbox bumpers (plex-player.js's
+   _handlePlayerNavCommand) and, for non-gamepad input, the More menu's Chapters overlay. */
+export function seekToAdjacentChapter(controller, direction, video) {
     const chapters = controller._session?.chapters || [];
     if (!chapters.length) return;
     const position = video.currentTime * 1000;
@@ -148,70 +91,6 @@ function seekToAdjacentChapter(controller, direction, video) {
     }
 }
 
-const TITLE_PREV_RESTART_MS = 10000;
-
-/* Always rendered, unlike chapter nav - "restart this title from the beginning" is a
-   valid action whether or not there's a queue at all (a standalone movie included), so
-   prev is never disabled. Next is the only one that ever greys out: skipping forward has
-   no equivalent "restart" fallback, so it's a real dead end whenever there's no next
-   queued title (see plex-player.js's queueRatingKeys/queueIndex) - shown disabled rather
-   than hidden so a movie's transport row still reads as symmetric with an episode's. */
-function makeTitleNavButton(controller, direction, video) {
-    const session = controller._session;
-    const queue = session?.queueRatingKeys || [];
-    const index = session?.queueIndex ?? -1;
-    const enabled = direction === "prev" || (index >= 0 && index < queue.length - 1);
-
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.setAttribute("aria-label", direction === "prev" ? "Previous title" : "Next title");
-    btn.innerHTML = skipIconMarkup(direction, { double: false });
-    Object.assign(btn.style, {
-        width: "26px",
-        height: "26px",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        borderRadius: "0",
-        border: "none",
-        background: "transparent",
-        color: enabled ? "#fff" : "#666",
-        cursor: enabled ? "pointer" : "default",
-        padding: "0",
-    });
-    btn.disabled = !enabled;
-    if (enabled) btn.addEventListener("click", () => seekToAdjacentTitle(controller, direction, video));
-    return btn;
-}
-
-/* "Previous" restarts the current title once more than a few seconds into it, jumping to
-   the actual previous queued title only when one exists and playback is still near the
-   start - same convention as seekToAdjacentChapter above, except prev is always enabled
-   here (see makeTitleNavButton), so a title with no previous queued entry (or no queue at
-   all - any standalone movie) still restarts from 0 rather than doing nothing. "Next"
-   always jumps forward - there's no equivalent restart concept for it, so it's simply
-   disabled when there's nowhere to jump to. Both directions that do jump fetch the
-   adjacent title's fresh metadata (the queue only ever carries ratingKeys) and hand off
-   to the controller's own mid-session _switchTitle rather than a cold-start play(), so
-   the pushed history entry and hero-trailer open/close events stay scoped to the whole
-   player, not each title. */
-async function seekToAdjacentTitle(controller, direction, video) {
-    const session = controller._session;
-    const queue = session?.queueRatingKeys || [];
-    const index = session?.queueIndex ?? -1;
-    if (direction === "next") {
-        if (index < 0 || index >= queue.length - 1) return;
-        await playQueuedTitle(controller, queue, index + 1);
-        return;
-    }
-    const position = (video.currentTime || 0) * 1000;
-    if (index > 0 && position <= TITLE_PREV_RESTART_MS) {
-        await playQueuedTitle(controller, queue, index - 1);
-        return;
-    }
-    video.currentTime = 0;
-}
-
 export async function playQueuedTitle(controller, queue, newIndex) {
     const session = controller._session;
     if (!session) return;
@@ -228,7 +107,7 @@ export async function playQueuedTitle(controller, queue, newIndex) {
             queueIndex: newIndex,
         });
     } catch (e) {
-        // best-effort - the title-nav button simply won't respond if this fails
+        // best-effort - the episode-list overlay's card simply won't respond if this fails
     }
 }
 
@@ -520,17 +399,17 @@ export function buildTransportBar(controller, video) {
        no image, same "never worse than today" fallback the segmented track uses. */
     const bifUrl = plexAssetUrl(controller._session, controller._session?.bifIndexPath);
     let bifIndex = null;
-    let lastHoverClientX = null;
+    let lastPreviewFraction = null;
     if (bifUrl) {
         loadBifIndex(bifUrl).then((index) => {
             bifIndex = index;
             controller._bifIndex = index;
             /* The index takes a couple of Range round-trips to load - if the user was
-               already hovering/dragging and had stopped moving the pointer before it
-               resolved, nothing would otherwise ever retry the frame lookup for that
-               position (only pointerenter/pointermove call showPreview, and a
-               stationary pointer fires neither). */
-            if (index && lastHoverClientX != null) showPreview(lastHoverClientX);
+               already hovering/dragging (or gamepad-scrubbing) and had stopped moving
+               before it resolved, nothing would otherwise ever retry the frame lookup
+               for that position (only pointer movement / setPreview calls
+               showPreviewAtFraction, and staying still fires neither). */
+            if (index && lastPreviewFraction != null) showPreviewAtFraction(lastPreviewFraction);
         });
     }
 
@@ -572,46 +451,49 @@ export function buildTransportBar(controller, video) {
 
     let previewLastTimeMs = null;
     let previewRequestId = 0;
-    const showPreview = (clientX) => {
+    /* Core preview repaint, keyed off a bare fraction-of-duration rather than a pointer
+       position - shared by pointer hover/drag (showPreview below, which derives the
+       fraction from clientX) and gamepad scrubbing (controller._transportScrub.setPreview,
+       which has no pointer at all and already knows its target time). */
+    const showPreviewAtFraction = (fraction) => {
         if (!video.duration) return;
-        const rect = seekWrap.getBoundingClientRect();
-        const fraction = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));
+        lastPreviewFraction = fraction;
         const timeMs = fraction * video.duration * 1000;
 
+        const rectWidth = seekWrap.getBoundingClientRect().width;
         previewTooltip.style.display = "flex";
         const tooltipHalfWidth = 80;
-        previewTooltip.style.left = `${Math.min(rect.width - tooltipHalfWidth, Math.max(tooltipHalfWidth, fraction * rect.width))}px`;
+        previewTooltip.style.left = `${Math.min(rectWidth - tooltipHalfWidth, Math.max(tooltipHalfWidth, fraction * rectWidth))}px`;
         previewTime.textContent = formatTime(timeMs / 1000);
 
         /* Debounced to roughly one lookup per real second of video scrubbed past,
-           rather than one per pointermove event - a fast drag across a long movie can
-           fire dozens of move events a second, and each would otherwise trigger its
-           own Range fetch for a frame the user never actually paused on. */
+           rather than one per pointermove/gamepad tick - a fast drag (or held stick)
+           across a long movie can fire dozens of updates a second, and each would
+           otherwise trigger its own Range fetch for a frame the user never actually
+           paused on. */
         if (!bifIndex || (previewLastTimeMs != null && Math.abs(timeMs - previewLastTimeMs) < 1000)) return;
         previewLastTimeMs = timeMs;
         const frame = findNearestBifFrame(bifIndex, timeMs);
         if (!frame) return;
         const requestId = ++previewRequestId;
         fetchBifFrameUrl(bifIndex, frame).then((url) => {
-            if (requestId !== previewRequestId) return; // a newer hover position won the race
+            if (requestId !== previewRequestId) return; // a newer preview position won the race
             previewImg.src = url;
             previewImg.style.display = "block";
         });
+    };
+    const showPreview = (clientX) => {
+        const rect = seekWrap.getBoundingClientRect();
+        showPreviewAtFraction(Math.min(1, Math.max(0, (clientX - rect.left) / rect.width)));
     };
     const hidePreview = () => {
         previewTooltip.style.display = "none";
         previewImg.style.display = "none";
         previewLastTimeMs = null;
-        lastHoverClientX = null;
+        lastPreviewFraction = null;
     };
-    seek.addEventListener("pointerenter", (e) => {
-        lastHoverClientX = e.clientX;
-        showPreview(e.clientX);
-    });
-    seek.addEventListener("pointermove", (e) => {
-        lastHoverClientX = e.clientX;
-        showPreview(e.clientX);
-    });
+    seek.addEventListener("pointerenter", (e) => showPreview(e.clientX));
+    seek.addEventListener("pointermove", (e) => showPreview(e.clientX));
     seek.addEventListener("pointerleave", () => {
         if (!scrubbing) hidePreview();
     });
@@ -656,274 +538,33 @@ export function buildTransportBar(controller, video) {
         syncSeekFill();
     });
 
-    const muteBtn = document.createElement("button");
-    muteBtn.type = "button";
-    Object.assign(muteBtn.style, {
-        flex: "0 0 auto",
-        width: "28px",
-        height: "28px",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        border: "none",
-        background: "transparent",
-        color: "#fff",
-        cursor: "pointer",
-        padding: "0",
-    });
-
-    /* A floating panel above the mute icon - matches the volume-flyout convention most
-       desktop/TV players use (drag up for louder) rather than a slider that permanently
-       eats transport-bar space. Appended to document.body (not `bar`) so its `position:
-       fixed` coordinates, computed off muteBtn's own rect in positionVolumePopout,
-       aren't affected by the bar's own opacity/transform transitions. */
-    const volumePopout = document.createElement("div");
-    Object.assign(volumePopout.style, {
-        position: "fixed",
-        zIndex: "10002",
-        background: "rgba(20,20,20,0.92)",
-        borderRadius: "8px",
-        padding: "14px 10px",
-        boxShadow: "0 12px 32px rgba(0,0,0,0.5)",
-        opacity: "0",
-        transform: "translate(-50%, 8px)",
-        transition: "opacity 0.15s ease, transform 0.15s ease",
-        pointerEvents: "none",
-    });
-
-    const volumeSlider = document.createElement("input");
-    volumeSlider.type = "range";
-    volumeSlider.className = "streaming-player-seek";
-    volumeSlider.min = "0";
-    volumeSlider.max = "100";
-    Object.assign(volumeSlider.style, {
-        /* writing-mode is the standards-based way to get a vertical range input - every
-           target this app ships to (Chrome/Edge, Android WebView, Xbox WebView2) is
-           Chromium-based and supports it. direction: rtl puts the minimum at the bottom
-           and the maximum at the top, matching a physical volume slider. */
-        writingMode: "vertical-lr",
-        direction: "rtl",
-        width: "6px",
-        height: "90px",
-        accentColor: "#e5a00d",
-        cursor: "pointer",
-    });
-    volumePopout.appendChild(volumeSlider);
-    document.body.appendChild(volumePopout);
-    controller._volumePopoutEl = volumePopout;
-
-    const positionVolumePopout = () => {
-        const rect = muteBtn.getBoundingClientRect();
-        volumePopout.style.left = `${rect.left + rect.width / 2}px`;
-        volumePopout.style.bottom = `${window.innerHeight - rect.top + 8}px`;
-    };
-    const showVolumePopout = () => {
-        positionVolumePopout();
-        volumePopout.style.opacity = "1";
-        volumePopout.style.pointerEvents = "auto";
-        volumePopout.style.transform = "translate(-50%, 0)";
-    };
-    /* sliderActive covers the duration of a drag - hideVolumePopout would otherwise fire
-       mid-drag whenever the pointer momentarily leaves the (narrow) slider or popout
-       bounds, yanking the control out from under the user's own gesture. */
-    let sliderActive = false;
-    let volumeHideTimer = null;
-    const hideVolumePopout = () => {
-        if (sliderActive) return;
-        volumePopout.style.opacity = "0";
-        volumePopout.style.pointerEvents = "none";
-        volumePopout.style.transform = "translate(-50%, 8px)";
-    };
-    /* Debounced rather than immediate - moving the mouse from muteBtn up to the popout
-       crosses a small real gap between two non-nested elements, and an immediate
-       hide-on-leave would close the popout before the cursor arrives. */
-    const scheduleHideVolumePopout = () => {
-        clearTimeout(volumeHideTimer);
-        volumeHideTimer = setTimeout(hideVolumePopout, 150);
-    };
-    muteBtn.addEventListener("mouseenter", () => {
-        clearTimeout(volumeHideTimer);
-        showVolumePopout();
-    });
-    muteBtn.addEventListener("mouseleave", scheduleHideVolumePopout);
-    /* The popout sits outside the transport bar's own DOM box (position: fixed off
-       document.body), so hovering it alone wouldn't otherwise count toward the bar's own
-       idle-fade tracking (see registerControlButton) - mirrors that function's
-       onEnter/onLeave exactly so the rest of the chrome doesn't fade out from under the
-       popout while it's in use. */
-    volumePopout.addEventListener("mouseenter", () => {
-        clearTimeout(volumeHideTimer);
-        controller._controlsHovering = true;
-        clearTimeout(controller._controlsHideTimer);
-        showControls(controller);
-    });
-    volumePopout.addEventListener("mouseleave", () => {
-        scheduleHideVolumePopout();
-        controller._controlsHovering = false;
-        scheduleHideControls(controller);
-    });
-    volumeSlider.addEventListener("focus", showVolumePopout);
-    volumeSlider.addEventListener("blur", scheduleHideVolumePopout);
-    volumeSlider.addEventListener("pointerdown", () => {
-        sliderActive = true;
-    });
-    const endSliderDrag = () => {
-        sliderActive = false;
-        scheduleHideVolumePopout();
-    };
-    volumeSlider.addEventListener("pointerup", endSliderDrag);
-    volumeSlider.addEventListener("pointercancel", endSliderDrag);
-
-    /* video.volume is already set from the stored preference before this bar is built
-       (see playWeb) - this only syncs the icon/slider to whatever that (or a later user
-       change) actually is, never writes it. */
-    const syncVolumeUi = () => {
-        const level = video.muted ? 0 : video.volume;
-        volumeSlider.value = String(Math.round(level * 100));
-        muteBtn.innerHTML = volumeIconMarkup(level);
-        muteBtn.setAttribute("aria-label", level <= 0 ? "Unmute" : "Mute");
-    };
-    syncVolumeUi();
-
-    muteBtn.addEventListener("click", () => {
-        video.muted = !video.muted;
-        syncVolumeUi();
-    });
-    volumeSlider.addEventListener("input", () => {
-        const level = Number(volumeSlider.value) / 100;
-        video.muted = false;
-        video.volume = level;
-        /* Only a non-zero level is worth remembering as "the last volume the user
-           chose" - persisting 0 would make every future session open muted with no
-           visible way to tell why. */
-        if (level > 0) localStorage.setItem(VOLUME_STORAGE_KEY, String(level));
-        syncVolumeUi();
-    });
-    video.addEventListener("volumechange", syncVolumeUi);
-
-    /* Not rendered at all when the host has no Fullscreen API (Xbox WebView2 already
-       runs the whole shell fullscreen, with no chrome to hide) - same "never an empty/
-       dead affordance" rule the hamburger's Chapters entry follows. */
-    const fullscreenSupported = document.fullscreenEnabled || document.webkitFullscreenEnabled;
-    let fullscreenBtn = null;
-    if (fullscreenSupported) {
-        fullscreenBtn = document.createElement("button");
-        fullscreenBtn.type = "button";
-        Object.assign(fullscreenBtn.style, {
-            flex: "0 0 auto",
-            width: "28px",
-            height: "28px",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            border: "none",
-            background: "transparent",
-            color: "#fff",
-            cursor: "pointer",
-            padding: "0",
-        });
-        const isFullscreen = () => !!(document.fullscreenElement || document.webkitFullscreenElement);
-        const syncFullscreenUi = () => {
-            const active = isFullscreen();
-            fullscreenBtn.innerHTML = fullscreenIconMarkup(active);
-            fullscreenBtn.setAttribute("aria-label", active ? "Exit fullscreen" : "Enter fullscreen");
-        };
-        syncFullscreenUi();
-        fullscreenBtn.addEventListener("click", () => {
-            if (isFullscreen()) {
-                (document.exitFullscreen || document.webkitExitFullscreen).call(document);
-            } else {
-                const el = document.documentElement;
-                (el.requestFullscreen || el.webkitRequestFullscreen).call(el);
+    /* Gamepad scrub-preview (Xbox left stick, see plex-player.js's _adjustScrub/
+       _commitScrub/_cancelScrub) - moves this same seek fill + BIF tooltip from a bare
+       target time, with no pointer involved and no seek applied until the caller commits.
+       Reuses the `scrubbing` flag pointer-drag already relies on so the timeupdate
+       listener above doesn't fight it either way. */
+    controller._transportScrub = {
+        setPreview(timeMs) {
+            if (!video.duration) return;
+            scrubbing = true;
+            const fraction = Math.min(1, Math.max(0, timeMs / (video.duration * 1000)));
+            seek.value = String(Math.round(fraction * 1000));
+            syncSeekFill();
+            syncRemaining(fraction * video.duration);
+            showPreviewAtFraction(fraction);
+        },
+        endPreview() {
+            scrubbing = false;
+            hidePreview();
+            if (video.duration) {
+                seek.value = String(Math.round((video.currentTime / video.duration) * 1000));
+                syncSeekFill();
+                syncRemaining(video.currentTime);
             }
-        });
-        /* Listener lives on `document`, outside this bar's own DOM subtree, so it can't
-           be cleaned up just by removing the bar (see teardownWeb's _controlButtons
-           sweep) - stashed on the controller so teardownWeb can remove it explicitly,
-           same reasoning as every other cross-cutting resource cleaned up there. */
-        controller._fullscreenChangeHandler = syncFullscreenUi;
-        document.addEventListener("fullscreenchange", syncFullscreenUi);
-        document.addEventListener("webkitfullscreenchange", syncFullscreenUi);
-    }
+        },
+    };
 
     bar.appendChild(seekWrap);
-
-    /* Three-cell row: play/pause (+ chapter nav, when the session has chapters) always
-       centered, mute pinned to the far right - filled in by buildCenterControls, called
-       right after this (see web-fallback.js), via _centerControlsSlot rather than this
-       function reaching into chapter/play-pause concerns itself. */
-    const controlsRow = document.createElement("div");
-    Object.assign(controlsRow.style, { display: "flex", alignItems: "center" });
-    const leftCell = document.createElement("div");
-    Object.assign(leftCell.style, { flex: "1 1 0", display: "flex", alignItems: "center" });
-    /* Text label standing in for the old standalone Episodes icon button (top-right
-       corner) - same "Episodes" vs "Up Next" wording episode-list.js's own overlay
-       heading already uses (seasonNumber present means a TV episode with siblings to
-       browse; its absence means a movie/collection queue, where "next" is the more
-       accurate word than "episode"), so the button and the screen it opens never
-       disagree about what to call the same queue. Only shown when there's an actual
-       queue to browse - same "never an empty/dead affordance" rule the hamburger's
-       Chapters/Audio Track rows already follow. */
-    if (session?.queueRatingKeys?.length > 1) {
-        const episodesBtn = document.createElement("button");
-        episodesBtn.type = "button";
-        episodesBtn.textContent = session.seasonNumber != null ? "Episodes" : "Up Next";
-        Object.assign(episodesBtn.style, {
-            background: "transparent",
-            border: "none",
-            color: "#fff",
-            fontSize: "13px",
-            fontWeight: "700",
-            fontFamily: '"Roboto", sans-serif',
-            cursor: "pointer",
-            padding: "0",
-        });
-        episodesBtn.addEventListener("click", () => {
-            if (controller._episodeListEl) {
-                controller._closeEpisodeListOverlay();
-            } else {
-                controller._openEpisodeListOverlay();
-            }
-        });
-        leftCell.appendChild(episodesBtn);
-    }
-    const centerCell = document.createElement("div");
-    Object.assign(centerCell.style, { flex: "0 0 auto", display: "flex", alignItems: "center", gap: "22px" });
-    const rightCell = document.createElement("div");
-    Object.assign(rightCell.style, { flex: "1 1 0", display: "flex", alignItems: "center", justifyContent: "flex-end", gap: "14px" });
-    controlsRow.appendChild(leftCell);
-    controlsRow.appendChild(centerCell);
-    controlsRow.appendChild(rightCell);
-    bar.appendChild(controlsRow);
-    controller._centerControlsSlot = centerCell;
-
-    /* Moved out of the More menu entirely (used to be a row there, "Audio & Subtitles")
-       into its own transport-bar icon between mute and fullscreen - both are "what am I
-       hearing/reading" controls a viewer reaches for far more often than anything else
-       in that menu, so they earned equal billing with volume/fullscreen rather than
-       being buried a tap deeper. */
-    const audioSubtitlesBtn = document.createElement("button");
-    audioSubtitlesBtn.type = "button";
-    audioSubtitlesBtn.innerHTML = audioSubtitlesIconMarkup();
-    audioSubtitlesBtn.setAttribute("aria-label", "Audio & Subtitles");
-    Object.assign(audioSubtitlesBtn.style, {
-        flex: "0 0 auto",
-        width: "28px",
-        height: "28px",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        border: "none",
-        background: "transparent",
-        color: "#fff",
-        cursor: "pointer",
-        padding: "0",
-    });
-    audioSubtitlesBtn.addEventListener("click", () => openAudioSubtitlesOverlay(controller));
-
-    rightCell.appendChild(muteBtn);
-    rightCell.appendChild(audioSubtitlesBtn);
-    if (fullscreenBtn) rightCell.appendChild(fullscreenBtn);
     document.body.appendChild(bar);
     registerControlButton(controller, bar, { anchor: false });
     return bar;
