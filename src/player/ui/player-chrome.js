@@ -2,6 +2,7 @@ import { updateContentAnalysis } from "../content-analysis.js";
 import { closeEpisodeListOverlay, closeChapterListOverlay } from "./episode-list.js";
 import { closeAudioSubtitlesOverlay, stopSubtitleLoop } from "./chrome-subtitles.js";
 import { ensurePlayerFocusStyle } from "./shared.js";
+import { platformTag } from "../core/platform.js";
 
 /* Circular with web-fallback.js (which imports mountPlayerChrome/unmountPlayerChrome from here, while
    chrome-subtitles.js above imports trySwitchAudioTrackLocal from it) - safe for the same reason the
@@ -66,7 +67,10 @@ export function mountPlayerChrome(controller, mediaEl, { gpuPipelines }) {
     controller._sleepMinutes = 0;
     if (gpuPipelines) controller._wireZoomPan();
     controller._buildTransportBar(mediaEl);
-    controller._buildFloatingPlayButton(mediaEl);
+    /* Xbox only - web builds its own in-row play/pause instead (see chrome-transport.js's
+       buildCenterControls, called from within buildTransportBar), so there's never two
+       play/pause buttons on screen at once. */
+    if (platformTag() === "xbox") controller._buildFloatingPlayButton(mediaEl);
 
     if (gpuPipelines) {
         /* _shaderType/_shaderStrength were already resolved in play() (global setting + this title's
@@ -115,6 +119,27 @@ export function unmountPlayerChrome(controller) {
     controller._controlsHovering = false;
     controller._controlButtons.forEach((b) => b.remove());
     controller._controlButtons = [];
+    /* Web-only (platformTag() !== "xbox" - see chrome-transport.js's buildTransportBar):
+       the fullscreen button requests fullscreen on document.documentElement, not a
+       player-scoped container - leaving the player without exiting fullscreen first would
+       strand the whole app fullscreen behind the now-gone player chrome. The listener lives
+       on `document` too, outside the transport bar's own DOM subtree, so removing the bar
+       above doesn't clean it up on its own. */
+    if (controller._fullscreenChangeHandler) {
+        document.removeEventListener("fullscreenchange", controller._fullscreenChangeHandler);
+        document.removeEventListener("webkitfullscreenchange", controller._fullscreenChangeHandler);
+        controller._fullscreenChangeHandler = null;
+    }
+    if (document.fullscreenElement || document.webkitFullscreenElement) {
+        (document.exitFullscreen || document.webkitExitFullscreen)?.call(document);
+    }
+    /* Web-only volume flyout - appended to document.body directly (not inside the
+       transport bar's own DOM box, see buildTransportBar), so it isn't swept up by the
+       _controlButtons removal above either. */
+    if (controller._volumePopoutEl) {
+        controller._volumePopoutEl.remove();
+        controller._volumePopoutEl = null;
+    }
     if (controller._skipBtnEl) {
         controller._skipBtnEl.remove();
         controller._skipBtnEl = null;

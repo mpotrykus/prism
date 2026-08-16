@@ -136,6 +136,22 @@ function isEventAllowed(e, command) {
   return e.__navAllowed;
 }
 
+// TEMP debug logging for the stick-vs-dpad centering bug - remove once diagnosed. A single
+// listener (not one per registerNavHandler call) so this logs each recognized keydown once,
+// regardless of how many handlers are registered app-wide.
+document.addEventListener(
+  "keydown",
+  (e) => {
+    const command = KEY_TO_COMMAND[e.key];
+    if (!command) return;
+    const active = resolveDeepActiveElement(document.activeElement);
+    console.warn(
+      `[nav-debug] keydown command=${command} isTrusted=${e.isTrusted} active=${active?.tagName}.${active?.className}`
+    );
+  },
+  true
+);
+
 /* Registers a handler that's consulted on every recognized keydown, regardless of source
    (real or synthetic). `handler(command, event, activeElement)` returns true if it acted on
    the command, which preventDefault()'s the key event - an unhandled command (this scope
@@ -449,13 +465,18 @@ function pollGamepads(now) {
     for (const command of REPEATABLE_COMMANDS) {
       const state = repeatState[command];
       if (active[command]) {
+        // TEMP debug logging for the stick-vs-dpad centering bug - remove once diagnosed.
+        const debugSource = { up: 12, down: 13, left: 14, right: 15 }[command];
+        const viaButton = debugSource !== undefined && !!gp.buttons[debugSource]?.pressed;
         if (!state.active) {
           state.active = true;
           state.heldSince = now;
           state.lastRepeatAt = now;
+          console.warn(`[nav-debug] dispatch ${command} viaButton=${viaButton} axisX=${axisX.toFixed(2)} axisY=${axisY.toFixed(2)}`);
           dispatchSyntheticKey(COMMAND_TO_KEY[command]);
         } else if (now - state.heldSince > REPEAT_DELAY_MS && now - state.lastRepeatAt > REPEAT_RATE_MS) {
           state.lastRepeatAt = now;
+          console.warn(`[nav-debug] repeat ${command} viaButton=${viaButton} axisX=${axisX.toFixed(2)} axisY=${axisY.toFixed(2)}`);
           dispatchSyntheticKey(COMMAND_TO_KEY[command]);
         }
       } else {

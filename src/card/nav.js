@@ -253,7 +253,16 @@ export function wireHomeNav(card) {
      shows its neighbors above/below too, not just a sliver of the row you jumped to. */
   const focusPoster = (el) => {
     el?.focus();
+    // TEMP debug logging for the stick-vs-dpad centering bug - remove once diagnosed.
+    const before = el?.getBoundingClientRect();
+    console.warn(`[nav-debug] focusPoster before top=${Math.round(before?.top)} left=${Math.round(before?.left)}`);
     el?.scrollIntoView({ block: "center", inline: "center", behavior: "smooth" });
+    setTimeout(() => {
+      const after = el?.getBoundingClientRect();
+      console.warn(
+        `[nav-debug] focusPoster after(500ms) top=${Math.round(after?.top)} left=${Math.round(after?.left)} viewport=${window.innerWidth}x${window.innerHeight}`
+      );
+    }, 500);
   };
   /* The hero banner sits at the very top of the page's scroll container, so any focus
      landing on one of its buttons needs the page scrolled all the way up too - otherwise
@@ -399,7 +408,16 @@ export function wireSearchNav(card) {
 
   const focusPoster = (el) => {
     el?.focus();
+    // TEMP debug logging for the stick-vs-dpad centering bug - remove once diagnosed.
+    const before = el?.getBoundingClientRect();
+    console.warn(`[nav-debug] focusPoster before top=${Math.round(before?.top)} left=${Math.round(before?.left)}`);
     el?.scrollIntoView({ block: "center", inline: "center", behavior: "smooth" });
+    setTimeout(() => {
+      const after = el?.getBoundingClientRect();
+      console.warn(
+        `[nav-debug] focusPoster after(500ms) top=${Math.round(after?.top)} left=${Math.round(after?.left)} viewport=${window.innerWidth}x${window.innerHeight}`
+      );
+    }, 500);
   };
 
   /* Column count varies with viewport width and each hub's grid wraps independently, so

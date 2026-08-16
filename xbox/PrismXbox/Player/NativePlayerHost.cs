@@ -31,6 +31,13 @@ namespace PrismXbox.Player
         private readonly Action<string> log;
         private string currentUrl;
         private bool everPlayed;
+        // Plex always bakes the resume point into the URL as offset= (see Play's own comment), so
+        // MediaPlaybackSession.Position is 0-based from THAT point, not from the start of the title -
+        // while NaturalDuration keeps reporting the title's real full length regardless of offset
+        // (confirmed in the phase0 spike log: "duration 7366.2s" for a stream requested with a large
+        // offset). Reporting session.Position as-is against that duration is what made the scrubber
+        // always read near the beginning - this is added back on every position reported to JS.
+        private long baseOffsetMs;
         private readonly HdrDisplayController hdr;
         // Tracks whether ShaderVideoEffect is currently attached to `player`, so
         // SetShaderEffect/SetColorBoost/SetAmbientLighting only call AddVideoEffect/
@@ -69,7 +76,7 @@ namespace PrismXbox.Player
             session.PlaybackStateChanged += (s, e) => OnPlaybackStateChanged(s);
             session.NaturalDurationChanged += (s, e) => EmitProgress(s);
             session.SeekCompleted += (s, e) =>
-                emit("seeked", $"{{\"positionMs\":{(long)s.Position.TotalMilliseconds}}}");
+                emit("seeked", $"{{\"positionMs\":{(long)s.Position.TotalMilliseconds + baseOffsetMs}}}");
 
             player.MediaOpened += (s, e) => OnMediaOpened(s);
             player.MediaEnded += (s, e) => emit("ended", "{}");
@@ -156,13 +163,15 @@ namespace PrismXbox.Player
         {
             everPlayed = false;
             currentUrl = url;
+            baseOffsetMs = startPositionMs;
             // Before Source is set, so the output mode is already correct when the first frame arrives -
             // switching afterwards makes the TV resync mid-playback.
             if (isHdr) await hdr.EnableAsync();
             else await hdr.RestoreAsync();
             // Plex encodes the start position in the URL itself (offset=), so there is no seek to
-            // perform here - the stream begins where it should. startPositionMs is accepted for
-            // parity with the Android bridge's signature and for logging.
+            // perform here - the stream begins where it should. startPositionMs is still recorded above
+            // (see baseOffsetMs) since session.Position reports 0-based from this point, not from the
+            // start of the title.
             log($"play @{startPositionMs}ms");
             player.Source = MediaSource.CreateFromUri(new Uri(url));
             player.Play();
@@ -176,6 +185,7 @@ namespace PrismXbox.Player
         {
             everPlayed = false;
             currentUrl = url;
+            baseOffsetMs = startPositionMs;
             // An in-place title swap can cross the SDR/HDR boundary, so the mode is re-evaluated here
             // too, not only on a cold start.
             if (isHdr) await hdr.EnableAsync();
@@ -228,14 +238,17 @@ namespace PrismXbox.Player
 
         private void EmitProgress(MediaPlaybackSession session)
         {
-            long positionMs = (long)session.Position.TotalMilliseconds;
+            long streamPositionMs = (long)session.Position.TotalMilliseconds;
+            long positionMs = streamPositionMs + baseOffsetMs;
             long durationMs = (long)session.NaturalDuration.TotalMilliseconds;
             // DownloadProgress is a 0..1 fraction of the whole stream, so buffered-ahead has to be
             // derived from it. Plex's progressive transcode does not reliably report a length, in which
             // case this reads 0 - which is why ABR on this platform is stall-driven rather than
-            // bandwidth-driven (see core/abr.js's setStallDrivenAbr).
+            // bandwidth-driven (see core/abr.js's setStallDrivenAbr). Computed against the stream-relative
+            // position, not the offset-adjusted one above - DownloadProgress is itself 0-based from the
+            // same stream start.
             long bufferedMs = durationMs > 0
-                ? (long)(session.DownloadProgress * durationMs) - positionMs
+                ? (long)(session.DownloadProgress * durationMs) - streamPositionMs
                 : 0;
             emit("progress",
                 $"{{\"positionMs\":{positionMs},\"durationMs\":{durationMs},\"bufferedMs\":{Math.Max(0, bufferedMs)}}}");

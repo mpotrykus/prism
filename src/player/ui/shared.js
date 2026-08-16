@@ -191,12 +191,39 @@ export function storedAutoQualityEnabled() {
     return localStorage.getItem(AUTO_QUALITY_STORAGE_KEY) === "1";
 }
 
+export function volumeIconMarkup(level) {
+    const speaker = '<path d="M3 9v6h4l5 5V4L7 9H3z" fill="currentColor"/>';
+    const waveNear = '<path d="M16.5 12c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02z" fill="currentColor"/>';
+    const waveFar =
+        '<path d="M14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z" fill="currentColor"/>';
+    const muteSlash = '<line x1="16" y1="7" x2="22" y2="17" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>';
+    let inner = speaker;
+    if (level <= 0) inner += muteSlash;
+    else if (level < 0.5) inner += waveNear;
+    else inner += waveNear + waveFar;
+    return `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" xmlns="http://www.w3.org/2000/svg">${inner}</svg>`;
+}
+
+/* Same currentColor-SVG reasoning as volumeIconMarkup above - a circular arrow drawn
+   from scratch rather than "⏪"/"⏩" glyphs, which have the same fixed-color emoji-
+   presentation problem. "back"/"forward" mirror the same arc+arrowhead across the
+   vertical axis (opposite sweep direction, opposite arrowhead) while the "5" label stays
+   unmirrored in both, matching the skip-5s convention HBO's own player uses. */
+export function seekIconMarkup(direction) {
+    const sweepFlag = direction === "forward" ? 0 : 1;
+    const arcEnd = direction === "forward" ? "6.2 17.5" : "17.8 17.5";
+    const arrowhead = direction === "forward" ? "15,1 15,7 9,4" : "9,1 9,7 15,4";
+    const arc = `<path d="M12 4 A8 8 0 1 ${sweepFlag} ${arcEnd}" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" fill="none"/>`;
+    const arrow = `<polygon points="${arrowhead}" fill="currentColor"/>`;
+    const label = `<text x="12" y="16.5" font-size="7.5" font-weight="700" text-anchor="middle" font-family="Roboto, sans-serif" fill="currentColor">5</text>`;
+    return `<svg viewBox="-6 -6 36 36" width="26" height="26" fill="none" xmlns="http://www.w3.org/2000/svg">${arc}${arrow}${label}</svg>`;
+}
+
 /* Same currentColor-SVG reasoning as audioSubtitlesIconMarkup below - drawn from scratch
    rather than an "⏮"/"⏭" glyph, which has the same fixed-color emoji-presentation problem.
-   Shared by chrome-menu.js's Auto-Play row (single triangle) - the double-triangle form is
-   otherwise unused now that the dedicated chapter/title-nav transport buttons are gone (see
-   chrome-transport.js's header comment), but the `double` option stays since Auto-Play's
-   icon and a future double-triangle use are the same underlying shape. */
+   Shared by chrome-menu.js's Auto-Play row (single triangle) and chrome-transport.js's
+   web-only chapter/title-nav transport buttons (double triangle, see platformTag() !== "xbox"
+   gating in buildCenterControls) - the `double` option tells the two uses apart. */
 export function skipIconMarkup(direction, { double = false } = {}) {
     const bar = '<rect x="16.6" y="5" width="2.2" height="14" rx="0.6" fill="currentColor"/>';
     const nearTriangle = '<polygon points="8,5 8,19 16.2,12" fill="currentColor"/>';
@@ -206,10 +233,11 @@ export function skipIconMarkup(direction, { double = false } = {}) {
 }
 
 /* Same currentColor-SVG-not-emoji reasoning as every icon in this file - the standard
-   four-corner-bracket "expand"/"contract" glyph pair. The player itself has no fullscreen
-   button anymore (Android has no equivalent either - see chrome-transport.js's header
-   comment), but chrome-menu-effects.js's Shader Upscaling row still reuses this shape for
-   its own icon, hence `isFullscreen` staying a parameter rather than a fixed glyph. */
+   four-corner-bracket "expand"/"contract" glyph pair. Used by chrome-transport.js's
+   web-only fullscreen toggle (Xbox/Android have no equivalent - the Xbox shell already
+   runs fullscreen with no chrome to hide, and Android's chrome is native, not this file)
+   and reused by chrome-menu-effects.js's Shader Upscaling row for its own icon, hence
+   `isFullscreen` staying a parameter rather than a fixed glyph. */
 export function fullscreenIconMarkup(isFullscreen) {
     const path = isFullscreen ?
         "M5 16h3v3h2v-5H5v2zm3-8H5v2h5V5H8v3zm6 11h2v-3h3v-2h-5v5zm2-11V5h-2v5h5V8h-3z" :
@@ -218,11 +246,11 @@ export function fullscreenIconMarkup(isFullscreen) {
 }
 
 /* Same currentColor-SVG reasoning as fullscreenIconMarkup above - a classic closed-
-   captions glyph (rounded outline rect + two text-line bars) for the More menu's Audio &
-   Subtitles row (see chrome-menu.js's renderMainList), which opens openAudioSubtitlesOverlay.
-   Geometry mirrors Android's MenuIconView.Icon.SUBTITLES exactly (same 24x24 box) so
-   the two platforms read as the same icon - Android's own chrome puts this in its More
-   menu too, not a standalone transport-bar icon (see PlayerUiHelper.java). */
+   captions glyph (rounded outline rect + two text-line bars). Used both by the More
+   menu's Audio & Subtitles row (see chrome-menu.js's renderMainList) and, on web only, by
+   chrome-transport.js's dedicated transport-bar icon (platformTag() !== "xbox") - both open
+   the same openAudioSubtitlesOverlay. Geometry mirrors Android's MenuIconView.Icon.SUBTITLES
+   exactly (same 24x24 box) so every platform reads as the same icon. */
 export function audioSubtitlesIconMarkup() {
     return '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x="2" y="5" width="20" height="14" rx="2" stroke="currentColor" stroke-width="1.8"/><rect x="5" y="9" width="10" height="2" rx="1" fill="currentColor"/><rect x="5" y="13" width="6" height="2" rx="1" fill="currentColor"/></svg>';
 }

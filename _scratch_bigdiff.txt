@@ -1,0 +1,2527 @@
+diff --git a/plex-player.js b/plex-player.js
+index 305fd9d..f20969d 100644
+--- a/plex-player.js
++++ b/plex-player.js
+@@ -21,12 +21,14 @@
+    method for every one of them so every existing internal cross-reference between
+    concerns (e.g. the shader pipeline reaching into applyZoomTransform, the web fallback
+    reaching into the shared control-row/menu chrome) keeps working unchanged. */
+-import { Capacitor } from "@capacitor/core";
+ import { registerNavHandler } from "./focus-nav.js";
+ import { lockScroll, unlockScroll } from "./scroll-lock.js";
+ import { detectShaderType } from "./src/player/shader/shaders.js";
++import { hasNativePlayer, platformTag, plexPlatformTag, usesProgressiveStream, supportsHdr } from "./src/player/core/platform.js";
++import { media } from "./src/player/core/media-facade.js";
+ import { buildStreamUrl, buildDecisionUrl } from "./src/player/core/stream-url.js";
+-import { playNative, switchNative, stopNative, pauseNative, resumeNative } from "./src/player/native-bridge.js";
++import { playNative, switchNative, stopNative, pauseNative, resumeNative, buildPlaybackPayload } from "./src/player/native-bridge.js";
++import { playXbox, switchXbox, stopXbox, pauseXbox, resumeXbox, reloadXboxSource } from "./src/player/xbox-bridge.js";
+ import { playWeb, attachSource, reloadWebSource, teardownWeb } from "./src/player/web-fallback.js";
+ import { setShaderStrength, setColorBoostStrength, updateShaderPipeline, ensureShaderPipeline, stopShaderLoop } from "./src/player/shader-pipeline.js";
+ import { setAmbientEnabled, setAmbientOpacity, updateAmbientPipeline, stopAmbientLoop } from "./src/player/ambient-pipeline.js";
+@@ -52,7 +54,7 @@ import {
+     hideControls,
+     scheduleHideControls,
+     buildLoadingSpinner,
+-    buildCenterControls,
++    buildFloatingPlayButton,
+     buildTransportBar,
+     openHamburgerMenu,
+     applyZoomTransform,
+@@ -63,6 +65,8 @@ import {
+     updateSkipButton,
+     playQueuedTitle,
+     applyRememberedSubtitle,
++    seekToAdjacentChapter,
++    updateTransportBarInfo,
+ } from "./src/player/ui/chrome.js";
+ import { openEpisodeListOverlay, closeEpisodeListOverlay } from "./src/player/ui/episode-list.js";
+ 
+@@ -70,6 +74,20 @@ import { openEpisodeListOverlay, closeEpisodeListOverlay } from "./src/player/ui
+    its "progress"-listener piggyback ping rather than importing it from here - see that
+    file's own comment for why a circular import back into this module isn't safe here. */
+ const TIMELINE_PING_MS = 10000;
++/* 10s per press, matching the transport bar's own +/- seek buttons. */
++const NAV_SEEK_STEP_MS = 10000;
++/* Long enough to absorb a burst of trigger-held repeats into one transcode restart, short enough not
++   to feel like lag on a single press. */
++const NAV_SEEK_COMMIT_MS = 600;
++/* Once the left stick has been held in one direction for SCRUB_SPEEDUP_INTERVAL_MS straight,
++   _adjustScrub jumps its per-tick step to SCRUB_MAX_SPEED_MULTIPLIER (configurable if that
++   ceiling needs to move later). SCRUB_HOLD_GAP_MS is how big a gap between consecutive
++   left/right nav commands still counts as "held through" rather than a fresh press - see
++   _adjustScrubHoldStep's own comment for why this needs to be bigger than focus-nav.js's
++   REPEAT_DELAY_MS (400ms). */
++const SCRUB_SPEEDUP_INTERVAL_MS = 3000;
++const SCRUB_MAX_SPEED_MULTIPLIER = 8;
++const SCRUB_HOLD_GAP_MS = 500;
+ const CLIENT_ID_KEY = "prism_plex_client_identifier";
+ 
+ function clientIdentifier() {
+@@ -86,6 +104,10 @@ class StreamingPlayerController {
+         this._session = null;
+         this._videoEl = null;
+         this._hls = null;
++        /* Whatever object core/abr.js reads `bandwidthEstimate` off for Auto Quality -
++           the hls.js instance itself on web, null on a backend that can't measure
++           bandwidth. Registered via setBandwidthSource, never assigned directly. */
++        this._bandwidthSource = null;
+         this._nativeListenerHandles = [];
+         this._pingTimer = null;
+         /* Piggybacked timeline-ping throttle for native playback - see
+@@ -108,6 +130,17 @@ class StreamingPlayerController {
+         this._episodeListEl = null;
+         this._episodeListCache = null;
+         this._bifIndex = null;
++        /* Left-stick gamepad scrub-preview state (Xbox only, see _adjustScrub/_commitScrub/
++           _cancelScrub below) - _transportScrub itself is assigned by chrome-transport.js's
++           buildTransportBar, rebuilt fresh each time the transport bar is. */
++        this._transportScrub = null;
++        this._scrubActive = false;
++        this._scrubTargetMs = null;
++        /* Tracks how long left/right has been held in one direction, purely for the
++           speed-up in _adjustScrub - see that method's own comment. */
++        this._scrubHoldDirection = 0;
++        this._scrubHoldStartAt = 0;
++        this._scrubHoldLastAt = 0;
+         this._ambientEnabled = false;
+         this._ambientOpacity = 0.5;
+         this._ambientGlowContainer = null;
+@@ -149,16 +182,49 @@ class StreamingPlayerController {
+         this._abrStableStreak = 0;
+         this._abrHasRealSample = false;
+         this._onPopState = this._onPopState.bind(this);
+-        /* A player has no sidenav/rows to navigate - the only D-pad/gamepad action it
+-           needs is an exit, same effect as the visible close button. Registered once,
+-           for the module's lifetime, and simply no-ops whenever nothing is playing. */
++        /* Registered once, for the module's lifetime, and no-ops whenever nothing is playing.
++           `back` applies on every platform - same effect as the visible close button. The rest is
++           gated to the Xbox leg for now, because that is the only platform where the player has no
++           pointer at all: the chrome is mouse/touch-driven on web, and native on Android. Without it
++           a console can start playback and then reach nothing but the exit.
++
++           Not enabled everywhere yet purely to avoid slipping a keyboard-behaviour change into the web
++           player as a side effect; some equivalent (arrow-key chrome navigation, a keyboard seek
++           shortcut) would be reasonable to offer there too, but that is a deliberate decision to make
++           on its own. */
+         registerNavHandler((command) => {
+-            if (command !== "back" || !this._session) return false;
+-            this.stop();
+-            return true;
++            if (!this._session) return false;
++            /* Yield entirely while one of the player's own overlays is open. focus-nav.js consults every
++               registered handler for the same keypress (it memoizes the cooldown on the event so no
++               handler can starve another), so without this the player would act on the same press the
++               open overlay is acting on: `back` would stop playback instead of closing the sheet -
++               which left the chrome orphaned on screen - and up/down would scrub while also moving the
++               menu selection. The convention this module is following is focus-nav.js's own: only the
++               handler whose scope currently owns focus should act. */
++            if (this._inlineMenuEl || this._audioSubtitlesEl || this._episodeListEl || this._chapterListEl) return false;
++            if (command === "back") {
++                /* B cancels an in-progress left-stick scrub instead of stopping playback -
++                   only ever true on Xbox, since that's the only place _adjustScrub ever sets
++                   it (see _handlePlayerNavCommand). */
++                if (this._scrubActive) {
++                    this._cancelScrub();
++                    return true;
++                }
++                this.stop();
++                return true;
++            }
++            if (platformTag() !== "xbox") return false;
++            return this._handlePlayerNavCommand(command);
+         });
+     }
+ 
++    /* Same "is playback up" test the nav handler above uses, exposed for the card's own
++       app-level shortcuts (see nav.js's wireSearchToggle), which have to stay inert while
++       the player overlay covers the app. */
++    isOpen() {
++        return !!this._session;
++    }
++
+     async play(item) {
+         const { ratingKey, plexUrl, plexToken } = item;
+         if (!ratingKey || !plexUrl || !plexToken) {
+@@ -189,9 +255,9 @@ class StreamingPlayerController {
+        without touching the pushed history entry or the hero-trailer open/close events -
+        those belong to the player overlay's own lifecycle, not to any one title inside
+        it, so calling play() again here would wrongly push a second history entry (and
+-       have stop()'s history.back() unwind the first one instead). Used by the title-nav
+-       prev/next buttons (see chrome.js's seekToAdjacentTitle) to jump to an adjacent
+-       queued title mid-session.
++       have stop()'s history.back() unwind the first one instead). Used by
++       episode-list.js's playQueuedTitle to jump to an adjacent/selected queued title
++       mid-session.
+ 
+        Android native takes its own path (_switchTitleNative) rather than this
+        teardown-then-rebegin one - _teardownMedia's stopNative finish()es the running
+@@ -199,7 +265,7 @@ class StreamingPlayerController {
+        the next title, a visible swipe-out/in Activity transition for what should read as
+        one continuous player staying on screen. */
+     async _switchTitle(item) {
+-        if (Capacitor.isNativePlatform() && Capacitor.getPlatform() === "android") {
++        if (hasNativePlayer()) {
+             await this._switchTitleNative(item);
+             return;
+         }
+@@ -214,6 +280,11 @@ class StreamingPlayerController {
+         }
+         if (this._session) this._reportTimeline("stopped");
+         const { streamUrl, startOffsetMs } = this._prepareSession(item);
++        /* This leg reuses the transport bar mounted for the previous title (see
++           _switchTitle's own comment on why native takes this in-place path instead of
++           web's teardown-then-rebegin) - nothing else repaints its title/subtitle text
++           for the session _prepareSession just swapped in. */
++        updateTransportBarInfo(this);
+         await this._switchNative(streamUrl, startOffsetMs);
+         this._reportTimeline("playing");
+         /* See native-bridge.js's "progress" listener for why native playback can't rely
+@@ -226,7 +297,7 @@ class StreamingPlayerController {
+ 
+     async _beginSession(item) {
+         const { streamUrl, startOffsetMs } = this._prepareSession(item);
+-        if (Capacitor.isNativePlatform() && Capacitor.getPlatform() === "android") {
++        if (hasNativePlayer()) {
+             await this._playNative(streamUrl, startOffsetMs);
+             /* Native's own equivalent lives in native-bridge.js's "progress" listener
+                instead of right here - _videoEl exists synchronously the instant
+@@ -307,6 +378,10 @@ class StreamingPlayerController {
+                audio-track switch (see web-fallback.js's reloadWebSource and
+                native-bridge.js's buildPlaybackPayload), not just request one. */
+             partId: item.partId ?? null,
++            /* Read from Plex's own video-stream metadata before playback starts (title-info.js's
++               isHdrVideo). The Xbox leg needs it up front to switch the console's HDMI output into an
++               HDR mode before the first frame - see HdrDisplayController. Harmless everywhere else. */
++            isHdr: !!item.isHdr,
+             /* Ordered sibling ratingKeys (a show's full episode order, or a playlist/
+                collection's own order) this title came from, if any - see title-info.js's
+                _getShowEpisodeQueue/_flatQueueContext. Powers the title-prev/title-next
+@@ -382,6 +457,12 @@ class StreamingPlayerController {
+             clearInterval(this._pingTimer);
+             this._pingTimer = null;
+         }
++        /* Reset here (not just on B/A) so a session torn down mid-scrub by some other path
++           (e.g. an error, or a title switch) can't leave the next session's constructor-level
++           registerNavHandler thinking a scrub is still active before it's ever pressed left/right. */
++        this._scrubActive = false;
++        this._scrubTargetMs = null;
++        this._scrubHoldDirection = 0;
+         if (this._session) {
+             /* Awaited (unlike the periodic pings during playback) so Plex's own
+                viewOffset/viewCount are committed before streaming-player-close fires below -
+@@ -389,8 +470,8 @@ class StreamingPlayerController {
+                refresh, the card's Continue Watching row refresh) would otherwise race the
+                fire-and-forget ping and read the pre-stop position. */
+             await this._reportTimeline("stopped");
+-            if (Capacitor.isNativePlatform() && Capacitor.getPlatform() === "android") {
+-                await stopNative(this);
++            if (hasNativePlayer()) {
++                await (platformTag() === "xbox" ? stopXbox(this) : stopNative(this));
+             } else {
+                 this._teardownWeb();
+             }
+@@ -422,7 +503,9 @@ class StreamingPlayerController {
+         return buildStreamUrl({
+             ...opts,
+             clientIdentifier: clientIdentifier(),
+-            platform: Capacitor.isNativePlatform() ? "Android" : "Chrome",
++            platform: plexPlatformTag(),
++            progressive: usesProgressiveStream(),
++            hdr: supportsHdr(),
+         });
+     }
+ 
+@@ -434,15 +517,33 @@ class StreamingPlayerController {
+         return buildDecisionUrl({
+             ...opts,
+             clientIdentifier: clientIdentifier(),
+-            platform: Capacitor.isNativePlatform() ? "Android" : "Chrome",
++            platform: plexPlatformTag(),
++            progressive: usesProgressiveStream(),
++            hdr: supportsHdr(),
+         });
+     }
+ 
++    /* The two native backends are dispatched here rather than behind one abstraction, because they
++       genuinely differ in transport (Capacitor plugin vs WebView2 messages) while sharing the method
++       and event NAMES - see xbox-bridge.js's header. buildPlaybackPayload is Android's, reused
++       deliberately: it owns the String() coercions for Plex's numeric ids that a bridge must not lose. */
+     _playNative(streamUrl, startOffsetMs) {
++        if (platformTag() === "xbox") {
++            return playXbox(
++                this,
++                streamUrl,
++                startOffsetMs,
++                buildPlaybackPayload(this, streamUrl, startOffsetMs),
++                (url, offsetMs) => buildPlaybackPayload(this, url, offsetMs)
++            );
++        }
+         return playNative(this, streamUrl, startOffsetMs);
+     }
+ 
+     _switchNative(streamUrl, startOffsetMs) {
++        if (platformTag() === "xbox") {
++            return switchXbox(this, streamUrl, startOffsetMs, buildPlaybackPayload(this, streamUrl, startOffsetMs));
++        }
+         return switchNative(this, streamUrl, startOffsetMs);
+     }
+ 
+@@ -454,7 +555,161 @@ class StreamingPlayerController {
+         return attachSource(this, video, streamUrl);
+     }
+ 
+-    _reloadWebSource(overrides) {
++    /* Restarts the Plex transcode session with new mediaIndex/qualityCapKbps/audioStreamID, or (on the
++       progressive path only) a new position. Dispatches per platform because only the final "hand the
++       new URL to the player" step differs - the Plex protocol sequence itself lives once in
++       core/session-reload.js. Called by core/abr.js, chrome-menu.js's Version/Quality menus and
++       chrome-subtitles.js's audio picker, none of which need to know which backend is playing. */
++    /* Gamepad control for a player whose chrome is DOM built for mouse/touch. Standard console
++       transport scheme: bumpers skip chapters, triggers rewind/fast-forward, Start opens the
++       options menu, A plays/pauses, left stick traverses the scrub bar with a BIF preview (see
++       _adjustScrub below) - every action reachable from the bare player screen already has its
++       own dedicated button/stick, so nothing here is left for D-pad to navigate between; that's
++       only meaningful once a menu/overlay is open, where wireLinearNav (focus-nav.js) already
++       handles it independently of this handler (see the constructor's registerNavHandler call,
++       which yields to those overlays entirely before ever reaching here).
++
++       "back" (B) is handled one level up, in that same constructor call - it cancels an
++       in-progress scrub if one is active, otherwise stops playback, but yields first to
++       whichever of the player's own overlays (hamburger menu, Audio & Subtitles, episode/chapter
++       list) is currently open, closing or backing that overlay up a screen instead. */
++    _handlePlayerNavCommand(command) {
++        const el = media(this);
++        if (!el) return false;
++        this._showControls();
++        switch (command) {
++            case "activate":
++                if (this._scrubActive) {
++                    this._commitScrub();
++                    return true;
++                }
++                if (el.paused) this.resume();
++                else this.pause();
++                return true;
++            case "left":
++                this._adjustScrub(-NAV_SEEK_STEP_MS);
++                return true;
++            case "right":
++                this._adjustScrub(NAV_SEEK_STEP_MS);
++                return true;
++            case "chapterPrev":
++                this._seekToAdjacentChapter("prev");
++                return true;
++            case "chapterNext":
++                this._seekToAdjacentChapter("next");
++                return true;
++            case "rewind":
++                this._queueNavSeek(-NAV_SEEK_STEP_MS);
++                return true;
++            case "forward":
++                this._queueNavSeek(NAV_SEEK_STEP_MS);
++                return true;
++            case "menu":
++                if (this._menuButtonEl) this._openHamburgerMenu(this._menuButtonEl);
++                return true;
++            default:
++                return false;
++        }
++    }
++
++    /* Left-stick scrub-preview: unlike _queueNavSeek's trigger-driven coalesced jump (which
++       always commits itself after a short idle), holding left/right only advances a pending
++       preview position - the transport bar's BIF tooltip and seek fill move (see
++       chrome-transport.js's controller._transportScrub), but video.currentTime is never
++       touched until commitScrub (A). B (_cancelScrub, wired one level up in the constructor)
++       drops the pending position without seeking at all. focus-nav.js already repeats
++       left/right at a steady rate while the stick/D-pad is held (see its REPEATABLE_COMMANDS),
++       so each call here only needs to advance by one step, not implement its own repeat timer -
++       it just jumps that step to SCRUB_MAX_SPEED_MULTIPLIER once the same direction has been
++       held continuously for SCRUB_SPEEDUP_INTERVAL_MS, tracked via _adjustScrubHoldStep below. */
++    _adjustScrub(deltaMs) {
++        const el = media(this);
++        if (!el) return;
++        const durationMs = (el.duration || 0) * 1000;
++        const fromMs = this._scrubActive ? this._scrubTargetMs : (el.currentTime || 0) * 1000;
++        const step = this._adjustScrubHoldStep(deltaMs);
++        this._scrubTargetMs = Math.max(0, durationMs ? Math.min(fromMs + step, durationMs - 1000) : fromMs + step);
++        this._scrubActive = true;
++        this._transportScrub?.setPreview(this._scrubTargetMs);
++    }
++
++    /* Multiplies deltaMs by SCRUB_MAX_SPEED_MULTIPLIER once left/right has been held in the
++       same direction for SCRUB_SPEEDUP_INTERVAL_MS straight (1x, then straight to max - no
++       intermediate tiers). A gap between calls bigger than SCRUB_HOLD_GAP_MS - larger than
++       focus-nav.js's own repeat cadence (REPEAT_DELAY_MS/REPEAT_RATE_MS) - means the stick was
++       released and re-pressed rather than held through, so the hold timer restarts; so does a
++       direction reversal. */
++    _adjustScrubHoldStep(deltaMs) {
++        const now = performance.now();
++        const direction = deltaMs > 0 ? 1 : -1;
++        const gapMs = now - this._scrubHoldLastAt;
++        if (direction !== this._scrubHoldDirection || gapMs > SCRUB_HOLD_GAP_MS) {
++            this._scrubHoldStartAt = now;
++        }
++        this._scrubHoldDirection = direction;
++        this._scrubHoldLastAt = now;
++        const held = now - this._scrubHoldStartAt >= SCRUB_SPEEDUP_INTERVAL_MS;
++        return held ? deltaMs * SCRUB_MAX_SPEED_MULTIPLIER : deltaMs;
++    }
++
++    /* A: commits the pending scrub position - seeks there (a full transcode restart on the
++       progressive/Xbox path, same as any other seek - see reloadXboxSource) and resumes
++       playback if it was paused, matching "plays from the selected spot". */
++    _commitScrub() {
++        const el = media(this);
++        const targetMs = this._scrubTargetMs;
++        this._scrubActive = false;
++        this._scrubTargetMs = null;
++        this._scrubHoldDirection = 0;
++        this._transportScrub?.endPreview();
++        if (!el || targetMs == null) return;
++        const wasPaused = el.paused;
++        el.currentTime = targetMs / 1000;
++        if (wasPaused) this.resume();
++    }
++
++    /* B: drops the pending scrub position and snaps the transport bar back to wherever
++       playback actually is, without ever touching video.currentTime. */
++    _cancelScrub() {
++        this._scrubActive = false;
++        this._scrubTargetMs = null;
++        this._scrubHoldDirection = 0;
++        this._transportScrub?.endPreview();
++    }
++
++    _seekToAdjacentChapter(direction) {
++        return seekToAdjacentChapter(this, direction, media(this));
++    }
++
++    /* Seeks are accumulated and committed after a short idle rather than applied per press. On the
++       progressive path every seek is a full Plex transcode restart (see xbox-bridge.js's
++       reloadXboxSource), so holding a trigger would otherwise fire a restart per repeat and thrash
++       the server - the exact orphaned-session problem the Phase 0 spikes ran into, but self-inflicted
++       and once per keypress. */
++    _queueNavSeek(deltaMs) {
++        const el = media(this);
++        if (!el) return;
++        const durationMs = (el.duration || 0) * 1000;
++        const fromMs = this._navSeekTargetMs != null ? this._navSeekTargetMs : (el.currentTime || 0) * 1000;
++        const target = Math.max(0, durationMs ? Math.min(fromMs + deltaMs, durationMs - 1000) : fromMs + deltaMs);
++        this._navSeekTargetMs = target;
++        /* Reflected immediately so the scrub bar tracks each press even though the actual seek is still
++           pending - otherwise the UI looks frozen for the whole coalescing window. */
++        this._session.lastTimeMs = Math.round(target);
++        clearTimeout(this._navSeekTimer);
++        this._navSeekTimer = setTimeout(() => {
++            const commitMs = this._navSeekTargetMs;
++            this._navSeekTargetMs = null;
++            if (commitMs != null && media(this)) media(this).currentTime = commitMs / 1000;
++        }, NAV_SEEK_COMMIT_MS);
++    }
++
++    _reloadSource(overrides) {
++        if (platformTag() === "xbox") {
++            return reloadXboxSource(this, overrides, (streamUrl, offsetMs) =>
++                buildPlaybackPayload(this, streamUrl, offsetMs)
++            );
++        }
+         return reloadWebSource(this, overrides);
+     }
+ 
+@@ -511,8 +766,8 @@ class StreamingPlayerController {
+     }
+ 
+     /* Used by web-fallback.js's <video> "ended" listener - advances to the next queued
+-       title exactly like the title-next button (chrome.js's seekToAdjacentTitle) when
+-       Auto-Play is on and one exists, falling back to the normal stop() otherwise.
++       title (episode-list.js's playQueuedTitle) when Auto-Play is on and one exists,
++       falling back to the normal stop() otherwise.
+        Android's native-bridge.js doesn't go through this: PlayerActivity's own
+        STATE_ENDED handler makes the same decision natively, before its own finish()
+        call, using its own SharedPreferences-persisted autoPlayEnabled flag - see that
+@@ -556,8 +811,8 @@ class StreamingPlayerController {
+         return buildLoadingSpinner(this, video);
+     }
+ 
+-    _buildCenterControls(video) {
+-        return buildCenterControls(this, video);
++    _buildFloatingPlayButton(video) {
++        return buildFloatingPlayButton(this, video);
+     }
+ 
+     _buildTransportBar(video) {
+@@ -602,19 +857,19 @@ class StreamingPlayerController {
+ 
+     async pause() {
+         if (!this._session) return;
+-        if (Capacitor.isNativePlatform() && Capacitor.getPlatform() === "android") {
+-            await pauseNative();
+-        } else if (this._videoEl) {
+-            this._videoEl.pause();
++        if (hasNativePlayer()) {
++            await (platformTag() === "xbox" ? pauseXbox() : pauseNative());
++        } else {
++            media(this)?.pause();
+         }
+     }
+ 
+     async resume() {
+         if (!this._session) return;
+-        if (Capacitor.isNativePlatform() && Capacitor.getPlatform() === "android") {
+-            await resumeNative();
+-        } else if (this._videoEl) {
+-            this._videoEl.play();
++        if (hasNativePlayer()) {
++            await (platformTag() === "xbox" ? resumeXbox() : resumeNative());
++        } else {
++            media(this)?.play();
+         }
+     }
+ 
+diff --git a/src/player/core/media-facade.js b/src/player/core/media-facade.js
+new file mode 100644
+index 0000000..32b071f
+--- /dev/null
++++ b/src/player/core/media-facade.js
+@@ -0,0 +1,219 @@
++/* The <video>-shaped surface the player chrome talks to, so the chrome doesn't have to know
++   whether a real HTMLVideoElement or a native player is behind it.
++
++   On the web leg the facade IS the <video> element - it already satisfies this whole
++   surface natively, so setMediaFacade(controller, videoEl) in playWeb is the entire
++   registration and nothing about the web path changes. A native backend registers a
++   NativeMediaFacade instead (see below).
++
++   Deliberately NOT everything the code does with a <video>. Two kinds of use exist and only
++   one of them belongs here:
++
++     - Playback state - currentTime/duration/buffered/paused/volume/muted/playbackRate/
++       videoWidth/videoHeight, play()/pause(), and the media events. Every backend can
++       answer these, so the chrome reads them through media(controller).
++
++     - The real DOM element - .style (shader-pipeline's opacity:0, ambient-pipeline's
++       background, the zoom transform), setPointerCapture, clientWidth/clientHeight,
++       readyState/HAVE_CURRENT_DATA, and being handed to texImage2D/drawImage. None of that
++       can be faked, and on a native backend each has a native equivalent instead (a
++       RenderTransform for zoom, a video effect in the decode pipeline for shaders/ambient).
++       Those keep using controller._videoEl directly and simply don't run off the web leg,
++       which is already how the Android path behaves. */
++
++export function setMediaFacade(controller, facade) {
++    controller._media = facade || null;
++}
++
++export function media(controller) {
++    return controller._media || null;
++}
++
++/* Everything a native backend has to supply. Positions/durations cross the bridge in
++   milliseconds (matching the existing native "progress" event payload); this class is what
++   converts to the seconds-based <video> property contract, so no chrome code has to care
++   which unit its backend speaks. */
++export class NativeMediaFacade extends EventTarget {
++    constructor({ seek, play, pause, setVolume, setMuted, setPlaybackRate, now } = {}) {
++        super();
++        this._seek = seek;
++        this._play = play;
++        this._pause = pause;
++        this._setVolume = setVolume;
++        this._setMuted = setMuted;
++        this._setPlaybackRate = setPlaybackRate;
++        this._now = now || (() => performance.now());
++
++        this._positionMs = 0;
++        this._positionAt = this._now();
++        this._durationMs = 0;
++        this._bufferedAheadMs = 0;
++        this._paused = false;
++        this._buffering = false;
++        this._volume = 1;
++        this._muted = false;
++        this._playbackRate = 1;
++        this.videoWidth = 0;
++        this.videoHeight = 0;
++    }
++
++    /* A native player reports position on its own cadence (~2-4 ticks/second, matching
++       Android's "progress" event), which is far too coarse for anything reading position
++       every frame - the subtitle renderer's rAF loop and the scrub bar would both visibly
++       step rather than move. So position is interpolated from the last report using
++       wall-clock elapsed time scaled by the playback rate, and snapped back to the truth on
++       every fresh report. Clamped to duration so a late tick can't read past the end. */
++    get currentTime() {
++        if (this._paused) return this._positionMs / 1000;
++        const elapsed = (this._now() - this._positionAt) * this._playbackRate;
++        const projected = this._positionMs + Math.max(0, elapsed);
++        const ceiling = this._durationMs || Infinity;
++        return Math.min(projected, ceiling) / 1000;
++    }
++
++    set currentTime(seconds) {
++        const positionMs = Math.max(0, seconds * 1000);
++        /* Applied locally before the bridge call resolves, so a scrub reads back the
++           position the user just asked for rather than snapping to the pre-seek value until
++           the next native report lands. */
++        this._setPosition(positionMs);
++        this._seek?.(positionMs);
++        this.dispatchEvent(new Event("timeupdate"));
++        /* chrome-controls.js's spinner shows on "seeking" and hides on "seeked"/"canplay",
++           so a backend MUST call applySeeked() once the seek completes or the spinner stays
++           up for the rest of the session. */
++        this.dispatchEvent(new Event("seeking"));
++    }
++
++    get duration() {
++        return this._durationMs ? this._durationMs / 1000 : NaN;
++    }
++
++    get paused() {
++        return this._paused;
++    }
++
++    /* One range covering what's buffered ahead of the playhead. A native player reports a
++       single "seconds buffered ahead" figure, not the full range list a <video> exposes,
++       so this can't reconstruct earlier ranges left behind by a seek - which is fine for
++       the only two consumers (the scrub bar's buffered fill and the stats overlay's buffer
++       health), both of which only ever look at the range containing currentTime. */
++    get buffered() {
++        const start = this.currentTime;
++        const end = start + this._bufferedAheadMs / 1000;
++        const length = this._bufferedAheadMs > 0 ? 1 : 0;
++        return {
++            length,
++            start: (i) => (i === 0 && length ? start : 0),
++            end: (i) => (i === 0 && length ? end : 0),
++        };
++    }
++
++    get volume() {
++        return this._volume;
++    }
++
++    set volume(value) {
++        this._volume = Math.min(1, Math.max(0, value));
++        this._setVolume?.(this._volume);
++        this.dispatchEvent(new Event("volumechange"));
++    }
++
++    get muted() {
++        return this._muted;
++    }
++
++    set muted(value) {
++        this._muted = !!value;
++        this._setMuted?.(this._muted);
++        this.dispatchEvent(new Event("volumechange"));
++    }
++
++    get playbackRate() {
++        return this._playbackRate;
++    }
++
++    set playbackRate(value) {
++        /* Resync first: the elapsed time since the last report was accumulating at the OLD
++           rate, so folding it in before the rate changes keeps the interpolation honest
++           instead of retroactively rescaling it. */
++        this._setPosition(this.currentTime * 1000);
++        this._playbackRate = value;
++        this._setPlaybackRate?.(value);
++    }
++
++    play() {
++        this._play?.();
++    }
++
++    pause() {
++        this._pause?.();
++    }
++
++    _setPosition(positionMs) {
++        this._positionMs = positionMs;
++        this._positionAt = this._now();
++    }
++
++    /* --- Ingest, called by the bridge as native events arrive --- */
++
++    applyProgress({ positionMs, durationMs, bufferedMs } = {}) {
++        if (positionMs != null) this._setPosition(positionMs);
++        const bufferedChanged = bufferedMs != null && bufferedMs !== this._bufferedAheadMs;
++        if (bufferedMs != null) this._bufferedAheadMs = bufferedMs;
++        if (durationMs != null && durationMs !== this._durationMs) {
++            this._durationMs = durationMs;
++            this.dispatchEvent(new Event("durationchange"));
++        }
++        this.dispatchEvent(new Event("timeupdate"));
++        /* What repaints the scrub bar's buffered fill (chrome-transport.js's syncSeekFill) -
++           only fired on an actual change, since the buffered figure is otherwise steady
++           across ticks during healthy playback. */
++        if (bufferedChanged) this.dispatchEvent(new Event("progress"));
++    }
++
++    /* Drives the buffering spinner (chrome-controls.js's buildLoadingSpinner). Edge-
++       triggered for the same reason applyPaused is: a backend reporting playback state on
++       every tick would otherwise show/hide the spinner continuously. */
++    applyBuffering(buffering) {
++        const next = !!buffering;
++        if (next === this._buffering) return;
++        this._buffering = next;
++        this.dispatchEvent(new Event(next ? "waiting" : "playing"));
++    }
++
++    /* Completes the seek the currentTime setter started - hides the spinner. */
++    applySeeked(positionMs) {
++        if (positionMs != null) this._setPosition(positionMs);
++        this.dispatchEvent(new Event("seeked"));
++        this.dispatchEvent(new Event("canplay"));
++    }
++
++    applyMetadata({ videoWidth, videoHeight, durationMs } = {}) {
++        if (videoWidth != null) this.videoWidth = videoWidth;
++        if (videoHeight != null) this.videoHeight = videoHeight;
++        if (durationMs != null) this._durationMs = durationMs;
++        this.dispatchEvent(new Event("loadedmetadata"));
++    }
++
++    /* Fires "play"/"pause" only on an actual transition - the chrome's handlers flip
++       session.state and re-render the play/pause glyph, and a native player that reports
++       state on every tick would otherwise churn both continuously. */
++    applyPaused(paused) {
++        const next = !!paused;
++        if (next === this._paused) return;
++        /* Fold the interpolated position in before freezing, so pausing doesn't rewind to
++           whatever the last native report said. */
++        this._setPosition(this.currentTime * 1000);
++        this._paused = next;
++        this.dispatchEvent(new Event(next ? "pause" : "play"));
++    }
++
++    applyEnded() {
++        this.dispatchEvent(new Event("ended"));
++    }
++
++    applyError() {
++        this.dispatchEvent(new Event("error"));
++    }
++}
+diff --git a/src/player/core/platform.js b/src/player/core/platform.js
+new file mode 100644
+index 0000000..594f7a4
+--- /dev/null
++++ b/src/player/core/platform.js
+@@ -0,0 +1,92 @@
++import { Capacitor } from "@capacitor/core";
++
++/* The one place that answers "which player backend is this build talking to". Before this
++   existed, `Capacitor.isNativePlatform() && Capacitor.getPlatform() === "android"` was
++   copy-pasted at ten call sites across plex-player.js and src/player/ui/, which is exactly
++   the shape that produces a third divergent code path the moment a second native platform
++   (the Xbox WebView2 shell) gets its own bridge. Everything that used to test that
++   expression inline now calls hasNativePlayer()/platformTag() instead.
++
++   @capacitor/core is a bundled npm import, not a native-injected global, so `Capacitor`
++   and `window.Capacitor` are defined even in a plain PWA or inside WebView2 - it just
++   resolves to platform "web" there, since WebView2 injects neither `androidBridge` nor
++   `webkit.messageHandlers.bridge`. That's why Xbox needs its own marker rather than
++   anything Capacitor can tell us. */
++
++/* Set by the UWP shell via CoreWebView2.AddScriptToExecuteOnDocumentCreatedAsync, so it's
++   present before any app script evaluates. Deliberately a private marker rather than
++   window.CapacitorCustomPlatform: setting that would flip Capacitor.isNativePlatform() to
++   true app-wide, silently changing branches that only ever meant "Android". */
++const XBOX_MARKER = "__prismXboxNativePlayer";
++
++/* "android" | "xbox" | "web" (or a raw Capacitor platform id for anything else).
++
++   This is platform IDENTITY only - deliberately separate from hasNativePlayer() below.
++   Identity is what Plex-facing decisions key off (which client capabilities to advertise,
++   what X-Plex-Platform to send), and those are useful on Xbox well before Xbox has a native
++   player. Deriving playback routing from identity instead would mean the first thing that
++   wants to identify as Xbox silently breaks playback. */
++export function platformTag() {
++    if (typeof window !== "undefined" && window[XBOX_MARKER]) return "xbox";
++    return Capacitor.getPlatform();
++}
++
++/* The platforms whose native playback bridge actually exists and is wired up. Add "xbox"
++   here - and only here - when its bridge lands; nothing else needs to change.
++
++   Kept as an explicit list rather than derived from platformTag() because "this platform is
++   Xbox" and "this build can hand playback to a native player" are genuinely different facts.
++   Conflating them is a trap: the Phase 0 spike build is a real case of a shell that has a
++   partial native player and legitimately wants to be identified as Xbox, while playback still
++   has to go through the <video>+hls.js path. If identity implied routing, that build would
++   dispatch to native-bridge.js's Capacitor "NativePlayer" plugin, which does not exist on
++   Xbox, and every play() would fail with "not implemented on web". */
++const PLATFORMS_WITH_NATIVE_PLAYER = ["android", "xbox"];
++
++/* True when a native playback bridge is present and should be used instead of the
++   <video>+hls.js fallback in web-fallback.js. */
++export function hasNativePlayer() {
++    return PLATFORMS_WITH_NATIVE_PLAYER.includes(platformTag());
++}
++
++/* X-Plex-Platform for the transcode/decision URLs (see core/stream-url.js).
++
++   This used to be `Capacitor.isNativePlatform() ? "Android" : "Chrome"` inline in
++   plex-player.js's _buildStreamUrl/_buildDecisionUrl - note it tested only
++   isNativePlatform(), not the OS, so ANY future native platform would have started
++   claiming to be Android to Plex's Media Decision Engine. Keyed off the real tag now.
++
++   Xbox deliberately still reports "Chrome": X-Plex-Platform is one of the inputs Plex
++   picks a server-side client profile from, and a profile chosen for a real Xbox client
++   could override the explicit X-Plex-Client-Capabilities this codebase sends. Changing it
++   belongs with the HEVC/HDR capability work, where the two can be verified together
++   against a real server, not as a side effect of this refactor. */
++export function plexPlatformTag() {
++    return platformTag() === "android" ? "Android" : "Chrome";
++}
++
++/* Whether this platform should ask Plex for progressive output (protocol=http, start.mp4) instead of
++   HLS. Xbox must: HLS is measurably broken there, for two independent reasons documented in
++   core/stream-url.js and docs/xbox-native-hdr-player/05-phase0-spike-results.md. Everything else
++   keeps using HLS, which hls.js and ExoPlayer both handle well.
++
++   Note this is keyed off platform IDENTITY, not hasNativePlayer() - the transport Plex is asked for
++   and whether a native player exists are separate questions. */
++export function usesProgressiveStream() {
++    return platformTag() === "xbox";
++}
++
++/* Whether this platform can actually put HDR on screen, which is what decides whether HDR is
++   advertised to Plex at all (see core/stream-url.js's clientCapabilities).
++
++   Xbox only. Its native MediaFoundation pipeline passes HDR10 through and the console's HDMI output
++   can be switched to it - documented by Microsoft and confirmed on hardware. The other legs cannot:
++   a browser has no way to present HDR or even read a <video>'s colour space without WebCodecs, and
++   Android's leg deliberately scopes HDR to "skip the SDR shader passes on HDR content" rather than
++   real passthrough.
++
++   Claiming HDR support from a player that cannot present it is worse than not claiming it: Plex would
++   stop tone-mapping and hand over PQ frames to be displayed as washed-out SDR. */
++export function supportsHdr() {
++    return platformTag() === "xbox";
++}
+diff --git a/src/player/core/session-reload.js b/src/player/core/session-reload.js
+new file mode 100644
+index 0000000..a12dbf2
+--- /dev/null
++++ b/src/player/core/session-reload.js
+@@ -0,0 +1,116 @@
++import { media } from "./media-facade.js";
++import { notifyReload, updateAbrMonitor } from "./abr.js";
++
++/* Restarting a Plex transcode session, minus the part that differs per platform.
++
++   Plex bakes the version, bitrate cap, audio selection AND start offset into a transcode session at
++   creation, so changing any of them means re-requesting the stream. Everything about how to do that
++   correctly against a real server was learned the hard way (see the comments inline - each one is a
++   separately-confirmed failure), and none of it is platform-specific: only the final "hand the new URL
++   to the player" step is. So that step is a callback, and this function is shared.
++
++   The alternative was a second copy of this sequence for the Xbox path, which would have meant two
++   places to keep five non-obvious Plex behaviours correct. That is exactly the divergence this
++   project's plan set out to avoid.
++
++   `rebuild(streamUrl, offsetMs)` is called last, after the decision call has been given its chance. */
++export function reloadTranscodeSession(controller, overrides = {}, rebuild) {
++    const s = controller._session;
++    if (!s || typeof rebuild !== "function") return;
++
++    /* Resume position. An explicit startOffsetMs override is a seek (the caller wants a specific
++       position); without one, resume wherever playback currently is. Read through the media facade
++       rather than a <video> element so this works for a native backend too. */
++    const offsetMs =
++        overrides.startOffsetMs != null
++            ? Math.max(0, Math.round(overrides.startOffsetMs))
++            : Math.round((media(controller)?.currentTime || 0) * 1000);
++
++    const nextMediaIndex = overrides.mediaIndex ?? s.mediaIndex;
++    /* qualityCapKbps needs its own `in` check (unlike the others): null is a valid explicit override
++       (Quality Cap's "Original" option), so `??`-against-undefined would wrongly treat "clear the cap"
++       the same as "don't touch it". */
++    const nextQualityCapKbps = "qualityCapKbps" in overrides ? overrides.qualityCapKbps : s.qualityCapKbps;
++    const nextAudioStreamID = overrides.audioStreamID ?? s.audioStreamId;
++    const oldSessionId = s.transcodeSessionId;
++    s.mediaIndex = nextMediaIndex;
++    s.qualityCapKbps = nextQualityCapKbps;
++    s.audioStreamId = nextAudioStreamID;
++
++    /* Generated once up front, not inside the rebuild - askDecision below needs the exact same session
++       id /start will use (see buildDecisionUrl's own comment: a /decision call only reliably predicts
++       what /start does when every param, session id included, matches). */
++    const sessionId = crypto.randomUUID();
++    const urlOpts = {
++        plexUrl: s.plexUrl,
++        plexToken: s.plexToken,
++        key: s.key,
++        sessionId,
++        startOffsetMs: offsetMs,
++        mediaIndex: nextMediaIndex,
++        qualityCapKbps: nextQualityCapKbps,
++        audioStreamID: nextAudioStreamID,
++    };
++
++    /* audioStreamID on the transcode start URL alone doesn't reliably make Plex actually mux the
++       requested track - confirmed against a real server, it kept playing the previously-selected audio
++       regardless of this param. The verified mechanism (same one python-plexapi's own users landed on)
++       is marking the stream "selected" on the Part first via
++       PUT /library/parts/<id>?audioStreamID=...&allParts=1 - the transcode decision then honors
++       whatever's currently selected there. Only done when actually switching audio (not on a
++       mediaIndex/qualityCap/seek-only reload) and only when a partId was resolved at play() time. */
++    const selectAudio =
++        overrides.audioStreamID != null && s.partId
++            ? (() => {
++                  const putUrl = new URL(`${s.plexUrl}/library/parts/${s.partId}`);
++                  putUrl.searchParams.set("audioStreamID", String(overrides.audioStreamID));
++                  putUrl.searchParams.set("allParts", "1");
++                  putUrl.searchParams.set("X-Plex-Token", s.plexToken);
++                  return fetch(putUrl, { method: "PUT" }).catch(() => {});
++              })()
++            : Promise.resolve();
++
++    /* A new `session` id alone isn't enough either - confirmed against a real server, an in-place
++       reload kept getting served the OLD, still-warm transcode session's audio selection even with a
++       fresh session id and a successful Part-selection PUT both in place, and only actually reflected
++       the switch once the old session had had time to expire on its own (e.g. a full stop()+replay).
++       Explicitly stopping it here makes the switch immediate instead of leaving it to Plex's own
++       idle-timeout.
++
++       This also matters for server load, not just correctness: an abandoned session leaves an ffmpeg
++       process transcoding on the server. Confirmed on real hardware during the Xbox spikes, where
++       orphaned sessions starved the player badly enough to fail it outright. */
++    const stopOldSession = oldSessionId
++        ? fetch(
++              `${s.plexUrl}/video/:/transcode/universal/stop?session=${encodeURIComponent(oldSessionId)}` +
++                  `&X-Plex-Token=${encodeURIComponent(s.plexToken)}`
++          ).catch(() => {})
++        : Promise.resolve();
++
++    /* The actual, whole reason a switch never took effect until backing out and back in - confirmed
++       against a real server (raspi-server), reading Plex's own session state via /status/sessions
++       mid-switch. Everything above this comment (the Part-selection PUT, the explicit old-session stop,
++       a brand-new session id) was already correct and already being done, and STILL wasn't enough on
++       its own: a /start request alone - even with all of that in place - kept transcoding the previous
++       audio selection. Only once a /video/:/transcode/universal/decision call went out FIRST, with the
++       exact same params /start was about to use (see buildDecisionUrl's own comment), did the Media
++       Decision Engine actually re-evaluate and the following /start honor the new selection
++       immediately. Best-effort like the requests above it - a failed decision call shouldn't block the
++       /start attempt that follows, it just means this particular attempt is back to relying on Plex's
++       own eventual re-evaluation. */
++    const askDecision = () => fetch(controller._buildDecisionUrl(urlOpts)).catch(() => {});
++
++    const finish = () => {
++        const streamUrl = controller._buildStreamUrl(urlOpts);
++        s.transcodeSessionId = sessionId;
++        rebuild(streamUrl, offsetMs);
++        /* A fresh transcode session means whatever Auto Quality streak/cooldown state was building
++           against the old one no longer applies - see core/abr.js's notifyReload. Also re-checks
++           whether the monitor should be running at all, since the rebuild may have replaced the
++           bandwidth source. */
++        notifyReload(controller);
++        updateAbrMonitor(controller);
++    };
++
++    Promise.all([selectAudio, stopOldSession]).then(askDecision, askDecision).then(finish, finish);
++}
+diff --git a/src/player/ui/chrome-transport.js b/src/player/ui/chrome-transport.js
+index 6dcfcce..36b5fa4 100644
+--- a/src/player/ui/chrome-transport.js
++++ b/src/player/ui/chrome-transport.js
+@@ -1,130 +1,73 @@
+-import { registerControlButton, showControls, scheduleHideControls } from "./chrome-controls.js";
+-import { openAudioSubtitlesOverlay } from "./chrome-subtitles.js";
+-import { VOLUME_STORAGE_KEY, volumeIconMarkup, seekIconMarkup, skipIconMarkup, fullscreenIconMarkup, audioSubtitlesIconMarkup } from "./shared.js";
++import { registerControlButton } from "./chrome-controls.js";
++import { PLAYER_FOCUSABLE_CLASS } from "./shared.js";
+ import { loadBifIndex, findNearestBifFrame, fetchBifFrameUrl } from "../core/bif.js";
+ import { plexAssetUrl } from "../core/plex-asset-url.js";
+ import { fetchQueuedTitle } from "../core/title-fetch.js";
+ 
+-/* Bottom transport bar: scrub bar/chapter segments/BIF scrub-preview, play/pause +
+-   chapter/title nav (buildCenterControls, called separately - see web-fallback.js), and
+-   the volume/audio-subtitles/fullscreen icon row. Takes the StreamingPlayerController
+-   instance as an explicit first argument (see native-bridge.js/shader-pipeline.js for why)
+-   rather than owning independent state - the idle-fade timer and session state are shared
+-   with the rest of the player chrome, not cleanly separable per element. */
+-
+-/* Play/pause flanked by back-5s/forward-5s seek buttons (matching HBO's own transport
+-   row) with chapter nav further out on each side, only when the session actually has
+-   chapters - same "never an empty/dead affordance" rule the hamburger's Chapters entry
+-   follows - and title nav (prev/next episode, playlist/collection item, or just "play
+-   this movie from the start") further out still. Title nav is always shown, unlike
+-   chapter nav: prev is always a real action (restart, even with no queue at all) and
+-   next disables itself rather than disappearing when there's nothing queued after this
+-   title (see makeTitleNavButton) - a movie played on its own still gets both buttons,
+-   just with next greyed out. Appended into the bottom transport bar's own center cell
+-   (built first, see buildTransportBar) rather than floating mid-screen, matching a
+-   premium-streaming-app transport row instead of a YouTube-style center overlay. */
+-export function buildCenterControls(controller, video) {
+-    const row = controller._centerControlsSlot;
+-    if (!row) return null;
+-
+-    row.appendChild(makeTitleNavButton(controller, "prev", video));
+-
+-    const chapters = controller._session?.chapters || [];
+-    if (chapters.length) row.appendChild(makeChapterNavButton(controller, "prev", video));
+-
+-    row.appendChild(makeSeekButton(controller, "back", video));
+-
+-    const playBtn = document.createElement("button");
+-    playBtn.type = "button";
+-    playBtn.setAttribute("aria-label", "Play/Pause");
+-    Object.assign(playBtn.style, {
+-        width: "32px",
+-        height: "32px",
++/* Bottom transport bar (title/subtitle + remaining time, scrub bar/chapter segments/BIF
++   scrub-preview) and the floating center play/pause button, mirroring the Android native
++   player's layout (see PlayerUiHelper.java): a single large play/pause control floating
++   over the video, a scrub bar pinned to the bottom, nothing else in either. Chapter nav,
++   title nav, the 5s seek buttons, volume, Audio & Subtitles and fullscreen used to live
++   here too - all removed rather than ported, since Android's own chrome doesn't have them
++   either (volume/fullscreen have no Android equivalent to begin with; chapter/title/5s nav
++   is still reachable - chapters via the More menu's Chapters row and Xbox's bumpers/
++   triggers (see plex-player.js's _handlePlayerNavCommand), any queued title via the
++   Episodes overlay - just not as dedicated transport-bar buttons; Audio & Subtitles moved
++   into the More menu, see chrome-menu.js). Takes the StreamingPlayerController instance as
++   an explicit first argument (see native-bridge.js/shader-pipeline.js for why) rather than
++   owning independent state - the idle-fade timer and session state are shared with the
++   rest of the player chrome, not cleanly separable per element. */
++
++/* The one on-screen playback control this chrome has left, centered over the video rather
++   than living in the transport bar - matches Android's buildFloatingPlaybackControls (a
++   60dp play/pause, title-prev/next only on non-touch devices - dropped here per the same
++   "no title nav buttons" decision as the transport bar's own header comment above). */
++export function buildFloatingPlayButton(controller, video) {
++    const btn = document.createElement("button");
++    btn.type = "button";
++    btn.classList.add(PLAYER_FOCUSABLE_CLASS);
++    btn.setAttribute("aria-label", "Play/Pause");
++    Object.assign(btn.style, {
++        position: "fixed",
++        top: "50%",
++        left: "50%",
++        transform: "translate(-50%, -50%)",
++        zIndex: "10001",
++        width: "76px",
++        height: "76px",
++        borderRadius: "50%",
+         display: "flex",
+         alignItems: "center",
+         justifyContent: "center",
+-        borderRadius: "0",
+         border: "none",
+-        background: "transparent",
++        background: "rgba(20,20,20,0.4)",
+         color: "#fff",
+-        fontSize: "22px",
++        fontSize: "32px",
+         cursor: "pointer",
+         padding: "0",
+     });
+     const syncPlayIcon = () => {
+-        playBtn.textContent = video.paused ? "▶" : "❙❙";
++        btn.textContent = video.paused ? "▶" : "❙❙";
+     };
+     syncPlayIcon();
+-    playBtn.addEventListener("click", () => {
++    btn.addEventListener("click", () => {
+         if (video.paused) video.play();
+         else video.pause();
+     });
+     video.addEventListener("play", syncPlayIcon);
+     video.addEventListener("pause", syncPlayIcon);
+-    row.appendChild(playBtn);
+-
+-    row.appendChild(makeSeekButton(controller, "forward", video));
+-
+-    if (chapters.length) row.appendChild(makeChapterNavButton(controller, "next", video));
+-    row.appendChild(makeTitleNavButton(controller, "next", video));
+-
+-    return row;
+-}
+-
+-function makeSeekButton(controller, direction, video) {
+-    const btn = document.createElement("button");
+-    btn.type = "button";
+-    btn.setAttribute("aria-label", direction === "back" ? "Back 5 seconds" : "Forward 5 seconds");
+-    btn.innerHTML = seekIconMarkup(direction);
+-    Object.assign(btn.style, {
+-        width: "34px",
+-        height: "34px",
+-        display: "flex",
+-        alignItems: "center",
+-        justifyContent: "center",
+-        borderRadius: "0",
+-        border: "none",
+-        background: "transparent",
+-        color: "#fff",
+-        cursor: "pointer",
+-        padding: "0",
+-    });
+-    btn.addEventListener("click", () => {
+-        if (!video.duration) {
+-            video.currentTime = Math.max(0, (video.currentTime || 0) + (direction === "back" ? -5 : 5));
+-            return;
+-        }
+-        video.currentTime = Math.min(video.duration, Math.max(0, video.currentTime + (direction === "back" ? -5 : 5)));
+-    });
+-    return btn;
+-}
+-
+-function makeChapterNavButton(controller, direction, video) {
+-    const btn = document.createElement("button");
+-    btn.type = "button";
+-    btn.setAttribute("aria-label", direction === "prev" ? "Previous chapter" : "Next chapter");
+-    btn.innerHTML = skipIconMarkup(direction, { double: true });
+-    Object.assign(btn.style, {
+-        width: "26px",
+-        height: "26px",
+-        display: "flex",
+-        alignItems: "center",
+-        justifyContent: "center",
+-        borderRadius: "0",
+-        border: "none",
+-        background: "transparent",
+-        color: "#fff",
+-        cursor: "pointer",
+-        padding: "0",
+-    });
+-    btn.addEventListener("click", () => seekToAdjacentChapter(controller, direction, video));
++    document.body.appendChild(btn);
++    registerControlButton(controller, btn, { anchor: false });
+     return btn;
+ }
+ 
+ /* "Previous" restarts the current chapter once more than a few seconds into it (rather
+    than always jumping two chapters at once) - the same convention as prev-track buttons
+-   on physical media remotes. */
+-function seekToAdjacentChapter(controller, direction, video) {
++   on physical media remotes. No on-screen button calls this anymore (see this file's own
++   header comment) - it's reached via the Xbox bumpers (plex-player.js's
++   _handlePlayerNavCommand) and, for non-gamepad input, the More menu's Chapters overlay. */
++export function seekToAdjacentChapter(controller, direction, video) {
+     const chapters = controller._session?.chapters || [];
+     if (!chapters.length) return;
+     const position = video.currentTime * 1000;
+@@ -148,70 +91,6 @@ function seekToAdjacentChapter(controller, direction, video) {
+     }
+ }
+ 
+-const TITLE_PREV_RESTART_MS = 10000;
+-
+-/* Always rendered, unlike chapter nav - "restart this title from the beginning" is a
+-   valid action whether or not there's a queue at all (a standalone movie included), so
+-   prev is never disabled. Next is the only one that ever greys out: skipping forward has
+-   no equivalent "restart" fallback, so it's a real dead end whenever there's no next
+-   queued title (see plex-player.js's queueRatingKeys/queueIndex) - shown disabled rather
+-   than hidden so a movie's transport row still reads as symmetric with an episode's. */
+-function makeTitleNavButton(controller, direction, video) {
+-    const session = controller._session;
+-    const queue = session?.queueRatingKeys || [];
+-    const index = session?.queueIndex ?? -1;
+-    const enabled = direction === "prev" || (index >= 0 && index < queue.length - 1);
+-
+-    const btn = document.createElement("button");
+-    btn.type = "button";
+-    btn.setAttribute("aria-label", direction === "prev" ? "Previous title" : "Next title");
+-    btn.innerHTML = skipIconMarkup(direction, { double: false });
+-    Object.assign(btn.style, {
+-        width: "26px",
+-        height: "26px",
+-        display: "flex",
+-        alignItems: "center",
+-        justifyContent: "center",
+-        borderRadius: "0",
+-        border: "none",
+-        background: "transparent",
+-        color: enabled ? "#fff" : "#666",
+-        cursor: enabled ? "pointer" : "default",
+-        padding: "0",
+-    });
+-    btn.disabled = !enabled;
+-    if (enabled) btn.addEventListener("click", () => seekToAdjacentTitle(controller, direction, video));
+-    return btn;
+-}
+-
+-/* "Previous" restarts the current title once more than a few seconds into it, jumping to
+-   the actual previous queued title only when one exists and playback is still near the
+-   start - same convention as seekToAdjacentChapter above, except prev is always enabled
+-   here (see makeTitleNavButton), so a title with no previous queued entry (or no queue at
+-   all - any standalone movie) still restarts from 0 rather than doing nothing. "Next"
+-   always jumps forward - there's no equivalent restart concept for it, so it's simply
+-   disabled when there's nowhere to jump to. Both directions that do jump fetch the
+-   adjacent title's fresh metadata (the queue only ever carries ratingKeys) and hand off
+-   to the controller's own mid-session _switchTitle rather than a cold-start play(), so
+-   the pushed history entry and hero-trailer open/close events stay scoped to the whole
+-   player, not each title. */
+-async function seekToAdjacentTitle(controller, direction, video) {
+-    const session = controller._session;
+-    const queue = session?.queueRatingKeys || [];
+-    const index = session?.queueIndex ?? -1;
+-    if (direction === "next") {
+-        if (index < 0 || index >= queue.length - 1) return;
+-        await playQueuedTitle(controller, queue, index + 1);
+-        return;
+-    }
+-    const position = (video.currentTime || 0) * 1000;
+-    if (index > 0 && position <= TITLE_PREV_RESTART_MS) {
+-        await playQueuedTitle(controller, queue, index - 1);
+-        return;
+-    }
+-    video.currentTime = 0;
+-}
+-
+ export async function playQueuedTitle(controller, queue, newIndex) {
+     const session = controller._session;
+     if (!session) return;
+@@ -228,8 +107,29 @@ export async function playQueuedTitle(controller, queue, newIndex) {
+             queueIndex: newIndex,
+         });
+     } catch (e) {
+-        // best-effort - the title-nav button simply won't respond if this fails
++        // best-effort - the episode-list overlay's card simply won't respond if this fails
++    }
++}
++
++/* Repaints the transport bar's title/subtitle from whatever controller._session currently is -
++   called once at buildTransportBar's own initial mount, and again by _switchTitleNative
++   (plex-player.js) after an in-place title switch, since that path never rebuilds this chrome. */
++export function updateTransportBarInfo(controller) {
++    const titleLine = controller._transportTitleEl;
++    const subLine = controller._transportSubtitleEl;
++    if (!titleLine || !subLine) return;
++    const session = controller._session;
++    titleLine.textContent = session?.title || "";
++
++    const subtitleParts = [];
++    if (session?.seasonNumber != null && session?.episodeNumber != null) {
++        if (session?.episodeTitle) subtitleParts.push(session.episodeTitle);
++        subtitleParts.push(`S${session.seasonNumber} E${session.episodeNumber}`);
++    } else if (session?.year) {
++        subtitleParts.push(String(session.year));
+     }
++    subLine.textContent = subtitleParts.join("  •  ");
++    subLine.style.display = subtitleParts.length ? "" : "none";
+ }
+ 
+ export function formatTime(seconds) {
+@@ -349,28 +249,26 @@ export function buildTransportBar(controller, video) {
+     const infoRow = document.createElement("div");
+     Object.assign(infoRow.style, { display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: "16px" });
+ 
+-    const session = controller._session;
+     const titleBlock = document.createElement("div");
+     const titleLine = document.createElement("div");
+-    titleLine.textContent = session?.title || "";
+     Object.assign(titleLine.style, { color: "#fff", fontSize: "19px", fontWeight: "700", fontFamily: '"Roboto", sans-serif', lineHeight: "1.3" });
+     titleBlock.appendChild(titleLine);
+ 
+-    const subtitleParts = [];
+-    if (session?.seasonNumber != null && session?.episodeNumber != null) {
+-        if (session?.episodeTitle) subtitleParts.push(session.episodeTitle);
+-        subtitleParts.push(`S${session.seasonNumber} E${session.episodeNumber}`);
+-    } else if (session?.year) {
+-        subtitleParts.push(String(session.year));
+-    }
+-    if (subtitleParts.length) {
+-        const subLine = document.createElement("div");
+-        subLine.textContent = subtitleParts.join("  •  ");
+-        Object.assign(subLine.style, { color: "rgba(255,255,255,0.65)", fontSize: "13px", fontWeight: "600", fontFamily: '"Roboto", sans-serif', marginTop: "2px" });
+-        titleBlock.appendChild(subLine);
+-    }
++    const subLine = document.createElement("div");
++    Object.assign(subLine.style, { color: "rgba(255,255,255,0.65)", fontSize: "13px", fontWeight: "600", fontFamily: '"Roboto", sans-serif', marginTop: "2px", display: "none" });
++    titleBlock.appendChild(subLine);
+     infoRow.appendChild(titleBlock);
+ 
++    /* Kept on the controller (rather than only closed over here) so an in-place title switch that
++       doesn't remount this chrome - _switchTitleNative, which reuses the same DOM chrome across the
++       switch rather than tearing it down and rebuilding it the way the <video>+hls.js fallback's
++       _beginSession does (see plex-player.js's _switchTitle) - can still repaint this text for the new
++       session. Without this, the bar kept showing whichever title was on screen when it was first
++       mounted. */
++    controller._transportTitleEl = titleLine;
++    controller._transportSubtitleEl = subLine;
++    updateTransportBarInfo(controller);
++
+     const remainingEl = document.createElement("span");
+     remainingEl.textContent = "-0:00";
+     Object.assign(remainingEl.style, { flex: "0 0 auto", color: "rgba(255,255,255,0.75)", fontSize: "13px", fontFamily: '"Roboto", sans-serif', fontVariantNumeric: "tabular-nums" });
+@@ -520,17 +418,17 @@ export function buildTransportBar(controller, video) {
+        no image, same "never worse than today" fallback the segmented track uses. */
+     const bifUrl = plexAssetUrl(controller._session, controller._session?.bifIndexPath);
+     let bifIndex = null;
+-    let lastHoverClientX = null;
++    let lastPreviewFraction = null;
+     if (bifUrl) {
+         loadBifIndex(bifUrl).then((index) => {
+             bifIndex = index;
+             controller._bifIndex = index;
+             /* The index takes a couple of Range round-trips to load - if the user was
+-               already hovering/dragging and had stopped moving the pointer before it
+-               resolved, nothing would otherwise ever retry the frame lookup for that
+-               position (only pointerenter/pointermove call showPreview, and a
+-               stationary pointer fires neither). */
+-            if (index && lastHoverClientX != null) showPreview(lastHoverClientX);
++               already hovering/dragging (or gamepad-scrubbing) and had stopped moving
++               before it resolved, nothing would otherwise ever retry the frame lookup
++               for that position (only pointer movement / setPreview calls
++               showPreviewAtFraction, and staying still fires neither). */
++            if (index && lastPreviewFraction != null) showPreviewAtFraction(lastPreviewFraction);
+         });
+     }
+ 
+@@ -572,46 +470,49 @@ export function buildTransportBar(controller, video) {
+ 
+     let previewLastTimeMs = null;
+     let previewRequestId = 0;
+-    const showPreview = (clientX) => {
++    /* Core preview repaint, keyed off a bare fraction-of-duration rather than a pointer
++       position - shared by pointer hover/drag (showPreview below, which derives the
++       fraction from clientX) and gamepad scrubbing (controller._transportScrub.setPreview,
++       which has no pointer at all and already knows its target time). */
++    const showPreviewAtFraction = (fraction) => {
+         if (!video.duration) return;
+-        const rect = seekWrap.getBoundingClientRect();
+-        const fraction = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));
++        lastPreviewFraction = fraction;
+         const timeMs = fraction * video.duration * 1000;
+ 
++        const rectWidth = seekWrap.getBoundingClientRect().width;
+         previewTooltip.style.display = "flex";
+         const tooltipHalfWidth = 80;
+-        previewTooltip.style.left = `${Math.min(rect.width - tooltipHalfWidth, Math.max(tooltipHalfWidth, fraction * rect.width))}px`;
++        previewTooltip.style.left = `${Math.min(rectWidth - tooltipHalfWidth, Math.max(tooltipHalfWidth, fraction * rectWidth))}px`;
+         previewTime.textContent = formatTime(timeMs / 1000);
+ 
+         /* Debounced to roughly one lookup per real second of video scrubbed past,
+-           rather than one per pointermove event - a fast drag across a long movie can
+-           fire dozens of move events a second, and each would otherwise trigger its
+-           own Range fetch for a frame the user never actually paused on. */
++           rather than one per pointermove/gamepad tick - a fast drag (or held stick)
++           across a long movie can fire dozens of updates a second, and each would
++           otherwise trigger its own Range fetch for a frame the user never actually
++           paused on. */
+         if (!bifIndex || (previewLastTimeMs != null && Math.abs(timeMs - previewLastTimeMs) < 1000)) return;
+         previewLastTimeMs = timeMs;
+         const frame = findNearestBifFrame(bifIndex, timeMs);
+         if (!frame) return;
+         const requestId = ++previewRequestId;
+         fetchBifFrameUrl(bifIndex, frame).then((url) => {
+-            if (requestId !== previewRequestId) return; // a newer hover position won the race
++            if (requestId !== previewRequestId) return; // a newer preview position won the race
+             previewImg.src = url;
+             previewImg.style.display = "block";
+         });
+     };
++    const showPreview = (clientX) => {
++        const rect = seekWrap.getBoundingClientRect();
++        showPreviewAtFraction(Math.min(1, Math.max(0, (clientX - rect.left) / rect.width)));
++    };
+     const hidePreview = () => {
+         previewTooltip.style.display = "none";
+         previewImg.style.display = "none";
+         previewLastTimeMs = null;
+-        lastHoverClientX = null;
++        lastPreviewFraction = null;
+     };
+-    seek.addEventListener("pointerenter", (e) => {
+-        lastHoverClientX = e.clientX;
+-        showPreview(e.clientX);
+-    });
+-    seek.addEventListener("pointermove", (e) => {
+-        lastHoverClientX = e.clientX;
+-        showPreview(e.clientX);
+-    });
++    seek.addEventListener("pointerenter", (e) => showPreview(e.clientX));
++    seek.addEventListener("pointermove", (e) => showPreview(e.clientX));
+     seek.addEventListener("pointerleave", () => {
+         if (!scrubbing) hidePreview();
+     });
+@@ -656,274 +557,33 @@ export function buildTransportBar(controller, video) {
+         syncSeekFill();
+     });
+ 
+-    const muteBtn = document.createElement("button");
+-    muteBtn.type = "button";
+-    Object.assign(muteBtn.style, {
+-        flex: "0 0 auto",
+-        width: "28px",
+-        height: "28px",
+-        display: "flex",
+-        alignItems: "center",
+-        justifyContent: "center",
+-        border: "none",
+-        background: "transparent",
+-        color: "#fff",
+-        cursor: "pointer",
+-        padding: "0",
+-    });
+-
+-    /* A floating panel above the mute icon - matches the volume-flyout convention most
+-       desktop/TV players use (drag up for louder) rather than a slider that permanently
+-       eats transport-bar space. Appended to document.body (not `bar`) so its `position:
+-       fixed` coordinates, computed off muteBtn's own rect in positionVolumePopout,
+-       aren't affected by the bar's own opacity/transform transitions. */
+-    const volumePopout = document.createElement("div");
+-    Object.assign(volumePopout.style, {
+-        position: "fixed",
+-        zIndex: "10002",
+-        background: "rgba(20,20,20,0.92)",
+-        borderRadius: "8px",
+-        padding: "14px 10px",
+-        boxShadow: "0 12px 32px rgba(0,0,0,0.5)",
+-        opacity: "0",
+-        transform: "translate(-50%, 8px)",
+-        transition: "opacity 0.15s ease, transform 0.15s ease",
+-        pointerEvents: "none",
+-    });
+-
+-    const volumeSlider = document.createElement("input");
+-    volumeSlider.type = "range";
+-    volumeSlider.className = "streaming-player-seek";
+-    volumeSlider.min = "0";
+-    volumeSlider.max = "100";
+-    Object.assign(volumeSlider.style, {
+-        /* writing-mode is the standards-based way to get a vertical range input - every
+-           target this app ships to (Chrome/Edge, Android WebView, Xbox WebView2) is
+-           Chromium-based and supports it. direction: rtl puts the minimum at the bottom
+-           and the maximum at the top, matching a physical volume slider. */
+-        writingMode: "vertical-lr",
+-        direction: "rtl",
+-        width: "6px",
+-        height: "90px",
+-        accentColor: "#e5a00d",
+-        cursor: "pointer",
+-    });
+-    volumePopout.appendChild(volumeSlider);
+-    document.body.appendChild(volumePopout);
+-    controller._volumePopoutEl = volumePopout;
+-
+-    const positionVolumePopout = () => {
+-        const rect = muteBtn.getBoundingClientRect();
+-        volumePopout.style.left = `${rect.left + rect.width / 2}px`;
+-        volumePopout.style.bottom = `${window.innerHeight - rect.top + 8}px`;
+-    };
+-    const showVolumePopout = () => {
+-        positionVolumePopout();
+-        volumePopout.style.opacity = "1";
+-        volumePopout.style.pointerEvents = "auto";
+-        volumePopout.style.transform = "translate(-50%, 0)";
+-    };
+-    /* sliderActive covers the duration of a drag - hideVolumePopout would otherwise fire
+-       mid-drag whenever the pointer momentarily leaves the (narrow) slider or popout
+-       bounds, yanking the control out from under the user's own gesture. */
+-    let sliderActive = false;
+-    let volumeHideTimer = null;
+-    const hideVolumePopout = () => {
+-        if (sliderActive) return;
+-        volumePopout.style.opacity = "0";
+-        volumePopout.style.pointerEvents = "none";
+-        volumePopout.style.transform = "translate(-50%, 8px)";
+-    };
+-    /* Debounced rather than immediate - moving the mouse from muteBtn up to the popout
+-       crosses a small real gap between two non-nested elements, and an immediate
+-       hide-on-leave would close the popout before the cursor arrives. */
+-    const scheduleHideVolumePopout = () => {
+-        clearTimeout(volumeHideTimer);
+-        volumeHideTimer = setTimeout(hideVolumePopout, 150);
+-    };
+-    muteBtn.addEventListener("mouseenter", () => {
+-        clearTimeout(volumeHideTimer);
+-        showVolumePopout();
+-    });
+-    muteBtn.addEventListener("mouseleave", scheduleHideVolumePopout);
+-    /* The popout sits outside the transport bar's own DOM box (position: fixed off
+-       document.body), so hovering it alone wouldn't otherwise count toward the bar's own
+-       idle-fade tracking (see registerControlButton) - mirrors that function's
+-       onEnter/onLeave exactly so the rest of the chrome doesn't fade out from under the
+-       popout while it's in use. */
+-    volumePopout.addEventListener("mouseenter", () => {
+-        clearTimeout(volumeHideTimer);
+-        controller._controlsHovering = true;
+-        clearTimeout(controller._controlsHideTimer);
+-        showControls(controller);
+-    });
+-    volumePopout.addEventListener("mouseleave", () => {
+-        scheduleHideVolumePopout();
+-        controller._controlsHovering = false;
+-        scheduleHideControls(controller);
+-    });
+-    volumeSlider.addEventListener("focus", showVolumePopout);
+-    volumeSlider.addEventListener("blur", scheduleHideVolumePopout);
+-    volumeSlider.addEventListener("pointerdown", () => {
+-        sliderActive = true;
+-    });
+-    const endSliderDrag = () => {
+-        sliderActive = false;
+-        scheduleHideVolumePopout();
+-    };
+-    volumeSlider.addEventListener("pointerup", endSliderDrag);
+-    volumeSlider.addEventListener("pointercancel", endSliderDrag);
+-
+-    /* video.volume is already set from the stored preference before this bar is built
+-       (see playWeb) - this only syncs the icon/slider to whatever that (or a later user
+-       change) actually is, never writes it. */
+-    const syncVolumeUi = () => {
+-        const level = video.muted ? 0 : video.volume;
+-        volumeSlider.value = String(Math.round(level * 100));
+-        muteBtn.innerHTML = volumeIconMarkup(level);
+-        muteBtn.setAttribute("aria-label", level <= 0 ? "Unmute" : "Mute");
+-    };
+-    syncVolumeUi();
+-
+-    muteBtn.addEventListener("click", () => {
+-        video.muted = !video.muted;
+-        syncVolumeUi();
+-    });
+-    volumeSlider.addEventListener("input", () => {
+-        const level = Number(volumeSlider.value) / 100;
+-        video.muted = false;
+-        video.volume = level;
+-        /* Only a non-zero level is worth remembering as "the last volume the user
+-           chose" - persisting 0 would make every future session open muted with no
+-           visible way to tell why. */
+-        if (level > 0) localStorage.setItem(VOLUME_STORAGE_KEY, String(level));
+-        syncVolumeUi();
+-    });
+-    video.addEventListener("volumechange", syncVolumeUi);
+-
+-    /* Not rendered at all when the host has no Fullscreen API (Xbox WebView2 already
+-       runs the whole shell fullscreen, with no chrome to hide) - same "never an empty/
+-       dead affordance" rule the hamburger's Chapters entry follows. */
+-    const fullscreenSupported = document.fullscreenEnabled || document.webkitFullscreenEnabled;
+-    let fullscreenBtn = null;
+-    if (fullscreenSupported) {
+-        fullscreenBtn = document.createElement("button");
+-        fullscreenBtn.type = "button";
+-        Object.assign(fullscreenBtn.style, {
+-            flex: "0 0 auto",
+-            width: "28px",
+-            height: "28px",
+-            display: "flex",
+-            alignItems: "center",
+-            justifyContent: "center",
+-            border: "none",
+-            background: "transparent",
+-            color: "#fff",
+-            cursor: "pointer",
+-            padding: "0",
+-        });
+-        const isFullscreen = () => !!(document.fullscreenElement || document.webkitFullscreenElement);
+-        const syncFullscreenUi = () => {
+-            const active = isFullscreen();
+-            fullscreenBtn.innerHTML = fullscreenIconMarkup(active);
+-            fullscreenBtn.setAttribute("aria-label", active ? "Exit fullscreen" : "Enter fullscreen");
+-        };
+-        syncFullscreenUi();
+-        fullscreenBtn.addEventListener("click", () => {
+-            if (isFullscreen()) {
+-                (document.exitFullscreen || document.webkitExitFullscreen).call(document);
+-            } else {
+-                const el = document.documentElement;
+-                (el.requestFullscreen || el.webkitRequestFullscreen).call(el);
++    /* Gamepad scrub-preview (Xbox left stick, see plex-player.js's _adjustScrub/
++       _commitScrub/_cancelScrub) - moves this same seek fill + BIF tooltip from a bare
++       target time, with no pointer involved and no seek applied until the caller commits.
++       Reuses the `scrubbing` flag pointer-drag already relies on so the timeupdate
++       listener above doesn't fight it either way. */
++    controller._transportScrub = {
++        setPreview(timeMs) {
++            if (!video.duration) return;
++            scrubbing = true;
++            const fraction = Math.min(1, Math.max(0, timeMs / (video.duration * 1000)));
++            seek.value = String(Math.round(fraction * 1000));
++            syncSeekFill();
++            syncRemaining(fraction * video.duration);
++            showPreviewAtFraction(fraction);
++        },
++        endPreview() {
++            scrubbing = false;
++            hidePreview();
++            if (video.duration) {
++                seek.value = String(Math.round((video.currentTime / video.duration) * 1000));
++                syncSeekFill();
++                syncRemaining(video.currentTime);
+             }
+-        });
+-        /* Listener lives on `document`, outside this bar's own DOM subtree, so it can't
+-           be cleaned up just by removing the bar (see teardownWeb's _controlButtons
+-           sweep) - stashed on the controller so teardownWeb can remove it explicitly,
+-           same reasoning as every other cross-cutting resource cleaned up there. */
+-        controller._fullscreenChangeHandler = syncFullscreenUi;
+-        document.addEventListener("fullscreenchange", syncFullscreenUi);
+-        document.addEventListener("webkitfullscreenchange", syncFullscreenUi);
+-    }
++        },
++    };
+ 
+     bar.appendChild(seekWrap);
+-
+-    /* Three-cell row: play/pause (+ chapter nav, when the session has chapters) always
+-       centered, mute pinned to the far right - filled in by buildCenterControls, called
+-       right after this (see web-fallback.js), via _centerControlsSlot rather than this
+-       function reaching into chapter/play-pause concerns itself. */
+-    const controlsRow = document.createElement("div");
+-    Object.assign(controlsRow.style, { display: "flex", alignItems: "center" });
+-    const leftCell = document.createElement("div");
+-    Object.assign(leftCell.style, { flex: "1 1 0", display: "flex", alignItems: "center" });
+-    /* Text label standing in for the old standalone Episodes icon button (top-right
+-       corner) - same "Episodes" vs "Up Next" wording episode-list.js's own overlay
+-       heading already uses (seasonNumber present means a TV episode with siblings to
+-       browse; its absence means a movie/collection queue, where "next" is the more
+-       accurate word than "episode"), so the button and the screen it opens never
+-       disagree about what to call the same queue. Only shown when there's an actual
+-       queue to browse - same "never an empty/dead affordance" rule the hamburger's
+-       Chapters/Audio Track rows already follow. */
+-    if (session?.queueRatingKeys?.length > 1) {
+-        const episodesBtn = document.createElement("button");
+-        episodesBtn.type = "button";
+-        episodesBtn.textContent = session.seasonNumber != null ? "Episodes" : "Up Next";
+-        Object.assign(episodesBtn.style, {
+-            background: "transparent",
+-            border: "none",
+-            color: "#fff",
+-            fontSize: "13px",
+-            fontWeight: "700",
+-            fontFamily: '"Roboto", sans-serif',
+-            cursor: "pointer",
+-            padding: "0",
+-        });
+-        episodesBtn.addEventListener("click", () => {
+-            if (controller._episodeListEl) {
+-                controller._closeEpisodeListOverlay();
+-            } else {
+-                controller._openEpisodeListOverlay();
+-            }
+-        });
+-        leftCell.appendChild(episodesBtn);
+-    }
+-    const centerCell = document.createElement("div");
+-    Object.assign(centerCell.style, { flex: "0 0 auto", display: "flex", alignItems: "center", gap: "22px" });
+-    const rightCell = document.createElement("div");
+-    Object.assign(rightCell.style, { flex: "1 1 0", display: "flex", alignItems: "center", justifyContent: "flex-end", gap: "14px" });
+-    controlsRow.appendChild(leftCell);
+-    controlsRow.appendChild(centerCell);
+-    controlsRow.appendChild(rightCell);
+-    bar.appendChild(controlsRow);
+-    controller._centerControlsSlot = centerCell;
+-
+-    /* Moved out of the More menu entirely (used to be a row there, "Audio & Subtitles")
+-       into its own transport-bar icon between mute and fullscreen - both are "what am I
+-       hearing/reading" controls a viewer reaches for far more often than anything else
+-       in that menu, so they earned equal billing with volume/fullscreen rather than
+-       being buried a tap deeper. */
+-    const audioSubtitlesBtn = document.createElement("button");
+-    audioSubtitlesBtn.type = "button";
+-    audioSubtitlesBtn.innerHTML = audioSubtitlesIconMarkup();
+-    audioSubtitlesBtn.setAttribute("aria-label", "Audio & Subtitles");
+-    Object.assign(audioSubtitlesBtn.style, {
+-        flex: "0 0 auto",
+-        width: "28px",
+-        height: "28px",
+-        display: "flex",
+-        alignItems: "center",
+-        justifyContent: "center",
+-        border: "none",
+-        background: "transparent",
+-        color: "#fff",
+-        cursor: "pointer",
+-        padding: "0",
+-    });
+-    audioSubtitlesBtn.addEventListener("click", () => openAudioSubtitlesOverlay(controller));
+-
+-    rightCell.appendChild(muteBtn);
+-    rightCell.appendChild(audioSubtitlesBtn);
+-    if (fullscreenBtn) rightCell.appendChild(fullscreenBtn);
+     document.body.appendChild(bar);
+     registerControlButton(controller, bar, { anchor: false });
+     return bar;
+diff --git a/src/player/ui/chrome.js b/src/player/ui/chrome.js
+index fb51b60..64ff3b9 100644
+--- a/src/player/ui/chrome.js
++++ b/src/player/ui/chrome.js
+@@ -6,10 +6,10 @@
+    independent state):
+ 
+      chrome-controls.js   - the shared idle-fade control-button row + buffering spinner
+-     chrome-transport.js  - the bottom transport bar (scrub bar/chapter segments/BIF
+-                             preview, volume, fullscreen) and center play/seek/chapter/
+-                             title-nav controls
+-     chrome-menu.js       - the hamburger "More" sheet's top-level list plus the
++     chrome-transport.js  - the bottom transport bar (title/time info, scrub bar/chapter
++                             segments/BIF preview) and the floating center play/pause button
++     chrome-menu.js       - the hamburger "More" sheet's top-level list (Episodes, Chapters,
++                             Audio & Subtitles, Version, Quality Cap, ...) plus the
+                              accordion-row/picker-list primitives shared with:
+      chrome-menu-effects.js - its Effects sub-screen (Shader Upscaling/Color Boost/
+                                Ambient Lighting)
+@@ -25,12 +25,12 @@
+ 
+ export { makeControlButton, registerControlButton, showControls, hideControls, scheduleHideControls, buildLoadingSpinner } from "./chrome-controls.js";
+ 
+-export { buildCenterControls, buildTransportBar, playQueuedTitle, formatTime } from "./chrome-transport.js";
++export { buildFloatingPlayButton, buildTransportBar, playQueuedTitle, updateTransportBarInfo, formatTime, seekToAdjacentChapter } from "./chrome-transport.js";
+ 
+ export { openHamburgerMenu, closeInlineMenu } from "./chrome-menu.js";
+ 
+ export { applyZoomTransform, wireZoomPan } from "./chrome-menu-extras.js";
+ 
+-export { openAudioSubtitlesOverlay, closeAudioSubtitlesOverlay, applyRememberedSubtitle } from "./chrome-subtitles.js";
++export { openAudioSubtitlesOverlay, closeAudioSubtitlesOverlay, applyRememberedSubtitle, stopSubtitleLoop } from "./chrome-subtitles.js";
+ 
+ export { activeMarkerAt, skipLabelFor, updateSkipButton } from "./chrome-skip.js";
+diff --git a/src/player/ui/player-chrome.js b/src/player/ui/player-chrome.js
+new file mode 100644
+index 0000000..9df3003
+--- /dev/null
++++ b/src/player/ui/player-chrome.js
+@@ -0,0 +1,134 @@
++import { updateContentAnalysis } from "../content-analysis.js";
++import { closeEpisodeListOverlay, closeChapterListOverlay } from "./episode-list.js";
++import { closeAudioSubtitlesOverlay, stopSubtitleLoop } from "./chrome-subtitles.js";
++import { ensurePlayerFocusStyle } from "./shared.js";
++
++/* Circular with web-fallback.js (which imports mountPlayerChrome/unmountPlayerChrome from here, while
++   chrome-subtitles.js above imports trySwitchAudioTrackLocal from it) - safe for the same reason the
++   other cycles in this directory are: every reference across the cycle is used inside a function body
++   at call time, never at module-evaluation time. */
++
++/* Mounts the player's on-screen chrome: the idle-fade control row (close + options), the transport
++   bar, the floating center play/pause button, the buffering spinner, and the per-session pipelines.
++
++   Extracted from web-fallback.js's playWeb so the Xbox leg can mount the identical chrome over native
++   video. That is the whole point of the Xbox architecture - the video surface is a sibling of a
++   transparent WebView2 in one XAML page, so the ~2,900 lines of chrome in this directory render over
++   it unchanged, instead of being re-implemented natively the way Android had to.
++
++   `mediaEl` is whatever core/media-facade.js registered: the real <video> on web, a NativeMediaFacade
++   on Xbox. Everything below only uses the <video>-shaped playback surface, never DOM specifics.
++
++   `gpuPipelines` is false on a native backend. Shader upscaling, Color Boost, ambient lighting and
++   the content-analysis sampler all need to read pixels out of a real <video> element (texImage2D /
++   drawImage), which a native surface cannot provide - those get native equivalents in a later phase.
++   The stats overlay is included either way: it is plain DOM reading the facade. */
++export function mountPlayerChrome(controller, mediaEl, { gpuPipelines }) {
++    ensurePlayerFocusStyle();
++    controller._buildLoadingSpinner(mediaEl);
++
++    /* Not just a convenience: on the Xbox WebView2 shell there's no browser chrome and no back button
++       to fall back on at all, so an explicit close control isn't optional the way it might seem on
++       desktop web. Styled as a back chevron, top-left, rather than an "✕" - same close-the-player
++       action, just matching where a streaming app's own back affordance normally sits. */
++    const closeBtn = controller._makeControlButton({
++        ariaLabel: "Close player",
++        content: "‹",
++        onClick: () => controller.stop(),
++    });
++    controller._registerControlButton(closeBtn, { side: "left" });
++
++    /* Every custom option (speed, sleep timer, zoom, chapters, subtitles) lives behind this single
++       button instead of one circular button each - see openHamburgerMenu. Opposite corner from the
++       close button. Toggles closed on a second tap - re-opening would otherwise be the only reachable
++       outcome of tapping this button again, since openHamburgerMenu (like every submenu) closes and
++       immediately rebuilds the flyout rather than no-op'ing when one is already open. */
++    const menuBtn = controller._makeControlButton({
++        ariaLabel: "Player options",
++        content: "☰",
++        onClick: () => {
++            if (controller._inlineMenuEl && controller._inlineMenuAnchor === menuBtn) {
++                controller._closeInlineMenu();
++            } else {
++                controller._openHamburgerMenu(menuBtn);
++            }
++        },
++    });
++    controller._registerControlButton(menuBtn, { side: "right" });
++    /* Kept on the controller so gamepad navigation can open this menu without a pointer - it is the
++       only route to Chapters/Version/Quality/Effects/Extras, so on a console it has to be reachable
++       from a button press. See plex-player.js's nav handler. */
++    controller._menuButtonEl = menuBtn;
++
++    controller._zoomIndex = 0;
++    controller._zoomPanX = 0;
++    controller._zoomPanY = 0;
++    controller._sleepMinutes = 0;
++    if (gpuPipelines) controller._wireZoomPan();
++    controller._buildTransportBar(mediaEl);
++    controller._buildFloatingPlayButton(mediaEl);
++
++    if (gpuPipelines) {
++        /* _shaderType/_shaderStrength were already resolved in play() (global setting + this title's
++           auto-detected type) before this ran - this just spins up the WebGL pipeline for that starting
++           state, same as any other change made through the hamburger menu later in the session. */
++        controller._updateShaderPipeline();
++        /* Same "already-resolved global default, just spin up the pipeline" reasoning as the shader call
++           above - controller._ambientEnabled was set from storedAmbientEnabled() in play(). */
++        controller._updateAmbientPipeline();
++        /* Same reasoning - controller._upscaleAuto/_colorBoostAuto were set from
++           storedUpscaleAuto()/storedColorBoostAuto() in play(). */
++        updateContentAnalysis(controller);
++    }
++    /* Same reasoning - controller._statsOverlayEnabled was set from storedStatsOverlayEnabled() in
++       play(). Reads the facade, so it works on either backend. */
++    controller._updateStatsOverlayPipeline();
++
++    controller._scheduleHideControls();
++}
++
++/* Removes everything mountPlayerChrome put on screen, plus the overlays and transient bits the chrome
++   can spawn during a session. Extracted from web-fallback.js's teardownWeb for the same reason the
++   mount was: both legs must tear down exactly what they mounted. Leaving this out on the Xbox leg left
++   the transport bar, center controls and open options sheet on screen after backing out - the player
++   "closed" but its UI stayed.
++
++   Everything <video>- or GPU-specific (hls.js, the shader canvas, ambient panels, the content-analysis
++   sampler) stays in teardownWeb: this leg never mounted those. */
++export function unmountPlayerChrome(controller) {
++    /* Mounted by mountPlayerChrome on both legs, so it has to come down here rather than in
++       teardownWeb - the stats overlay reads the media facade, not a <video>. */
++    if (controller._statsOverlayIntervalId) {
++        clearInterval(controller._statsOverlayIntervalId);
++        controller._statsOverlayIntervalId = null;
++    }
++    if (controller._statsOverlayEl) {
++        controller._statsOverlayEl.remove();
++        controller._statsOverlayEl = null;
++    }
++    controller._closeInlineMenu();
++    closeEpisodeListOverlay(controller);
++    closeChapterListOverlay(controller);
++    closeAudioSubtitlesOverlay(controller);
++    clearTimeout(controller._controlsHideTimer);
++    controller._controlsHideTimer = null;
++    controller._controlsHovering = false;
++    controller._controlButtons.forEach((b) => b.remove());
++    controller._controlButtons = [];
++    if (controller._skipBtnEl) {
++        controller._skipBtnEl.remove();
++        controller._skipBtnEl = null;
++    }
++    controller._activeSkipMarker = null;
++    if (controller._spinnerEl) {
++        controller._spinnerEl.remove();
++        controller._spinnerEl = null;
++    }
++    stopSubtitleLoop(controller);
++    controller._subtitleCues = null;
++    controller._subtitleRenderedKey = null;
++    if (controller._subtitleOverlayEl) {
++        controller._subtitleOverlayEl.remove();
++        controller._subtitleOverlayEl = null;
++    }
++}
+diff --git a/src/player/web-fallback.js b/src/player/web-fallback.js
+index bfcd991..f5cbd68 100644
+--- a/src/player/web-fallback.js
++++ b/src/player/web-fallback.js
+@@ -1,14 +1,16 @@
+ import Hls from "hls.js";
+ import { ZOOM_LEVELS, storedVolume } from "./ui/shared.js";
+-import { updateContentAnalysis } from "./content-analysis.js";
+ import { releaseBifIndex } from "./core/bif.js";
++import { setMediaFacade } from "./core/media-facade.js";
+ import { closeEpisodeListOverlay, closeChapterListOverlay } from "./ui/episode-list.js";
+-import { updateAbrMonitor, stopAbrLoop, notifyStall, notifyReload } from "./core/abr.js";
++import { updateAbrMonitor, stopAbrLoop, notifyStall, setBandwidthSource } from "./core/abr.js";
++import { reloadTranscodeSession } from "./core/session-reload.js";
++import { mountPlayerChrome, unmountPlayerChrome } from "./ui/player-chrome.js";
+ /* Circular with chrome.js (which already imports reloadWebSource from this file) - safe
+    here for the same reason that one is: closeAudioSubtitlesOverlay is only ever called
+    from inside teardownWeb's own function body below, never at module-top-level
+    evaluation time. */
+-import { closeAudioSubtitlesOverlay } from "./ui/chrome.js";
++import { closeAudioSubtitlesOverlay, stopSubtitleLoop } from "./ui/chrome.js";
+ 
+ /* <video>+hls.js fallback path - used everywhere WebView2/Chrome/Xbox/Android-web has
+    no native player available (see native-bridge.js for the Android/ExoPlayer leg).
+@@ -81,79 +83,41 @@ function createVideoElement(controller) {
+     return video;
+ }
+ 
++/* Assigning video.currentTime immediately after attachSource() (the previous approach here and in
++   reloadWebSource below) is unreliable: readyState is still HAVE_NOTHING at that point - hls.js's
++   loadSource()/attachMedia() and the plain `video.src =` assignment both resolve asynchronously - and
++   a seek requested that early is a well-known case browsers silently drop rather than queue. The
++   symptom is exactly "playback (and therefore the scrub bar, which just reads video.currentTime/
++   video.duration) starts from true zero every time," regardless of the real resume position, since
++   the dropped seek never gets retried. loadedmetadata is the first point a seek is spec-guaranteed to
++   actually take effect. `once: true` needs no manual removal - the listener is used up after firing
++   once, same lifetime as the seek it performs. */
++function seekOnceReady(video, offsetMs) {
++    if (!offsetMs) return;
++    video.addEventListener("loadedmetadata", () => {
++        video.currentTime = offsetMs / 1000;
++    }, { once: true });
++}
++
+ export function playWeb(controller, streamUrl, startOffsetMs) {
+     const video = createVideoElement(controller);
+     attachSource(controller, video, streamUrl);
+-    video.currentTime = startOffsetMs / 1000;
++    seekOnceReady(video, startOffsetMs);
+     document.body.appendChild(video);
+     controller._videoEl = video;
+-    controller._buildLoadingSpinner(video);
+-
+-    /* Not just a convenience: on the Xbox WebView2 shell there's no browser chrome and
+-       no back button to fall back on at all, so an explicit close control isn't
+-       optional the way it might seem on desktop web. Styled as a back chevron,
+-       top-left, rather than an "✕" - same close-the-player action, just matching where
+-       a streaming app's own back affordance normally sits. */
+-    const closeBtn = controller._makeControlButton({
+-        ariaLabel: "Close player",
+-        content: "‹",
+-        onClick: () => controller.stop(),
+-    });
+-    controller._registerControlButton(closeBtn, { side: "left" });
+-
+-    /* Every custom option (speed, sleep timer, zoom, chapters, subtitles) lives behind
+-       this single button instead of one circular button each - see openHamburgerMenu.
+-       Opposite corner from the close button. Toggles closed on a second tap - re-opening
+-       would otherwise be the only reachable outcome of tapping this button again, since
+-       openHamburgerMenu (like every submenu) closes and immediately rebuilds the flyout
+-       rather than no-op'ing when one is already open. */
+-    const menuBtn = controller._makeControlButton({
+-        ariaLabel: "Player options",
+-        content: "☰",
+-        onClick: () => {
+-            if (controller._inlineMenuEl && controller._inlineMenuAnchor === menuBtn) {
+-                controller._closeInlineMenu();
+-            } else {
+-                controller._openHamburgerMenu(menuBtn);
+-            }
+-        },
+-    });
+-    controller._registerControlButton(menuBtn, { side: "right" });
+-
+-    controller._zoomIndex = 0;
+-    controller._zoomPanX = 0;
+-    controller._zoomPanY = 0;
+-    controller._sleepMinutes = 0;
+-    controller._wireZoomPan();
+-    /* Transport bar first: it builds the bottom chrome's center cell that
+-       _buildCenterControls fills with play/pause + chapter nav (see chrome.js), rather
+-       than that row floating mid-screen on its own. */
+-    controller._buildTransportBar(video);
+-    controller._buildCenterControls(video);
+-    /* _shaderType/_shaderStrength were already resolved in play() (global setting +
+-       this title's auto-detected type) before playWeb was called - this just spins up
+-       the WebGL pipeline for that starting state, same as any other change made
+-       through the hamburger menu later in the session. */
+-    controller._updateShaderPipeline();
+-    /* Same "already-resolved global default, just spin up the pipeline" reasoning as
+-       the shader call above - controller._ambientEnabled was set from
+-       storedAmbientEnabled() in play() before playWeb was called. */
+-    controller._updateAmbientPipeline();
+-    /* Same "already-resolved global default, just spin up the pipeline" reasoning as
+-       the calls above - controller._statsOverlayEnabled was set from
+-       storedStatsOverlayEnabled() in play() before playWeb was called. */
+-    controller._updateStatsOverlayPipeline();
+-    /* Same "already-resolved global default, just spin up the pipeline" reasoning as
+-       the calls above - controller._upscaleAuto/_colorBoostAuto were set from
+-       storedUpscaleAuto()/storedColorBoostAuto() in play() before playWeb was called. */
+-    updateContentAnalysis(controller);
+-    /* Same "already-resolved global default, just spin up the pipeline" reasoning as
+-       the calls above - controller._autoQualityEnabled was set from
+-       storedAutoQualityEnabled() in play() before playWeb was called. No-ops on the
+-       native-HLS branch above (controller._hls stays null there) - see core/abr.js. */
++    /* The element itself is the media facade on this leg - it already satisfies the whole
++       playback-state surface the chrome reads (see core/media-facade.js), so registering it
++       is the entire web-side implementation. Everything below that still wants the real
++       DOM element (the GPU pipelines, the zoom transform) keeps using controller._videoEl. */
++    setMediaFacade(controller, video);
++    /* The chrome itself lives in ui/player-chrome.js so the Xbox leg can mount the identical thing
++       over native video - see that file's header. gpuPipelines:true because this leg has a real
++       <video> element for the shader/ambient/content-analysis passes to read pixels from. */
++    mountPlayerChrome(controller, video, { gpuPipelines: true });
++    /* Auto Quality's monitor is started here rather than inside mountPlayerChrome because what it
++       depends on is this leg's bandwidth source (the hls.js instance attachSource just created), not
++       the chrome. No-ops on the native-HLS branch, which registers no source - see core/abr.js. */
+     updateAbrMonitor(controller);
+-
+-    controller._scheduleHideControls();
+ }
+ 
+ /* Shared by the initial load (playWeb) and reloadWebSource (audio-track switch) so the
+@@ -190,10 +154,12 @@ export function attachSource(controller, video, streamUrl) {
+             else if (data.details === Hls.ErrorDetails.BUFFER_STALLED_ERROR) notifyStall(controller);
+         });
+         /* hls.js's own bandwidthEstimate starts at a synthetic default before any real
+-           fragment has loaded (see core/abr.js's evaluateAbrTick) - reset the "do we have
+-           a real sample yet" flag on every fresh instance, flip it once a fragment
+-           actually finishes. */
+-        controller._abrHasRealSample = false;
++           fragment has loaded (see core/abr.js's evaluateAbrTick) - registering the
++           instance as the bandwidth source also resets the "do we have a real sample yet"
++           flag, which this flips once a fragment actually finishes. The Hls instance IS the
++           source object here: its bandwidthEstimate property already has exactly the shape
++           core/abr.js reads. */
++        setBandwidthSource(controller, hls);
+         hls.on(Hls.Events.FRAG_LOADED, () => {
+             controller._abrHasRealSample = true;
+         });
+@@ -201,6 +167,10 @@ export function attachSource(controller, video, streamUrl) {
+         hls.attachMedia(video);
+         controller._hls = hls;
+     } else {
++        /* Safari's native-HLS path measures nothing abr.js can read, so Auto Quality stays
++           correctly unavailable rather than deciding off a stale estimate from the hls.js
++           instance a previous reload may have registered. */
++        setBandwidthSource(controller, null);
+         /* Only this branch needs crossOrigin, not the hls.js branch above - hls.js
+            attaches media via a same-origin blob: URL and feeds it segments through
+            MediaSource.appendBuffer(), so the video element's own origin (as far as
+@@ -254,109 +224,27 @@ export function trySwitchAudioTrackLocal(controller, audioStreamID) {
+     return true;
+ }
+ 
+-/* Restarts the Plex transcode session with a new mediaIndex/qualityCapKbps (and, as a
+-   fallback path, audioStreamID - see trySwitchAudioTrackLocal above for the normal
+-   case), resuming at the current position - Plex bakes the version and bitrate cap into
+-   the HLS transcode at session start, so there's no way to change either without
+-   re-requesting the playlist. A fresh session id avoids Plex reusing/confusing the
+-   just-abandoned transcode session's own state. Shared by chrome.js's Audio Track/Video
+-   Quality menus - only the override actually being changed is passed, everything else
+-   falls back to the current session value. qualityCapKbps needs its own `in` check
+-   (unlike the others): null is a valid explicit override (Quality Cap's "Original"
+-   option), so `??`-against-undefined would wrongly treat "clear the cap" the same as
+-   "don't touch it". */
++/* The web leg's rebuild step for a transcode-session restart. Everything about the restart itself -
++   resume position, the Part-selection PUT, stopping the old session, the /decision call that is what
++   actually makes Plex re-evaluate - lives in core/session-reload.js, because none of it is
++   web-specific and the Xbox leg needs the identical sequence. All this adds is "point the <video> and
++   hls.js at the new URL".
++
++   Shared by chrome-menu.js's Version/Quality Cap menus and chrome-subtitles.js's audio picker via the
++   controller's _reloadSource delegate, which dispatches per platform - only the override actually
++   being changed is passed, everything else falls back to the current session value. */
+ export function reloadWebSource(controller, overrides = {}) {
+     const video = controller._videoEl;
+-    const s = controller._session;
+-    if (!video || !s) return;
+-    const offsetMs = Math.round((video.currentTime || 0) * 1000);
+-    const nextMediaIndex = overrides.mediaIndex ?? s.mediaIndex;
+-    const nextQualityCapKbps = "qualityCapKbps" in overrides ? overrides.qualityCapKbps : s.qualityCapKbps;
+-    const nextAudioStreamID = overrides.audioStreamID ?? s.audioStreamId;
+-    const oldSessionId = s.transcodeSessionId;
+-    s.mediaIndex = nextMediaIndex;
+-    s.qualityCapKbps = nextQualityCapKbps;
+-    s.audioStreamId = nextAudioStreamID;
+-
+-    /* Generated once up front, not inside rebuild() - askDecision below needs the exact
+-       same session id /start will use (see buildDecisionUrl's own comment: a /decision
+-       call only reliably predicts what /start does when every param, session id
+-       included, matches). */
+-    const sessionId = crypto.randomUUID();
+-    const urlOpts = {
+-        plexUrl: s.plexUrl,
+-        plexToken: s.plexToken,
+-        key: s.key,
+-        sessionId,
+-        startOffsetMs: offsetMs,
+-        mediaIndex: nextMediaIndex,
+-        qualityCapKbps: nextQualityCapKbps,
+-        audioStreamID: nextAudioStreamID,
+-    };
+-
+-    const rebuild = () => {
+-        const streamUrl = controller._buildStreamUrl(urlOpts);
+-        s.transcodeSessionId = sessionId;
++    if (!video || !controller._session) return;
++    reloadTranscodeSession(controller, overrides, (streamUrl, offsetMs) => {
+         attachSource(controller, video, streamUrl);
+-        video.currentTime = offsetMs / 1000;
+-        /* A fresh transcode session means whatever Auto Quality streak/cooldown state
+-           was building against the old one no longer applies - see core/abr.js's
+-           notifyReload. Also re-checks whether the monitor should be running at all,
+-           since attachSource above just replaced controller._hls with a fresh
+-           instance. */
+-        notifyReload(controller);
+-        updateAbrMonitor(controller);
+-    };
+-
+-    /* audioStreamID on the transcode start URL alone doesn't reliably make Plex
+-       actually mux the requested track - confirmed against a real server, it kept
+-       playing the previously-selected audio regardless of this param. The verified
+-       mechanism (same one python-plexapi's own users landed on) is marking the stream
+-       "selected" on the Part first via PUT /library/parts/<id>?audioStreamID=...
+-       &allParts=1 - the transcode decision then honors whatever's currently selected
+-       there. Only done when actually switching audio (not on a mediaIndex/qualityCap-
+-       only reload) and only when a partId was resolved for this item at play() time. */
+-    const selectAudio =
+-        overrides.audioStreamID != null && s.partId
+-            ? (() => {
+-                  const putUrl = new URL(`${s.plexUrl}/library/parts/${s.partId}`);
+-                  putUrl.searchParams.set("audioStreamID", String(overrides.audioStreamID));
+-                  putUrl.searchParams.set("allParts", "1");
+-                  putUrl.searchParams.set("X-Plex-Token", s.plexToken);
+-                  return fetch(putUrl, { method: "PUT" }).catch(() => {});
+-              })()
+-            : Promise.resolve();
+-
+-    /* A new `session` id alone isn't enough either - confirmed against a real server,
+-       an in-place reload kept getting served the OLD, still-warm transcode session's
+-       audio selection even with a fresh session id and a successful Part-selection PUT
+-       both in place, and only actually reflected the switch once the old session had
+-       had time to expire on its own (e.g. a full stop()+replay). Explicitly stopping it
+-       here makes the switch immediate instead of leaving it to Plex's own idle-timeout. */
+-    const stopOldSession = oldSessionId
+-        ? fetch(`${s.plexUrl}/video/:/transcode/universal/stop?session=${encodeURIComponent(oldSessionId)}&X-Plex-Token=${encodeURIComponent(s.plexToken)}`).catch(() => {})
+-        : Promise.resolve();
+-
+-    /* The actual, whole reason a switch never took effect until backing out and back in
+-       - confirmed against a real server (raspi-server), reading Plex's own session state
+-       via /status/sessions mid-switch. Everything above this comment (the Part-selection
+-       PUT, the explicit old-session stop, a brand-new session id) was already correct
+-       and already being done, and STILL wasn't enough on its own: a /start request alone
+-       - even with all of that in place - kept transcoding the previous audio selection.
+-       Only once a /video/:/transcode/universal/decision call went out FIRST, with the
+-       exact same params /start was about to use (see buildDecisionUrl's own comment),
+-       did the Media Decision Engine actually re-evaluate and the following /start honor
+-       the new selection immediately. Best-effort like the requests above it - a failed
+-       decision call shouldn't block the /start attempt that follows, it just means this
+-       particular attempt is back to relying on Plex's own eventual re-evaluation. */
+-    const askDecision = () =>
+-        fetch(controller._buildDecisionUrl(urlOpts)).catch(() => {});
+-
+-    Promise.all([selectAudio, stopOldSession]).then(askDecision, askDecision).then(rebuild, rebuild);
++        seekOnceReady(video, offsetMs);
++    });
+ }
+ 
+ export function teardownWeb(controller) {
+     stopAbrLoop(controller);
++    setBandwidthSource(controller, null);
+     if (controller._hls) {
+         controller._hls.destroy();
+         controller._hls = null;
+@@ -387,59 +275,15 @@ export function teardownWeb(controller) {
+     controller._contentSampleCtx = null;
+     controller._contentSmoothedSaturation = null;
+     controller._contentSmoothedEdgeEnergy = null;
+-    if (controller._statsOverlayIntervalId) {
+-        clearInterval(controller._statsOverlayIntervalId);
+-        controller._statsOverlayIntervalId = null;
+-    }
+-    if (controller._statsOverlayEl) {
+-        controller._statsOverlayEl.remove();
+-        controller._statsOverlayEl = null;
+-    }
+-    controller._closeInlineMenu();
+-    closeEpisodeListOverlay(controller);
+-    closeChapterListOverlay(controller);
+-    closeAudioSubtitlesOverlay(controller);
+-    clearTimeout(controller._controlsHideTimer);
+-    controller._controlsHideTimer = null;
+-    controller._controlsHovering = false;
+-    controller._controlButtons.forEach((b) => b.remove());
+-    controller._controlButtons = [];
+-    if (controller._fullscreenChangeHandler) {
+-        document.removeEventListener("fullscreenchange", controller._fullscreenChangeHandler);
+-        document.removeEventListener("webkitfullscreenchange", controller._fullscreenChangeHandler);
+-        controller._fullscreenChangeHandler = null;
+-    }
+-    /* The fullscreen button (chrome.js) requests fullscreen on document.documentElement,
+-       not a player-scoped container - leaving the player without exiting fullscreen first
+-       would strand the whole app fullscreen behind the now-gone player chrome. */
+-    if (document.fullscreenElement || document.webkitFullscreenElement) {
+-        (document.exitFullscreen || document.webkitExitFullscreen)?.call(document);
+-    }
+-    if (controller._skipBtnEl) {
+-        controller._skipBtnEl.remove();
+-        controller._skipBtnEl = null;
+-    }
+-    controller._activeSkipMarker = null;
+-    if (controller._volumePopoutEl) {
+-        controller._volumePopoutEl.remove();
+-        controller._volumePopoutEl = null;
+-    }
+-    if (controller._spinnerEl) {
+-        controller._spinnerEl.remove();
+-        controller._spinnerEl = null;
+-    }
+-    if (controller._subtitleTrackUrl) {
+-        URL.revokeObjectURL(controller._subtitleTrackUrl);
+-        controller._subtitleTrackUrl = null;
+-    }
+-    if (controller._subtitleOverlayEl) {
+-        controller._subtitleOverlayEl.remove();
+-        controller._subtitleOverlayEl = null;
+-    }
++    /* The chrome half of teardown lives in ui/player-chrome.js, so the Xbox leg tears down exactly
++       the same things it mounted - a missing unmount there left the transport bar, center controls and
++       options sheet on screen after backing out of native playback. */
++    unmountPlayerChrome(controller);
+     if (controller._bifIndex) {
+         releaseBifIndex(controller._bifIndex);
+         controller._bifIndex = null;
+     }
++    setMediaFacade(controller, null);
+     if (controller._videoEl) {
+         controller._videoEl.pause();
+         controller._videoEl.remove();
+diff --git a/src/player/xbox-bridge.js b/src/player/xbox-bridge.js
+new file mode 100644
+index 0000000..861237f
+--- /dev/null
++++ b/src/player/xbox-bridge.js
+@@ -0,0 +1,356 @@
++/* Xbox leg of playback: the WebView2 message bridge between the JS player and the UWP shell's
++   native MediaPlayer. Sibling of native-bridge.js (Android/Capacitor), deliberately mirroring its
++   method and event names so the two contracts can be compared line by line and don't drift.
++
++   Takes the StreamingPlayerController as an explicit first argument, same as every other module in
++   src/player/ - see native-bridge.js's header for why.
++
++   Two ways this differs from Android's leg, both consequences of the Phase 0 hardware spikes
++   (docs/xbox-native-hdr-player/05-phase0-spike-results.md):
++
++   1. **The chrome stays in JS.** Android re-implemented the whole player UI natively because its
++      player is a separate Activity. Here the native video surface is a sibling of the WebView2 in
++      one XAML page, with the WebView2 transparent on top, so the existing ~2,900 lines of chrome in
++      src/player/ui/ render over native video untouched. That means this file has no equivalent of
++      showEpisodeList/showSubtitleResults/showSkipButton - JS draws all of that itself.
++   2. **JS keeps owning the Plex protocol.** Android had to move /:/timeline reporting into native
++      Java because WebView.onPause() suspended all network loading while PlayerActivity was
++      foregrounded. Measured here: JS timers and fetch keep running throughout native playback
++      (nothing is ever backgrounded - there is no second Activity), so timeline reporting stays in
++      plex-player.js where the rest of the Plex protocol lives. */
++
++import { media, setMediaFacade, NativeMediaFacade } from "./core/media-facade.js";
++import { notifyStall, notifyReload, setStallDrivenAbr, updateAbrMonitor } from "./core/abr.js";
++import { reloadTranscodeSession } from "./core/session-reload.js";
++import { mountPlayerChrome, unmountPlayerChrome } from "./ui/player-chrome.js";
++/* Circular with shader-pipeline.js/content-analysis.js/ambient-pipeline.js (each imports a "post"
++   helper from this file; this file imports their "update"/"apply" functions back) - safe for the
++   same "function-body-only reference" reason documented in each of those files' own import
++   comments. */
++import { updateShaderPipeline } from "./shader-pipeline.js";
++import { updateContentAnalysis, applyXboxContentAnalysis } from "./content-analysis.js";
++import { updateAmbientPipeline, applyXboxAmbientColors, teardownAmbient } from "./ambient-pipeline.js";
++
++function bridge() {
++    return typeof window !== "undefined" ? window.chrome?.webview : null;
++}
++
++/* Every message is JSON.stringify'd rather than posted as an object. This is not stylistic: an
++   object payload silently never arrives at CoreWebView2.WebMessageReceived on the Xbox WebView2
++   runtime - not from app code, and not from a probe injected before any app module evaluated, with no
++   error raised on either side. A string payload arrives immediately. Confirmed on hardware; see the
++   spike results.
++
++   The Android bridge's rule still applies on top of this: any Plex-sourced numeric id (partId,
++   audioStreams[].id) must be String()-coerced before it crosses, because a JSON number arriving where
++   a string is expected became null on the native side and cost five rounds of debugging. The payload
++   is therefore built by native-bridge.js's buildPlaybackPayload and passed in by the caller, rather
++   than reassembled here, so those coercions keep living in exactly one place. */
++function post(method, params) {
++    const wv = bridge();
++    if (!wv) return;
++    try {
++        wv.postMessage(JSON.stringify({ method, params: params || {} }));
++    } catch (e) {
++        console.error("StreamingPlayer: xbox bridge post failed -", method, e);
++    }
++}
++
++/* --- JS -> native. Names match native-bridge.js's NativePlayer.* surface. --- */
++
++export function playXbox(controller, streamUrl, startOffsetMs, payload, payloadFor) {
++    registerListeners(controller);
++    const facade = attachFacade(controller, payloadFor);
++    mountBackdrop(controller);
++    /* The same chrome the web leg mounts, over native video instead of a <video> element - this is what
++       the whole transparent-WebView2 architecture is for. gpuPipelines:false because shader-pipeline.js's
++       WebGL canvas and content-analysis.js's 2D canvas both read pixels out of a real <video> via
++       texImage2D/drawImage, which a native surface cannot provide - ShaderVideoEffect
++       (xbox/PrismXboxEffects) does that work natively instead (see the three calls below). */
++    mountPlayerChrome(controller, facade, { gpuPipelines: false });
++    /* Mirrors mountPlayerChrome's own gpuPipelines-gated startup calls (web) - applies whatever
++       shader/Color-Boost/ambient/auto settings were already resolved from storage in play(), so a
++       session that starts with an effect already on takes effect immediately rather than waiting
++       for the viewer to open the Effects menu. Each of these three internally branches on Xbox to
++       relay settings over the bridge instead of building a canvas. */
++    updateShaderPipeline(controller);
++    updateAmbientPipeline(controller);
++    updateContentAnalysis(controller);
++    /* Stall-driven rather than bandwidth-driven: the native player hands HTTP fetching to
++       MediaFoundation, so there are no per-segment byte/duration callbacks to derive kbps from. See
++       core/abr.js's setStallDrivenAbr. */
++    setStallDrivenAbr(controller, true);
++    updateAbrMonitor(controller);
++    post("play", { ...payload, url: streamUrl, startPositionMs: startOffsetMs });
++}
++
++export function switchXbox(controller, streamUrl, startOffsetMs, payload) {
++    /* Listeners are NOT re-registered: the native player stays alive across an in-place title swap,
++       exactly as PlayerActivity does on Android, so the handlers wired up by playXbox keep firing for
++       the new title. */
++    post("switchTitle", { ...payload, url: streamUrl, startPositionMs: startOffsetMs });
++    notifyReload(controller);
++}
++
++export function stopXbox(controller) {
++    post("stop");
++    /* Tears down exactly what playXbox mounted. Its absence is what left the transport bar, center
++       controls and an open options sheet on screen after backing out of native playback. Ambient's
++       glow panels are torn down explicitly here (not inside unmountPlayerChrome, which is shared
++       with a leg that never mounts them) - see teardownAmbient's own comment for why web instead
++       tears them down from teardownWeb. */
++    unmountPlayerChrome(controller);
++    teardownAmbient(controller);
++    removeListeners(controller);
++    setStallDrivenAbr(controller, false);
++    setMediaFacade(controller, null);
++    unmountBackdrop(controller);
++}
++
++/* A transparent, full-screen element under the chrome. Two jobs: it makes the page's own background
++   see-through so the native video behind the WebView2 is visible at all (the page is otherwise opaque,
++   which is what made the Phase 0 overlay test initially show nothing), and it gives the chrome the
++   same click-to-toggle-play and pointer-wake behaviour the <video> element provides on web. */
++function mountBackdrop(controller) {
++    if (controller._xboxBackdropEl) return;
++    const backdrop = document.createElement("div");
++    backdrop.className = "streaming-player-native-backdrop";
++    Object.assign(backdrop.style, {
++        position: "fixed",
++        inset: "0",
++        zIndex: "10000",
++        background: "transparent",
++    });
++    backdrop.addEventListener("click", () => {
++        const el = media(controller);
++        if (!el) return;
++        if (el.paused) el.play();
++        else el.pause();
++    });
++    backdrop.addEventListener("mousemove", () => controller._showControls());
++
++    /* Hiding the app's own UI is not optional here, and transparent backgrounds alone are not enough.
++       On the web leg nothing ever explicitly closes the title-info overlay: playWeb's <video> is opaque
++       at inset:0 and simply covers it. This leg needs the page see-through so native video is visible,
++       which means the card and any open overlay would otherwise remain on screen in front of it - which
++       is exactly what happened, and read as "the player never opened".
++
++       Every current body child is hidden, saving its inline display so unmount restores it exactly.
++       Done BEFORE the chrome is mounted, so the chrome's own elements (appended after) stay visible. */
++    controller._xboxHiddenNodes = Array.from(document.body.children).map((el) => ({
++        el,
++        display: el.style.display,
++    }));
++    controller._xboxHiddenNodes.forEach(({ el }) => {
++        el.style.display = "none";
++    });
++
++    document.body.appendChild(backdrop);
++    controller._xboxSavedBodyBackground = document.body.style.background;
++    document.documentElement.style.background = "transparent";
++    document.body.style.background = "transparent";
++
++    /* The controls idle-fade after ~1s and the only re-show triggers on the web leg are mousemove and
++       touchstart - neither of which exists on a console, where RequiresPointerMode.WhenRequested means
++       there is no pointer at all. Without this the transport bar appeared, faded, and could never be
++       recovered. Gamepad input reaches the page as ordinary key events (confirmed in Phase 0: WebView2
++       delivers it directly, which is also why the shell's own key forwarding turned out to be dead
++       code), so any keydown is the right wake signal. */
++    controller._xboxWakeHandler = () => controller._showControls();
++    document.addEventListener("keydown", controller._xboxWakeHandler);
++
++    controller._xboxBackdropEl = backdrop;
++}
++
++function unmountBackdrop(controller) {
++    if (controller._xboxBackdropEl) {
++        controller._xboxBackdropEl.remove();
++        controller._xboxBackdropEl = null;
++    }
++    if (controller._xboxWakeHandler) {
++        document.removeEventListener("keydown", controller._xboxWakeHandler);
++        controller._xboxWakeHandler = null;
++    }
++    if (controller._xboxHiddenNodes) {
++        controller._xboxHiddenNodes.forEach(({ el, display }) => {
++            el.style.display = display;
++        });
++        controller._xboxHiddenNodes = null;
++    }
++    if (controller._xboxSavedBodyBackground != null) {
++        document.body.style.background = controller._xboxSavedBodyBackground;
++        document.documentElement.style.background = "";
++        controller._xboxSavedBodyBackground = null;
++    }
++}
++
++export function pauseXbox() {
++    post("pause");
++}
++
++export function resumeXbox() {
++    post("resume");
++}
++
++/* --- JS -> native, Effects (shader-pipeline.js/ambient-pipeline.js call these; see each file's
++   own postXboxShaderSettings/postXboxColorBoostSettings/updateAmbientPipeline). Native's
++   ShaderVideoEffect keeps its own copy of these values (EffectSettings, xbox/PrismXboxEffects) -
++   see that class's own header comment for why settings flow this way rather than through
++   MediaPlayer.AddVideoEffect's IPropertySet. --- */
++
++export function postShaderEffect({ enabled, shaderType, strength, auto }) {
++    post("setShaderEffect", { enabled, shaderType, strength, auto });
++}
++
++export function postColorBoost({ enabled, strength, auto }) {
++    post("setColorBoost", { enabled, strength, auto });
++}
++
++export function postAmbientLighting(enabled) {
++    post("setAmbientLighting", { enabled });
++}
++
++/* The Xbox leg's rebuild step, over the same shared sequence the web leg uses
++   (core/session-reload.js). Serves three callers that all need the identical thing here: the Version
++   and Quality Cap menus, the audio-track picker's restart fallback, and - unlike on web - **seeking**.
++
++   Seeking has to go through here because a Plex transcode session bakes the start position into the
++   URL as `offset=`, so a progressive stream is not seekable in place: MediaPlaybackSession.CanSeek is
++   false and moving the playhead means asking Plex for a new stream at a new offset. switchTitle rather
++   than play, so the native player is reused in place and the page's chrome never sees a teardown. */
++export function reloadXboxSource(controller, overrides = {}, payloadFor) {
++    if (!controller._session) return;
++    reloadTranscodeSession(controller, overrides, (streamUrl, offsetMs) => {
++        post("switchTitle", { ...payloadFor(streamUrl, offsetMs), url: streamUrl, startPositionMs: offsetMs });
++        /* The facade would otherwise keep interpolating from the pre-seek position until the first
++           native progress tick lands, which reads as the scrubber snapping back. */
++        media(controller)?.applyProgress({ positionMs: offsetMs });
++    });
++}
++
++/* --- The media facade the chrome talks to --- */
++
++/* Wires the <video>-shaped surface in core/media-facade.js to bridge calls, so the transport bar,
++   scrubber, volume popout, subtitle renderer and everything else in src/player/ui/ work unchanged
++   over a native player they know nothing about. */
++function attachFacade(controller, payloadFor) {
++    const facade = new NativeMediaFacade({
++        /* Not a bridge "seek" call: see reloadXboxSource above for why a Plex progressive stream can
++           only be repositioned by requesting a new one. The chrome is unaware - it just sets
++           currentTime on the facade as it always has. */
++        seek: (positionMs) => reloadXboxSource(controller, { startOffsetMs: positionMs }, payloadFor),
++        play: () => post("resume"),
++        pause: () => post("pause"),
++        setVolume: (volume) => post("setVolume", { volume }),
++        setMuted: (muted) => post("setMuted", { muted }),
++        setPlaybackRate: (speed) => post("setPlaybackSpeed", { speed }),
++    });
++    setMediaFacade(controller, facade);
++    return facade;
++}
++
++/* --- native -> JS --- */
++
++function handleMessage(controller, message) {
++    const facade = media(controller);
++    const params = message.params || {};
++    switch (message.event) {
++        case "progress":
++            facade?.applyProgress({
++                positionMs: params.positionMs,
++                durationMs: params.durationMs,
++                bufferedMs: params.bufferedMs,
++            });
++            /* Kept as an active push from native rather than a JS interval purely out of caution: the
++               measured behaviour is that JS timers survive native playback here (unlike Android), so
++               plex-player.js's own _pingTimer does the timeline reporting. This tick only updates
++               session position, which the timeline ping then reads. */
++            if (controller._session) {
++                controller._session.lastTimeMs = params.positionMs ?? controller._session.lastTimeMs;
++                if (params.durationMs) controller._session.durationMs = params.durationMs;
++            }
++            controller._updateSkipButton?.(controller._activeMarkerAt?.(params.positionMs ?? 0));
++            break;
++        case "stateChanged":
++            facade?.applyPaused(params.paused);
++            if (controller._session) {
++                controller._session.state = params.paused ? "paused" : "playing";
++            }
++            break;
++        case "buffering":
++            facade?.applyBuffering(params.buffering);
++            /* A real rebuffer is the only degradation signal this backend has, and it is what drives
++               a downgrade - see setStallDrivenAbr. Guarded on having played once, mirroring Android's
++               everStartedPlaying, so cold-start and post-reload buffering aren't misread as stalls. */
++            if (params.buffering && controller._xboxEverPlayed) notifyStall(controller);
++            if (!params.buffering) controller._xboxEverPlayed = true;
++            break;
++        case "seeked":
++            facade?.applySeeked(params.positionMs);
++            break;
++        case "loadedMetadata":
++            facade?.applyMetadata({
++                videoWidth: params.videoWidth,
++                videoHeight: params.videoHeight,
++                durationMs: params.durationMs,
++            });
++            controller._xboxIsHdr = !!params.isHdr;
++            break;
++        case "stats":
++            /* Read by stats-overlay.js. Notably includes real colour-space/transfer state, which the
++               web leg can never provide - its HDR line is hardcoded "n/a (browser)". */
++            controller._xboxStats = params;
++            break;
++        case "contentAnalysis":
++            applyXboxContentAnalysis(controller, params.avgSaturation, params.edgeEnergy);
++            break;
++        case "ambientColors":
++            applyXboxAmbientColors(controller, {
++                top: params.top,
++                bottom: params.bottom,
++                left: params.left,
++                right: params.right,
++            });
++            break;
++        case "ended":
++            controller._handlePlaybackEnded?.();
++            break;
++        case "error":
++            console.error("StreamingPlayer: native player error -", params.message);
++            controller.stop();
++            break;
++        case "stopped":
++            controller.stop();
++            break;
++        default:
++            break;
++    }
++}
++
++function registerListeners(controller) {
++    const wv = bridge();
++    if (!wv || controller._xboxMessageHandler) return;
++    controller._xboxEverPlayed = false;
++    controller._xboxMessageHandler = (event) => {
++        let message = event.data;
++        if (typeof message === "string") {
++            try {
++                message = JSON.parse(message);
++            } catch {
++                return;
++            }
++        }
++        /* Spike-only messages share this channel while the Phase 0 harness still exists; they carry
++           `type` rather than `event`, so they fall through harmlessly. */
++        if (message?.event) handleMessage(controller, message);
++    };
++    wv.addEventListener("message", controller._xboxMessageHandler);
++}
++
++function removeListeners(controller) {
++    const wv = bridge();
++    if (wv && controller._xboxMessageHandler) {
++        wv.removeEventListener("message", controller._xboxMessageHandler);
++    }
++    controller._xboxMessageHandler = null;
++}
