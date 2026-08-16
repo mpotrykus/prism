@@ -57,6 +57,18 @@ namespace PrismXbox
             // entirely for input *delivery* - see OnCoreWindowKeyDown below.
             Windows.UI.Xaml.Window.Current.CoreWindow.KeyDown += OnCoreWindowKeyDown;
 
+            // Confirmed on real hardware: opening the Xbox Guide (Nexus button) does NOT stop
+            // gamepad input from reaching this app underneath it - neither this native
+            // CoreWindow.KeyDown forwarder nor focus-nav.js's own Gamepad API poller (which reads
+            // raw HID state directly, independent of any window message) know the Guide has taken
+            // over, so a D-pad move or A/B press drives both the Guide overlay and the app behind
+            // it at once. CoreWindow.Activated firing Deactivated is the documented signal for
+            // "another surface owns input now" - gating the native forwarder on it here, and
+            // relaying the same state to the page (OnCoreWindowActivated below) so the JS-side
+            // poller can gate itself too, since that poller can't observe CoreWindow state on its
+            // own.
+            Windows.UI.Xaml.Window.Current.CoreWindow.Activated += OnCoreWindowActivated;
+
             // The console stays in whatever display mode it was last put into, so leaving HDR on when
             // the app is suspended or closed leaves the dashboard rendering with inaccurate colour.
             // moonlight-xbox restores only on explicit disconnect and has exactly that bug when killed
@@ -128,6 +140,11 @@ namespace PrismXbox
                   // evaluates. platformTag() then reports 'xbox', which routes playback to
                   // xbox-bridge.js and makes Plex serve progressive output instead of HLS.
                   window.__prismXboxNativePlayer = true;
+                  // Default true: this script runs once per new document, before any
+                  // CoreWindow.Activated transition has necessarily happened again, so a
+                  // mid-session navigation/reload shouldn't start the page assuming input is
+                  // suspended when nothing actually suspended it.
+                  window.__prismXboxInputActive = true;
                   var wv = window.chrome && window.chrome.webview;
                   if (!wv) return;
                   var send = function (type, message) {
@@ -295,8 +312,30 @@ namespace PrismXbox
         private readonly Dictionary<VirtualKey, DateTime> _repeatDelayStart = new Dictionary<VirtualKey, DateTime>();
         private readonly Dictionary<VirtualKey, DateTime> _lastForwardedAt = new Dictionary<VirtualKey, DateTime>();
 
+        private bool _inputActive = true;
+
+        // Deactivated fires when the Guide (or any other system surface) takes over input;
+        // CodeActivated/PointerActivated fire when it closes and this app owns input again.
+        // Resetting the repeat-timing dictionaries on every transition means a direction still
+        // held from before the Guide opened doesn't read as "held long enough to repeat" the
+        // instant input resumes - it has to be freshly held past RepeatDelayMs again, same as a
+        // brand-new press.
+        private void OnCoreWindowActivated(CoreWindow sender, WindowActivatedEventArgs args)
+        {
+            _inputActive = args.WindowActivationState != CoreWindowActivationState.Deactivated;
+            _repeatDelayStart.Clear();
+            _lastForwardedAt.Clear();
+
+            string activeLiteral = _inputActive ? "true" : "false";
+            _ = webView?.CoreWebView2?.ExecuteScriptAsync(
+                $"window.__prismXboxInputActive = {activeLiteral}; " +
+                $"document.dispatchEvent(new CustomEvent('xbox-input-active-change', {{ detail: {{ active: {activeLiteral} }} }}));");
+        }
+
         private void OnCoreWindowKeyDown(CoreWindow sender, KeyEventArgs args)
         {
+            if (!_inputActive) return;
+
             string jsKey = MapGamepadKey(args.VirtualKey);
             if (jsKey == null) return;
             args.Handled = true;

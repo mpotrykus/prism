@@ -35,7 +35,15 @@ export function focusAfterPaint(el) {
 const COOLDOWN_MS = 120;
 const REPEAT_DELAY_MS = 400;
 const REPEAT_RATE_MS = 150;
-const DEADZONE = 0.5;
+/* Two different thresholds (hysteresis), not one - a single DEADZONE compared fresh every
+   animation frame let the stick's own analog noise flicker active[command] false/true/false
+   across consecutive frames whenever the raw axis sat right around the line, each flicker
+   back to true read as a brand-new press (see repeatState below) and re-fired. Requiring a
+   bigger push to register a press than to release it means once the stick reads as "pressed"
+   it stays pressed through any noise that doesn't clearly cross back past the lower line -
+   the same on/off stability a real digital d-pad switch has for free. */
+const STICK_PRESS_THRESHOLD = 0.5;
+const STICK_RELEASE_THRESHOLD = 0.3;
 
 /* "GamepadY" is not a real keyboard key and no keyboard produces it - the gamepad poller
    below is its only source. Y has no keyboard equivalent worth binding (any letter key
@@ -135,22 +143,6 @@ function isEventAllowed(e, command) {
   }
   return e.__navAllowed;
 }
-
-// TEMP debug logging for the stick-vs-dpad centering bug - remove once diagnosed. A single
-// listener (not one per registerNavHandler call) so this logs each recognized keydown once,
-// regardless of how many handlers are registered app-wide.
-document.addEventListener(
-  "keydown",
-  (e) => {
-    const command = KEY_TO_COMMAND[e.key];
-    if (!command) return;
-    const active = resolveDeepActiveElement(document.activeElement);
-    console.warn(
-      `[nav-debug] keydown command=${command} isTrusted=${e.isTrusted} active=${active?.tagName}.${active?.className}`
-    );
-  },
-  true
-);
 
 /* Registers a handler that's consulted on every recognized keydown, regardless of source
    (real or synthetic). `handler(command, event, activeElement)` returns true if it acted on
@@ -419,6 +411,10 @@ export function wireLinearNav(root, selector, { orientation = "vertical", onActi
 const REPEATABLE_COMMANDS = ["up", "down", "left", "right", "rewind", "forward"];
 const repeatState = Object.fromEntries(REPEATABLE_COMMANDS.map((c) => [c, { active: false, heldSince: 0, lastRepeatAt: 0 }]));
 const buttonState = Object.create(null);
+/* Persists across animation frames (unlike active[] below, which is recomputed fresh every
+   frame) - this is the stick's own virtual d-pad-button state, carrying the hysteresis
+   band's "stay pressed" memory from one frame to the next. */
+const stickButtonState = { up: false, down: false, left: false, right: false };
 const GAMEPAD_BUTTONS = { 0: "activate", 1: "back", 3: "search", 4: "chapterPrev", 5: "chapterNext", 9: "menu" }; // standard mapping: A, B, Y, LB, RB, Start
 
 /* PrismXbox's MainPage.xaml.cs also forwards d-pad/thumbstick/A/B natively via
@@ -431,6 +427,23 @@ const GAMEPAD_BUTTONS = { 0: "activate", 1: "back", 3: "search", 4: "chapterPrev
    the only thing actually working. Left unconditional until that native path is confirmed
    to fire on real hardware. */
 
+/* Confirmed on real Xbox hardware: this poller reads raw Gamepad API state directly, which
+   keeps working even while the system Guide overlay is open on top of the app - the Guide
+   takes over the gamepad's buttons, but nothing tells the *browsing context* that happened,
+   so a D-pad move or A/B press drives Guide navigation and this app's own nav at the same
+   time. MainPage.xaml.cs's OnCoreWindowActivated relays CoreWindow's Deactivated/Activated
+   transition (the OS's own signal that something else now owns input) into this flag via a
+   custom event - default true so the web-only (non-Xbox) build, which never receives that
+   event, behaves exactly as before. */
+let inputActive = window.__prismXboxInputActive !== false;
+document.addEventListener("xbox-input-active-change", (e) => {
+  inputActive = e.detail.active;
+  if (!inputActive) {
+    for (const state of Object.values(repeatState)) state.active = false;
+    for (const key of Object.keys(buttonState)) buttonState[key] = false;
+  }
+});
+
 function dispatchSyntheticKey(key) {
   const target = document.activeElement && document.activeElement !== document.body ? document.activeElement : document;
   /* cancelable defaults to false on a constructed event (unlike a real trusted keydown) -
@@ -440,43 +453,64 @@ function dispatchSyntheticKey(key) {
   target.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, composed: true, cancelable: true }));
 }
 
+/* Turns the raw stick axes into the same true/false "is this direction pressed" shape a
+   real d-pad button already reports, so everything downstream (active[] below, and every
+   handler beyond it) treats the stick as nothing more than four virtual d-pad buttons -
+   one path, not an analog signal OR'd into it. Hysteresis (STICK_PRESS_THRESHOLD to turn
+   on, the lower STICK_RELEASE_THRESHOLD to turn off) gives each virtual button the same
+   on/off stability a real digital switch has for free - analog noise sitting between the
+   two thresholds can't flicker it. */
+function updateStickButtonState(axisX, axisY) {
+  // An analog stick almost never reports a perfectly clean push - a slight diagonal drift
+  // means both axes can read past the press threshold on the same frame, unlike a real
+  // d-pad's mechanical cross where only one direction can physically register. Zeroing out
+  // whichever axis isn't dominant keeps the stick's virtual buttons collapsed to a single
+  // direction at a time, same as the d-pad.
+  const stickIsHorizontal = Math.abs(axisX) > Math.abs(axisY);
+  const y = stickIsHorizontal ? 0 : axisY;
+  const x = stickIsHorizontal ? axisX : 0;
+
+  if (y < -STICK_PRESS_THRESHOLD) stickButtonState.up = true;
+  else if (y > -STICK_RELEASE_THRESHOLD) stickButtonState.up = false;
+  if (y > STICK_PRESS_THRESHOLD) stickButtonState.down = true;
+  else if (y < STICK_RELEASE_THRESHOLD) stickButtonState.down = false;
+  if (x < -STICK_PRESS_THRESHOLD) stickButtonState.left = true;
+  else if (x > -STICK_RELEASE_THRESHOLD) stickButtonState.left = false;
+  if (x > STICK_PRESS_THRESHOLD) stickButtonState.right = true;
+  else if (x < STICK_RELEASE_THRESHOLD) stickButtonState.right = false;
+}
+
 function pollGamepads(now) {
+  // repeatState/buttonState were already reset to "nothing held" the instant Guide took
+  // over (see the xbox-input-active-change listener above) - skipping the whole body here
+  // just keeps them that way for as long as Guide stays open, so nothing fires until the
+  // gamepad's actual current state is read fresh below.
+  if (!inputActive) {
+    requestAnimationFrame(pollGamepads);
+    return;
+  }
   const pads = navigator.getGamepads ? navigator.getGamepads() : [];
   for (const gp of pads) {
     if (!gp) continue;
-    const axisX = gp.axes[0] || 0;
-    const axisY = gp.axes[1] || 0;
-    /* An analog stick almost never reports a perfectly clean push - a slight diagonal
-       drift means both axes can cross DEADZONE on the same frame, unlike a real d-pad's
-       mechanical cross where only one direction can physically register. Without this,
-       a diagonal-ish push fired two perpendicular commands per tick (e.g. up AND right),
-       each with its own focus/scrollIntoView call fighting the other and never settling
-       into place. Picking only the axis with the larger deflection makes the stick
-       collapse to a single direction per tick, same as the d-pad. */
-    const stickIsHorizontal = Math.abs(axisX) > Math.abs(axisY);
+    updateStickButtonState(gp.axes[0] || 0, gp.axes[1] || 0);
     const active = {
-      up: !!gp.buttons[12]?.pressed || (!stickIsHorizontal && axisY < -DEADZONE),
-      down: !!gp.buttons[13]?.pressed || (!stickIsHorizontal && axisY > DEADZONE),
-      left: !!gp.buttons[14]?.pressed || (stickIsHorizontal && axisX < -DEADZONE),
-      right: !!gp.buttons[15]?.pressed || (stickIsHorizontal && axisX > DEADZONE),
+      up: !!gp.buttons[12]?.pressed || stickButtonState.up,
+      down: !!gp.buttons[13]?.pressed || stickButtonState.down,
+      left: !!gp.buttons[14]?.pressed || stickButtonState.left,
+      right: !!gp.buttons[15]?.pressed || stickButtonState.right,
       rewind: !!gp.buttons[6]?.pressed,
       forward: !!gp.buttons[7]?.pressed,
     };
     for (const command of REPEATABLE_COMMANDS) {
       const state = repeatState[command];
       if (active[command]) {
-        // TEMP debug logging for the stick-vs-dpad centering bug - remove once diagnosed.
-        const debugSource = { up: 12, down: 13, left: 14, right: 15 }[command];
-        const viaButton = debugSource !== undefined && !!gp.buttons[debugSource]?.pressed;
         if (!state.active) {
           state.active = true;
           state.heldSince = now;
           state.lastRepeatAt = now;
-          console.warn(`[nav-debug] dispatch ${command} viaButton=${viaButton} axisX=${axisX.toFixed(2)} axisY=${axisY.toFixed(2)}`);
           dispatchSyntheticKey(COMMAND_TO_KEY[command]);
         } else if (now - state.heldSince > REPEAT_DELAY_MS && now - state.lastRepeatAt > REPEAT_RATE_MS) {
           state.lastRepeatAt = now;
-          console.warn(`[nav-debug] repeat ${command} viaButton=${viaButton} axisX=${axisX.toFixed(2)} axisY=${axisY.toFixed(2)}`);
           dispatchSyntheticKey(COMMAND_TO_KEY[command]);
         }
       } else {

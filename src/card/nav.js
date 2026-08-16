@@ -253,16 +253,15 @@ export function wireHomeNav(card) {
      shows its neighbors above/below too, not just a sliver of the row you jumped to. */
   const focusPoster = (el) => {
     el?.focus();
-    // TEMP debug logging for the stick-vs-dpad centering bug - remove once diagnosed.
-    const before = el?.getBoundingClientRect();
-    console.warn(`[nav-debug] focusPoster before top=${Math.round(before?.top)} left=${Math.round(before?.left)}`);
-    el?.scrollIntoView({ block: "center", inline: "center", behavior: "smooth" });
-    setTimeout(() => {
-      const after = el?.getBoundingClientRect();
-      console.warn(
-        `[nav-debug] focusPoster after(500ms) top=${Math.round(after?.top)} left=${Math.round(after?.left)} viewport=${window.innerWidth}x${window.innerHeight}`
-      );
-    }, 500);
+    /* Not "smooth" - a held/repeating d-pad or stick fires the next move every
+       REPEAT_RATE_MS (150ms, focus-nav.js), faster than a smooth scroll's own animation
+       takes to finish. Each new move interrupted the previous one's in-flight smooth
+       scroll before it ever reached center - confirmed via logging on real hardware, a
+       held stick hit this on nearly every step while an isolated single d-pad tap (no
+       following move to interrupt it) centered correctly. An instant jump can't be
+       interrupted mid-animation, so every step - however fast they arrive - lands
+       exactly centered. */
+    el?.scrollIntoView({ block: "center", inline: "center" });
   };
   /* The hero banner sits at the very top of the page's scroll container, so any focus
      landing on one of its buttons needs the page scrolled all the way up too - otherwise
@@ -408,16 +407,15 @@ export function wireSearchNav(card) {
 
   const focusPoster = (el) => {
     el?.focus();
-    // TEMP debug logging for the stick-vs-dpad centering bug - remove once diagnosed.
-    const before = el?.getBoundingClientRect();
-    console.warn(`[nav-debug] focusPoster before top=${Math.round(before?.top)} left=${Math.round(before?.left)}`);
-    el?.scrollIntoView({ block: "center", inline: "center", behavior: "smooth" });
-    setTimeout(() => {
-      const after = el?.getBoundingClientRect();
-      console.warn(
-        `[nav-debug] focusPoster after(500ms) top=${Math.round(after?.top)} left=${Math.round(after?.left)} viewport=${window.innerWidth}x${window.innerHeight}`
-      );
-    }, 500);
+    /* Not "smooth" - a held/repeating d-pad or stick fires the next move every
+       REPEAT_RATE_MS (150ms, focus-nav.js), faster than a smooth scroll's own animation
+       takes to finish. Each new move interrupted the previous one's in-flight smooth
+       scroll before it ever reached center - confirmed via logging on real hardware, a
+       held stick hit this on nearly every step while an isolated single d-pad tap (no
+       following move to interrupt it) centered correctly. An instant jump can't be
+       interrupted mid-animation, so every step - however fast they arrive - lands
+       exactly centered. */
+    el?.scrollIntoView({ block: "center", inline: "center" });
   };
 
   /* Column count varies with viewport width and each hub's grid wraps independently, so
