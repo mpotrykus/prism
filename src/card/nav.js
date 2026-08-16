@@ -139,6 +139,15 @@ export function wireHomeNav(card) {
      all (empty on-deck, or the current view isn't Home) rather than focusing nothing. */
   const continueWatchingFirstPoster = () =>
     postersIn(card.shadowRoot.querySelector('.row-section[data-row-key="on-deck"]'))[0] || null;
+  /* Posters live in a vertically-stacked, independently-scrollable row inside the page's
+     own scroll container - focusing one is not guaranteed to bring its whole row toward
+     the viewport's center the way a plain .focus() call would (browsers default to the
+     minimal "nearest" scroll). Centering it explicitly means landing on a row always
+     shows its neighbors above/below too, not just a sliver of the row you jumped to. */
+  const focusPoster = (el) => {
+    el?.focus();
+    el?.scrollIntoView({ block: "center", inline: "center", behavior: "smooth" });
+  };
 
   registerNavHandler((command, e, active) => {
     const inSidenav = sidenavItems().includes(active);
@@ -156,7 +165,9 @@ export function wireHomeNav(card) {
          this handler stealing focus mid-interaction with some other overlay. */
       const nothingFocusedYet = !active || active === document.body || active === card;
       if (nothingFocusedYet && ["up", "down", "left", "right"].includes(command)) {
-        (continueWatchingFirstPoster() || sidenavItems()[0])?.focus();
+        const target = continueWatchingFirstPoster();
+        if (target) focusPoster(target);
+        else sidenavItems()[0]?.focus();
         return true;
       }
       return false;
@@ -179,8 +190,9 @@ export function wireHomeNav(card) {
         return true;
       }
       if (command === "right") {
-        const target = heroItems()[0] || postersIn(rowSections()[0])[0];
-        target?.focus();
+        const heroTarget = heroItems()[0];
+        if (heroTarget) heroTarget.focus();
+        else focusPoster(postersIn(rowSections()[0])[0]);
         return true;
       }
       return false;
@@ -199,7 +211,7 @@ export function wireHomeNav(card) {
         return true;
       }
       if (command === "down") {
-        postersIn(rowSections()[0])[0]?.focus();
+        focusPoster(postersIn(rowSections()[0])[0]);
         return true;
       }
       if (command === "up") return true; // nothing above the hero - swallow, don't fall through
@@ -228,9 +240,7 @@ export function wireHomeNav(card) {
       const targetSection = sections[sectionIdx + (command === "down" ? 1 : -1)];
       if (!targetSection) return true; // no more rows that way - swallow
       const targetPosters = postersIn(targetSection);
-      const target = targetPosters[Math.min(idx, targetPosters.length - 1)];
-      target?.focus();
-      target?.scrollIntoView({ block: "nearest", inline: "center" });
+      focusPoster(targetPosters[Math.min(idx, targetPosters.length - 1)]);
       return true;
     }
     return false;
