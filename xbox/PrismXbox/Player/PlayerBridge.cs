@@ -119,6 +119,22 @@ namespace PrismXbox.Player
                 case "setPlaybackSpeed":
                     host.SetPlaybackSpeed(p.GetNamedNumber("speed", 1));
                     break;
+                case "setShaderEffect":
+                    host.SetShaderEffect(
+                        p.GetNamedBoolean("enabled", false),
+                        p.GetNamedString("shaderType", ""),
+                        p.GetNamedNumber("strength", 0),
+                        p.GetNamedBoolean("auto", false));
+                    break;
+                case "setColorBoost":
+                    host.SetColorBoost(
+                        p.GetNamedBoolean("enabled", false),
+                        p.GetNamedNumber("strength", 0),
+                        p.GetNamedBoolean("auto", false));
+                    break;
+                case "setAmbientLighting":
+                    host.SetAmbientLighting(p.GetNamedBoolean("enabled", false));
+                    break;
                 default:
                     log($"unhandled bridge method: {method}");
                     break;

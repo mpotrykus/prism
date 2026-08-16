@@ -1,4 +1,11 @@
 import { autoUpscaleStrength, autoColorBoostStrength } from "./shader/shaders.js";
+import { hasNativePlayer, platformTag } from "./core/platform.js";
+import { media } from "./core/media-facade.js";
+/* Circular with shader-pipeline.js (which imports updateContentAnalysis from this file, while
+   this file imports postXboxShaderSettings/postXboxColorBoostSettings from it) - safe for the
+   same "only referenced inside function bodies, never at module-evaluation time" reason as the
+   other cycles in this directory. */
+import { postXboxShaderSettings, postXboxColorBoostSettings } from "./shader-pipeline.js";
 
 /* Content-analysis pipeline backing "Auto strength" for Shader Upscaling and Color
    Boost (web/Xbox - Android's native ExoPlayer leg has its own equivalent built from
@@ -23,12 +30,41 @@ const CONTENT_SAMPLE_H = 18;
 const CONTENT_SMOOTHING_FACTOR = 0.3;
 
 export function updateContentAnalysis(controller) {
+    /* Xbox: no canvas to sample a <video> into - ShaderVideoEffect's ContentAnalysisSampler reads
+       real decoded frames instead and reports avgSaturation/edgeEnergy back over the bridge (see
+       applyXboxContentAnalysis below). setUpscaleAuto/setColorBoostAuto (shader-pipeline.js) both
+       call this function on every change, and native's own "auto" flag lives in the same
+       setShaderEffect/setColorBoost message shader-pipeline.js already owns building - re-posting
+       here keeps that flag in sync without a third copy of the payload-building logic. */
+    if (hasNativePlayer() && platformTag() === "xbox") {
+        postXboxShaderSettings(controller);
+        postXboxColorBoostSettings(controller);
+        return;
+    }
     if (!controller._upscaleAuto && !controller._colorBoostAuto) {
         stopContentAnalysisLoop(controller);
         return;
     }
     if (!ensureContentAnalysis(controller)) return;
     startContentAnalysisLoop(controller);
+}
+
+/* Fed by ShaderVideoEffect's native sampler via xbox-bridge.js's "contentAnalysis" event -
+   avgSaturation/edgeEnergy are the two numbers a browser canvas can compute itself on web, but
+   only native pixel access can produce on Xbox (see ShaderVideoEffect.ProcessFrame). Runs through
+   the exact same smoothing + autoUpscaleStrength/autoColorBoostStrength math sampleContentFrame
+   below already uses, so there is one tuning implementation shared by both platforms - see this
+   module's own header for why that math stays in JS rather than being duplicated natively. */
+export function applyXboxContentAnalysis(controller, avgSaturation, edgeEnergy) {
+    applySample(controller, avgSaturation, edgeEnergy);
+    /* applySample only updates controller._autoUpscaleStrength/_autoColorBoostStrength in memory -
+       native has no way to see those without this. Re-posts through the exact same helpers
+       shader-pipeline.js's updateShaderPipeline already uses, so native's ShaderVideoEffect picks
+       up the freshly-resolved auto strength on (roughly) the same ~750ms cadence this event
+       itself arrives on, rather than only ever seeing whatever strength was in effect at the
+       moment Auto mode was first switched on. */
+    if (controller._upscaleAuto) postXboxShaderSettings(controller);
+    if (controller._colorBoostAuto) postXboxColorBoostSettings(controller);
 }
 
 function ensureContentAnalysis(controller) {
@@ -91,6 +127,13 @@ function sampleContentFrame(controller, timestamp) {
 
     const rawSaturation = averageSaturation(data);
     const rawEdgeEnergy = averageEdgeEnergy(data, CONTENT_SAMPLE_W, CONTENT_SAMPLE_H);
+    applySample(controller, rawSaturation, rawEdgeEnergy);
+}
+
+/* Shared tail of sampleContentFrame (web) and applyXboxContentAnalysis (Xbox) - everything past
+   "a raw avgSaturation/edgeEnergy number exists", which is the only part that differs by
+   platform (a canvas sample here, a bridge event there). */
+function applySample(controller, rawSaturation, rawEdgeEnergy) {
     controller._contentSmoothedSaturation = smooth(controller._contentSmoothedSaturation, rawSaturation);
     controller._contentSmoothedEdgeEnergy = smooth(controller._contentSmoothedEdgeEnergy, rawEdgeEnergy);
 
@@ -112,9 +155,11 @@ function smooth(prev, raw) {
 
 /* How much the source would need to be stretched to fill the display - same ratio
    renderShaderFrame computes for its own scale clamp (shader-pipeline.js), recomputed
-   fresh here rather than cached since the window can resize mid-playback. */
+   fresh here rather than cached since the window can resize mid-playback. Falls back to the
+   media facade's videoWidth/videoHeight on Xbox, where there is no controller._videoEl - see
+   core/media-facade.js's NativeMediaFacade, kept in sync from native's own loadedMetadata event. */
 function computeScaleFactor(controller) {
-    const video = controller._videoEl;
+    const video = controller._videoEl || media(controller);
     if (!video || !video.videoWidth || !video.videoHeight) return 1;
     const dpr = window.devicePixelRatio || 1;
     const displayW = (window.innerWidth || document.documentElement.clientWidth) * dpr;

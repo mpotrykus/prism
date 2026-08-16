@@ -1,5 +1,7 @@
 using System;
 using System.Threading.Tasks;
+using PrismXboxEffects;
+using Windows.Foundation.Collections;
 using Windows.Media.Core;
 using Windows.Media.Playback;
 using Windows.UI.Xaml.Controls;
@@ -30,6 +32,12 @@ namespace PrismXbox.Player
         private string currentUrl;
         private bool everPlayed;
         private readonly HdrDisplayController hdr;
+        // Tracks whether ShaderVideoEffect is currently attached to `player`, so
+        // SetShaderEffect/SetColorBoost/SetAmbientLighting only call AddVideoEffect/
+        // RemoveAllEffects on an actual on/off transition rather than on every settings tweak -
+        // mirrors shader-pipeline.js's own "only spin the pipeline up/down at the 0%/on-off
+        // boundary" reasoning.
+        private bool effectAttached;
 
         public MediaPlayerElement Element { get; }
 
@@ -70,6 +78,72 @@ namespace PrismXbox.Player
                 log($"MediaFailed: {e.Error} / 0x{e.ExtendedErrorCode?.HResult:X8}");
                 emit("error", $"{{\"message\":{JsonString($"{e.Error}: {e.ErrorMessage}")}}}");
             };
+
+            // Raised on ShaderVideoEffect.ProcessFrame's own thread (a Media Foundation work
+            // thread, not the UI thread) - same "must marshal before touching WebView2" rule the
+            // constructor's `emit` parameter itself is already built to satisfy (see MainPage.xaml.cs's
+            // Dispatcher.RunAsync wrapper around it), so simply forwarding through `emit` here is
+            // enough; this class does not need its own dispatcher call.
+            EffectSettings.ContentAnalysis += (avgSaturation, edgeEnergy) =>
+                emit("contentAnalysis", $"{{\"avgSaturation\":{avgSaturation:R},\"edgeEnergy\":{edgeEnergy:R}}}");
+            EffectSettings.AmbientColors += (top, bottom, left, right) =>
+                emit("ambientColors",
+                    $"{{\"top\":{JsonNumberArray(top)},\"bottom\":{JsonNumberArray(bottom)}," +
+                    $"\"left\":{JsonNumberArray(left)},\"right\":{JsonNumberArray(right)}}}");
+            // Also raised off ProcessFrame's own thread - `log` already marshals to the UI thread
+            // itself (it's the same delegate MainPage.xaml.cs wires up for everything else), so no
+            // extra dispatcher call is needed here either.
+            EffectSettings.EffectLog += (message) => log($"[effect] {message}");
+        }
+
+        /// <summary>
+        /// Adds/removes ShaderVideoEffect at the actual on/off boundary (see
+        /// EffectSettings.ShouldAttach) and always writes the new settings through first, so a
+        /// freshly-attached effect's very first frame already sees the right values instead of a
+        /// stale/default snapshot.
+        /// </summary>
+        public void SetShaderEffect(bool enabled, string shaderType, double strength, bool auto)
+        {
+            EffectSettings.SetShaderEffect(enabled, shaderType, strength, auto);
+            SyncEffectAttachment();
+        }
+
+        public void SetColorBoost(bool enabled, double strength, bool auto)
+        {
+            EffectSettings.SetColorBoost(enabled, strength, auto);
+            SyncEffectAttachment();
+        }
+
+        public void SetAmbientLighting(bool enabled)
+        {
+            EffectSettings.SetAmbientLighting(enabled);
+            SyncEffectAttachment();
+        }
+
+        private void SyncEffectAttachment()
+        {
+            bool shouldAttach = EffectSettings.ShouldAttach;
+            if (shouldAttach == effectAttached) return;
+            if (shouldAttach)
+            {
+                // effectOptional:true - if activation genuinely fails on this device (see
+                // ShaderVideoEffect's own header comment for the two things this project has not
+                // yet verified on real hardware), playback should keep working without effects
+                // rather than refuse to play at all.
+                player.AddVideoEffect(typeof(ShaderVideoEffect).FullName, true, new PropertySet());
+            }
+            else
+            {
+                player.RemoveAllEffects();
+            }
+            effectAttached = shouldAttach;
+        }
+
+        private static string JsonNumberArray(double[] values)
+        {
+            var parts = new string[values.Length];
+            for (int i = 0; i < values.Length; i++) parts[i] = values[i].ToString("R");
+            return "[" + string.Join(",", parts) + "]";
         }
 
         /// <param name="isHdr">

@@ -1,4 +1,15 @@
 import { AMBIENT_STORAGE_KEY, AMBIENT_OPACITY_STORAGE_KEY } from "./ui/shared.js";
+import { hasNativePlayer, platformTag } from "./core/platform.js";
+import { media } from "./core/media-facade.js";
+/* Circular with xbox-bridge.js (which imports applyXboxAmbientColors/teardownAmbient from this
+   file, while this file imports postAmbientLighting from it) - safe for the same reason as the
+   other cycles in src/player/: postAmbientLighting is only referenced inside updateAmbientPipeline's
+   function body below, never at module-evaluation time. */
+import { postAmbientLighting } from "./xbox-bridge.js";
+
+function isXbox() {
+    return hasNativePlayer() && platformTag() === "xbox";
+}
 
 /* Ambient-lighting pipeline (web/Xbox only - Android's native ExoPlayer leg has its own
    equivalent built from AmbientLightSampler/AmbientGlowView in the android/ project,
@@ -121,6 +132,12 @@ function applyAmbientOpacity(controller) {
 }
 
 export function updateAmbientPipeline(controller) {
+    const xbox = isXbox();
+    /* Native only has a sampling job here (the color-averaging, done off the same decoded frame
+       ShaderVideoEffect already has in hand) - the panels themselves are pure DOM, painted below
+       exactly as on web, since there is no way for a native surface to layer into the page. */
+    if (xbox) postAmbientLighting(!!controller._ambientEnabled);
+
     if (!controller._ambientEnabled) {
         stopAmbientLoop(controller);
         if (controller._ambientGlowContainer) controller._ambientGlowContainer.style.display = "none";
@@ -133,25 +150,44 @@ export function updateAmbientPipeline(controller) {
         return;
     }
     controller._ambientGlowContainer.style.display = "block";
-    controller._videoEl.style.background = "transparent";
+    if (controller._videoEl) controller._videoEl.style.background = "transparent";
     if (controller._shaderCanvas) controller._shaderCanvas.style.background = "transparent";
     layoutGlowPanels(controller);
-    startAmbientLoop(controller);
+    /* Xbox never starts this loop - there is no <video> for renderAmbientFrame to sample, and
+       layoutGlowPanels is instead re-run each time a fresh "ambientColors" event arrives (see
+       applyXboxAmbientColors below) plus once here for the initial layout. */
+    if (!xbox) startAmbientLoop(controller);
 }
 
-/* Wrapper carries the blur/positioning (so blur blends across zone boundaries); each
-   zone is an independently-colored flex child sized equally along the wrapper's own
-   length. Row layout (zones side-by-side) for the horizontal edges, column layout
-   (zones stacked) for the vertical ones - flexbox's default align-items:stretch then
-   handles sizing the zones across the cross-axis without any explicit per-zone
-   width/height math. Deliberately doesn't set the wrapper's own `opacity` here - that's
-   applied separately (see applyAmbientOpacity) since it's a user-tunable value read from
-   controller._ambientOpacity, not a fixed constant like blur is. */
+/* Two nested elements per edge, not one. The blur filter needs real, opaque content past the
+   picture's own true edge to sample near that boundary (see AMBIENT_BLUR_PX's own comment for
+   why - without it, blur dilutes in transparency from beyond the box and reads as a shadow right
+   at the edge) - true on every platform. But that overscan content must never actually be visible
+   over the real picture, and web/Xbox differ in how that gets enforced: web's opaque <video>
+   element sits above this whole tree in z-order and simply covers it; Xbox has no such element at
+   all (native video renders in a separate XAML layer, entirely outside CSS z-index), so nothing
+   would hide it there.
+   `clip` is sized to the TRUE gap only (see layoutGlowPanels) with overflow:hidden, and never
+   grows past it. `wrapper` - still the full gap+overscan size the blur needs - is its child,
+   positioned so the overscan portion always lands outside clip's own box and gets cut off by it.
+   This is a plain CSS clip, not a platform check: it produces the exact same rendered result on
+   web (that overscan region was already invisible there too, just via z-order instead of
+   clipping) while actually fixing Xbox, where a viewer could otherwise see it visibly overlapping
+   real video ("ambient lighting is overlaying the main video", confirmed on hardware). */
 function makeGlowEdge(edge) {
+    const clip = document.createElement("div");
+    Object.assign(clip.style, {
+        position: "fixed",
+        overflow: "hidden",
+        pointerEvents: "none",
+    });
+
     const wrapper = document.createElement("div");
     const gradientDir = { top: "to top", bottom: "to bottom", left: "to left", right: "to right" }[edge];
     Object.assign(wrapper.style, {
-        position: "fixed",
+        /* Relative to `clip` (its nearest positioned ancestor), not the viewport - layoutGlowPanels
+           positions clip in viewport coordinates and wrapper relative to clip's own box. */
+        position: "absolute",
         display: "flex",
         flexDirection: edge === "top" || edge === "bottom" ? "row" : "column",
         /* Smaller than an earlier version's blur(80px) - a heavy blur diffuses color
@@ -183,7 +219,8 @@ function makeGlowEdge(edge) {
         wrapper.appendChild(zone);
         zones.push(zone);
     }
-    return { wrapper, zones };
+    clip.appendChild(wrapper);
+    return { clip, wrapper, zones };
 }
 
 /* Lazily built on first enable, same reasoning as ensureShaderPipeline - most sessions
@@ -195,15 +232,26 @@ function makeGlowEdge(edge) {
    updateAmbientPipeline) within whatever gap object-fit:contain leaves. */
 export function ensureAmbientPipeline(controller) {
     if (controller._ambientGlowContainer) return true;
-    const video = controller._videoEl;
-    if (!video) return false;
+    /* Web needs a real <video> to sample from; Xbox needs nothing here at all - its color data
+       arrives over the bridge instead (see applyXboxAmbientColors below), so the panels can be
+       built with no video element in hand. */
+    if (!isXbox() && !controller._videoEl) return false;
 
     const container = document.createElement("div");
     Object.assign(container.style, {
         position: "fixed",
         inset: "0",
         zIndex: "9990",
-        background: "#000",
+        /* "#000" on web only, where this container sits BEHIND the opaque <video> element (see
+           this function's own header comment) - the fallback is invisible everywhere except the
+           corners of the true letterbox gap the four edge gradients don't quite reach. Xbox has no
+           DOM video element to occlude it: native video renders in a completely separate XAML
+           visual layer behind the transparent WebView2, entirely outside CSS z-index, so an
+           opaque full-screen background here would paint over the ENTIRE picture, not just the
+           gap - confirmed on hardware ("ambient lighting borders generate live" but "the middle is
+           solid black"). Xbox's own MediaPlayerElement (Stretch=Uniform) already letterboxes with
+           its own black bars, so this container needs no fallback color of its own there. */
+        background: isXbox() ? "transparent" : "#000",
         overflow: "hidden",
         pointerEvents: "none",
     });
@@ -213,24 +261,29 @@ export function ensureAmbientPipeline(controller) {
         left: makeGlowEdge("left"),
         right: makeGlowEdge("right"),
     };
-    Object.values(panels).forEach((p) => container.appendChild(p.wrapper));
+    Object.values(panels).forEach((p) => container.appendChild(p.clip));
     document.body.appendChild(container);
 
-    const sampleCanvas = document.createElement("canvas");
-    sampleCanvas.width = AMBIENT_SAMPLE_W;
-    sampleCanvas.height = AMBIENT_SAMPLE_H;
-    const ctx = sampleCanvas.getContext("2d", { willReadFrequently: true });
-    if (!ctx) {
-        console.error("StreamingPlayer: 2D canvas unavailable, ambient lighting disabled");
-        container.remove();
-        return false;
+    /* Xbox supplies zone colors over the bridge (see applyXboxAmbientColors below) - there is no
+       <video> for a canvas to sample here, so skip building one entirely rather than fail the
+       whole pipeline over a resource this platform never uses. */
+    if (!isXbox()) {
+        const sampleCanvas = document.createElement("canvas");
+        sampleCanvas.width = AMBIENT_SAMPLE_W;
+        sampleCanvas.height = AMBIENT_SAMPLE_H;
+        const ctx = sampleCanvas.getContext("2d", { willReadFrequently: true });
+        if (!ctx) {
+            console.error("StreamingPlayer: 2D canvas unavailable, ambient lighting disabled");
+            container.remove();
+            return false;
+        }
+        controller._ambientSampleCanvas = sampleCanvas;
+        controller._ambientSampleCtx = ctx;
     }
 
     controller._ambientGlowContainer = container;
     controller._ambientGlowPanels = panels;
     applyAmbientOpacity(controller);
-    controller._ambientSampleCanvas = sampleCanvas;
-    controller._ambientSampleCtx = ctx;
     controller._ambientLastSampleAt = 0;
     /* Per-zone EMA state for applySmoothedZoneColors (see AMBIENT_SMOOTHING_FACTOR) -
        null entries mean "no real sample seen yet for this zone", so the first sample
@@ -254,7 +307,10 @@ export function ensureAmbientPipeline(controller) {
 function computePictureRect(controller) {
     const vw = window.innerWidth;
     const vh = window.innerHeight;
-    const video = controller._videoEl;
+    /* Falls back to the media facade's videoWidth/videoHeight on Xbox, where there is no
+       controller._videoEl - see core/media-facade.js's NativeMediaFacade, kept in sync from
+       native's own loadedMetadata event. */
+    const video = controller._videoEl || media(controller);
     const viewportAR = vw / vh;
     const videoAR = video && video.videoWidth && video.videoHeight ? video.videoWidth / video.videoHeight : viewportAR;
     let w;
@@ -300,23 +356,38 @@ function layoutGlowPanels(controller) {
     const leftGap = Math.max(0, rect.left);
     const rightGap = Math.max(0, vw - right);
 
+    /* clip is sized to the TRUE gap only, in viewport coordinates - never overscan, and never more
+       than the real gap. When a side has no gap at all, clip collapses to 0 and hides its wrapper
+       entirely regardless of what the wrapper itself wants to paint - this is what makes it safe to
+       give wrapper a flat, unconditional gap+AMBIENT_BLUR_PX size below instead of the three-way
+       `gap > 0 ? gap + overscan : 0` ternary an earlier version needed (back when there was no clip
+       to enforce true visibility, a zero-gap side given any height at all could leak a bright
+       streak across the video on the slightest mismatch between this computed rect and the
+       browser's real object-fit:contain rendering - see the git history for that fix). wrapper is
+       positioned relative to clip (its nearest positioned ancestor - see makeGlowEdge), not the
+       viewport, so its offsets below are deliberately DIFFERENT numbers from clip's own. */
+    Object.assign(panels.top.clip.style, { left: "0px", top: "0px", width: `${vw}px`, height: `${topGap}px` });
     Object.assign(panels.top.wrapper.style, {
-        left: "0px", top: "0px", width: `${vw}px`, height: `${topGap > 0 ? topGap + AMBIENT_BLUR_PX : 0}px`,
+        left: "0px", top: "0px", width: `${vw}px`, height: `${topGap + AMBIENT_BLUR_PX}px`,
+    });
+
+    Object.assign(panels.bottom.clip.style, {
+        left: "0px", top: `${vh - bottomGap}px`, width: `${vw}px`, height: `${bottomGap}px`,
     });
     Object.assign(panels.bottom.wrapper.style, {
-        left: "0px",
-        top: `${bottomGap > 0 ? bottom - AMBIENT_BLUR_PX : vh}px`,
-        width: `${vw}px`,
-        height: `${bottomGap > 0 ? bottomGap + AMBIENT_BLUR_PX : 0}px`,
+        left: "0px", top: `${-AMBIENT_BLUR_PX}px`, width: `${vw}px`, height: `${bottomGap + AMBIENT_BLUR_PX}px`,
     });
+
+    Object.assign(panels.left.clip.style, { left: "0px", top: "0px", width: `${leftGap}px`, height: `${vh}px` });
     Object.assign(panels.left.wrapper.style, {
-        left: "0px", top: "0px", width: `${leftGap > 0 ? leftGap + AMBIENT_BLUR_PX : 0}px`, height: `${vh}px`,
+        left: "0px", top: "0px", width: `${leftGap + AMBIENT_BLUR_PX}px`, height: `${vh}px`,
+    });
+
+    Object.assign(panels.right.clip.style, {
+        left: `${vw - rightGap}px`, top: "0px", width: `${rightGap}px`, height: `${vh}px`,
     });
     Object.assign(panels.right.wrapper.style, {
-        left: `${rightGap > 0 ? right - AMBIENT_BLUR_PX : vw}px`,
-        top: "0px",
-        width: `${rightGap > 0 ? rightGap + AMBIENT_BLUR_PX : 0}px`,
-        height: `${vh}px`,
+        left: `${-AMBIENT_BLUR_PX}px`, top: "0px", width: `${rightGap + AMBIENT_BLUR_PX}px`, height: `${vh}px`,
     });
 }
 
@@ -475,6 +546,27 @@ function boostColor(r, g, b) {
     const luma = 0.299 * r + 0.587 * g + 0.114 * b;
     const boost = (c) => clamp255((luma + (c - luma) * AMBIENT_SATURATION_BOOST) * AMBIENT_BRIGHTNESS_BOOST);
     return [boost(r), boost(g), boost(b)];
+}
+
+/* Fed by ShaderVideoEffect's native sampler via xbox-bridge.js's "ambientColors" event - raw
+   per-zone RGB averages only (see AmbientColorSampler.cs's own header for why). boostColor and
+   smoothZones below are the exact same functions renderAmbientFrame's web path already calls,
+   applied here in the same order (average -> boost -> smooth -> paint) so the two platforms
+   produce the same look from the same source. */
+export function applyXboxAmbientColors(controller, rawColors) {
+    if (!controller._ambientGlowPanels || !controller._ambientSmoothed) return;
+    layoutGlowPanels(controller);
+    const toBoostedTriples = (flat) => {
+        const out = [];
+        for (let i = 0; i < flat.length; i += 3) out.push(boostColor(flat[i], flat[i + 1], flat[i + 2]));
+        return out;
+    };
+    const { top, bottom, left, right } = controller._ambientGlowPanels;
+    const smoothed = controller._ambientSmoothed;
+    applyZoneColors(top, smoothZones(smoothed.top, toBoostedTriples(rawColors.top)));
+    applyZoneColors(bottom, smoothZones(smoothed.bottom, toBoostedTriples(rawColors.bottom)));
+    applyZoneColors(left, smoothZones(smoothed.left, toBoostedTriples(rawColors.left)));
+    applyZoneColors(right, smoothZones(smoothed.right, toBoostedTriples(rawColors.right)));
 }
 
 /* Called from web-fallback.js's teardownWeb alongside the shader pipeline's own inline

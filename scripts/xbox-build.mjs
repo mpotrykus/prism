@@ -18,29 +18,7 @@
 // set in the csproj) depends only on the standard retail Microsoft.NET.Native.*/
 // Microsoft.VCLibs.*.14.00 framework packages instead, which sideload cleanly.
 import { execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-
-const projectDir = fileURLToPath(new URL("../xbox/PrismXbox/", import.meta.url));
-const solutionPath = new URL("../xbox/PrismXbox/PrismXbox.sln", import.meta.url);
-
-function findMsBuild() {
-  const vswhere = "C:\\Program Files (x86)\\Microsoft Visual Studio\\Installer\\vswhere.exe";
-  if (!existsSync(vswhere)) {
-    throw new Error(`vswhere.exe not found at ${vswhere} - is Visual Studio installed?`);
-  }
-  const path = execFileSync(vswhere, [
-    "-latest",
-    "-prerelease",
-    "-requires", "Microsoft.Component.MSBuild",
-    "-find", "MSBuild\\**\\Bin\\MSBuild.exe",
-  ])
-    .toString()
-    .split(/\r?\n/)
-    .find((line) => line.trim().length > 0);
-  if (!path) throw new Error("vswhere found Visual Studio but no MSBuild.exe under it.");
-  return path.trim();
-}
+import { findMsBuild, projectDir, solutionPath } from "./xbox-msbuild.mjs";
 
 const msbuild = findMsBuild();
 console.log(`xbox-build: using ${msbuild}`);
@@ -49,11 +27,11 @@ const run = (args) =>
   execFileSync(msbuild, args, { cwd: projectDir, stdio: "inherit" });
 
 console.log("xbox-build: restoring NuGet packages...");
-run([fileURLToPath(solutionPath), "/t:Restore", "/verbosity:minimal"]);
+run([solutionPath, "/t:Restore", "/verbosity:minimal"]);
 
 console.log("xbox-build: building .msix (Release|x64, sideload)...");
 run([
-  fileURLToPath(solutionPath),
+  solutionPath,
   "/t:Build",
   "/p:Configuration=Release",
   "/p:Platform=x64",

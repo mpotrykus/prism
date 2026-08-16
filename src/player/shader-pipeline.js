@@ -8,6 +8,47 @@ import {
     COLOR_BOOST_AUTO_STORAGE_KEY,
 } from "./ui/shared.js";
 import { updateContentAnalysis } from "./content-analysis.js";
+import { hasNativePlayer, platformTag } from "./core/platform.js";
+/* Circular with xbox-bridge.js (which imports postXboxShaderSettings/postXboxColorBoostSettings
+   from content-analysis.js, which itself imports them from this file) - safe for the same reason
+   the other cycles in src/player/ui/ are: postShaderEffect/postColorBoost are only referenced
+   inside function bodies below (updateShaderPipeline, postXboxShaderSettings), never at
+   top-level module-evaluation time. */
+import { postShaderEffect, postColorBoost } from "./xbox-bridge.js";
+
+function isXbox() {
+    return hasNativePlayer() && platformTag() === "xbox";
+}
+
+/* Xbox has no real <video> element for ensureShaderPipeline's canvas/WebGL pass to read from -
+   ShaderVideoEffect (xbox/PrismXboxEffects) bakes Shader Upscaling/Color Boost directly into the
+   decoded frame instead, so this side only ever has to relay settings across the bridge. Exported
+   so content-analysis.js's own Xbox branch can reuse the exact same payload-building logic rather
+   than re-deriving it - native's "auto" flag lives in this same message, and content-analysis.js's
+   updateContentAnalysis is what setUpscaleAuto/setColorBoostAuto below actually call. */
+export function postXboxShaderSettings(controller) {
+    postShaderEffect({
+        enabled: !!controller._shaderEnabled,
+        shaderType: controller._shaderAutoType,
+        /* The bug this fixed: native has no concept of "auto" strength resolution of its own - it
+           only ever renders whatever strength number this message carries. Sending the raw manual
+           slider value here meant Auto mode natively rendered with _shaderStrength (0 unless the
+           viewer had also dragged the slider), a no-op, regardless of what applyXboxContentAnalysis
+           had actually computed into _autoUpscaleStrength - same resolution renderShaderFrame's web
+           path already does per-frame (`controller._upscaleAuto ? controller._autoUpscaleStrength :
+           controller._shaderStrength`). */
+        strength: controller._upscaleAuto ? (controller._autoUpscaleStrength ?? 0) : controller._shaderStrength,
+        auto: !!controller._upscaleAuto,
+    });
+}
+
+export function postXboxColorBoostSettings(controller) {
+    postColorBoost({
+        enabled: !!controller._colorBoostEnabled,
+        strength: controller._colorBoostAuto ? (controller._autoColorBoostStrength ?? 0) : controller._colorBoostStrength,
+        auto: !!controller._colorBoostAuto,
+    });
+}
 
 /* WebGL upscaling pipeline (Anime4K/CAS) - reads frames from the controller's <video>
    element and renders an upscaled frame into a canvas stacked on top of it. Takes the
@@ -131,6 +172,15 @@ export function setColorBoostMode(controller, mode) {
    no-ops once already built, and start/stop only takes effect when the 0%/>0% boundary
    is actually crossed. */
 export function updateShaderPipeline(controller) {
+    /* Xbox: no canvas/WebGL pass at all - ShaderVideoEffect is what actually renders this, and it
+       reads its settings from EffectSettings (a shared static on the native side), not a
+       per-frame bridge message. Relaying the current settings here is enough; native re-attaches/
+       detaches itself from EffectSettings.ShouldAttach. */
+    if (isXbox()) {
+        postXboxShaderSettings(controller);
+        postXboxColorBoostSettings(controller);
+        return;
+    }
     /* Either toggle keeps this GL pass alive - Color Boost alone still needs the canvas
        rendering (with sharpenStrength forced to 0 in renderShaderFrame below), same as
        shader upscaling alone. */

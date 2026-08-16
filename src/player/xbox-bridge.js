@@ -23,6 +23,13 @@ import { media, setMediaFacade, NativeMediaFacade } from "./core/media-facade.js
 import { notifyStall, notifyReload, setStallDrivenAbr, updateAbrMonitor } from "./core/abr.js";
 import { reloadTranscodeSession } from "./core/session-reload.js";
 import { mountPlayerChrome, unmountPlayerChrome } from "./ui/player-chrome.js";
+/* Circular with shader-pipeline.js/content-analysis.js/ambient-pipeline.js (each imports a "post"
+   helper from this file; this file imports their "update"/"apply" functions back) - safe for the
+   same "function-body-only reference" reason documented in each of those files' own import
+   comments. */
+import { updateShaderPipeline } from "./shader-pipeline.js";
+import { updateContentAnalysis, applyXboxContentAnalysis } from "./content-analysis.js";
+import { updateAmbientPipeline, applyXboxAmbientColors, teardownAmbient } from "./ambient-pipeline.js";
 
 function bridge() {
     return typeof window !== "undefined" ? window.chrome?.webview : null;
@@ -56,10 +63,19 @@ export function playXbox(controller, streamUrl, startOffsetMs, payload, payloadF
     const facade = attachFacade(controller, payloadFor);
     mountBackdrop(controller);
     /* The same chrome the web leg mounts, over native video instead of a <video> element - this is what
-       the whole transparent-WebView2 architecture is for. gpuPipelines:false because the shader,
-       Color Boost, ambient-lighting and content-analysis passes all read pixels out of a real <video>
-       via texImage2D/drawImage, which a native surface cannot provide. */
+       the whole transparent-WebView2 architecture is for. gpuPipelines:false because shader-pipeline.js's
+       WebGL canvas and content-analysis.js's 2D canvas both read pixels out of a real <video> via
+       texImage2D/drawImage, which a native surface cannot provide - ShaderVideoEffect
+       (xbox/PrismXboxEffects) does that work natively instead (see the three calls below). */
     mountPlayerChrome(controller, facade, { gpuPipelines: false });
+    /* Mirrors mountPlayerChrome's own gpuPipelines-gated startup calls (web) - applies whatever
+       shader/Color-Boost/ambient/auto settings were already resolved from storage in play(), so a
+       session that starts with an effect already on takes effect immediately rather than waiting
+       for the viewer to open the Effects menu. Each of these three internally branches on Xbox to
+       relay settings over the bridge instead of building a canvas. */
+    updateShaderPipeline(controller);
+    updateAmbientPipeline(controller);
+    updateContentAnalysis(controller);
     /* Stall-driven rather than bandwidth-driven: the native player hands HTTP fetching to
        MediaFoundation, so there are no per-segment byte/duration callbacks to derive kbps from. See
        core/abr.js's setStallDrivenAbr. */
@@ -79,8 +95,12 @@ export function switchXbox(controller, streamUrl, startOffsetMs, payload) {
 export function stopXbox(controller) {
     post("stop");
     /* Tears down exactly what playXbox mounted. Its absence is what left the transport bar, center
-       controls and an open options sheet on screen after backing out of native playback. */
+       controls and an open options sheet on screen after backing out of native playback. Ambient's
+       glow panels are torn down explicitly here (not inside unmountPlayerChrome, which is shared
+       with a leg that never mounts them) - see teardownAmbient's own comment for why web instead
+       tears them down from teardownWeb. */
     unmountPlayerChrome(controller);
+    teardownAmbient(controller);
     removeListeners(controller);
     setStallDrivenAbr(controller, false);
     setMediaFacade(controller, null);
@@ -170,6 +190,24 @@ export function pauseXbox() {
 
 export function resumeXbox() {
     post("resume");
+}
+
+/* --- JS -> native, Effects (shader-pipeline.js/ambient-pipeline.js call these; see each file's
+   own postXboxShaderSettings/postXboxColorBoostSettings/updateAmbientPipeline). Native's
+   ShaderVideoEffect keeps its own copy of these values (EffectSettings, xbox/PrismXboxEffects) -
+   see that class's own header comment for why settings flow this way rather than through
+   MediaPlayer.AddVideoEffect's IPropertySet. --- */
+
+export function postShaderEffect({ enabled, shaderType, strength, auto }) {
+    post("setShaderEffect", { enabled, shaderType, strength, auto });
+}
+
+export function postColorBoost({ enabled, strength, auto }) {
+    post("setColorBoost", { enabled, strength, auto });
+}
+
+export function postAmbientLighting(enabled) {
+    post("setAmbientLighting", { enabled });
 }
 
 /* The Xbox leg's rebuild step, over the same shared sequence the web leg uses
@@ -262,6 +300,17 @@ function handleMessage(controller, message) {
             /* Read by stats-overlay.js. Notably includes real colour-space/transfer state, which the
                web leg can never provide - its HDR line is hardcoded "n/a (browser)". */
             controller._xboxStats = params;
+            break;
+        case "contentAnalysis":
+            applyXboxContentAnalysis(controller, params.avgSaturation, params.edgeEnergy);
+            break;
+        case "ambientColors":
+            applyXboxAmbientColors(controller, {
+                top: params.top,
+                bottom: params.bottom,
+                left: params.left,
+                right: params.right,
+            });
             break;
         case "ended":
             controller._handlePlaybackEnded?.();

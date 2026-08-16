@@ -56,7 +56,6 @@
     </Compile>
     <Compile Include="Player\HdrDisplayController.cs" />
     <Compile Include="Player\NativePlayerHost.cs" />
-    <Compile Include="Player\NativePlayerSpike.cs" />
     <Compile Include="Player\PlayerBridge.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
   </ItemGroup>
@@ -116,6 +115,15 @@
     <PackageReference Include="Microsoft.Web.WebView2">
       <Version>1.0.4129.50</Version>
     </PackageReference>
+  </ItemGroup>
+  <ItemGroup>
+    <!-- Hosts ShaderVideoEffect (Shader Upscaling/Color Boost/Ambient Lighting) - must be a
+         separate Windows Runtime Component project, not a class in this one; see that
+         project's own csproj header comment for why. -->
+    <ProjectReference Include="..\PrismXboxEffects\PrismXboxEffects.csproj">
+      <Project>{9E6F7E1E-9E6E-4E3F-8B7B-5F6D9B7F6E1E}</Project>
+      <Name>PrismXboxEffects</Name>
+    </ProjectReference>
   </ItemGroup>
   <PropertyGroup Condition=" '$(VisualStudioVersion)' == '' or '$(VisualStudioVersion)' &lt; '14.0' ">
     <VisualStudioVersion>14.0</VisualStudioVersion>

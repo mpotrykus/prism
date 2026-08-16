@@ -26,12 +26,6 @@ namespace PrismXbox
     /// Hosts the built Prism web app (bundled under www/, synced from the root repo's
     /// `npm run xbox:sync`) full-screen inside a WebView2 control.
     ///
-    /// Currently also carries the Phase 0 native-player hardware spike (NativePlayerSpike +
-    /// the SPIKE-marked members below), which is temporary: it answers, on a real console,
-    /// whether MediaFoundation can be the native player before Phase 2's real bridge is worth
-    /// building. Everything marked SPIKE comes out once the answers land in
-    /// docs/xbox-native-hdr-player/.
-    ///
     /// Layout is a Grid rather than the WebView2 alone so a video surface can sit behind the
     /// page: MediaPlayerElement at z=0, WebView2 (transparent) at z=1, diagnostics on top.
     /// </summary>
@@ -39,45 +33,15 @@ namespace PrismXbox
     {
         private WebView2 webView;
 
-        // The real Phase 2 player and its bridge. Runs alongside the Phase 0 spike during bring-up:
-        // the spike's Y/Menu triggers and on-screen log are still the only way to compare stacks on
-        // hardware, and both it and the SPIKE-marked members below come out once native playback is
-        // driven entirely by the app.
         private NativePlayerHost playerHost;
         private PlayerBridge playerBridge;
 
-        // SPIKE
-        private NativePlayerSpike nativeSpike;
         private TextBlock diagnostics;
         private Border diagnosticsPanel;
         private readonly List<string> diagnosticLines = new List<string>();
-        private string lastStreamUrl;
-        private DateTime lastHeartbeatAt = DateTime.MinValue;
         private const int MaxDiagnosticLines = 18;
-        // Bumped on every spike iteration and logged at startup, so "did my build actually get
-        // deployed?" is answerable by looking at the screen instead of inferring it.
-        private const string SpikeBuild = "spike-10";
         private string lastLoggedMessage;
         private int repeatCount;
-        // Logged once per newly-seen key rather than on every press: enough to prove which
-        // VirtualKeys the console actually delivers to CoreWindow.KeyDown, without D-pad repeats
-        // flooding the 18-line panel. This exists because X/Y appeared to do nothing on the first
-        // spike build, and "our handler never ran" and "those keys never arrive" look identical
-        // from the outside.
-        private readonly HashSet<VirtualKey> keysSeen = new HashSet<VirtualKey>();
-        // Second, independent route to the X trigger. Xbox synthesizes keyboard equivalents
-        // for D-pad/A/B (arrows/Enter/Escape), which is why the existing forwarding works, but
-        // X has no keyboard equivalent and may therefore never surface as a
-        // CoreWindow.KeyDown at all - a plausible explanation for the first spike build appearing
-        // to ignore it. Windows.Gaming.Input reads the pad directly and bypasses the question.
-        // It has no event for button presses, hence the poll and the edge detection.
-        private DispatcherTimer padPollTimer;
-        private bool padXWasDown;
-        // Set the first time X arrives as a CoreWindow key event, which switches the polling
-        // fallback off. Without this both routes would act on the same press - the double-handled
-        // input trap this project already hit once on the moonlight-xbox side.
-        private bool padTriggersArriveAsKeys;
-        private int padTickCount;
 
         // "prismxbox.local" is an arbitrary virtual hostname mapped below to the bundled "www"
         // folder via SetVirtualHostNameToFolderMapping. This is WebView2's recommended mechanism
@@ -152,27 +116,19 @@ namespace PrismXbox
             webView.NavigationCompleted += OnNavigationCompleted;
 
             // The real playback bridge. It subscribes WebMessageReceived itself and ignores anything
-            // without a "method" field, so it coexists with the spike handler below on one channel.
+            // without a "method" field, so it coexists with the diagnostic channel below on one
+            // message channel.
             playerBridge = new PlayerBridge(coreWebView, playerHost, Log);
 
-            // SPIKE: the diagnostic harness's own half of the channel (messages carrying "type"). Comes
-            // out with the rest of the spike.
+            // The diagnostic channel's own half of that shared message channel (messages carrying
+            // "type" rather than "method").
             coreWebView.WebMessageReceived += OnWebMessageReceived;
 
-            // SPIKE. Two jobs, both about making a silent JS-side failure visible on the TV:
-            //
-            //  1. Post one message from injected script before any app module evaluates. That
-            //     bisects "the WebView2 message channel is broken" from "the app's own JS never
-            //     got as far as calling initXboxSpike()" - which look identical from the outside,
-            //     and the second is exactly what a stale service-worker-cached bundle or a module
-            //     throwing during import would produce.
-            //  2. Forward window.onerror, unhandled rejections, and console.error/warn to the
-            //     native log, so a JS exception is readable on screen. There is no other way to
-            //     see it: the console is only reachable over remote DevTools, which needs
-            //     --remote-debugging-address to be reachable off-console and isn't set.
-            //
-            // Must be awaited before navigation, or the document it should run in has already
-            // been created.
+            // Forwards window.onerror, unhandled rejections, and console.error/warn to the native
+            // log, so a JS exception is readable on the console's own screen without remote DevTools
+            // - this is what actually found the Shader Upscaling/Color Boost shader-model bug during
+            // Effects bring-up. Must be awaited before navigation, or the document it should run in
+            // has already been created.
             await coreWebView.AddScriptToExecuteOnDocumentCreatedAsync(@"
                 (function () {
                   // Tells src/player/core/platform.js this is the Xbox shell, before any app module
@@ -182,36 +138,32 @@ namespace PrismXbox
                   var wv = window.chrome && window.chrome.webview;
                   if (!wv) return;
                   var send = function (type, message) {
-                    // Stringified, matching xbox-spike.js - see its post() for why an object
-                    // payload never arrived on this runtime.
+                    // Stringified, not an object - an object payload silently never arrives at
+                    // CoreWebView2.WebMessageReceived on this WebView2 runtime, confirmed during
+                    // Phase 0 bring-up.
                     try { wv.postMessage(JSON.stringify({ type: type, message: String(message) })); } catch (e) {}
                   };
-                  send('spikeInjected', navigator.userAgent);
                   window.addEventListener('error', function (e) {
-                    send('spikeJsError', (e && e.message) + ' @ ' + (e && e.filename) + ':' + (e && e.lineno));
+                    send('jsError', (e && e.message) + ' @ ' + (e && e.filename) + ':' + (e && e.lineno));
                   });
                   window.addEventListener('unhandledrejection', function (e) {
-                    send('spikeJsError', 'unhandled rejection: ' + (e && e.reason));
+                    send('jsError', 'unhandled rejection: ' + (e && e.reason));
                   });
                   ['error', 'warn'].forEach(function (level) {
                     var original = console[level];
                     console[level] = function () {
-                      send('spikeJsConsole', level + ': ' + Array.prototype.join.call(arguments, ' '));
+                      send('jsConsole', level + ': ' + Array.prototype.join.call(arguments, ' '));
                       original.apply(console, arguments);
                     };
                   });
                 })();
             ");
 
-            // SPIKE. The WebView2 profile persists across deployments, and the app registers a
-            // service worker (sw.js). A stale cached bundle would look exactly like the symptom
-            // seen on the previous run - app works, native input works, but no JS message ever
-            // arrives - because the cached bundle predates the spike code. sw.js is network-first
-            // so this shouldn't happen, but it costs one call to stop wondering.
-            //
-            // CacheStorage and DiskCache ONLY. Not AllDomStorage/IndexedDb/LocalStorage: those
-            // hold the Plex token (vault.js) and all settings, so clearing them would sign the
-            // user out on every launch.
+            // The WebView2 profile persists across deployments, and the app registers a service
+            // worker (sw.js) - clearing these avoids a stale cached bundle looking identical to a
+            // real regression. CacheStorage and DiskCache ONLY. Not AllDomStorage/IndexedDb/
+            // LocalStorage: those hold the Plex token (vault.js) and all settings, so clearing them
+            // would sign the user out on every launch.
             try
             {
                 await coreWebView.Profile.ClearBrowsingDataAsync(
@@ -226,15 +178,12 @@ namespace PrismXbox
             webView.Source = new Uri(InitialUri);
         }
 
-        // SPIKE. MediaPlayerElement first so it renders behind the WebView2; the diagnostics
-        // TextBlock last so it stays readable over both. Neither added control is focusable
-        // (MediaPlayerElement has IsTabStop=false, a TextBlock never is), which is what keeps
-        // webView the only focusable control in the tree - the invariant OnCoreWindowKeyDown's
-        // comment below depends on, and what S4 is checking.
+        // The diagnostics TextBlock is added last so it stays readable over both the video and the
+        // WebView2. Neither the MediaPlayerElement (IsTabStop=false) nor the TextBlock is focusable,
+        // which is what keeps webView the only focusable control in the tree - the invariant
+        // OnCoreWindowKeyDown's comment below depends on.
         private Grid BuildLayout()
         {
-            nativeSpike = new NativePlayerSpike(Log);
-
             diagnostics = new TextBlock
             {
                 FontFamily = new FontFamily("Consolas"),
@@ -253,19 +202,14 @@ namespace PrismXbox
                 HorizontalAlignment = HorizontalAlignment.Left,
                 VerticalAlignment = VerticalAlignment.Top,
                 IsHitTestVisible = false,
-                // Visible from startup, not on first log line: the panel appearing at all is the
-                // signal that this build is the one running on the console.
                 Visibility = Visibility.Visible,
             };
 
-            // The real player's surface goes in first (z=0, behind the WebView2). The spike's element
-            // is added after it and stays hidden unless its own test is triggered, so only one video
-            // surface is ever visible.
             // Marshalled to the UI thread, because MediaPlayer and MediaPlaybackSession raise their
             // events on background threads while CoreWebView2.PostWebMessageAsJson may only be called
             // on the UI thread. Without this every emit fails with 0x802A000C and JS receives nothing -
-            // native playback runs perfectly and the page never hears about it. Log() already did this,
-            // which is exactly why the log stayed readable while the bridge appeared silent.
+            // native playback runs perfectly and the page never hears about it. Log() already does
+            // this, which is exactly why the log stays readable even if the bridge itself goes silent.
             playerHost = new NativePlayerHost(
                 (name, json) => _ = Dispatcher.RunAsync(
                     CoreDispatcherPriority.Normal, () => playerBridge?.Emit(name, json)),
@@ -273,21 +217,11 @@ namespace PrismXbox
 
             var grid = new Grid();
             grid.Children.Add(playerHost.Element);
-            grid.Children.Add(nativeSpike.Element);
             grid.Children.Add(webView);
             grid.Children.Add(diagnosticsPanel);
 
-            Log($"{SpikeBuild} loaded. Press any button - every new key is logged below.");
             Log("X = hide this panel.");
-            StartPadPolling();
             return grid;
-        }
-
-        // SPIKE. Keeps a long payload (a tokened Plex URL is ~600 chars) from blowing the panel.
-        private static string Truncate(string value, int max)
-        {
-            if (string.IsNullOrEmpty(value)) return "(empty)";
-            return value.Length <= max ? value : value.Substring(0, max) + "...";
         }
 
         private void RestoreDisplayMode()
@@ -298,18 +232,16 @@ namespace PrismXbox
             _ = playerHost?.RestoreDisplayAsync();
         }
 
-        // SPIKE. Rendered on screen rather than to Debug output because the point is to read
-        // results on a TV without depending on remote DevTools reaching the console.
+        // Rendered on screen rather than to Debug output because the point is to read results on a
+        // TV without depending on remote DevTools reaching the console.
         private void Log(string line)
         {
-            Debug.WriteLine($"[spike] {line}");
+            Debug.WriteLine($"[xbox] {line}");
             _ = Dispatcher.RunAsync(CoreDispatcherPriority.Low, () =>
             {
-                // Coalesce consecutive identical messages into "(xN)" rather than appending each.
-                // Not cosmetic: pressing Y repeatedly logged the same line over and over and
-                // pushed the startup lines - the ones that say whether the JS side ever reported
-                // in - straight out of the 18-line window, which is how the most useful
-                // information got lost on the previous run.
+                // Coalesce consecutive identical messages into "(xN)" rather than appending each -
+                // a repeated line (e.g. a per-frame diagnostic) would otherwise push older, more
+                // useful lines straight out of the panel's fixed line budget.
                 if (lastLoggedMessage == line && diagnosticLines.Count > 0)
                 {
                     repeatCount++;
@@ -332,13 +264,11 @@ namespace PrismXbox
             });
         }
 
-        // SPIKE
         private void OnWebMessageReceived(CoreWebView2 sender, CoreWebView2WebMessageReceivedEventArgs args)
         {
             // Everything below is wrapped because an exception thrown out of a WinRT event handler
             // is swallowed at the ABI boundary - the handler would appear never to have run, which
-            // is indistinguishable from the message never arriving. That ambiguity was one of the
-            // two candidate causes for the outbound channel appearing dead in spike-3.
+            // is indistinguishable from the message never arriving.
             try
             {
                 DispatchWebMessage(args);
@@ -349,12 +279,11 @@ namespace PrismXbox
             }
         }
 
-        // SPIKE
         private void DispatchWebMessage(CoreWebView2WebMessageReceivedEventArgs args)
         {
-            // Accept either envelope. JS now posts a JSON string (WebMessageAsJson would then be
-            // that string, JSON-quoted, and TryGetWebMessageAsString gives it unwrapped), but an
-            // object post is still handled so this doesn't depend on which form works.
+            // Accept either envelope. JS posts a JSON string (WebMessageAsJson would then be that
+            // string, JSON-quoted, and TryGetWebMessageAsString gives it unwrapped), but an object
+            // post is still handled so this doesn't depend on which form works.
             string payload;
             try
             {
@@ -365,162 +294,25 @@ namespace PrismXbox
                 payload = args.WebMessageAsJson;
             }
 
-            // Logged before parsing: if the handler is running at all, this proves it, and shows
-            // exactly what shape arrived.
-            Log($"msg<- {Truncate(payload, 90)}");
-
-            if (!JsonObject.TryParse(payload, out JsonObject root))
-            {
-                Log("Bad web message: not a JSON object");
-                return;
-            }
+            if (!JsonObject.TryParse(payload, out JsonObject root)) return;
 
             // "" not null as the default: a WinRT HSTRING cannot be null, so GetNamedString throws
-            // ArgumentNullException on a null default rather than returning it. That threw on every
-            // single message in spike-4 - each one arrived, got logged, and was then discarded by
-            // the exception - which looked exactly like the channel still being broken.
-            // Messages carrying "method" belong to PlayerBridge, which shares this channel. Ignored
-            // silently rather than logged, so the real bridge's traffic doesn't read as spike errors.
+            // ArgumentNullException on a null default rather than returning it.
+            // Messages carrying "method" belong to PlayerBridge, which shares this channel - ignored
+            // silently rather than logged, so the real bridge's traffic doesn't read as an error here.
             if (root.ContainsKey("method")) return;
 
             string type = root.GetNamedString("type", "");
             switch (type)
             {
-                case "spikeInjected":
-                    // Proves the message channel works and injected script ran. If this appears
-                    // but spikeReady never does, the app's own bundle is the problem, not the
-                    // bridge.
-                    Log("injected script ran - message channel OK");
-                    break;
-                case "spikeJsError":
+                case "jsError":
                     Log($"JS ERROR: {root.GetNamedString("message", "(none)")}");
                     break;
-                case "spikeJsConsole":
+                case "jsConsole":
                     Log($"JS {root.GetNamedString("message", "(none)")}");
                     break;
-                case "spikeReady":
-                    Log("JS harness ready. X = toggle diagnostics.");
-                    break;
-                case "spikeStreamUrl":
-                    lastStreamUrl = root.GetNamedString("url", "");
-                    if (string.IsNullOrEmpty(lastStreamUrl))
-                    {
-                        Log("spikeStreamUrl arrived with no usable url");
-                        break;
-                    }
-                    Log("Stream URL received.");
-                    break;
-                case "spikeHeartbeat":
-                    OnHeartbeat(root);
-                    break;
                 default:
-                    Log($"Unhandled web message type: {(type.Length == 0 ? "(none)" : type)}");
                     break;
-            }
-        }
-
-        // SPIKE, S3. What matters is the GAP between heartbeats, not the count: if WebView2
-        // suspends JS the way Android's WebView did, ticks simply stop arriving while native
-        // video is foregrounded, and the gap on the last line before the stall is the evidence.
-        // fetchOk being false while ticks keep arriving would be the subtler failure - timers
-        // alive but network loading suspended, which is what actually bit the Android leg.
-        private void OnHeartbeat(JsonObject root)
-        {
-            DateTime now = DateTime.Now;
-            double gapMs = lastHeartbeatAt == DateTime.MinValue ? 0 : (now - lastHeartbeatAt).TotalMilliseconds;
-            lastHeartbeatAt = now;
-
-            int tick = (int)root.GetNamedNumber("tick", -1);
-            string fetchOk = IsNull(root, "fetchOk") ? "n/a" : root.GetNamedBoolean("fetchOk", false).ToString();
-            string fetchMs = IsNull(root, "fetchMs") ? "n/a" : $"{(int)root.GetNamedNumber("fetchMs", 0)}ms";
-            Log($"heartbeat #{tick} gap={gapMs:F0}ms fetch={fetchOk} in {fetchMs}");
-        }
-
-        // SPIKE. JS sends null for these until it has an origin to probe, and GetNamedBoolean
-        // would throw on a null-valued key rather than returning its default.
-        private static bool IsNull(JsonObject obj, string key)
-        {
-            return !obj.ContainsKey(key) || obj[key].ValueType == JsonValueType.Null;
-        }
-
-        // SPIKE
-        private void StartPadPolling()
-        {
-            padPollTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(100) };
-            padPollTimer.Tick += (s, e) =>
-            {
-                if (padTriggersArriveAsKeys) return;
-                var pads = Windows.Gaming.Input.Gamepad.Gamepads;
-                if (pads.Count == 0) return;
-                Windows.Gaming.Input.GamepadReading reading = pads[0].GetCurrentReading();
-                bool xDown = (reading.Buttons & Windows.Gaming.Input.GamepadButtons.X) != 0;
-
-                // Edge-triggered: a held button would otherwise fire every 100ms.
-                if (xDown && !padXWasDown && diagnosticsPanel != null)
-                {
-                    diagnosticsPanel.Visibility = diagnosticsPanel.Visibility == Visibility.Visible
-                        ? Visibility.Collapsed
-                        : Visibility.Visible;
-                }
-                padXWasDown = xDown;
-
-                // SPIKE, S3 via the proven channel. Pulling the heartbeat rather than waiting to
-                // be told it means S3 is answerable even with the outbound postMessage channel
-                // dead - and the pull is itself diagnostic: if JS is suspended while native video
-                // is foregrounded, ExecuteScriptAsync will stall or return a tick whose timestamp
-                // stops advancing. Every 10th 100ms tick, so once a second, and only while
-                // playing.
-                if (nativeSpike?.IsPlaying == true && ++padTickCount % 10 == 0)
-                {
-                    // Position alongside the heartbeat: a frozen position means the decoder is
-                    // starved, an advancing one with a blank screen means a presentation problem.
-                    Log($"pos={nativeSpike.PositionSeconds:F1}s");
-                    _ = PullHeartbeatAsync();
-                }
-            };
-            padPollTimer.Start();
-        }
-
-        // SPIKE, S3
-        private async System.Threading.Tasks.Task PullHeartbeatAsync()
-        {
-            try
-            {
-                string raw = await webView.CoreWebView2.ExecuteScriptAsync(
-                    "window.__prismSpikeHeartbeat || ''");
-                if (string.IsNullOrEmpty(raw) || raw == "null") return;
-                JsonValue outer = JsonValue.Parse(raw);
-                if (outer.ValueType != JsonValueType.String) return;
-                string inner = outer.GetString();
-                if (string.IsNullOrEmpty(inner) || !JsonObject.TryParse(inner, out JsonObject hb)) return;
-
-                int tick = (int)hb.GetNamedNumber("tick", -1);
-                // JS Date.now() is ms since epoch; compare against the same clock rather than the
-                // console's local time, so the age is real and not a timezone artefact.
-                double at = hb.GetNamedNumber("at", 0);
-                double ageMs = (DateTime.UtcNow - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc))
-                    .TotalMilliseconds - at;
-                string fetchOk = IsNull(hb, "fetchOk") ? "n/a" : hb.GetNamedBoolean("fetchOk", false).ToString();
-                Log($"hb(pull) #{tick} age={ageMs:F0}ms fetch={fetchOk}");
-            }
-            catch (Exception ex)
-            {
-                // A stall or throw here is itself the S3 answer: JS isn't running.
-                Log($"hb pull failed: {ex.GetType().Name}");
-            }
-        }
-
-        // SPIKE, S2
-        private async System.Threading.Tasks.Task ProbeReceivedUrlAsync()
-        {
-            if (nativeSpike == null || string.IsNullOrEmpty(lastStreamUrl)) return;
-            try
-            {
-                await nativeSpike.ProbeAsync(lastStreamUrl);
-            }
-            catch (Exception ex)
-            {
-                Log($"Auto-probe threw: {ex.GetType().Name} / {ex.Message}");
             }
         }
 
@@ -553,25 +345,12 @@ namespace PrismXbox
         // was for moonlight-xbox's DPad-vs-XY-nav case (see that project's memory).
         private void OnCoreWindowKeyDown(CoreWindow sender, KeyEventArgs args)
         {
-            // SPIKE: log each distinct key once. If a button press produces a line here, this
-            // handler is running and the build is current; if a specific button never appears,
-            // the console isn't delivering that VirtualKey to CoreWindow.KeyDown at all. Those
-            // two causes are indistinguishable without this.
-            if (keysSeen.Add(args.VirtualKey))
-            {
-                Log($"key seen: {args.VirtualKey} ({(int)args.VirtualKey})");
-            }
-
-            // SPIKE: X is unmapped below, so it falls through to the page today and is free to
-            // drive the harness without colliding with anything the app uses. Y/RightShoulder and
-            // Menu/Start used to be spike-only debug triggers here too (native play/stop and the
-            // progressive-MP4 test) - removed now that the real app binds them (Y = search,
-            // RightShoulder = next chapter, Menu/Start = options menu - see focus-nav.js/
-            // plex-player.js), so they no longer get hijacked before ever reaching the page.
+            // X and LeftShoulder are unmapped below, so they're free to toggle the diagnostics
+            // panel without colliding with anything the app uses (Y = search, RightShoulder = next
+            // chapter, Menu/Start = options menu - see focus-nav.js/plex-player.js).
             if (args.VirtualKey == VirtualKey.GamepadX || args.VirtualKey == VirtualKey.GamepadLeftShoulder)
             {
                 args.Handled = true;
-                padTriggersArriveAsKeys = true;
                 if (diagnosticsPanel != null)
                 {
                     diagnosticsPanel.Visibility = diagnosticsPanel.Visibility == Visibility.Visible
@@ -584,17 +363,6 @@ namespace PrismXbox
             string jsKey = MapGamepadKey(args.VirtualKey);
             if (jsKey == null) return;
             args.Handled = true;
-
-            // SPIKE, S4. Whether a direction key still reaches the page is only half the
-            // question - the other half is whether XAML moved logical focus off the WebView2
-            // now that the tree has more than one control in it. If this ever reports anything
-            // other than WebView2, the focus-trap risk is live and Phase 2's "keep the WebView
-            // the only focusable control" mitigation isn't holding.
-            if (nativeSpike?.IsPlaying == true)
-            {
-                object focused = FocusManager.GetFocusedElement();
-                Log($"key {args.VirtualKey} -> {jsKey}, focus={focused?.GetType().Name ?? "null"}");
-            }
 
             _ = webView?.CoreWebView2?.ExecuteScriptAsync(
                 $"document.dispatchEvent(new KeyboardEvent('keydown', {{ key: '{jsKey}', bubbles: true, composed: true }}));");

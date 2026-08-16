@@ -28,3 +28,12 @@ xbox/PrismXbox/*.appxsym
 # first sync.
 xbox/PrismXbox/www/*
 !xbox/PrismXbox/www/index.html
+
+# Xbox video-effects Windows Runtime Component (see xbox/PrismXboxEffects/PrismXboxEffects.csproj's
+# own header comment for why this is a separate project from PrismXbox). The compiled .cso shader
+# bytecode under Shaders/ IS tracked (same precedent as moonlight-xbox's committed Assets/Shader/*.fxc)
+# - only the usual build output is excluded here.
+xbox/PrismXboxEffects/.vs/
+xbox/PrismXboxEffects/*.csproj.user
+xbox/PrismXboxEffects/bin/
+xbox/PrismXboxEffects/obj/

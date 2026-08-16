@@ -26,7 +26,6 @@ import { lockScroll, unlockScroll } from "./scroll-lock.js";
 import { detectShaderType } from "./src/player/shader/shaders.js";
 import { hasNativePlayer, platformTag, plexPlatformTag, usesProgressiveStream, supportsHdr } from "./src/player/core/platform.js";
 import { media } from "./src/player/core/media-facade.js";
-import { reportStreamUrl } from "./src/player/xbox-spike.js";
 import { buildStreamUrl, buildDecisionUrl } from "./src/player/core/stream-url.js";
 import { playNative, switchNative, stopNative, pauseNative, resumeNative, buildPlaybackPayload } from "./src/player/native-bridge.js";
 import { playXbox, switchXbox, stopXbox, pauseXbox, resumeXbox, reloadXboxSource } from "./src/player/xbox-bridge.js";
@@ -495,17 +494,13 @@ class StreamingPlayerController {
     }
 
     _buildStreamUrl(opts) {
-        const url = buildStreamUrl({
+        return buildStreamUrl({
             ...opts,
             clientIdentifier: clientIdentifier(),
             platform: plexPlatformTag(),
             progressive: usesProgressiveStream(),
             hdr: supportsHdr(),
         });
-        /* Phase 0 spike only, no-op everywhere but the Xbox shell - hands native a real
-           tokened URL to probe AdaptiveMediaSource with. Remove with xbox-spike.js. */
-        reportStreamUrl(url);
-        return url;
     }
 
     /* Same opts shape as _buildStreamUrl above (deliberately - see buildDecisionUrl's
