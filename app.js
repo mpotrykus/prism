@@ -18,6 +18,7 @@ import "./input-mode.js";
   card.addEventListener("open-settings", () => modal.open());
   modal.addEventListener("settings-saved", (e) => card.refreshConfig(e.detail));
   modal.addEventListener("request-plex-reauth", () => signinModal.open({ blocking: false }));
+  modal.addEventListener("request-profile-switch", () => card.openProfileSwitcher());
   /* Reopening Settings after a reauth (but not after the first-run gate, which had no
      Settings open to return to) lets the user see the freshly-discovered libraries
      without having to find the gear icon again. */

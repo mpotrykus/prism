@@ -1,4 +1,4 @@
-import { wireLinearNav, focusAfterPaint } from "./focus-nav.js";
+import { wireLinearNav, isControllerActive } from "./focus-nav.js";
 import { App } from "@capacitor/app";
 import { player } from "./plex-player.js";
 import { tapUrl } from "./src/card/logic/deep-link.js";
@@ -31,7 +31,16 @@ import { TitleInfoController } from "./src/card/title-info.js";
 import { HeroController } from "./src/card/hero.js";
 import { plexFetch, loadAll, sectionForView, sectionsForView, fetchWatchlistRaw, fetchOnDeckRaw } from "./src/card/data.js";
 import { onSearchInput, exitSearch, renderSearchPage } from "./src/card/search-page.js";
-import { wireNavItem, renderNavSections, wireHomeNav, wireSearchNav, wireSearchToggle, wireStartButton } from "./src/card/nav.js";
+import {
+  wireNavItem,
+  renderNavSections,
+  wireHomeNav,
+  wireSearchNav,
+  wireSearchToggle,
+  wireVirtualKeyboardDismiss,
+  wireStartButton,
+  restoreFocusAfterSearch,
+} from "./src/card/nav.js";
 
 import hostResetCss from "./src/card/styles/host-reset.css?inline";
 import sidenavCss from "./src/card/styles/sidenav.css?inline";
@@ -134,6 +143,13 @@ class PlexNetflixCard extends HTMLElement {
     this._lastSearchQuery = null;
     this._lastSearchHubs = null;
     this._searchSeq = 0;
+    /* Reflected onto this host element, not read via a :root selector inside the shadow
+       stylesheet below - a shadow tree's root node is the ShadowRoot itself, not an Element,
+       so :root never matches there (see focus-nav.js's own comment on this). */
+    this.toggleAttribute("controller-active", isControllerActive());
+    document.addEventListener("controller-active-change", (e) => {
+      this.toggleAttribute("controller-active", e.detail.active);
+    });
     this.attachShadow({ mode: "open" });
     this.shadowRoot.innerHTML = `
       <style>${STYLE}</style>
@@ -356,6 +372,19 @@ class PlexNetflixCard extends HTMLElement {
 
     this._wireHomeNav();
 
+    /* Continuously remembers whatever last held real DOM focus *outside* the search box
+       (poster, sidenav item, hero button, ...) so search-exit paths below can restore it.
+       Deliberately not captured at each search-entry call site instead (click toggle,
+       Tab, gamepad Y, hero up-hand-off) - clicking the toggle button, for instance,
+       transiently focuses that button itself before this._searchInput.focus() runs, and a
+       relatedTarget/active-element snapshot taken at that point would wrongly capture the
+       button (itself inside .search-wrap) rather than whatever was focused before the
+       click. Tracking continuously and only updating for focus landing outside the wrap
+       sidesteps that regardless of which entry path fires. */
+    this.shadowRoot.addEventListener("focusin", (e) => {
+      if (!this._searchWrap.contains(e.target)) this._searchReturnFocusEl = e.target;
+    });
+
     this._updateSearchToggleIcon();
     this._searchToggle.addEventListener("click", () => {
       if (this._searchInput.value) {
@@ -363,6 +392,7 @@ class PlexNetflixCard extends HTMLElement {
         this._onSearchInput();
         this._searchWrap.classList.remove("expanded");
         this._searchInput.blur();
+        restoreFocusAfterSearch(this);
         return;
       }
       this._searchWrap.classList.add("expanded");
@@ -383,9 +413,15 @@ class PlexNetflixCard extends HTMLElement {
         this._exitSearch();
         this._searchWrap.classList.remove("expanded");
         this._searchInput.blur();
+        /* Blurring alone leaves nothing focused at all - the next D-pad/gamepad press
+           would restart from wireHomeNav's lazy first-press fallback instead of landing
+           somewhere sensible on the view _exitSearch just switched to. Prefer whatever had
+           focus before the search box was opened over that fallback. */
+        restoreFocusAfterSearch(this);
       }
     });
     wireSearchToggle(this);
+    wireVirtualKeyboardDismiss(this);
     wireStartButton(this);
   }
 
@@ -671,6 +707,15 @@ class PlexNetflixCard extends HTMLElement {
     this._renderProfileList();
     this._profileOverlay.classList.add("open");
     this._profileNav.focusFirst();
+  }
+
+  /* Entry point for <streaming-settings-modal>'s Profiles tab (see app.js) - a separate
+     top-level element with no access to this card's private overlay state. Guarded the
+     same way the sidenav item itself is (hidden when there's nothing to switch to)
+     since this can be invoked with no prior check that a switcher is even applicable. */
+  openProfileSwitcher() {
+    if (this._profileNavItem.hidden) return;
+    this._openProfileOverlay();
   }
 
   _closeProfileOverlay() {

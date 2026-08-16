@@ -2,6 +2,7 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.Web.WebView2.Core;
 using PrismXbox.Player;
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 // Windows.Data.Json, not System.Text.Json: the latter isn't part of the UWP framework and
 // pulls reflection-heavy dependencies that behave badly under the .NET Native toolchain
@@ -284,14 +285,56 @@ namespace PrismXbox
         // this whole app (webView) - there's nothing for XAML's native XY focus navigation
         // to move focus to/away from, so there's no double-handling risk here the way there
         // was for moonlight-xbox's DPad-vs-XY-nav case (see that project's memory).
+        // How long a key must be held before it starts repeating, and how often it repeats
+        // after that - matches focus-nav.js's own REPEAT_DELAY_MS/REPEAT_RATE_MS exactly, so
+        // a held d-pad/thumbstick direction paces the same way here as it does through that
+        // module's own Gamepad API poller (used everywhere this native path doesn't cover -
+        // search/chapter-skip/seek/menu, see MapGamepadKey below).
+        private const double RepeatDelayMs = 400;
+        private const double RepeatRateMs = 150;
+        private readonly Dictionary<VirtualKey, DateTime> _repeatDelayStart = new Dictionary<VirtualKey, DateTime>();
+        private readonly Dictionary<VirtualKey, DateTime> _lastForwardedAt = new Dictionary<VirtualKey, DateTime>();
+
         private void OnCoreWindowKeyDown(CoreWindow sender, KeyEventArgs args)
         {
             string jsKey = MapGamepadKey(args.VirtualKey);
             if (jsKey == null) return;
             args.Handled = true;
 
+            if (!ShouldForwardKeyDown(args)) return;
+
             _ = webView?.CoreWebView2?.ExecuteScriptAsync(
                 $"document.dispatchEvent(new KeyboardEvent('keydown', {{ key: '{jsKey}', bubbles: true, composed: true }}));");
+        }
+
+        // Windows' own OS-level auto-repeat for a held gamepad-mapped VirtualKey fires at its
+        // own, uncontrolled cadence - forwarding every repeat verbatim let a single quick
+        // thumbstick flick register as two presses instead of one: an analog push dwells past
+        // the deadzone threshold for tens of milliseconds even on a deliberately quick flick,
+        // long enough for the OS to consider it a "repeat" at least once before release, unlike
+        // the d-pad's clean, near-instant mechanical digital edge. That extra forwarded press
+        // moved focus twice before the web app's smooth-scroll centering call for the first
+        // move could settle, so it never visibly centered. Re-pacing repeats to
+        // RepeatDelayMs/RepeatRateMs here - rather than trusting the OS's own repeat timer -
+        // makes a quick flick collapse back to exactly one forwarded press, same as the d-pad,
+        // while a genuine hold still repeats at a controlled, deliberate rate.
+        private bool ShouldForwardKeyDown(KeyEventArgs args)
+        {
+            VirtualKey key = args.VirtualKey;
+            DateTime now = DateTime.UtcNow;
+
+            if (!args.KeyStatus.WasKeyDown || !_repeatDelayStart.ContainsKey(key))
+            {
+                _repeatDelayStart[key] = now;
+                _lastForwardedAt[key] = now;
+                return true;
+            }
+
+            if ((now - _repeatDelayStart[key]).TotalMilliseconds < RepeatDelayMs) return false;
+            if ((now - _lastForwardedAt[key]).TotalMilliseconds < RepeatRateMs) return false;
+
+            _lastForwardedAt[key] = now;
+            return true;
         }
 
         private static string MapGamepadKey(VirtualKey key)

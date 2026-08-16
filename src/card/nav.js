@@ -70,6 +70,35 @@ export function renderNavSections(card) {
   card._navItems.forEach((n) => n.classList.toggle("active", n.dataset.view === card._currentView));
 }
 
+/* Shared "no better target" fallback for every place that drops focus out of the search
+   input without a specific destination in mind. The sidenav's Home tab used to be that
+   fallback everywhere, but it's a poor landing spot - it's not "the first thing on
+   screen," it's a tab you weren't navigating to. Home's actual first item is the hero's
+   More Info button; the search results page has real posters to land on instead. */
+export function focusFirstAvailable(card) {
+  if (card._currentView === "search") {
+    return card.shadowRoot.querySelector(".search-page-grid .poster") || card._navItems[0];
+  }
+  if (card._currentView === "home") {
+    return card.shadowRoot.querySelector(".hero-info-btn") || card._navItems[0];
+  }
+  return card._navItems[0];
+}
+
+/* Shared restore-on-exit for every place that drops focus out of the search input and wants
+   to resume wherever focus was *before* the box was opened, rather than landing on
+   focusFirstAvailable's generic default. card._searchReturnFocusEl is populated either
+   explicitly (gamepad Y toggle, hero up-hand-off below) or generically via the input's own
+   "focus" listener in plex-netflix-card.js (FocusEvent.relatedTarget, covers mouse/Tab entry).
+   The remembered element is often stale by the time this runs - typing a query re-renders
+   .rows out from under whatever row was focused - hence the still-focusable check. */
+export function restoreFocusAfterSearch(card) {
+  const prev = card._searchReturnFocusEl;
+  card._searchReturnFocusEl = null;
+  const usable = prev?.isConnected && prev.tabIndex >= 0 && prev.offsetParent !== null;
+  focusAfterPaint(usable ? prev : focusFirstAvailable(card));
+}
+
 /* Gamepad Y toggles the header search box in and out of focus. Every other command in this
    app is focus-scoped (only meaningful to whichever handler currently owns focus), but "jump
    to search" is meaningful from anywhere in the browsing UI, so this one has to be gated on
@@ -90,7 +119,9 @@ export function wireSearchToggle(card) {
     if (!inMainApp()) return false;
 
     if (active !== card._searchInput) {
-      card._searchReturnFocusEl = active;
+      /* No explicit card._searchReturnFocusEl assignment here - the shadowRoot-wide
+         focusin tracker in plex-netflix-card.js already captured `active` the moment it
+         was focused by whatever nav command landed on it. */
       card._searchWrap.classList.add("expanded");
       focusAfterPaint(card._searchInput);
       return true;
@@ -102,16 +133,67 @@ export function wireSearchToggle(card) {
     if (card._currentView !== "search") card._searchWrap.classList.remove("expanded");
     /* Blurring alone would leave focus on nothing at all, so the next D-pad press would
        restart from wireHomeNav's lazy first-press fallback instead of resuming where the
-       user was. The remembered element is often not a usable target by now - typing a query
-       re-renders .rows over whatever row was focused, and it's the card host or <body> in
-       the first place if nothing was focused when search was opened - hence the
-       still-focusable check and the sidenav fallback, the sidenav being the one thing always
-       on screen and always D-pad navigable. */
-    const prev = card._searchReturnFocusEl;
-    card._searchReturnFocusEl = null;
-    const usable = prev?.isConnected && prev.tabIndex >= 0 && prev.offsetParent !== null;
-    focusAfterPaint(usable ? prev : card._navItems[0]);
+       user was. */
+    restoreFocusAfterSearch(card);
     return true;
+  });
+
+  /* Gamepad B while browsing the search results page backs all the way out, same as
+     clearing the query by hand (search-page.js's onSearchInput already exits search once
+     the box is empty). Unlike every other handler here, this isn't gated on `active` being
+     the search input - wireSearchNav below gives results-grid posters their own Up/Down/
+     Left/Right, but never registers a "back" of its own, so a poster having focus left B
+     unhandled entirely before this existed. */
+  registerNavHandler((command, e, active) => {
+    if (command !== "back") return false;
+    if (!inMainApp() || card._currentView !== "search") return false;
+    card._clearSearchInput();
+    card._exitSearch();
+    card._searchWrap.classList.remove("expanded");
+    card._searchInput.blur();
+    focusAfterPaint(focusFirstAvailable(card));
+    return true;
+  });
+
+  /* Left/Right are left to the input's own native caret movement, but nothing previously
+     handled Down at all - a text input isn't in wireHomeNav's/wireSearchNav's scope
+     (neither sidenav, hero, nor a poster), so a D-pad/gamepad press there had no owner
+     and just sat in the box. Down always means "leave the input and go into the content
+     below it," unlike the Y toggle above (which restores wherever focus was before
+     search was opened) - so this always lands on focusFirstAvailable rather than
+     card._searchReturnFocusEl. */
+  registerNavHandler((command, e, active) => {
+    if (active !== card._searchInput || command !== "down") return false;
+    card._searchInput.blur();
+    if (card._currentView !== "search") card._searchWrap.classList.remove("expanded");
+    focusAfterPaint(focusFirstAvailable(card));
+    return true;
+  });
+}
+
+/* WebView2's on-screen keyboard (Xbox) is a platform-level overlay, not page content -
+   dismissing it (gamepad B) is very likely consumed entirely by the platform before it
+   ever reaches this app's keydown pipeline, the same way Android's back button eats an
+   IME-dismiss press - so the search input is left focused with no page-level event ever
+   firing to blur it, and only a subsequent Y press (wireSearchToggle above) clears focus.
+   The VirtualKeyboard API's geometrychange event is the one cross-platform signal for
+   "the keyboard just closed" that's independent of whatever button/gesture caused it.
+   Feature-detected: older WebView2/Android WebView builds without it just keep relying on
+   the Y-toggle/Escape paths as before. Unverified on real Xbox hardware whether WebView2
+   actually fires geometrychange for the platform keyboard - confirm before building
+   anything further on top of this. */
+export function wireVirtualKeyboardDismiss(card) {
+  if (!navigator.virtualKeyboard) return;
+  navigator.virtualKeyboard.overlaysContent = true;
+  let wasVisible = false;
+  navigator.virtualKeyboard.addEventListener("geometrychange", () => {
+    const visible = navigator.virtualKeyboard.boundingRect.height > 0;
+    const justClosed = wasVisible && !visible;
+    wasVisible = visible;
+    if (!justClosed || card.shadowRoot.activeElement !== card._searchInput) return;
+    card._searchInput.blur();
+    if (card._currentView !== "search") card._searchWrap.classList.remove("expanded");
+    restoreFocusAfterSearch(card);
   });
 }
 
@@ -142,8 +224,14 @@ export function wireStartButton(card) {
    focus - only one handler ever actually acts on a given keypress since focus is a
    singleton. */
 export function wireHomeNav(card) {
+  /* .nav-profile shares the .nav-item class purely for styling (see plex-netflix-card.js's
+     template) but sits in the header next to the search box, not in the vertical sidenav
+     it's styled to match - this list's Up/Down/index-based traversal has no sensible
+     relationship to that position, which is exactly the "doesn't work well with
+     controllers" bug this exclusion fixes. Mouse/touch clicks on it still work via its own
+     click listener, entirely independent of this D-pad list. */
   const sidenavItems = () =>
-    Array.from(card.shadowRoot.querySelectorAll(".nav-item")).filter((el) => el.offsetParent !== null);
+    Array.from(card.shadowRoot.querySelectorAll(".nav-item:not(.nav-profile)")).filter((el) => el.offsetParent !== null);
   const heroItems = () =>
     Array.from(card.shadowRoot.querySelectorAll(".hero-info-btn, .hero-watchlist-btn, .hero-play-btn, .hero-mute-btn")).filter(
       (el) => el.offsetParent !== null
@@ -255,7 +343,14 @@ export function wireHomeNav(card) {
         focusPoster(postersIn(rowSections()[0])[0]);
         return true;
       }
-      if (command === "up") return true; // nothing above the hero - swallow, don't fall through
+      if (command === "up") {
+        // same hand-off wireSearchToggle's "search" command does - up from the hero has
+        // nowhere else to go, and the search box sits directly above it in the header.
+        // (card._searchReturnFocusEl is already `active` via the focusin tracker.)
+        card._searchWrap.classList.add("expanded");
+        focusAfterPaint(card._searchInput);
+        return true;
+      }
       return false;
     }
 
@@ -298,21 +393,13 @@ export function wireHomeNav(card) {
    wireHomeNav's posterSection lookup requires a .row-section ancestor, which the search
    page never has, so every arrow press and Activate on a search result silently no-opped. */
 export function wireSearchNav(card) {
-  const heroItems = () =>
-    Array.from(card.shadowRoot.querySelectorAll(".hero-info-btn, .hero-watchlist-btn, .hero-play-btn, .hero-mute-btn")).filter(
-      (el) => el.offsetParent !== null
-    );
-  const sidenavItems = () => Array.from(card.shadowRoot.querySelectorAll(".nav-item")).filter((el) => el.offsetParent !== null);
+  const sidenavItems = () => Array.from(card.shadowRoot.querySelectorAll(".nav-item:not(.nav-profile)")).filter((el) => el.offsetParent !== null);
   const allPosters = () =>
     Array.from(card.shadowRoot.querySelectorAll(".search-page-grid .poster")).filter((el) => el.offsetParent !== null);
 
   const focusPoster = (el) => {
     el?.focus();
     el?.scrollIntoView({ block: "center", inline: "center", behavior: "smooth" });
-  };
-  const focusHero = (el) => {
-    el?.focus();
-    window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
   /* Column count varies with viewport width and each hub's grid wraps independently, so
@@ -345,12 +432,15 @@ export function wireSearchNav(card) {
   registerNavHandler((command, e, active) => {
     if (card._currentView !== "search") return false;
 
-    /* wireHomeNav's own inHero "down" branch looks for rowSections() (.row-section) and
-       no-ops when none exist, which is always true on the search page - handle that one
-       transition here instead so Down from the hero actually lands in the results grid. */
-    if (heroItems().includes(active)) {
-      if (command !== "down") return false;
-      focusPoster(rowsOf(allPosters())[0]?.items[0]);
+    /* hero.js's show() forces display:none for the whole hero banner whenever
+       getCurrentView() === "search", so there's no hero to hand off to here the way
+       wireHomeNav's sidenav "right" does on the home screen - its fallback
+       (postersIn(rowSections()[0])) also comes up empty since .row-section never
+       exists on this page, so without this the event was swallowed with nowhere to
+       go. Enter the grid directly instead. */
+    if (sidenavItems().includes(active)) {
+      if (command !== "right") return false;
+      focusPoster(allPosters()[0]);
       return true;
     }
 
@@ -379,9 +469,8 @@ export function wireSearchNav(card) {
       const rowIdx = rows.findIndex((r) => r.items.includes(active));
       const targetRowIdx = rowIdx + (command === "down" ? 1 : -1);
       if (targetRowIdx < 0) {
-        const heroTarget = heroItems()[0];
-        if (heroTarget) focusHero(heroTarget);
-        else sidenavItems()[0]?.focus();
+        // no hero to hand off to during search (see the sidenav branch above) - sidenav is it
+        sidenavItems()[0]?.focus();
         return true;
       }
       if (targetRowIdx >= rows.length) return true; // last row on the page - swallow

@@ -86,14 +86,29 @@ let controllerActive = false;
 export function isControllerActive() {
   return controllerActive;
 }
+/* Mirrored onto documentElement (same pattern as input-mode.js's data-input-mode) for any
+   light-DOM CSS, plus a "controller-active-change" event so shadow-DOM components (the card,
+   whose own CSS is inlined into its shadow root - a :root selector there would never match,
+   since a shadow tree's root node is the ShadowRoot itself, not an Element) can toggle an
+   attribute on their own host instead and key :host([...]) rules off that. Used to hide the
+   per-poster watchlist-btn (rows.js), which sits inside a .poster and is never reachable by
+   D-pad/gamepad nav (wireHomeNav only moves focus between whole .poster elements, never into
+   a nested button), unlike the hero/title-info watchlist buttons which are proper stops in
+   that nav. */
+function setControllerActive(next) {
+  if (next === controllerActive) return;
+  controllerActive = next;
+  document.documentElement.dataset.controllerActive = String(next);
+  document.dispatchEvent(new CustomEvent("controller-active-change", { detail: { active: next } }));
+}
 document.addEventListener(
   "keydown",
   (e) => {
-    if (KEY_TO_COMMAND[e.key]) controllerActive = true;
+    if (KEY_TO_COMMAND[e.key]) setControllerActive(true);
   },
   true
 );
-document.addEventListener("pointerdown", () => (controllerActive = false), true);
+document.addEventListener("pointerdown", () => setControllerActive(false), true);
 
 const lastCommandAt = Object.create(null);
 
@@ -176,8 +191,43 @@ export function wireLinearNav(root, selector, { orientation = "vertical", onActi
     );
   }
 
+  /* Giving a text/password/number input real DOM focus is what triggers Xbox/WebView2's
+     on-screen keyboard - doing that on mere arrival (every other stop in a linear nav list
+     gets focused as soon as nav lands on it) means just passing over a field on the way to
+     something else pops the keyboard for no reason. These three types instead get a
+     "selected but not focused" virtual highlight (see setHighlight/currentActive below);
+     real focus - and the keyboard - only happens on an explicit "activate" (A/Enter). */
+  function isTextEntry(el) {
+    return el?.tagName === "INPUT" && (el.type === "text" || el.type === "password" || el.type === "number");
+  }
+
+  let virtualActive = null;
+  const HIGHLIGHT_CLASS = "nav-text-highlight";
+  function setHighlight(el) {
+    if (virtualActive && virtualActive !== el) virtualActive.classList.remove(HIGHLIGHT_CLASS);
+    virtualActive = el;
+    el.classList.add(HIGHLIGHT_CLASS);
+  }
+  function clearHighlight() {
+    if (virtualActive) virtualActive.classList.remove(HIGHLIGHT_CLASS);
+    virtualActive = null;
+  }
+  /* The item nav currently treats as "here" - a really-focused element if there is one,
+     else whatever's virtually highlighted. Used everywhere below in place of a bare
+     root.activeElement so the two focus styles are interchangeable to the rest of this
+     function. */
+  function currentActive() {
+    return root.activeElement || virtualActive;
+  }
+  /* A stray highlight can outlive its own move (e.g. a mouse/touch click landing real
+     focus somewhere else entirely) - clearing it whenever real focus lands on a different
+     element keeps at most one visual indicator on screen at a time. */
+  root.addEventListener("focusin", (e) => {
+    if (virtualActive && e.target !== virtualActive) clearHighlight();
+  });
+
   function focusFirst() {
-    focusAfterPaint(items()[0]);
+    requestAnimationFrame(() => focusItem(items()[0]));
   }
 
   /* Centers the newly-focused item vertically in whatever scroll container it sits in
@@ -189,7 +239,13 @@ export function wireLinearNav(root, selector, { orientation = "vertical", onActi
      edge got focus. */
   function focusItem(el) {
     if (!el) return;
-    el.focus();
+    if (isTextEntry(el)) {
+      root.activeElement?.blur();
+      setHighlight(el);
+    } else {
+      clearHighlight();
+      el.focus();
+    }
     el.scrollIntoView({ block: "center", inline: "nearest" });
   }
 
@@ -241,7 +297,7 @@ export function wireLinearNav(root, selector, { orientation = "vertical", onActi
   function moveAcrossGroup(delta) {
     const list = items();
     if (!list.length) return;
-    const activeEl = root.activeElement;
+    const activeEl = currentActive();
     let idx = list.indexOf(activeEl);
     if (idx === -1) {
       focusItem(list[0]);
@@ -270,7 +326,7 @@ export function wireLinearNav(root, selector, { orientation = "vertical", onActi
   /* Moves within the active element's own group only. Returns false (leaving the command
      unhandled) when the active element isn't grouped at all. */
   function moveWithinGroup(delta) {
-    const active = root.activeElement;
+    const active = currentActive();
     const group = groupOf(active);
     if (!group) return false;
     const list = items().filter((el) => groupOf(el) === group);
@@ -281,7 +337,38 @@ export function wireLinearNav(root, selector, { orientation = "vertical", onActi
 
   const unregister = registerNavHandler((command) => {
     const list = items();
-    if (!list.includes(root.activeElement)) return false;
+    const cur = currentActive();
+    if (!list.includes(cur)) return false;
+
+    /* Really-focused (not just highlighted) text entry: hand every command except "back"
+       to the input's own native handling (caret movement, number spinner, typing) rather
+       than letting this list's Up/Down/Left/Right hijack it mid-edit. "back" exits edit
+       mode (blur + re-highlight) instead of reaching onBack, so Escape/B backs out of
+       typing one step at a time instead of also closing the whole modal/overlay. */
+    const editing = isTextEntry(cur) && cur === root.activeElement;
+    if (command === "back") {
+      if (editing) {
+        cur.blur();
+        setHighlight(cur);
+        return true;
+      }
+      if (onBack) {
+        onBack();
+        return true;
+      }
+      return false;
+    }
+    if (editing) return false;
+
+    if (command === "activate") {
+      if (isTextEntry(cur)) {
+        clearHighlight();
+        cur.focus();
+        return true;
+      }
+      (onActivate || ((el) => el.click()))(cur);
+      return true;
+    }
     if (command === forwardCommand) {
       moveAcrossGroup(1);
       return true;
@@ -292,19 +379,11 @@ export function wireLinearNav(root, selector, { orientation = "vertical", onActi
     }
     if (acrossCommands.includes(command)) {
       const delta = command === acrossCommands[1] ? 1 : -1;
-      if (root.activeElement?.tagName === "INPUT" && root.activeElement.type === "range") {
-        adjustRange(root.activeElement, delta);
+      if (cur?.tagName === "INPUT" && cur.type === "range") {
+        adjustRange(cur, delta);
         return true;
       }
       return moveWithinGroup(delta);
-    }
-    if (command === "activate") {
-      (onActivate || ((el) => el.click()))(root.activeElement);
-      return true;
-    }
-    if (command === "back" && onBack) {
-      onBack();
-      return true;
     }
     return false;
   });
@@ -326,9 +405,23 @@ const repeatState = Object.fromEntries(REPEATABLE_COMMANDS.map((c) => [c, { acti
 const buttonState = Object.create(null);
 const GAMEPAD_BUTTONS = { 0: "activate", 1: "back", 3: "search", 4: "chapterPrev", 5: "chapterNext", 9: "menu" }; // standard mapping: A, B, Y, LB, RB, Start
 
+/* PrismXbox's MainPage.xaml.cs also forwards d-pad/thumbstick/A/B natively via
+   CoreWindow.KeyDown, in principle covering the same input this poller does - but with
+   WebView2 hosted as its own visual island, CoreWindow input delivery while the control
+   holds focus is one of this project's two flagged-unverified Xbox risks (see CLAUDE.md's
+   "gamepad focus trap" note). Disabling this poller's handling of those commands on Xbox
+   on the assumption the native path covers them broke every button and the stick on real
+   hardware - the native path evidently isn't reaching the DOM here, and this poller was
+   the only thing actually working. Left unconditional until that native path is confirmed
+   to fire on real hardware. */
+
 function dispatchSyntheticKey(key) {
   const target = document.activeElement && document.activeElement !== document.body ? document.activeElement : document;
-  target.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, composed: true }));
+  /* cancelable defaults to false on a constructed event (unlike a real trusted keydown) -
+     without it, registerNavHandler's e.preventDefault() is a silent no-op for every
+     gamepad-driven command, so the browser's native arrow-key scroll still runs alongside
+     (and fights) each handler's own scrollIntoView/focus centering. */
+  target.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, composed: true, cancelable: true }));
 }
 
 function pollGamepads(now) {
@@ -337,11 +430,19 @@ function pollGamepads(now) {
     if (!gp) continue;
     const axisX = gp.axes[0] || 0;
     const axisY = gp.axes[1] || 0;
+    /* An analog stick almost never reports a perfectly clean push - a slight diagonal
+       drift means both axes can cross DEADZONE on the same frame, unlike a real d-pad's
+       mechanical cross where only one direction can physically register. Without this,
+       a diagonal-ish push fired two perpendicular commands per tick (e.g. up AND right),
+       each with its own focus/scrollIntoView call fighting the other and never settling
+       into place. Picking only the axis with the larger deflection makes the stick
+       collapse to a single direction per tick, same as the d-pad. */
+    const stickIsHorizontal = Math.abs(axisX) > Math.abs(axisY);
     const active = {
-      up: !!gp.buttons[12]?.pressed || axisY < -DEADZONE,
-      down: !!gp.buttons[13]?.pressed || axisY > DEADZONE,
-      left: !!gp.buttons[14]?.pressed || axisX < -DEADZONE,
-      right: !!gp.buttons[15]?.pressed || axisX > DEADZONE,
+      up: !!gp.buttons[12]?.pressed || (!stickIsHorizontal && axisY < -DEADZONE),
+      down: !!gp.buttons[13]?.pressed || (!stickIsHorizontal && axisY > DEADZONE),
+      left: !!gp.buttons[14]?.pressed || (stickIsHorizontal && axisX < -DEADZONE),
+      right: !!gp.buttons[15]?.pressed || (stickIsHorizontal && axisX > DEADZONE),
       rewind: !!gp.buttons[6]?.pressed,
       forward: !!gp.buttons[7]?.pressed,
     };

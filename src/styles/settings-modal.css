@@ -90,6 +90,12 @@ input:focus, select:focus { border-color: #e5a00d; }
 .btn:focus-visible, .modal-close:focus-visible, input:focus-visible, select:focus-visible {
   outline: 2px solid #e5a00d; outline-offset: 2px;
 }
+/* Matches input[type="..."]'s own (0,1,1) specificity (line 72's outline:none) - a bare
+   .nav-text-highlight class selector is only (0,1,0) and silently loses to it regardless
+   of source order, which is why the virtual highlight (focus-nav.js) had no visible ring. */
+input.nav-text-highlight {
+  outline: 2px solid #e5a00d; outline-offset: 2px; border-color: #e5a00d;
+}
 .status { font-size: 12px; font-weight: 600; margin-top: 6px; min-height: 15px; }
 .status.ok { color: #4caf7d; }
 .status.err { color: #ff6b6b; }

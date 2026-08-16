@@ -51,6 +51,7 @@ const TABS = [
   { key: "plex", label: "Plex" },
   { key: "integrations", label: "Integrations" },
   { key: "preferences", label: "Preferences" },
+  { key: "profiles", label: "Profiles" },
 ];
 
 class StreamingSettingsModal extends HTMLElement {
@@ -68,7 +69,7 @@ class StreamingSettingsModal extends HTMLElement {
             <button type="button" class="modal-close" aria-label="Close">✕</button>
           </div>
           <div class="tabs">
-            ${TABS.map((t) => `<button type="button" class="tab-btn" data-tab="${t.key}">${t.label}</button>`).join("")}
+            ${TABS.map((t) => `<button type="button" class="tab-btn" data-tab="${t.key}" data-nav-group="tabs">${t.label}</button>`).join("")}
           </div>
           <div class="modal-body">
             <div class="tab-panel" data-tab="plex">
@@ -117,11 +118,11 @@ class StreamingSettingsModal extends HTMLElement {
                 <div class="row-2col ai-fields">
                   <div class="field">
                     <label>OpenRouter API Key</label>
-                    <input type="password" class="f-openrouter-key" />
+                    <input type="password" class="f-openrouter-key" data-nav-group="ai-row" />
                   </div>
                   <div class="field">
                     <label>Refresh Cadence</label>
-                    <select class="f-ai-cadence">
+                    <select class="f-ai-cadence" data-nav-group="ai-row">
                       <option value="86400000">Daily</option>
                       <option value="604800000">Weekly</option>
                     </select>
@@ -141,11 +142,11 @@ class StreamingSettingsModal extends HTMLElement {
                 <div class="row-2col opensubtitles-fields">
                   <div class="field">
                     <label>Username</label>
-                    <input type="text" class="f-opensubtitles-username" placeholder="Needed to download, not just search" />
+                    <input type="text" class="f-opensubtitles-username" placeholder="Needed to download, not just search" data-nav-group="opensubs-creds" />
                   </div>
                   <div class="field">
                     <label>Password</label>
-                    <input type="password" class="f-opensubtitles-password" />
+                    <input type="password" class="f-opensubtitles-password" data-nav-group="opensubs-creds" />
                   </div>
                 </div>
                 <div class="field opensubtitles-fields">
@@ -162,13 +163,20 @@ class StreamingSettingsModal extends HTMLElement {
                 <div class="row-2col">
                   <div class="field">
                     <label>Max Genre Rows</label>
-                    <input type="number" class="f-max-genre-rows" min="0" max="40" />
+                    <input type="number" class="f-max-genre-rows" min="0" max="40" data-nav-group="prefs-display" />
                   </div>
                   <div class="field">
                     <label>Row Size</label>
-                    <input type="number" class="f-row-size" min="5" max="60" />
+                    <input type="number" class="f-row-size" min="5" max="60" data-nav-group="prefs-display" />
                   </div>
                 </div>
+              </section>
+            </div>
+
+            <div class="tab-panel" data-tab="profiles">
+              <section class="group">
+                <div class="group-title">Plex Home</div>
+                <button type="button" class="btn btn-secondary btn-switch-profile">Switch Profile</button>
               </section>
             </div>
           </div>
@@ -195,6 +203,7 @@ class StreamingSettingsModal extends HTMLElement {
       if (e.target === this._overlay) this.close();
     });
     this._el(".btn-reauth").addEventListener("click", () => this._reauthenticate());
+    this._el(".btn-switch-profile").addEventListener("click", () => this._switchProfile());
     this._el(".btn-fetch-libraries").addEventListener("click", () => this._fetchLibraries());
     this._el(".btn-save").addEventListener("click", () => this._save());
     this._el(".f-subtitle-provider").addEventListener("change", () => this._syncSubtitleProviderFields());
@@ -205,22 +214,23 @@ class StreamingSettingsModal extends HTMLElement {
     });
     /* One long vertical list rather than per-row/per-section sub-navigation - simpler,
        and good enough for a screen that isn't the primary Xbox-blocking flow the way
-       sign-in is. Tab buttons are included in this same vertical list (Down/Up walks
-       through them like any other item, Enter clicks one via wireLinearNav's default
-       onActivate) rather than getting their own horizontal sub-nav - a hidden tab
-       panel's fields are automatically excluded already, since items() filters on
-       offsetParent !== null and inactive .tab-panels are display:none. Native
-       Left/Right cursor movement inside text/number inputs is left alone (this only
-       claims Up/Down/Enter/Escape - see focus-nav.js's orientation handling), though
-       that does mean Up/Down no longer increments/decrements a number input via its
-       native spinner behavior - an accepted trade-off since moving between fields has
-       to win for gamepad nav to work at all. */
+       sign-in is. Tab buttons share data-nav-group="tabs" (set in the template above) so
+       they're treated as one horizontal row - Up/Down passes over all of them as a single
+       stop, Left/Right steps between them - instead of Down walking through each tab
+       individually the way the rest of this list works. Fields that sit side-by-side in a
+       .row-2col share their own per-row data-nav-group for the same reason (Up/Down should
+       skip the pair as one visual row, Left/Right moves within it), matching how they
+       actually appear on screen rather than raw DOM order. A hidden tab panel's fields are
+       automatically excluded already, since items() filters on offsetParent !== null and
+       inactive .tab-panels are display:none. Text/password/number inputs don't take real
+       focus (and so don't pop the on-screen keyboard) until an explicit "activate" - see
+       focus-nav.js. */
     wireLinearNav(
       this.shadowRoot,
       ".modal-close, .tab-btn, .btn-reauth, .btn-fetch-libraries, .section-row .s-enabled, .section-row .s-label, " +
         ".f-trailers-enabled, .f-youtube-key, .f-ai-enabled, .f-openrouter-key, .f-subtitle-provider, " +
         ".f-opensubtitles-username, .f-opensubtitles-password, .f-opensubtitles-key, " +
-        ".f-ai-cadence, .f-max-genre-rows, .f-row-size, " +
+        ".f-ai-cadence, .f-max-genre-rows, .f-row-size, .btn-switch-profile, " +
         ".btn-cancel, .btn-save",
       { orientation: "vertical", onBack: () => this.close() }
     );
@@ -294,7 +304,7 @@ class StreamingSettingsModal extends HTMLElement {
     this._el(".save-status").textContent = "";
     this._el(".save-status").className = "status save-status";
     this._overlay.classList.add("open");
-    focusAfterPaint(this._el(".modal-close"));
+    focusAfterPaint(this._el(`.tab-btn[data-tab="${TABS[0].key}"]`));
   }
 
   /* Decrypts (once per open() - see above) whatever secrets are already stored, so
@@ -319,6 +329,14 @@ class StreamingSettingsModal extends HTMLElement {
   _reauthenticate() {
     this.close();
     this.dispatchEvent(new CustomEvent("request-plex-reauth", { bubbles: true, composed: true }));
+  }
+
+  /* Delegates to <plex-netflix-card>'s own profile overlay (see app.js) rather than
+     reimplementing the PIN-protected-profile switch flow here - that overlay already has
+     its own D-pad-capable wireLinearNav (.profile-switch-btn/.profile-cancel). */
+  _switchProfile() {
+    this.close();
+    this.dispatchEvent(new CustomEvent("request-profile-switch", { bubbles: true, composed: true }));
   }
 
   async _fetchLibraries() {
@@ -374,8 +392,8 @@ class StreamingSettingsModal extends HTMLElement {
       .map(
         (s, i) => `
       <div class="section-row" data-index="${i}">
-        <input type="checkbox" class="s-enabled" ${s.enabled !== false ? "checked" : ""} />
-        <input type="text" class="s-label" value="${this._escape(s.label)}" />
+        <input type="checkbox" class="s-enabled" data-nav-group="section-row-${i}" ${s.enabled !== false ? "checked" : ""} />
+        <input type="text" class="s-label" data-nav-group="section-row-${i}" value="${this._escape(s.label)}" />
         <span class="type-badge">${s.type === 1 ? "Movies" : "TV"}</span>
       </div>`
       )
