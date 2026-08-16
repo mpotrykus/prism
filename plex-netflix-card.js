@@ -31,7 +31,7 @@ import { TitleInfoController } from "./src/card/title-info.js";
 import { HeroController } from "./src/card/hero.js";
 import { plexFetch, loadAll, sectionForView, sectionsForView, fetchWatchlistRaw, fetchOnDeckRaw } from "./src/card/data.js";
 import { onSearchInput, exitSearch, renderSearchPage } from "./src/card/search-page.js";
-import { wireNavItem, renderNavSections, wireHomeNav, wireSearchToggle } from "./src/card/nav.js";
+import { wireNavItem, renderNavSections, wireHomeNav, wireSearchNav, wireSearchToggle, wireStartButton } from "./src/card/nav.js";
 
 import hostResetCss from "./src/card/styles/host-reset.css?inline";
 import sidenavCss from "./src/card/styles/sidenav.css?inline";
@@ -386,6 +386,7 @@ class PlexNetflixCard extends HTMLElement {
       }
     });
     wireSearchToggle(this);
+    wireStartButton(this);
   }
 
   _wireNavItem(el) {
@@ -724,6 +725,7 @@ class PlexNetflixCard extends HTMLElement {
 
   _wireHomeNav() {
     wireHomeNav(this);
+    wireSearchNav(this);
   }
 
   /* Prefers the shared player (native on Android, <video>+hls.js everywhere else - see

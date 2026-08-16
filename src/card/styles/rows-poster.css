@@ -376,6 +376,7 @@
 }
 
 .poster:hover .watchlist-btn,
+.poster:focus-visible .watchlist-btn,
 .poster .watchlist-btn:focus-visible {
     opacity: 1;
     pointer-events: auto;
@@ -401,14 +402,6 @@
     opacity: 1;
     color: #ff6b6b;
     border-color: rgba(255, 107, 107, 0.7);
-}
-
-@media (hover: none) {
-    .poster .watchlist-btn {
-        opacity: 1;
-        pointer-events: auto;
-        background: rgba(20, 20, 24, 0.7);
-    }
 }
 
 .poster.landscape {

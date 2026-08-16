@@ -111,6 +111,27 @@ export async function playQueuedTitle(controller, queue, newIndex) {
     }
 }
 
+/* Repaints the transport bar's title/subtitle from whatever controller._session currently is -
+   called once at buildTransportBar's own initial mount, and again by _switchTitleNative
+   (plex-player.js) after an in-place title switch, since that path never rebuilds this chrome. */
+export function updateTransportBarInfo(controller) {
+    const titleLine = controller._transportTitleEl;
+    const subLine = controller._transportSubtitleEl;
+    if (!titleLine || !subLine) return;
+    const session = controller._session;
+    titleLine.textContent = session?.title || "";
+
+    const subtitleParts = [];
+    if (session?.seasonNumber != null && session?.episodeNumber != null) {
+        if (session?.episodeTitle) subtitleParts.push(session.episodeTitle);
+        subtitleParts.push(`S${session.seasonNumber} E${session.episodeNumber}`);
+    } else if (session?.year) {
+        subtitleParts.push(String(session.year));
+    }
+    subLine.textContent = subtitleParts.join("  •  ");
+    subLine.style.display = subtitleParts.length ? "" : "none";
+}
+
 export function formatTime(seconds) {
     const total = Math.max(0, Math.floor(seconds || 0));
     const h = Math.floor(total / 3600);
@@ -228,27 +249,25 @@ export function buildTransportBar(controller, video) {
     const infoRow = document.createElement("div");
     Object.assign(infoRow.style, { display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: "16px" });
 
-    const session = controller._session;
     const titleBlock = document.createElement("div");
     const titleLine = document.createElement("div");
-    titleLine.textContent = session?.title || "";
     Object.assign(titleLine.style, { color: "#fff", fontSize: "19px", fontWeight: "700", fontFamily: '"Roboto", sans-serif', lineHeight: "1.3" });
     titleBlock.appendChild(titleLine);
 
-    const subtitleParts = [];
-    if (session?.seasonNumber != null && session?.episodeNumber != null) {
-        if (session?.episodeTitle) subtitleParts.push(session.episodeTitle);
-        subtitleParts.push(`S${session.seasonNumber} E${session.episodeNumber}`);
-    } else if (session?.year) {
-        subtitleParts.push(String(session.year));
-    }
-    if (subtitleParts.length) {
-        const subLine = document.createElement("div");
-        subLine.textContent = subtitleParts.join("  •  ");
-        Object.assign(subLine.style, { color: "rgba(255,255,255,0.65)", fontSize: "13px", fontWeight: "600", fontFamily: '"Roboto", sans-serif', marginTop: "2px" });
-        titleBlock.appendChild(subLine);
-    }
+    const subLine = document.createElement("div");
+    Object.assign(subLine.style, { color: "rgba(255,255,255,0.65)", fontSize: "13px", fontWeight: "600", fontFamily: '"Roboto", sans-serif', marginTop: "2px", display: "none" });
+    titleBlock.appendChild(subLine);
     infoRow.appendChild(titleBlock);
+
+    /* Kept on the controller (rather than only closed over here) so an in-place title switch that
+       doesn't remount this chrome - _switchTitleNative, which reuses the same DOM chrome across the
+       switch rather than tearing it down and rebuilding it the way the <video>+hls.js fallback's
+       _beginSession does (see plex-player.js's _switchTitle) - can still repaint this text for the new
+       session. Without this, the bar kept showing whichever title was on screen when it was first
+       mounted. */
+    controller._transportTitleEl = titleLine;
+    controller._transportSubtitleEl = subLine;
+    updateTransportBarInfo(controller);
 
     const remainingEl = document.createElement("span");
     remainingEl.textContent = "-0:00";

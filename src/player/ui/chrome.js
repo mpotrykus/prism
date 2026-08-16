@@ -25,7 +25,7 @@
 
 export { makeControlButton, registerControlButton, showControls, hideControls, scheduleHideControls, buildLoadingSpinner } from "./chrome-controls.js";
 
-export { buildFloatingPlayButton, buildTransportBar, playQueuedTitle, formatTime, seekToAdjacentChapter } from "./chrome-transport.js";
+export { buildFloatingPlayButton, buildTransportBar, playQueuedTitle, updateTransportBarInfo, formatTime, seekToAdjacentChapter } from "./chrome-transport.js";
 
 export { openHamburgerMenu, closeInlineMenu } from "./chrome-menu.js";
 

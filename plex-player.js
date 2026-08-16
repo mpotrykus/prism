@@ -66,6 +66,7 @@ import {
     playQueuedTitle,
     applyRememberedSubtitle,
     seekToAdjacentChapter,
+    updateTransportBarInfo,
 } from "./src/player/ui/chrome.js";
 import { openEpisodeListOverlay, closeEpisodeListOverlay } from "./src/player/ui/episode-list.js";
 
@@ -279,6 +280,11 @@ class StreamingPlayerController {
         }
         if (this._session) this._reportTimeline("stopped");
         const { streamUrl, startOffsetMs } = this._prepareSession(item);
+        /* This leg reuses the transport bar mounted for the previous title (see
+           _switchTitle's own comment on why native takes this in-place path instead of
+           web's teardown-then-rebegin) - nothing else repaints its title/subtitle text
+           for the session _prepareSession just swapped in. */
+        updateTransportBarInfo(this);
         await this._switchNative(streamUrl, startOffsetMs);
         this._reportTimeline("playing");
         /* See native-bridge.js's "progress" listener for why native playback can't rely

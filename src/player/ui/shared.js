@@ -63,10 +63,10 @@ export function ensurePlayerFocusStyle() {
     document.head.appendChild(style);
 }
 
-/* A slim, on-theme scrollbar for any flyout content that overflows (subtitle search
-   results, a long chapter/audio-track list) instead of the browser's default wide
-   scrollbar clashing with the glass-panel look above. Injected once, lazily, rather than
-   at module load - nothing needs it until a panel actually overflows. Shared by
+/* Hides the scrollbar for any flyout content that overflows (subtitle search results,
+   a long chapter/audio-track list) instead of the browser's default wide scrollbar
+   clashing with the glass-panel look above. Injected once, lazily, rather than at
+   module load - nothing needs it until a panel actually overflows. Shared by
    chrome-menu.js and chrome-subtitles.js so both panels use the exact same scrollbar
    styling instead of each carrying its own copy. */
 export function ensureMenuScrollStyle() {
@@ -74,14 +74,8 @@ export function ensureMenuScrollStyle() {
     const style = document.createElement("style");
     style.id = "streaming-player-menu-scroll-style";
     style.textContent = `
-        .${MENU_SCROLL_CLASS} {
-            scrollbar-width: thin;
-            scrollbar-color: rgba(255,255,255,0.25) transparent;
-        }
-        .${MENU_SCROLL_CLASS}::-webkit-scrollbar { width: 6px; }
-        .${MENU_SCROLL_CLASS}::-webkit-scrollbar-track { background: transparent; }
-        .${MENU_SCROLL_CLASS}::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.25); border-radius: 3px; }
-        .${MENU_SCROLL_CLASS}::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.4); }
+        .${MENU_SCROLL_CLASS} { scrollbar-width: none; }
+        .${MENU_SCROLL_CLASS}::-webkit-scrollbar { display: none; width: 0; height: 0; }
     `;
     document.head.appendChild(style);
 }

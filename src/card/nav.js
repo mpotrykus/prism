@@ -115,6 +115,25 @@ export function wireSearchToggle(card) {
   });
 }
 
+/* Gamepad Start ("menu" command) opens the player's own hamburger menu while a session is
+   active (see plex-player.js's constructor-level registerNavHandler, gated on this._session) -
+   outside the player there's no equivalent overlay, so Start instead surfaces the app's
+   Settings modal, same as clicking the sidenav's Settings button. Scoped the same way
+   wireSearchToggle is (suppressed while player/title-info/settings/signin are already up)
+   so Start doesn't fight the player's own handler or reopen Settings on top of itself. */
+export function wireStartButton(card) {
+  registerNavHandler((command) => {
+    if (command !== "menu") return false;
+    if (player.isOpen()) return false;
+    if (document.querySelector("streaming-settings-modal")?.isOpen()) return false;
+    if (document.querySelector("streaming-plex-signin-modal")?.isOpen()) return false;
+
+    if (card._titleInfo.isOpen()) card._titleInfo.close();
+    card.dispatchEvent(new CustomEvent("open-settings", { bubbles: true, composed: true }));
+    return true;
+  });
+}
+
 /* The home screen (sidenav + hero + a 2D grid of poster rows) isn't a single list -
    wireLinearNav's 1D model doesn't cover "Left/Right moves within whichever row
    currently has focus, Up/Down moves between rows while roughly preserving column
@@ -147,6 +166,28 @@ export function wireHomeNav(card) {
   const focusPoster = (el) => {
     el?.focus();
     el?.scrollIntoView({ block: "center", inline: "center", behavior: "smooth" });
+  };
+  /* The hero banner sits at the very top of the page's scroll container, so any focus
+     landing on one of its buttons needs the page scrolled all the way up too - otherwise
+     a D-pad/gamepad user coming up from a poster row sees the hero cut off mid-scroll
+     instead of in full. */
+  const focusHero = (el) => {
+    el?.focus();
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+  /* Rows scroll horizontally independent of one another, so the same array index in two
+     rows can sit at completely different on-screen columns - matching by index made
+     up/down land on a poster with no visual relationship to the one just left. Matching
+     by actual horizontal center position is what "roughly preserving column position"
+     (the comment above wireHomeNav) actually requires. */
+  const closestByPosition = (posters, referenceEl) => {
+    if (!posters.length) return null;
+    const refCenter = referenceEl.getBoundingClientRect().left + referenceEl.getBoundingClientRect().width / 2;
+    return posters.reduce((best, el) => {
+      const center = el.getBoundingClientRect().left + el.getBoundingClientRect().width / 2;
+      const bestCenter = best.getBoundingClientRect().left + best.getBoundingClientRect().width / 2;
+      return Math.abs(center - refCenter) < Math.abs(bestCenter - refCenter) ? el : best;
+    });
   };
 
   registerNavHandler((command, e, active) => {
@@ -191,7 +232,7 @@ export function wireHomeNav(card) {
       }
       if (command === "right") {
         const heroTarget = heroItems()[0];
-        if (heroTarget) heroTarget.focus();
+        if (heroTarget) focusHero(heroTarget);
         else focusPoster(postersIn(rowSections()[0])[0]);
         return true;
       }
@@ -202,12 +243,12 @@ export function wireHomeNav(card) {
       const list = heroItems();
       const idx = list.indexOf(active);
       if (command === "right") {
-        list[Math.min(idx + 1, list.length - 1)].focus();
+        focusHero(list[Math.min(idx + 1, list.length - 1)]);
         return true;
       }
       if (command === "left") {
         if (idx <= 0) sidenavItems()[0]?.focus();
-        else list[idx - 1].focus();
+        else focusHero(list[idx - 1]);
         return true;
       }
       if (command === "down") {
@@ -222,25 +263,129 @@ export function wireHomeNav(card) {
     const posters = postersIn(posterSection);
     const idx = posters.indexOf(active);
     if (command === "right") {
-      posters[Math.min(idx + 1, posters.length - 1)].focus();
+      focusPoster(posters[Math.min(idx + 1, posters.length - 1)]);
       return true;
     }
     if (command === "left") {
       if (idx <= 0) sidenavItems()[0]?.focus();
-      else posters[idx - 1].focus();
+      else focusPoster(posters[idx - 1]);
       return true;
     }
     if (command === "down" || command === "up") {
       const sections = rowSections();
       const sectionIdx = sections.indexOf(posterSection);
       if (command === "up" && sectionIdx === 0) {
-        heroItems()[0]?.focus();
+        focusHero(heroItems()[0]);
         return true;
       }
       const targetSection = sections[sectionIdx + (command === "down" ? 1 : -1)];
       if (!targetSection) return true; // no more rows that way - swallow
       const targetPosters = postersIn(targetSection);
-      focusPoster(targetPosters[Math.min(idx, targetPosters.length - 1)]);
+      focusPoster(closestByPosition(targetPosters, active));
+      return true;
+    }
+    return false;
+  });
+}
+
+/* Search results: D-pad/gamepad navigation for the results grid search-page.js renders
+   into card._rowsEl. Kept separate from wireHomeNav above because .search-page-grid
+   (header-search.css) is a flex-wrap flow that wraps to however many columns the
+   viewport fits, not a horizontal-scrolling single-line .row-section - "row" here can't
+   be assumed from markup structure the way it can on the home screen, only discovered
+   from actual rendered layout. Without this, search-page posters were still Tab-focusable
+   (buildPoster gives every poster tabIndex 0) but had no D-pad/gamepad handler at all -
+   wireHomeNav's posterSection lookup requires a .row-section ancestor, which the search
+   page never has, so every arrow press and Activate on a search result silently no-opped. */
+export function wireSearchNav(card) {
+  const heroItems = () =>
+    Array.from(card.shadowRoot.querySelectorAll(".hero-info-btn, .hero-watchlist-btn, .hero-play-btn, .hero-mute-btn")).filter(
+      (el) => el.offsetParent !== null
+    );
+  const sidenavItems = () => Array.from(card.shadowRoot.querySelectorAll(".nav-item")).filter((el) => el.offsetParent !== null);
+  const allPosters = () =>
+    Array.from(card.shadowRoot.querySelectorAll(".search-page-grid .poster")).filter((el) => el.offsetParent !== null);
+
+  const focusPoster = (el) => {
+    el?.focus();
+    el?.scrollIntoView({ block: "center", inline: "center", behavior: "smooth" });
+  };
+  const focusHero = (el) => {
+    el?.focus();
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  /* Column count varies with viewport width and each hub's grid wraps independently, so
+     rows can't be derived from index math the way pin.js's fixed 3-column keypad can be -
+     they're discovered empirically by clustering posters that share a vertical position,
+     the same positional-matching idea closestByPosition uses for column alignment below. */
+  const rowsOf = (posters) => {
+    const rows = [];
+    for (const el of posters) {
+      const top = el.getBoundingClientRect().top;
+      let row = rows.find((r) => Math.abs(r.top - top) < 2);
+      if (!row) {
+        row = { top, items: [] };
+        rows.push(row);
+      }
+      row.items.push(el);
+    }
+    return rows.sort((a, b) => a.top - b.top);
+  };
+  const closestByPosition = (posters, referenceEl) => {
+    if (!posters.length) return null;
+    const refCenter = referenceEl.getBoundingClientRect().left + referenceEl.getBoundingClientRect().width / 2;
+    return posters.reduce((best, el) => {
+      const center = el.getBoundingClientRect().left + el.getBoundingClientRect().width / 2;
+      const bestCenter = best.getBoundingClientRect().left + best.getBoundingClientRect().width / 2;
+      return Math.abs(center - refCenter) < Math.abs(bestCenter - refCenter) ? el : best;
+    });
+  };
+
+  registerNavHandler((command, e, active) => {
+    if (card._currentView !== "search") return false;
+
+    /* wireHomeNav's own inHero "down" branch looks for rowSections() (.row-section) and
+       no-ops when none exist, which is always true on the search page - handle that one
+       transition here instead so Down from the hero actually lands in the results grid. */
+    if (heroItems().includes(active)) {
+      if (command !== "down") return false;
+      focusPoster(rowsOf(allPosters())[0]?.items[0]);
+      return true;
+    }
+
+    if (!active?.classList?.contains("poster") || !active.closest(".search-page-grid")) return false;
+
+    if (command === "activate") {
+      active.click();
+      return true;
+    }
+
+    const posters = allPosters();
+    const idx = posters.indexOf(active);
+    if (idx === -1) return false;
+
+    if (command === "right") {
+      if (idx < posters.length - 1) focusPoster(posters[idx + 1]);
+      return true; // last poster on the page - nowhere further right, swallow
+    }
+    if (command === "left") {
+      if (idx === 0) sidenavItems()[0]?.focus();
+      else focusPoster(posters[idx - 1]);
+      return true;
+    }
+    if (command === "up" || command === "down") {
+      const rows = rowsOf(posters);
+      const rowIdx = rows.findIndex((r) => r.items.includes(active));
+      const targetRowIdx = rowIdx + (command === "down" ? 1 : -1);
+      if (targetRowIdx < 0) {
+        const heroTarget = heroItems()[0];
+        if (heroTarget) focusHero(heroTarget);
+        else sidenavItems()[0]?.focus();
+        return true;
+      }
+      if (targetRowIdx >= rows.length) return true; // last row on the page - swallow
+      focusPoster(closestByPosition(rows[targetRowIdx].items, active));
       return true;
     }
     return false;

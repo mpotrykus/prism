@@ -22,6 +22,7 @@
 .title-info-episode:focus-visible,
 .title-info-similar-item:focus-visible,
 .title-info-season-select:focus-visible,
+.title-info-season-option:focus-visible,
 .more-sheet-item:focus-visible,
 .more-sheet-cancel:focus-visible {
     outline: 2px solid #e5a00d;
@@ -46,6 +47,7 @@
 .title-info-episode,
 .title-info-similar-item,
 .title-info-season-select,
+.title-info-season-option,
 .more-sheet-item,
 .more-sheet-cancel {
     outline: 2px solid #e5a00d00;

@@ -154,13 +154,17 @@ function resolveDeepActiveElement(el) {
    registerNavHandler() directly instead - see plex-netflix-card.js.
 
    Items sharing a `data-nav-group` value (e.g. chrome-menu-effects.js's Auto/On/Off mode
-   buttons) are treated as one horizontal row rather than individually-steppable stops: in
-   a vertical list, Up/Down skips the whole group in one step (landing just past its far
-   edge) while Left/Right moves within the group only, clamped to its own edges even when
-   `loop` is set for the rest of the list - wrapping Off back to Auto reads as a different
-   gesture than wrapping the top of a long list to the bottom. A focused <input type=range>
-   (ungrouped) instead has Left/Right adjust its value directly (see adjustRange below).
-   Any other ungrouped item leaves Left/Right unhandled, same as before this existed. */
+   buttons, or title-info.js dynamically row-grouping its wrapping "More Like This" grid -
+   see _assignSimilarRowGroups there) are treated as one horizontal row rather than
+   individually-steppable stops: in a vertical list, Up/Down skips the whole group in one
+   step, landing on whichever of the new group's members sits closest (by horizontal
+   center) to the item just left rather than always the group's first/last member - see
+   moveAcrossGroup's own comment - while Left/Right moves within the group only, clamped to
+   its own edges even when `loop` is set for the rest of the list - wrapping Off back to
+   Auto reads as a different gesture than wrapping the top of a long list to the bottom. A
+   focused <input type=range> (ungrouped) instead has Left/Right adjust its value directly
+   (see adjustRange below). Any other ungrouped item leaves Left/Right unhandled, same as
+   before this existed. */
 export function wireLinearNav(root, selector, { orientation = "vertical", onActivate, onBack, loop = false } = {}) {
   const forwardCommand = orientation === "vertical" ? "down" : "right";
   const backwardCommand = orientation === "vertical" ? "up" : "left";
@@ -174,6 +178,19 @@ export function wireLinearNav(root, selector, { orientation = "vertical", onActi
 
   function focusFirst() {
     focusAfterPaint(items()[0]);
+  }
+
+  /* Centers the newly-focused item vertically in whatever scroll container it sits in
+     (e.g. title-info.js's overlay, scrollable top-to-bottom) - D-pad/gamepad nav has no
+     hover/cursor to show where focus went, so a focused item scrolled just barely into
+     view (or half-clipped at an edge) is easy to lose track of. inline is left at
+     "nearest" (the default) since this is only about vertical position - a horizontal
+     grid row (cast/similar) shouldn't also jump sideways just because an item near its
+     edge got focus. */
+  function focusItem(el) {
+    if (!el) return;
+    el.focus();
+    el.scrollIntoView({ block: "center", inline: "nearest" });
   }
 
   function groupOf(el) {
@@ -203,12 +220,31 @@ export function wireLinearNav(root, selector, { orientation = "vertical", onActi
   /* Steps past every remaining member of the active element's own group in one go before
      applying the final +/-1 - so a group reads as a single stop for Up/Down (or Left/Right
      in a horizontal list) regardless of which of its members currently has focus. */
+  function centerX(el) {
+    const r = el.getBoundingClientRect();
+    return r.left + r.width / 2;
+  }
+
+  /* When crossing into a *different* group of more than one member (e.g. title-info.js
+     dynamically row-grouping a wrapping poster grid so Left/Right stays within a visual
+     row - see assignRowNavGroups there), landing on that group's first/last member by
+     index alone puts focus wherever the group happens to start in DOM order, with no
+     relationship to the column just left. Picking the member whose horizontal center is
+     closest to the departing element's is what makes Up/Down actually track "the item
+     roughly above/below this one" for a grid, the same positional-matching idea
+     nav.js's closestByPosition uses for the home screen's poster rows. */
+  function closestByCenterX(elements, referenceEl) {
+    const refX = centerX(referenceEl);
+    return elements.reduce((best, el) => (Math.abs(centerX(el) - refX) < Math.abs(centerX(best) - refX) ? el : best));
+  }
+
   function moveAcrossGroup(delta) {
     const list = items();
     if (!list.length) return;
-    let idx = list.indexOf(root.activeElement);
+    const activeEl = root.activeElement;
+    let idx = list.indexOf(activeEl);
     if (idx === -1) {
-      list[0].focus();
+      focusItem(list[0]);
       return;
     }
     const group = groupOf(list[idx]);
@@ -220,7 +256,15 @@ export function wireLinearNav(root, selector, { orientation = "vertical", onActi
     idx += delta;
     if (loop) idx = (idx + list.length) % list.length;
     else idx = Math.max(0, Math.min(list.length - 1, idx));
-    list[idx].focus();
+    const targetGroup = groupOf(list[idx]);
+    if (targetGroup && targetGroup !== group) {
+      const groupMembers = list.filter((el) => groupOf(el) === targetGroup);
+      if (groupMembers.length > 1) {
+        focusItem(closestByCenterX(groupMembers, activeEl));
+        return;
+      }
+    }
+    focusItem(list[idx]);
   }
 
   /* Moves within the active element's own group only. Returns false (leaving the command
@@ -231,7 +275,7 @@ export function wireLinearNav(root, selector, { orientation = "vertical", onActi
     if (!group) return false;
     const list = items().filter((el) => groupOf(el) === group);
     let idx = Math.max(0, Math.min(list.length - 1, list.indexOf(active) + delta));
-    list[idx].focus();
+    focusItem(list[idx]);
     return true;
   }
 

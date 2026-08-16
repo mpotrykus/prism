@@ -447,13 +447,30 @@ export class TitleInfoController {
       if (!seasons.length || this._item?.ratingKey !== showRatingKey) return;
 
       this._episodesEl.innerHTML = "";
-      const select = document.createElement("select");
-      select.className = "title-info-season-select";
-      select.innerHTML = seasons
-        .map((s) => `<option value="${s.ratingKey}">${this._ctx.escape(s.title || `Season ${s.index}`)}</option>`)
+      /* A native <select>'s dropdown-open is a browser-gated action - it only responds to a
+         genuinely trusted user gesture (a real mousedown, or a trusted keydown's own default
+         action), never to a script-driven `.click()`/`.showPicker()` call. That's exactly what
+         "activate" resolves to for a gamepad/D-pad press whose only path into the page is this
+         file's own synthetic-KeyboardEvent bridge (see focus-nav.js's dispatchSyntheticKey) -
+         same root cause as adjustRange's own comment in focus-nav.js, just hitting a browser
+         control this app can't work around by manually firing an "input"/"change" event. A
+         hand-built trigger+list instead opens/closes via a plain "open" class toggle in response
+         to whatever click the trigger's own listener sees - script-driven or real, it's all the
+         same to a plain click listener. */
+      const picker = document.createElement("div");
+      picker.className = "title-info-season-picker";
+      const trigger = document.createElement("button");
+      trigger.type = "button";
+      trigger.className = "title-info-season-select";
+      const options = document.createElement("div");
+      options.className = "title-info-season-options";
+      options.innerHTML = seasons
+        .map((s) => `<div class="title-info-season-option" data-rating-key="${s.ratingKey}" tabindex="0">${this._ctx.escape(s.title || `Season ${s.index}`)}</div>`)
         .join("");
+      picker.appendChild(trigger);
+      picker.appendChild(options);
       const list = document.createElement("div");
-      this._episodesEl.appendChild(select);
+      this._episodesEl.appendChild(picker);
       this._episodesEl.appendChild(list);
 
       const showSeason = async (seasonRatingKey, focusEpisodeRatingKey) => {
@@ -466,7 +483,7 @@ export class TitleInfoController {
             const progress = ep.duration ? Math.max(0, Math.min(1, (ep.viewOffset || 0) / ep.duration)) : 0;
             const watched = !!ep.viewCount && progress <= 0;
             return `
-          <div class="title-info-episode" data-rating-key="${ep.ratingKey}">
+          <div class="title-info-episode" data-rating-key="${ep.ratingKey}" tabindex="0">
             <div class="title-info-episode-thumb">
               <img loading="lazy" src="${this._ctx.escape(this._ctx.plexThumbUrl(ep.thumb, 320, 180))}" alt="" />
               ${watched ? `<div class="title-info-episode-watched">${WATCHED_ICON_SVG}</div>` : ""}
@@ -506,15 +523,29 @@ export class TitleInfoController {
           }
         }
       };
-      select.addEventListener("change", () => showSeason(select.value));
+      const selectSeason = (seasonRatingKey, focusEpisodeRatingKey) => {
+        const season = seasons.find((s) => String(s.ratingKey) === String(seasonRatingKey));
+        trigger.textContent = `${season ? season.title || `Season ${season.index}` : "Season"} ▾`;
+        options.querySelectorAll(".title-info-season-option").forEach((opt) => {
+          opt.classList.toggle("selected", opt.dataset.ratingKey === String(seasonRatingKey));
+        });
+        options.classList.remove("open");
+        showSeason(seasonRatingKey, focusEpisodeRatingKey);
+      };
+      trigger.addEventListener("click", () => options.classList.toggle("open"));
+      options.querySelectorAll(".title-info-season-option").forEach((opt) => {
+        opt.addEventListener("click", () => {
+          selectSeason(opt.dataset.ratingKey);
+          focusAfterPaint(trigger);
+        });
+      });
       /* Opening a show from an episode (e.g. Continue Watching) requests landing on that
          episode's own season/row instead of always season 1 - see openForEpisode. */
       const focus = this._pendingEpisodeFocus;
       this._pendingEpisodeFocus = null;
       const focusSeason = focus && seasons.find((s) => String(s.ratingKey) === String(focus.seasonRatingKey));
       const initialSeasonKey = focusSeason ? focusSeason.ratingKey : seasons[0].ratingKey;
-      select.value = initialSeasonKey;
-      showSeason(initialSeasonKey, focusSeason ? focus.episodeRatingKey : null);
+      selectSeason(initialSeasonKey, focusSeason ? focus.episodeRatingKey : null);
     } catch (e) {
       // episode list is supplementary; leave the rest of the modal usable on failure
     }
@@ -533,7 +564,7 @@ export class TitleInfoController {
         const mapped = this._ctx.mapItem(m, true);
         const watched = mapped.watched && !(mapped.progress > 0);
         return `
-      <div class="title-info-episode" data-rating-key="${mapped.ratingKey}">
+      <div class="title-info-episode" data-rating-key="${mapped.ratingKey}" tabindex="0">
         <div class="title-info-episode-thumb">
           <img loading="lazy" src="${this._ctx.escape(mapped.art || mapped.image)}" alt="" />
           ${watched ? `<div class="title-info-episode-watched">${WATCHED_ICON_SVG}</div>` : ""}
@@ -598,7 +629,7 @@ export class TitleInfoController {
         .map((m) => {
           const mapped = this._ctx.mapItem(m, false);
           return `
-          <div class="title-info-similar-item" data-rating-key="${mapped.ratingKey}">
+          <div class="title-info-similar-item" data-rating-key="${mapped.ratingKey}" tabindex="0">
             <img loading="lazy" src="${this._ctx.escape(mapped.image)}" alt="" />
             <div class="t">${this._ctx.escape(mapped.title)}</div>
           </div>`;
@@ -607,6 +638,7 @@ export class TitleInfoController {
       this._similarEl.querySelectorAll(".title-info-similar-item").forEach((el, i) => {
         el.addEventListener("click", () => this.open(this._ctx.mapItem(items[i], false), "local"));
       });
+      this._assignSimilarRowGroups();
     } catch (e) {
       // similar titles are supplementary; leave the rest of the modal usable on failure
     }
@@ -925,7 +957,35 @@ export class TitleInfoController {
     }
   }
 
+  /* .title-info-similar lays out via CSS grid (auto-fill columns, see title-info.css) rather
+     than a fixed column count, so which items share a visual row can only be known from
+     actual layout, not computed up front. Grouping same-row items under a shared
+     data-nav-group value is what lets wireLinearNav's own Left/Right-within-group and
+     positional Up/Down-across-group logic (see focus-nav.js's moveWithinGroup/
+     moveAcrossGroup) treat this grid as an actual 2D grid instead of one long vertical
+     list - without this, every item just sits in the flat list unGrouped, and Up/Down
+     visits them one at a time in DOM order regardless of which column they're actually in. */
+  _assignSimilarRowGroups() {
+    const items = Array.from(this._similarEl.querySelectorAll(".title-info-similar-item"));
+    if (!items.length) return;
+    let rowTop = null;
+    let rowIndex = -1;
+    items.forEach((el) => {
+      if (rowTop === null || Math.abs(el.offsetTop - rowTop) > 2) {
+        rowIndex++;
+        rowTop = el.offsetTop;
+      }
+      el.dataset.navGroup = `similar-row-${rowIndex}`;
+    });
+  }
+
   _wire() {
+    /* Recomputes which items land in which visual row whenever the grid's own width
+       changes (window resize, or the responsive layout swapping breakpoints) - the
+       auto-fill column count is purely width-driven, so a stale grouping from before a
+       resize would misreport which items are actually side-by-side. */
+    new ResizeObserver(() => this._assignSimilarRowGroups()).observe(this._similarEl);
+
     /* The player is a full-screen overlay on top of this modal, not a replacement for it -
        closing it leaves document.activeElement pointing at whatever the player itself last
        focused (now torn down), so D-pad/gamepad nav silently stops responding to anything
@@ -941,9 +1001,24 @@ export class TitleInfoController {
     });
     this._nav = wireLinearNav(
       this._shadowRoot,
-      ".title-info-close, .title-info-play, .title-info-restart-btn, .title-info-watched-btn, .title-info-watchlist-btn, .title-info-season-select, .title-info-episode, .title-info-similar-item",
+      ".title-info-close, .title-info-play, .title-info-restart-btn, .title-info-watched-btn, .title-info-watchlist-btn, .title-info-season-select, .title-info-season-option, .title-info-episode, .title-info-similar-item",
       { orientation: "vertical", onBack: () => this.close() }
     );
+    /* Play/Restart/Watched/Watchlist visually sit in one horizontal row (.title-info-actions,
+       see title-info.css) except on mobile (responsive.css wraps them to one full-width button
+       per line instead) - grouping them via data-nav-group (see wireLinearNav) only on the
+       desktop layout makes Left/Right cycle across the row there, while Up/Down still steps
+       through them one at a time on mobile where they're actually stacked. Same 700px cutoff
+       responsive.css itself uses. */
+    const desktopActionsQuery = window.matchMedia("(min-width: 701px)");
+    const syncActionsNavGroup = () => {
+      [this._playBtn, this._restartBtn, this._watchedBtn, this._watchlistBtn].forEach((el) => {
+        if (desktopActionsQuery.matches) el.dataset.navGroup = "title-info-actions";
+        else delete el.dataset.navGroup;
+      });
+    };
+    syncActionsNavGroup();
+    desktopActionsQuery.addEventListener("change", syncActionsNavGroup);
     this._watchlistBtn.addEventListener("click", (e) => {
       e.stopPropagation();
       const item = this._item;

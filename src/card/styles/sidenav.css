@@ -16,7 +16,7 @@
   transition: flex-basis 0.22s ease;
   z-index: 30;
 }
-.sidenav:hover {
+.sidenav:hover, .sidenav:focus-within {
   flex-basis: 130px;
 }
 .nav-top, .nav-bottom {
@@ -59,7 +59,7 @@
   opacity: 0;
   transition: opacity 0.15s ease;
 }
-.sidenav:hover .nav-label {
+.sidenav:hover .nav-label, .sidenav:focus-within .nav-label {
   opacity: 1;
 }
 /* Only ever shown at the mobile breakpoint below - the hover sidenav has room for
