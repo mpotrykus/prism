@@ -151,10 +151,20 @@ function resolveDeepActiveElement(el) {
    `root` (a shadow root or plain container) - covers every simple linear list in the app
    (a modal's buttons, a settings form, an overlay's keypad). The card's home screen (sidenav
    + 2D grid of rows/posters) needs bespoke Up/Down-by-position logic and uses
-   registerNavHandler() directly instead - see plex-netflix-card.js. */
+   registerNavHandler() directly instead - see plex-netflix-card.js.
+
+   Items sharing a `data-nav-group` value (e.g. chrome-menu-effects.js's Auto/On/Off mode
+   buttons) are treated as one horizontal row rather than individually-steppable stops: in
+   a vertical list, Up/Down skips the whole group in one step (landing just past its far
+   edge) while Left/Right moves within the group only, clamped to its own edges even when
+   `loop` is set for the rest of the list - wrapping Off back to Auto reads as a different
+   gesture than wrapping the top of a long list to the bottom. A focused <input type=range>
+   (ungrouped) instead has Left/Right adjust its value directly (see adjustRange below).
+   Any other ungrouped item leaves Left/Right unhandled, same as before this existed. */
 export function wireLinearNav(root, selector, { orientation = "vertical", onActivate, onBack, loop = false } = {}) {
   const forwardCommand = orientation === "vertical" ? "down" : "right";
   const backwardCommand = orientation === "vertical" ? "up" : "left";
+  const acrossCommands = orientation === "vertical" ? ["left", "right"] : ["up", "down"];
 
   function items() {
     return Array.from(root.querySelectorAll(selector)).filter(
@@ -166,7 +176,34 @@ export function wireLinearNav(root, selector, { orientation = "vertical", onActi
     focusAfterPaint(items()[0]);
   }
 
-  function move(delta) {
+  function groupOf(el) {
+    return el?.dataset?.navGroup || null;
+  }
+
+  /* Left/Right on a focused <input type=range> (e.g. chrome-menu-effects.js's Shader
+     Upscaling/Color Boost/Ambient Lighting strength/opacity sliders) adjusts its value
+     directly rather than falling through to the browser's own native range-input key
+     handling - that native behavior only fires for a *trusted* keydown, but the gamepad
+     poller's dispatchSyntheticKey below produces untrusted synthetic KeyboardEvents (a
+     physical D-pad press on Xbox is very likely delivered this way, see this file's own
+     header comment on that still-unverified-on-hardware question), which the browser
+     silently ignores for a form control's default action. Firing a real "input" event
+     keeps this working the same way as a manual drag - every slider's own listener
+     reacts to "input", not "change". */
+  function adjustRange(el, delta) {
+    const step = Number(el.step) || 1;
+    const min = el.min !== "" ? Number(el.min) : 0;
+    const max = el.max !== "" ? Number(el.max) : 100;
+    const next = Math.max(min, Math.min(max, Number(el.value) + delta * step));
+    if (next === Number(el.value)) return;
+    el.value = String(next);
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+  }
+
+  /* Steps past every remaining member of the active element's own group in one go before
+     applying the final +/-1 - so a group reads as a single stop for Up/Down (or Left/Right
+     in a horizontal list) regardless of which of its members currently has focus. */
+  function moveAcrossGroup(delta) {
     const list = items();
     if (!list.length) return;
     let idx = list.indexOf(root.activeElement);
@@ -174,22 +211,48 @@ export function wireLinearNav(root, selector, { orientation = "vertical", onActi
       list[0].focus();
       return;
     }
+    const group = groupOf(list[idx]);
+    if (group) {
+      while (idx + delta >= 0 && idx + delta < list.length && groupOf(list[idx + delta]) === group) {
+        idx += delta;
+      }
+    }
     idx += delta;
     if (loop) idx = (idx + list.length) % list.length;
     else idx = Math.max(0, Math.min(list.length - 1, idx));
     list[idx].focus();
   }
 
+  /* Moves within the active element's own group only. Returns false (leaving the command
+     unhandled) when the active element isn't grouped at all. */
+  function moveWithinGroup(delta) {
+    const active = root.activeElement;
+    const group = groupOf(active);
+    if (!group) return false;
+    const list = items().filter((el) => groupOf(el) === group);
+    let idx = Math.max(0, Math.min(list.length - 1, list.indexOf(active) + delta));
+    list[idx].focus();
+    return true;
+  }
+
   const unregister = registerNavHandler((command) => {
     const list = items();
     if (!list.includes(root.activeElement)) return false;
     if (command === forwardCommand) {
-      move(1);
+      moveAcrossGroup(1);
       return true;
     }
     if (command === backwardCommand) {
-      move(-1);
+      moveAcrossGroup(-1);
       return true;
+    }
+    if (acrossCommands.includes(command)) {
+      const delta = command === acrossCommands[1] ? 1 : -1;
+      if (root.activeElement?.tagName === "INPUT" && root.activeElement.type === "range") {
+        adjustRange(root.activeElement, delta);
+        return true;
+      }
+      return moveWithinGroup(delta);
     }
     if (command === "activate") {
       (onActivate || ((el) => el.click()))(root.activeElement);

@@ -544,8 +544,12 @@ export function openHamburgerMenu(controller, anchor) {
        never consider itself in scope. */
     sheet.classList.add(INLINE_MENU_CLASS);
     /* Without this the sheet opens with focus still nowhere, so wireLinearNav's own "is focus inside my
-       list" guard never passes and D-pad input does nothing. */
-    const menuNav = wireLinearNav(document, `.${INLINE_MENU_CLASS} button:not(.${OVERLAY_CLOSE_BTN_CLASS})`, {
+       list" guard never passes and D-pad input does nothing. Also includes input[type=range] (only
+       present on chrome-menu-effects.js's Effects sub-screen) so its Shader Upscaling/Color Boost/
+       Ambient Lighting sliders are themselves reachable Up/Down stops, not just their Auto/On/Off
+       mode buttons - a disabled slider (see buildModeRow's applyStrengthDisplay) is skipped for free,
+       since items() already filters out disabled elements. */
+    const menuNav = wireLinearNav(document, `.${INLINE_MENU_CLASS} button:not(.${OVERLAY_CLOSE_BTN_CLASS}), .${INLINE_MENU_CLASS} input[type="range"]`, {
         orientation: "vertical",
         loop: true,
         /* Back up a screen (Quality Cap/Effects/Extras -> the main list) if one is open, else close

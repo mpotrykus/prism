@@ -2,7 +2,6 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.Web.WebView2.Core;
 using PrismXbox.Player;
 using System;
-using System.Collections.Generic;
 using System.Diagnostics;
 // Windows.Data.Json, not System.Text.Json: the latter isn't part of the UWP framework and
 // pulls reflection-heavy dependencies that behave badly under the .NET Native toolchain
@@ -27,7 +26,7 @@ namespace PrismXbox
     /// `npm run xbox:sync`) full-screen inside a WebView2 control.
     ///
     /// Layout is a Grid rather than the WebView2 alone so a video surface can sit behind the
-    /// page: MediaPlayerElement at z=0, WebView2 (transparent) at z=1, diagnostics on top.
+    /// page: MediaPlayerElement at z=0, WebView2 (transparent) at z=1.
     /// </summary>
     public sealed partial class MainPage : Page
     {
@@ -35,13 +34,6 @@ namespace PrismXbox
 
         private NativePlayerHost playerHost;
         private PlayerBridge playerBridge;
-
-        private TextBlock diagnostics;
-        private Border diagnosticsPanel;
-        private readonly List<string> diagnosticLines = new List<string>();
-        private const int MaxDiagnosticLines = 18;
-        private string lastLoggedMessage;
-        private int repeatCount;
 
         // "prismxbox.local" is an arbitrary virtual hostname mapped below to the bundled "www"
         // folder via SetVirtualHostNameToFolderMapping. This is WebView2's recommended mechanism
@@ -178,38 +170,12 @@ namespace PrismXbox
             webView.Source = new Uri(InitialUri);
         }
 
-        // The diagnostics TextBlock is added last so it stays readable over both the video and the
-        // WebView2. Neither the MediaPlayerElement (IsTabStop=false) nor the TextBlock is focusable,
-        // which is what keeps webView the only focusable control in the tree - the invariant
-        // OnCoreWindowKeyDown's comment below depends on.
         private Grid BuildLayout()
         {
-            diagnostics = new TextBlock
-            {
-                FontFamily = new FontFamily("Consolas"),
-                FontSize = 18,
-                Foreground = new SolidColorBrush(Colors.Lime),
-            };
-
-            // UWP's TextBlock is a FrameworkElement with no Background of its own (WinUI 3 added
-            // one), so the backing plate has to be a Border - and it needs one: the log has to
-            // stay legible against video, not against whatever the page happens to be painting.
-            diagnosticsPanel = new Border
-            {
-                Child = diagnostics,
-                Background = new SolidColorBrush(Color.FromArgb(190, 0, 0, 0)),
-                Padding = new Thickness(10),
-                HorizontalAlignment = HorizontalAlignment.Left,
-                VerticalAlignment = VerticalAlignment.Top,
-                IsHitTestVisible = false,
-                Visibility = Visibility.Visible,
-            };
-
             // Marshalled to the UI thread, because MediaPlayer and MediaPlaybackSession raise their
             // events on background threads while CoreWebView2.PostWebMessageAsJson may only be called
             // on the UI thread. Without this every emit fails with 0x802A000C and JS receives nothing -
-            // native playback runs perfectly and the page never hears about it. Log() already does
-            // this, which is exactly why the log stays readable even if the bridge itself goes silent.
+            // native playback runs perfectly and the page never hears about it.
             playerHost = new NativePlayerHost(
                 (name, json) => _ = Dispatcher.RunAsync(
                     CoreDispatcherPriority.Normal, () => playerBridge?.Emit(name, json)),
@@ -218,9 +184,7 @@ namespace PrismXbox
             var grid = new Grid();
             grid.Children.Add(playerHost.Element);
             grid.Children.Add(webView);
-            grid.Children.Add(diagnosticsPanel);
 
-            Log("X = hide this panel.");
             return grid;
         }
 
@@ -232,36 +196,13 @@ namespace PrismXbox
             _ = playerHost?.RestoreDisplayAsync();
         }
 
-        // Rendered on screen rather than to Debug output because the point is to read results on a
-        // TV without depending on remote DevTools reaching the console.
+        // Every native call site (PlayerBridge, NativePlayerHost, HdrDisplayController,
+        // EffectSettings.EffectLog) and the JS console/error forwarder below still funnel through
+        // this one sink - visible in Visual Studio's Output window during a Remote Machine debug
+        // session, same as any other Debug.WriteLine.
         private void Log(string line)
         {
             Debug.WriteLine($"[xbox] {line}");
-            _ = Dispatcher.RunAsync(CoreDispatcherPriority.Low, () =>
-            {
-                // Coalesce consecutive identical messages into "(xN)" rather than appending each -
-                // a repeated line (e.g. a per-frame diagnostic) would otherwise push older, more
-                // useful lines straight out of the panel's fixed line budget.
-                if (lastLoggedMessage == line && diagnosticLines.Count > 0)
-                {
-                    repeatCount++;
-                    diagnosticLines[diagnosticLines.Count - 1] = $"{DateTime.Now:HH:mm:ss} {line} (x{repeatCount})";
-                }
-                else
-                {
-                    lastLoggedMessage = line;
-                    repeatCount = 1;
-                    diagnosticLines.Add($"{DateTime.Now:HH:mm:ss} {line}");
-                }
-                if (diagnosticLines.Count > MaxDiagnosticLines)
-                {
-                    diagnosticLines.RemoveRange(0, diagnosticLines.Count - MaxDiagnosticLines);
-                }
-                if (diagnostics != null)
-                {
-                    diagnostics.Text = string.Join("\n", diagnosticLines);
-                }
-            });
         }
 
         private void OnWebMessageReceived(CoreWebView2 sender, CoreWebView2WebMessageReceivedEventArgs args)
@@ -345,21 +286,6 @@ namespace PrismXbox
         // was for moonlight-xbox's DPad-vs-XY-nav case (see that project's memory).
         private void OnCoreWindowKeyDown(CoreWindow sender, KeyEventArgs args)
         {
-            // X and LeftShoulder are unmapped below, so they're free to toggle the diagnostics
-            // panel without colliding with anything the app uses (Y = search, RightShoulder = next
-            // chapter, Menu/Start = options menu - see focus-nav.js/plex-player.js).
-            if (args.VirtualKey == VirtualKey.GamepadX || args.VirtualKey == VirtualKey.GamepadLeftShoulder)
-            {
-                args.Handled = true;
-                if (diagnosticsPanel != null)
-                {
-                    diagnosticsPanel.Visibility = diagnosticsPanel.Visibility == Visibility.Visible
-                        ? Visibility.Collapsed
-                        : Visibility.Visible;
-                }
-                return;
-            }
-
             string jsKey = MapGamepadKey(args.VirtualKey);
             if (jsKey == null) return;
             args.Handled = true;

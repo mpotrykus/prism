@@ -49,7 +49,7 @@ const MODE_OPTIONS = [
    mode-switch time (not live-ticking while the panel stays open) since
    content-analysis.js only updates every ~750ms and the panel is normally only glanced
    at, not watched. */
-function buildModeRow({ mode, onModeChange, getAutoValue, getManualValue, strengthInput, strengthLabel }) {
+function buildModeRow({ groupId, mode, onModeChange, getAutoValue, getManualValue, strengthInput, strengthLabel }) {
     const row = document.createElement("div");
     Object.assign(row.style, { display: "flex", gap: "6px", padding: "0 0 10px" });
 
@@ -72,6 +72,11 @@ function buildModeRow({ mode, onModeChange, getAutoValue, getManualValue, streng
         const btn = document.createElement("button");
         btn.type = "button";
         btn.classList.add(PLAYER_FOCUSABLE_CLASS);
+        /* See focus-nav.js's wireLinearNav: same data-nav-group value on all three buttons
+           makes Left/Right cycle between Auto/On/Off while Up/Down skips the whole row in
+           one step, landing on the slider (or whatever's next) instead of stepping through
+           each mode button individually. */
+        btn.dataset.navGroup = groupId;
         btn.textContent = opt.label;
         Object.assign(btn.style, {
             width: "44px",
@@ -226,6 +231,7 @@ function buildShaderEffectRow(controller, list) {
     strengthInput.type = "range";
     strengthInput.min = "0";
     strengthInput.max = "100";
+    strengthInput.classList.add(PLAYER_FOCUSABLE_CLASS);
     Object.assign(strengthInput.style, { display: "block", width: "100%", accentColor: "#e5a00d", cursor: "pointer", boxSizing: "border-box" });
     strengthInput.addEventListener("input", () => {
         strengthLabel.textContent = `Strength: ${strengthInput.value}%`;
@@ -233,6 +239,7 @@ function buildShaderEffectRow(controller, list) {
     });
 
     const { row: modeRow, refreshIfAuto } = buildModeRow({
+        groupId: "shader-mode",
         mode: upscaleModeOf(controller),
         onModeChange: (mode) => setUpscaleMode(controller, mode),
         getAutoValue: () => controller._autoUpscaleStrength,
@@ -262,6 +269,7 @@ function buildColorBoostEffectRow(controller, list) {
     strengthInput.type = "range";
     strengthInput.min = "0";
     strengthInput.max = "100";
+    strengthInput.classList.add(PLAYER_FOCUSABLE_CLASS);
     Object.assign(strengthInput.style, { display: "block", width: "100%", accentColor: "#e5a00d", cursor: "pointer", boxSizing: "border-box" });
     strengthInput.addEventListener("input", () => {
         strengthLabel.textContent = `Strength: ${strengthInput.value}%`;
@@ -269,6 +277,7 @@ function buildColorBoostEffectRow(controller, list) {
     });
 
     const { row: modeRow, refreshIfAuto } = buildModeRow({
+        groupId: "colorboost-mode",
         mode: colorBoostModeOf(controller),
         onModeChange: (mode) => setColorBoostMode(controller, mode),
         getAutoValue: () => controller._autoColorBoostStrength,
@@ -297,6 +306,7 @@ function buildAmbientEffectRow(controller, list) {
     opacityInput.min = "0";
     opacityInput.max = "100";
     opacityInput.value = String(Math.round(controller._ambientOpacity * 100));
+    opacityInput.classList.add(PLAYER_FOCUSABLE_CLASS);
     Object.assign(opacityInput.style, { display: "block", width: "100%", accentColor: "#e5a00d", boxSizing: "border-box" });
     opacityInput.addEventListener("input", () => {
         opacityLabel.textContent = `Opacity: ${opacityInput.value}%`;
