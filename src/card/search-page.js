@@ -194,7 +194,39 @@ async function fetchByFacet(card, facet, filterName, limit) {
   }
 }
 
-export function renderSearchPage(card, hubs, { expanded = false } = {}) {
+/* Row "See More" (see openRowSeeMore below) reuses this same expanded single-hub page -
+   its back button can't reuse the default "return to the last search's hubs" behavior
+   (there may be no prior search at all), so onBack/backLabel let a caller override both
+   the label and the action while still getting the identical grid rendering. */
+/* A browse row's "See More" card (rows.js's buildSeeMoreCard, wired up via row.hasMore/
+   row.loadMore - see plex-netflix-card.js's _rowCtx.onSeeMoreRow) - not a real search, but
+   reuses the exact same expanded single-hub grid page since that's already the codebase's
+   "uncapped version of a row" UI (see expandSearchSection above). Borrows the "search"
+   view's own re-render guard (data.js's loadAll/loadBackgroundData both skip their
+   background re-renders while card._currentView === "search") so a background data
+   refresh landing mid-view can't stomp this page back to the normal grid underneath it. */
+export async function openRowSeeMore(card, row) {
+  const returnView = card._currentView;
+  card._preSearchView = returnView;
+  card._currentView = "search";
+  card._navItems.forEach((n) => n.classList.remove("active"));
+  card._showHero();
+  card._renderLoading();
+  let rawItems = [];
+  try {
+    rawItems = (await row.loadMore?.()) || [];
+  } catch (e) {
+    rawItems = [];
+  }
+  if (card._currentView !== "search") return; // user navigated away while this was loading
+  renderSearchPage(card, [{ title: row.title, Metadata: rawItems }], {
+    expanded: true,
+    backLabel: "← Back",
+    onBack: () => card._exitSearch(),
+  });
+}
+
+export function renderSearchPage(card, hubs, { expanded = false, onBack = null, backLabel = "← Back to all results" } = {}) {
   const visibleHubs = hubs.filter((hub) => (hub.Metadata || []).length);
   if (!visibleHubs.length) {
     card._rowsEl.innerHTML = `<div class="empty">${card._emptyStateHtml("No results")}</div>`;
@@ -213,9 +245,10 @@ export function renderSearchPage(card, hubs, { expanded = false } = {}) {
     const back = document.createElement("button");
     back.type = "button";
     back.className = "search-page-back";
-    back.textContent = "← Back to all results";
+    back.textContent = backLabel;
     back.addEventListener("click", () => {
-      if (card._lastSearchHubs) renderSearchPage(card, card._lastSearchHubs);
+      if (onBack) onBack();
+      else if (card._lastSearchHubs) renderSearchPage(card, card._lastSearchHubs);
     });
     page.appendChild(back);
   }

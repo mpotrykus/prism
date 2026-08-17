@@ -1,20 +1,19 @@
-import { hasNativePlayer } from "../core/platform.js";
 import { media } from "../core/media-facade.js";
-import { setNativePlaybackRate } from "../native-bridge.js";
-import { PLAYBACK_RATES, SLEEP_TIMER_PRESETS_MIN, ZOOM_LEVELS, speedIconMarkup, zoomIconMarkup, sleepIconMarkup } from "./shared.js";
-/* Circular with chrome-menu.js (which imports renderExtrasList/applyZoomTransform from
-   this file for its "Extras" row and its Zoom picker's onSelect) - safe here because
+import { postAspectMode } from "../xbox-bridge.js";
+import { PLAYBACK_RATES, SLEEP_TIMER_PRESETS_MIN, FIT_MODES, speedIconMarkup, aspectIconMarkup, sleepIconMarkup } from "./shared.js";
+/* Circular with chrome-menu.js (which imports renderExtrasList/applyFitMode from
+   this file for its "Extras" row and its Aspect picker's onSelect) - safe here because
    both sides only reference the other module's export from inside a function body
    (renderPickerList/buildAccordionRow/makeBackRow/refocusList are only called once
    renderExtrasList itself actually runs, well after both modules have finished loading),
    never at top-level module-evaluation time. */
 import { renderPickerList, buildAccordionRow, makeBackRow, refocusList } from "./chrome-menu.js";
 
-/* The hamburger "More" sheet's Extras sub-screen: Playback Speed/Zoom/Sleep Timer, each its
+/* The hamburger "More" sheet's Extras sub-screen: Playback Speed/Aspect/Sleep Timer, each its
    own dedicated screen (see renderExtrasList) - grouped together under one "Extras" row since
    none of the three relate to each other the way Effects' three GPU-pipeline controls do, but
    each is simple/single-picker enough that squeezing all three top-level rows down to one
-   still reads as a sensible cluster. Also owns zoom pan/transform, since Zoom is one of these
+   still reads as a sensible cluster. Also owns applyFitMode, since Aspect is one of these
    pickers.
 
    Each picker used to expand in place as an accordion (buildAccordionRow's `render` case)
@@ -33,15 +32,19 @@ function renderSpeedSection(controller, content, { setValue, collapse }) {
     })));
 }
 
-async function setPlaybackRate(controller, rate) {
+/* Not gated on hasNativePlayer() the way native-bridge.js's own Android bridge calls are
+   elsewhere in this codebase - this whole module only ever mounts for the web and Xbox
+   legs (Android has its own native menu, PlayerUiHelper.java, with no equivalent of this
+   file at all), and media(controller) already resolves to the right thing on both: the
+   real <video> element on web, a NativeMediaFacade relaying to the Xbox bridge otherwise
+   (see core/media-facade.js). Routing through native-bridge.js's Capacitor-only
+   setNativePlaybackRate here - as an earlier version of this function did - reached a
+   plugin that only exists on Android, silently doing nothing on Xbox. */
+function setPlaybackRate(controller, rate) {
     if (!controller._session) return;
     controller._session.playbackRate = rate;
-    if (hasNativePlayer()) {
-        await setNativePlaybackRate(rate);
-    } else {
-        const el = media(controller);
-        if (el) el.playbackRate = rate;
-    }
+    const el = media(controller);
+    if (el) el.playbackRate = rate;
 }
 
 function renderSleepSection(controller, content, { setValue, collapse }) {
@@ -63,41 +66,60 @@ function setSleepTimer(controller, ms) {
     controller._sleepMinutes = ms > 0 ? Math.round(ms / 60000) : 0;
 }
 
-function renderZoomSection(controller, content, { setValue, collapse }) {
-    renderPickerList(content, ZOOM_LEVELS.map((level, idx) => ({
-        label: `${level}x${idx === controller._zoomIndex ? "  ✓" : ""}`,
+function renderAspectSection(controller, content, { setValue, collapse }) {
+    renderPickerList(content, FIT_MODES.map(({ key, label }) => ({
+        label: `${label}${key === controller._fitMode ? "  ✓" : ""}`,
         onSelect: () => {
-            controller._zoomIndex = idx;
-            controller._zoomPanX = 0;
-            controller._zoomPanY = 0;
-            applyZoomTransform(controller);
-            setValue(`${level}x`);
+            applyFitMode(controller, key);
+            setValue(label);
             collapse();
         },
     })));
 }
 
-export function applyZoomTransform(controller) {
-    if (!controller._videoEl) return;
-    const scale = ZOOM_LEVELS[controller._zoomIndex];
-    const transform = `translate(${controller._zoomPanX}px, ${controller._zoomPanY}px) scale(${scale})`;
-    controller._videoEl.style.transform = transform;
-    /* The shader canvas sits exactly on top of the (now-invisible) video at the same
-       position/size, so it needs the same transform to stay aligned with it - pan/zoom
-       itself is still driven entirely off the video's own pointer events, since the
-       canvas is pointer-events:none and lets clicks/drags fall through to it. */
-    if (controller._shaderCanvas) controller._shaderCanvas.style.transform = transform;
+/* "fit"/"cover"/"stretch" -> CSS object-fit's own keywords, except "stretch" itself
+   (object-fit has no "stretch" value - "fill" is the one that ignores aspect ratio and
+   distorts the picture to exactly cover the box, which is what "Stretch" means here). */
+function cssObjectFitFor(mode) {
+    return mode === "cover" ? "cover" : mode === "stretch" ? "fill" : "contain";
+}
+
+/* Replaces the old scale+pan zoom transform (applyZoomTransform/wireZoomPan) with a
+   plain aspect-fit switch - Fit (letterbox, the old 1x), Cover (crop to fill, no
+   letterbox) or Stretch (fill exactly, distorting the picture). No pan needed for any
+   of the three, so this is also why wireZoomPan's drag-to-pan handling is gone
+   entirely rather than ported over.
+
+   controller._videoEl is null on Xbox (no real <video> element - the native surface
+   sits behind the transparent WebView2, see xbox-bridge.js's header), so that leg
+   relays the mode across the bridge instead for NativePlayerHost.SetStretch to apply
+   to its MediaPlayerElement.Stretch - same "no _videoEl means Xbox" branch
+   ambient-pipeline.js's computePictureRect already uses. */
+export function applyFitMode(controller, mode) {
+    controller._fitMode = mode;
+    if (controller._videoEl) {
+        const cssFit = cssObjectFitFor(mode);
+        controller._videoEl.style.objectFit = cssFit;
+        /* The shader canvas sits exactly on top of the (now-invisible) video at the
+           same position/size, so it needs the same object-fit to stay visually
+           aligned with it - see shader-pipeline.js's ensureShaderPipeline, which gives
+           a freshly-created canvas this same treatment for whatever mode is already
+           current. */
+        if (controller._shaderCanvas) controller._shaderCanvas.style.objectFit = cssFit;
+    } else {
+        postAspectMode(mode);
+    }
 }
 
 /* "Extras" - same dedicated-screen pattern as chrome-menu-effects.js's renderEffectsList,
-   for Playback Speed/Zoom/Sleep Timer instead of the shader/color/ambient trio. Each of the
+   for Playback Speed/Aspect/Sleep Timer instead of the shader/color/ambient trio. Each of the
    three is itself a `nav` target rather than an in-place accordion expand, exactly like
    Quality Cap/Version/Effects at the main list's own level - one consistent "tap a row, land
    on its own screen, Back returns you" interaction everywhere in this sheet, rather than
    accordion expand-in-place being a second, different pattern one level down.
 
    `onBack` is what Back should do at THIS screen (return to the main list) - `setGoBack` is
-   chrome-menu.js's own goBack setter, needed here because entering Playback Speed/Zoom/Sleep
+   chrome-menu.js's own goBack setter, needed here because entering Playback Speed/Aspect/Sleep
    Timer has to point `goBack` at showThisScreen (return to Extras) instead, then back at
    `onBack` again once the viewer returns here - see chrome-menu.js's own setGoBack comment for
    why a sub-screen module can't just reassign that variable directly. */
@@ -123,13 +145,13 @@ export function renderExtrasList(controller, list, onBack, setGoBack) {
         },
     });
     buildAccordionRow(list, state, {
-        key: "zoom",
-        label: "Zoom",
-        icon: zoomIconMarkup(),
-        getValue: () => `${ZOOM_LEVELS[controller._zoomIndex]}x`,
+        key: "aspect",
+        label: "Aspect",
+        icon: aspectIconMarkup(),
+        getValue: () => FIT_MODES.find((m) => m.key === controller._fitMode)?.label || "Fit",
         nav: () => {
             setGoBack(showThisScreen);
-            renderZoomList(controller, list, showThisScreen);
+            renderAspectList(controller, list, showThisScreen);
             refocusList(list);
         },
     });
@@ -146,9 +168,9 @@ export function renderExtrasList(controller, list, onBack, setGoBack) {
     });
 }
 
-/* Reuses renderSpeedSection/renderZoomSection/renderSleepSection's picker-list body unchanged
+/* Reuses renderSpeedSection/renderAspectSection/renderSleepSection's picker-list body unchanged
    (same "own dedicated screen" wiring as chrome-menu.js's renderQualityCapList) - `onBack`
-   stands in for the accordion's own `collapse`, so picking a rate/zoom/sleep-duration returns
+   stands in for the accordion's own `collapse`, so picking a rate/fit-mode/sleep-duration returns
    straight to the Extras screen instead of needing a separate "update this row's value" step. */
 function renderSpeedList(controller, list, onBack) {
     list.innerHTML = "";
@@ -156,50 +178,14 @@ function renderSpeedList(controller, list, onBack) {
     renderSpeedSection(controller, list, { setValue: () => {}, collapse: onBack });
 }
 
-function renderZoomList(controller, list, onBack) {
+function renderAspectList(controller, list, onBack) {
     list.innerHTML = "";
     list.appendChild(makeBackRow(onBack));
-    renderZoomSection(controller, list, { setValue: () => {}, collapse: onBack });
+    renderAspectSection(controller, list, { setValue: () => {}, collapse: onBack });
 }
 
 function renderSleepList(controller, list, onBack) {
     list.innerHTML = "";
     list.appendChild(makeBackRow(onBack));
     renderSleepSection(controller, list, { setValue: () => {}, collapse: onBack });
-}
-
-/* Pan only engages once zoomed past 1x, and only within the padding introduced by that
-   zoom - clamped against the video's own unscaled box size so the frame can never be
-   dragged edge-past-edge and leave black space. */
-export function wireZoomPan(controller) {
-    const video = controller._videoEl;
-    if (!video) return;
-    let dragging = false;
-    let startX = 0;
-    let startY = 0;
-    let originX = 0;
-    let originY = 0;
-    video.addEventListener("pointerdown", (e) => {
-        if (ZOOM_LEVELS[controller._zoomIndex] <= 1) return;
-        dragging = true;
-        startX = e.clientX;
-        startY = e.clientY;
-        originX = controller._zoomPanX;
-        originY = controller._zoomPanY;
-        video.setPointerCapture(e.pointerId);
-    });
-    video.addEventListener("pointermove", (e) => {
-        if (!dragging) return;
-        const scale = ZOOM_LEVELS[controller._zoomIndex];
-        const maxX = ((scale - 1) * video.clientWidth) / 2;
-        const maxY = ((scale - 1) * video.clientHeight) / 2;
-        controller._zoomPanX = Math.max(-maxX, Math.min(maxX, originX + (e.clientX - startX)));
-        controller._zoomPanY = Math.max(-maxY, Math.min(maxY, originY + (e.clientY - startY)));
-        applyZoomTransform(controller);
-    });
-    const endDrag = () => {
-        dragging = false;
-    };
-    video.addEventListener("pointerup", endDrag);
-    video.addEventListener("pointercancel", endDrag);
 }

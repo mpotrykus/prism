@@ -252,6 +252,27 @@ export function wireStartButton(card) {
   });
 }
 
+/* Gamepad Back/Select ("profile" command) opens the Plex Home profile switcher directly,
+   replacing the old Settings > Profiles tab - a controller user no longer has to drill
+   into Settings just to switch profiles. Only meaningful when there's actually more than
+   one Home profile to switch between (card._profileNavItem is hidden otherwise - see
+   plex-netflix-card.js's _renderProfileNav), and scoped the same way wireStartButton is,
+   so it doesn't fight the player's own handler or reopen the switcher on top of another
+   overlay. */
+export function wireProfileButton(card) {
+  registerNavHandler((command) => {
+    if (command !== "profile") return false;
+    if (card._profileNavItem.hidden) return false;
+    if (player.isOpen()) return false;
+    if (document.querySelector("streaming-settings-modal")?.isOpen()) return false;
+    if (document.querySelector("streaming-plex-signin-modal")?.isOpen()) return false;
+
+    if (card._titleInfo.isOpen()) card._titleInfo.close();
+    card.openProfileSwitcher();
+    return true;
+  });
+}
+
 /* The home screen (sidenav + hero + a 2D grid of poster rows) isn't a single list -
    wireLinearNav's 1D model doesn't cover "Left/Right moves within whichever row
    currently has focus, Up/Down moves between rows while roughly preserving column

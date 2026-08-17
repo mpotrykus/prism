@@ -426,6 +426,45 @@
     padding: 60px 12px 12px;
 }
 
+/* "See More" trailing card (rows.js's buildSeeMoreCard) - deliberately its own simple
+   markup rather than reusing .poster .card's img/glow/caption structure, since it has no
+   artwork of its own; sized to match a sibling poster/landscape card via the same
+   aspect-ratio rules. */
+.poster.see-more-card .see-more-inner {
+    position: relative;
+    border-radius: 14px;
+    overflow: hidden;
+    background: #16161a;
+    aspect-ratio: 2 / 3;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    color: #9a9aa2;
+    transition: transform 0.18s ease, background 0.18s ease, color 0.18s ease;
+}
+
+.poster.landscape.see-more-card .see-more-inner {
+    aspect-ratio: 16 / 9;
+}
+
+.poster.see-more-card:hover .see-more-inner,
+.poster.see-more-card:focus-visible .see-more-inner {
+    transform: scale(1.06);
+    background: #202027;
+    color: #e5a00d;
+}
+
+.poster.see-more-card .see-more-icon {
+    display: flex;
+}
+
+.poster.see-more-card .see-more-label {
+    font-size: 0.8rem;
+    font-weight: 600;
+}
+
 
 /* Top-10-style big rank numbers (e.g. HBO Max) for rank-ordered rows like What's
    Popular. Ties into this card's existing amber accent (#e5a00d, also used as the

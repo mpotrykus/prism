@@ -119,6 +119,9 @@ namespace PrismXbox.Player
                 case "setPlaybackSpeed":
                     host.SetPlaybackSpeed(p.GetNamedNumber("speed", 1));
                     break;
+                case "setStretch":
+                    host.SetStretch(p.GetNamedString("mode", "fit"));
+                    break;
                 case "setShaderEffect":
                     host.SetShaderEffect(
                         p.GetNamedBoolean("enabled", false),

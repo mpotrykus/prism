@@ -219,6 +219,20 @@ namespace PrismXbox.Player
 
         public void SetPlaybackSpeed(double speed) => player.PlaybackSession.PlaybackRate = speed;
 
+        /// <summary>
+        /// "fit"/"cover"/"stretch" from chrome-menu-extras.js's Aspect picker (see that file's
+        /// applyFitMode, which sets CSS object-fit on the web leg's own &lt;video&gt; instead - there is
+        /// no such element here, so the equivalent lives on the MediaPlayerElement itself). Not a
+        /// switch expression: this project has no explicit LangVersion set, which defaults to a C#
+        /// version that predates them.
+        /// </summary>
+        public void SetStretch(string mode)
+        {
+            if (mode == "cover") Element.Stretch = Windows.UI.Xaml.Media.Stretch.UniformToFill;
+            else if (mode == "stretch") Element.Stretch = Windows.UI.Xaml.Media.Stretch.Fill;
+            else Element.Stretch = Windows.UI.Xaml.Media.Stretch.Uniform;
+        }
+
         public void Stop()
         {
             player.Pause();

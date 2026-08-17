@@ -196,6 +196,10 @@ public class PlayerActivity extends AppCompatActivity {
     float zoomScale = 1f;
     float panX = 0f;
     float panY = 0f;
+    /* "fit"/"cover"/"stretch" - see PlayerUiHelper's Aspect row (renderExtrasList) and
+       applyAspectMode below. Independent of zoomScale/panX/panY above: that's a separate,
+       continuous pinch/pan gesture on the video surface, not a picker in the menu. */
+    String aspectMode = "fit";
     private float dragStartRawX;
     private float dragStartRawY;
     private float panStartX;
@@ -1463,7 +1467,12 @@ public class PlayerActivity extends AppCompatActivity {
 
         float w;
         float h;
-        if (videoAR > screenAR) {
+        if (!"fit".equals(aspectMode)) {
+            /* Cover/Stretch (see applyAspectMode) fill the screen exactly by definition - no
+               letterbox gap exists for the glow to show in, regardless of videoAR/screenAR. */
+            w = vw;
+            h = vh;
+        } else if (videoAR > screenAR) {
             w = vw;
             h = vw / videoAR;
         } else {
@@ -1626,6 +1635,27 @@ public class PlayerActivity extends AppCompatActivity {
                 if (activeInstance.player != null) activeInstance.player.setPlaybackParameters(new PlaybackParameters(speed));
             });
         }
+    }
+
+    public static void setAspectMode(String mode) {
+        if (activeInstance != null) {
+            activeInstance.runOnUiThread(() -> activeInstance.applyAspectMode(mode));
+        }
+    }
+
+    /* "fit" letterboxes (ExoPlayer's own default), "cover" crops to fill without distorting,
+       "stretch" fills exactly, distorting the picture - same three options as the web/Xbox
+       leg's Aspect picker (chrome-menu-extras.js's applyFitMode), applied here via
+       PlayerView's own AspectRatioFrameLayout instead of a CSS object-fit. layoutGlow (see its
+       own comment) has to know the current mode too: Cover/Stretch leave no letterbox gap for
+       ambient lighting's edge glow to show in, regardless of the video's own aspect ratio. */
+    private void applyAspectMode(String mode) {
+        aspectMode = mode;
+        int resizeMode;
+        if ("cover".equals(mode)) resizeMode = AspectRatioFrameLayout.RESIZE_MODE_ZOOM;
+        else if ("stretch".equals(mode)) resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FILL;
+        else resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT;
+        playerView.setResizeMode(resizeMode);
     }
 
     /* View mutations, same as the player-only static methods above, need to run on the

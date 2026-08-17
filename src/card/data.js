@@ -105,6 +105,11 @@ async function fetchRecentlyAddedRaw(card) {
       }
     })
   );
+  /* Same "hit the requested cap -> there may be more" heuristic search-page.js's
+     /hubs/search hub building uses (there's no totalSize on this per-section /all
+     response the way genre listings have) - stashed on the card since this raw fetch
+     result itself has no room for it once flattened below. */
+  card._recentlyAddedHasMore = perSection.some((items) => items.length >= rowSize);
   return perSection.flat();
 }
 
@@ -289,7 +294,14 @@ async function fetchAiRowsRaw(card, ideas) {
           }
         })
       );
-      return { label: idea.label, genres: idea.genres, items: perSection.flat() };
+      /* Same hit-the-cap heuristic as fetchRecentlyAddedRaw above - this per-section
+         query has no totalSize to check precisely either. */
+      return {
+        label: idea.label,
+        genres: idea.genres,
+        items: perSection.flat(),
+        hasMore: perSection.some((items) => items.length >= rowSize),
+      };
     })
   );
   return results.filter((r) => r.items.length);

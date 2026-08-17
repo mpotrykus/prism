@@ -1,5 +1,5 @@
 import Hls from "hls.js";
-import { ZOOM_LEVELS, storedVolume } from "./ui/shared.js";
+import { storedVolume } from "./ui/shared.js";
 import { releaseBifIndex } from "./core/bif.js";
 import { setMediaFacade } from "./core/media-facade.js";
 import { closeEpisodeListOverlay, closeChapterListOverlay } from "./ui/episode-list.js";
@@ -70,11 +70,8 @@ function createVideoElement(controller) {
     });
     video.volume = storedVolume();
 
-    /* Tapping the video itself toggles play/pause, matching every mainstream player -
-       only when not zoomed in, since zoomed-in drag is already claimed by pan (see
-       _wireZoomPan) and would otherwise fight this for the same gesture. */
+    /* Tapping the video itself toggles play/pause, matching every mainstream player. */
     video.addEventListener("click", () => {
-        if (ZOOM_LEVELS[controller._zoomIndex] > 1) return;
         if (video.paused) video.play();
         else video.pause();
     });

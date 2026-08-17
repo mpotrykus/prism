@@ -61,11 +61,8 @@ export function mountPlayerChrome(controller, mediaEl, { gpuPipelines }) {
        from a button press. See plex-player.js's nav handler. */
     controller._menuButtonEl = menuBtn;
 
-    controller._zoomIndex = 0;
-    controller._zoomPanX = 0;
-    controller._zoomPanY = 0;
+    controller._fitMode = "fit";
     controller._sleepMinutes = 0;
-    if (gpuPipelines) controller._wireZoomPan();
     controller._buildTransportBar(mediaEl);
     /* Xbox only - web builds its own in-row play/pause instead (see chrome-transport.js's
        buildCenterControls, called from within buildTransportBar), so there's never two

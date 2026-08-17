@@ -100,17 +100,19 @@ function buildQueueScrollArrow(direction, scroller) {
     return btn;
 }
 
-/* Deferred to the next frame for the same WebView2 focus-timing reason as focusAfterPaint
-   above, but doing its own scrollIntoView too (in this exact order - focus() first, then
-   the explicit scrollIntoView) rather than delegating to that helper: a bare .focus() call
-   auto-scrolls the element into view using the browser's own default (edge-aligned, not
-   centered) alignment, so calling scrollIntoView(center) *before* the deferred focus() just
-   gets silently overwritten by that default scroll once the focus actually lands - matches
-   the same focus-then-scrollIntoView order wireLinearNav's own internal focusItem uses. */
+/* Deferred to the next frame for the same WebView2 focus-timing reason as focus-nav.js's
+   own focusAfterPaint. Focusing with preventScroll:true (rather than a bare .focus(), the
+   way wireLinearNav's own internal focusItem does it) is deliberate here: the browser's own
+   default auto-scroll-into-view-on-focus can land *after* this script's own explicit
+   scrollIntoView call below rather than before it (that default scroll isn't necessarily
+   synchronous with the focus() call - it can apply during the render update that follows),
+   which was silently overwriting the centering this function exists to guarantee. Disabling
+   it outright leaves the explicit scrollIntoView call as the only thing that ever moves the
+   scroll position, so there's nothing left to race against. */
 function focusCardCentered(el) {
     if (!el) return;
     requestAnimationFrame(() => {
-        el.focus();
+        el.focus({ preventScroll: true });
         el.scrollIntoView({ inline: "center", block: "nearest" });
     });
 }

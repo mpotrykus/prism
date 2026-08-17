@@ -218,6 +218,14 @@ export function postAmbientLighting(enabled) {
     post("setAmbientLighting", { enabled });
 }
 
+/* "fit"/"cover"/"stretch" - see chrome-menu-extras.js's applyFitMode. There is no
+   controller._videoEl on this leg to set a CSS object-fit on, so the equivalent
+   (MediaPlayerElement.Stretch) is applied natively instead - see
+   NativePlayerHost.SetStretch. */
+export function postAspectMode(mode) {
+    post("setStretch", { mode });
+}
+
 /* The Xbox leg's rebuild step, over the same shared sequence the web leg uses
    (core/session-reload.js). Serves three callers that all need the identical thing here: the Version
    and Quality Cap menus, the audio-track picker's restart fallback, and - unlike on web - **seeking**.

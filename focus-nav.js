@@ -66,6 +66,7 @@ export const KEY_TO_COMMAND = {
   GamepadLT: "rewind",
   GamepadRT: "forward",
   GamepadStart: "menu",
+  GamepadSelect: "profile",
 };
 
 const COMMAND_TO_KEY = {
@@ -81,6 +82,7 @@ const COMMAND_TO_KEY = {
   rewind: "GamepadLT",
   forward: "GamepadRT",
   menu: "GamepadStart",
+  profile: "GamepadSelect",
 };
 
 /* Tracks whether the most recent input was D-pad/gamepad/keyboard nav (real or synthetic
@@ -415,7 +417,7 @@ const buttonState = Object.create(null);
    frame) - this is the stick's own virtual d-pad-button state, carrying the hysteresis
    band's "stay pressed" memory from one frame to the next. */
 const stickButtonState = { up: false, down: false, left: false, right: false };
-const GAMEPAD_BUTTONS = { 0: "activate", 1: "back", 3: "search", 4: "chapterPrev", 5: "chapterNext", 9: "menu" }; // standard mapping: A, B, Y, LB, RB, Start
+const GAMEPAD_BUTTONS = { 0: "activate", 1: "back", 3: "search", 4: "chapterPrev", 5: "chapterNext", 8: "profile", 9: "menu" }; // standard mapping: A, B, Y, LB, RB, Back/Select, Start
 
 /* PrismXbox's MainPage.xaml.cs also forwards d-pad/thumbstick/A/B natively via
    CoreWindow.KeyDown, in principle covering the same input this poller does - but with

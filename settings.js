@@ -51,7 +51,6 @@ const TABS = [
   { key: "plex", label: "Plex" },
   { key: "integrations", label: "Integrations" },
   { key: "preferences", label: "Preferences" },
-  { key: "profiles", label: "Profiles" },
 ];
 
 class StreamingSettingsModal extends HTMLElement {
@@ -178,13 +177,6 @@ class StreamingSettingsModal extends HTMLElement {
                 </div>
               </section>
             </div>
-
-            <div class="tab-panel" data-tab="profiles">
-              <section class="group">
-                <div class="group-title">Plex Home</div>
-                <button type="button" class="btn btn-secondary btn-switch-profile">Switch Profile</button>
-              </section>
-            </div>
           </div>
           <div class="status save-status"></div>
           <div class="modal-footer">
@@ -209,7 +201,6 @@ class StreamingSettingsModal extends HTMLElement {
       if (e.target === this._overlay) this.close();
     });
     this._el(".btn-reauth").addEventListener("click", () => this._reauthenticate());
-    this._el(".btn-switch-profile").addEventListener("click", () => this._switchProfile());
     this._el(".btn-fetch-libraries").addEventListener("click", () => this._fetchLibraries());
     this._el(".btn-save").addEventListener("click", () => this._save());
     this._el(".f-subtitle-provider").addEventListener("change", () => this._syncSubtitleProviderFields());
@@ -236,7 +227,7 @@ class StreamingSettingsModal extends HTMLElement {
       ".modal-close, .tab-btn, .btn-reauth, .btn-fetch-libraries, .section-row .s-enabled, .section-row .s-label, " +
         ".f-trailers-enabled, .f-youtube-key, .f-ai-enabled, .f-openrouter-key, .f-subtitle-provider, " +
         ".f-opensubtitles-username, .f-opensubtitles-password, .f-opensubtitles-key, " +
-        ".f-ai-cadence, .f-max-genre-rows, .f-row-size, .btn-switch-profile, " +
+        ".f-ai-cadence, .f-max-genre-rows, .f-row-size, " +
         ".btn-cancel, .btn-save",
       { orientation: "vertical", onBack: () => this.close() }
     );
@@ -335,14 +326,6 @@ class StreamingSettingsModal extends HTMLElement {
   _reauthenticate() {
     this.close();
     this.dispatchEvent(new CustomEvent("request-plex-reauth", { bubbles: true, composed: true }));
-  }
-
-  /* Delegates to <plex-netflix-card>'s own profile overlay (see app.js) rather than
-     reimplementing the PIN-protected-profile switch flow here - that overlay already has
-     its own D-pad-capable wireLinearNav (.profile-switch-btn/.profile-cancel). */
-  _switchProfile() {
-    this.close();
-    this.dispatchEvent(new CustomEvent("request-profile-switch", { bubbles: true, composed: true }));
   }
 
   async _fetchLibraries() {

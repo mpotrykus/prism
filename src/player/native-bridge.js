@@ -321,10 +321,6 @@ export async function resumeNative() {
     await NativePlayer.resume();
 }
 
-export async function setNativePlaybackRate(rate) {
-    await NativePlayer.setPlaybackSpeed({ speed: rate });
-}
-
 export async function setNativeSubtitle(text, languageCode, mimeType) {
     await NativePlayer.setSubtitle({ text, languageCode, mimeType });
 }

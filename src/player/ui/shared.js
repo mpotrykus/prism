@@ -1,7 +1,16 @@
 export const CONTROLS_HIDE_DELAY_MS = 1000;
 export const PLAYBACK_RATES = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 4, 8];
 export const SLEEP_TIMER_PRESETS_MIN = [15, 30, 45, 60];
-export const ZOOM_LEVELS = [1, 1.25, 1.5, 2];
+/* key matches both the CSS object-fit keyword this maps to on the web leg (see
+   chrome-menu-extras.js's applyFitMode) and the Xbox bridge's "mode" param
+   (NativePlayerHost.SetStretch) - "stretch" is the one exception, mapped to
+   object-fit:fill/Stretch.Fill rather than reusing the word "fill" itself, since
+   "Stretch" is the clearer label to show the viewer. */
+export const FIT_MODES = [
+    { key: "fit", label: "Fit" },
+    { key: "cover", label: "Cover" },
+    { key: "stretch", label: "Stretch" },
+];
 /* kbps: null means "no cap" (Original) - matched against the selected quality cap by
    identity in chrome.js's openQualityCapMenu, so keep it null rather than 0 or a
    sentinel number. */
@@ -352,10 +361,10 @@ export function speedIconMarkup() {
     </svg>`;
 }
 
-export function zoomIconMarkup() {
+export function aspectIconMarkup() {
     return `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" xmlns="http://www.w3.org/2000/svg">
-        <circle cx="10.5" cy="10.5" r="6.5" stroke="currentColor" stroke-width="1.8"/>
-        <line x1="15.3" y1="15.3" x2="21" y2="21" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+        <rect x="3" y="5" width="18" height="14" rx="2" stroke="currentColor" stroke-width="1.8"/>
+        <rect x="7" y="9" width="10" height="6" rx="1" stroke="currentColor" stroke-width="1.4"/>
     </svg>`;
 }
 

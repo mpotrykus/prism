@@ -82,10 +82,17 @@ export function mergeGenreRows(sections, { genreBySection, mapItem: mapItemFn, s
     const entries = (genreBySection && genreBySection.get(s.key)) || [];
     for (const g of entries) {
       const norm = g.title.trim().toLowerCase();
-      if (!merged.has(norm)) merged.set(norm, { title: g.title, items: [], totalSize: 0 });
+      if (!merged.has(norm)) merged.set(norm, { title: g.title, items: [], totalSize: 0, sectionGenreKeys: [] });
       const bucket = merged.get(norm);
       bucket.items.push(...g.items);
       bucket.totalSize += g.totalSize;
+      /* Per-section genre key, kept alongside the merged/sliced items so a "See More"
+         click can re-run this same genre filter per section with a much larger limit -
+         mergeGenreRows itself only ever sees rowSize items per section per genre (see
+         data.js's loadGenreDataBySection), so totalSize is the only signal of a bigger
+         true total, and the actual expanded fetch has to happen at the network-calling
+         layer (this module is deliberately network-free - see the file header). */
+      bucket.sectionGenreKeys.push({ key: s.key, type: s.type, genreKey: g.key });
     }
   }
 
@@ -97,6 +104,8 @@ export function mergeGenreRows(sections, { genreBySection, mapItem: mapItemFn, s
         source: "local",
         totalSize: g.totalSize,
         items: items.map((m) => mapItemFn(m, false)),
+        hasMore: g.totalSize > rowSize,
+        sectionGenreKeys: g.sectionGenreKeys,
       };
     })
     .filter((r) => r.totalSize >= 5 && r.items.length);
@@ -185,8 +194,19 @@ export function buildPopularRaw({ genreBySection }) {
 export function buildCollectionRows(collectionRowsRaw, typeFilter, { mapItem: mapItemFn, rowSize }) {
   return (collectionRowsRaw || [])
     .map((r) => {
-      const items = r.items.filter(typeFilter).slice(0, rowSize);
-      return { title: r.title, source: "collection", items: items.map((m) => mapItemFn(m, false)) };
+      const filtered = r.items.filter(typeFilter);
+      const items = filtered.slice(0, rowSize);
+      return {
+        title: r.title,
+        source: "collection",
+        items: items.map((m) => mapItemFn(m, false)),
+        hasMore: filtered.length > rowSize,
+        /* Unlike genre/AI rows, the source fetch here (data.js's fetchCollectionRowItems,
+           via /library/collections/{ratingKey}/children) is already unbounded - filtered
+           already holds the collection's true full membership, so "See More" just needs
+           to hand this back, no network re-fetch required. */
+        loadMore: filtered.length > rowSize ? () => filtered : undefined,
+      };
     })
     .filter((r) => r.items.length > 0);
 }
@@ -194,11 +214,15 @@ export function buildCollectionRows(collectionRowsRaw, typeFilter, { mapItem: ma
 export function buildAiRows(aiRowsRaw, typeFilter, { mapItem: mapItemFn, rowSize }) {
   return (aiRowsRaw || [])
     .map((r) => {
-      const items = r.items
-        .filter(typeFilter)
-        .sort((a, b) => (b.addedAt || 0) - (a.addedAt || 0))
-        .slice(0, rowSize);
-      return { title: r.label, source: "ai", items: items.map((m) => mapItemFn(m, false)) };
+      const filtered = r.items.filter(typeFilter).sort((a, b) => (b.addedAt || 0) - (a.addedAt || 0));
+      const items = filtered.slice(0, rowSize);
+      return {
+        title: r.label,
+        source: "ai",
+        items: items.map((m) => mapItemFn(m, false)),
+        hasMore: !!r.hasMore,
+        genres: r.genres,
+      };
     })
     .filter((r) => r.items.length >= 5);
 }

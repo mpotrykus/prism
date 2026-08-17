@@ -29,7 +29,7 @@ export { buildFloatingPlayButton, buildTransportBar, playQueuedTitle, updateTran
 
 export { openHamburgerMenu, closeInlineMenu } from "./chrome-menu.js";
 
-export { applyZoomTransform, wireZoomPan } from "./chrome-menu-extras.js";
+export { applyFitMode } from "./chrome-menu-extras.js";
 
 export { openAudioSubtitlesOverlay, closeAudioSubtitlesOverlay, applyRememberedSubtitle, stopSubtitleLoop } from "./chrome-subtitles.js";
 

@@ -64,6 +64,10 @@ final class PlayerUiHelper {
 
     private static final float[] PLAYBACK_RATES = {0.25f, 0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f, 4f, 8f};
     private static final int[] SLEEP_TIMER_PRESETS_MIN = {15, 30, 45, 60};
+    /* Keys match the web/Xbox leg's FIT_MODES (src/player/ui/shared.js) and
+       PlayerActivity.applyAspectMode's own switch on them. */
+    private static final String[] ASPECT_KEYS = {"fit", "cover", "stretch"};
+    private static final String[] ASPECT_LABELS = {"Fit", "Cover", "Stretch"};
     /* Same threshold as chrome.js's TITLE_PREV_RESTART_MS - how far into a title "prev"
        still counts as "just started" (jump to the actual previous queued title) rather
        than "restart this one from 0". */
@@ -1127,12 +1131,11 @@ final class PlayerUiHelper {
         sections.add(effectsSection);
 
         /* Same "own dedicated screen" reasoning as Effects above, for Playback Speed/
-           Sleep Timer - grouped as "Extras" since neither relates to the other the way
-           Effects' GPU-pipeline controls do, but each is simple/single-picker enough
-           that squeezing both top-level rows down to one still reads as a sensible
-           cluster (playback tweaks outside the everyday audio/subtitle/quality set
-           above). No Zoom row here, unlike the web leg's Extras screen - this native
-           leg has never had a Zoom control in the menu. */
+           Aspect/Sleep Timer - grouped as "Extras" since none of the three relates to
+           the others the way Effects' GPU-pipeline controls do, but each is simple/
+           single-picker enough that squeezing all three top-level rows down to one
+           still reads as a sensible cluster (playback tweaks outside the everyday
+           audio/subtitle/quality set above). */
         MenuSection extrasSection = new MenuSection("Extras");
         extrasSection.icon = MenuIconView.Icon.EXTRAS;
         extrasSection.showChevron = true;
@@ -1434,7 +1437,7 @@ final class PlayerUiHelper {
     }
 
     /* "Extras" - same dedicated-screen pattern as renderEffectsList above, for
-       Playback Speed/Sleep Timer instead of the shader/color/ambient trio. */
+       Playback Speed/Aspect/Sleep Timer instead of the shader/color/ambient trio. */
     private static void renderExtrasList(PlayerActivity activity, LinearLayout list) {
         float density = activity.getResources().getDisplayMetrics().density;
         list.removeAllViews();
@@ -1448,6 +1451,12 @@ final class PlayerUiHelper {
         speedSection.getValue = () -> formatRate(activity.player != null ? activity.player.getPlaybackParameters().speed : 1f);
         speedSection.render = (content, setValue, collapse) -> renderSpeedSection(activity, content, setValue, collapse);
         sections.add(speedSection);
+
+        MenuSection aspectSection = new MenuSection("Aspect");
+        aspectSection.icon = MenuIconView.Icon.ASPECT;
+        aspectSection.getValue = () -> aspectDisplayLabel(activity);
+        aspectSection.render = (content, setValue, collapse) -> renderAspectSection(activity, content, setValue, collapse);
+        sections.add(aspectSection);
 
         MenuSection sleepSection = new MenuSection("Sleep Timer");
         sleepSection.icon = MenuIconView.Icon.SLEEP;
@@ -1943,6 +1952,32 @@ final class PlayerUiHelper {
             items.add(new PickerItem(formatRate(rate) + (rate == current ? "  ✓" : ""), () -> {
                 PlayerActivity.setPlaybackSpeed(rate);
                 setValue.accept(formatRate(rate));
+                collapse.run();
+            }));
+        }
+        renderPickerRows(activity, content, density, items);
+    }
+
+    private static String aspectDisplayLabel(PlayerActivity activity) {
+        for (int i = 0; i < ASPECT_KEYS.length; i++) {
+            if (ASPECT_KEYS[i].equals(activity.aspectMode)) return ASPECT_LABELS[i];
+        }
+        return ASPECT_LABELS[0];
+    }
+
+    /* Replaces the old pinch/pan zoom's own would-be menu row - see PlayerActivity's own
+       zoomScale/panX/panY, a separate continuous touch gesture on the video surface that this
+       doesn't change - with a plain Fit/Cover/Stretch aspect picker, matching the web/Xbox
+       leg's Aspect screen (chrome-menu-extras.js's renderAspectSection). */
+    private static void renderAspectSection(PlayerActivity activity, LinearLayout content, Consumer<String> setValue, Runnable collapse) {
+        float density = activity.getResources().getDisplayMetrics().density;
+        List<PickerItem> items = new ArrayList<>();
+        for (int i = 0; i < ASPECT_KEYS.length; i++) {
+            String key = ASPECT_KEYS[i];
+            String label = ASPECT_LABELS[i];
+            items.add(new PickerItem(label + (key.equals(activity.aspectMode) ? "  ✓" : ""), () -> {
+                PlayerActivity.setAspectMode(key);
+                setValue.accept(label);
                 collapse.run();
             }));
         }

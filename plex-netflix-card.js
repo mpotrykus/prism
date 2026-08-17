@@ -30,7 +30,7 @@ import { fetchHomeProfiles, renderProfileNav, renderProfileList, switchToUser } 
 import { TitleInfoController } from "./src/card/title-info.js";
 import { HeroController } from "./src/card/hero.js";
 import { plexFetch, loadAll, sectionForView, sectionsForView, fetchWatchlistRaw, fetchOnDeckRaw } from "./src/card/data.js";
-import { onSearchInput, exitSearch, renderSearchPage } from "./src/card/search-page.js";
+import { onSearchInput, exitSearch, renderSearchPage, openRowSeeMore } from "./src/card/search-page.js";
 import {
   wireNavItem,
   renderNavSections,
@@ -39,6 +39,7 @@ import {
   wireSearchToggle,
   wireVirtualKeyboardDismiss,
   wireStartButton,
+  wireProfileButton,
   restoreFocusAfterSearch,
   dismissSearchKeyboard,
 } from "./src/card/nav.js";
@@ -75,6 +76,12 @@ const SECTION_TYPE_FILTERS = {
   1: { onDeck: "movie", other: "movie" },
   2: { onDeck: "episode", other: "show" },
 };
+
+/* Row "See More" re-fetch limit (genre/AI/recently-added rows - see _loadGenreRowFull/
+   _loadAiRowFull/_loadRecentlyAddedFull) - same value and "large enough that no row's
+   true total realistically hits it" reasoning as search-page.js's own
+   SEARCH_EXPAND_LIMIT for its "See All" section expansion. */
+const ROW_SEE_MORE_LIMIT = 500;
 
 
 const SEARCH_ICON_SVG =
@@ -414,6 +421,7 @@ class PlexNetflixCard extends HTMLElement {
     wireSearchToggle(this);
     wireVirtualKeyboardDismiss(this);
     wireStartButton(this);
+    wireProfileButton(this);
   }
 
   _wireNavItem(el) {
@@ -516,18 +524,17 @@ class PlexNetflixCard extends HTMLElement {
     const onDeck = (this._onDeckRaw || [])
       .filter(onDeckFilter)
       .map((m) => this._mapItem(m, true));
-    const watchlist = (this._watchlistRaw || [])
-      .filter(watchlistFilter)
-      .map((m) => this._mapItem(m, false));
-    const recentlyAdded = (this._recentlyAddedRaw || [])
+    const watchlistFull = (this._watchlistRaw || []).filter(watchlistFilter);
+    const watchlist = watchlistFull.slice(0, this._config.row_size).map((m) => this._mapItem(m, false));
+    const recentlyAddedFull = (this._recentlyAddedRaw || [])
       .filter(recentlyAddedFilter)
-      .sort((a, b) => (b.addedAt || 0) - (a.addedAt || 0))
-      .slice(0, this._config.row_size)
-      .map((m) => this._mapItem(m, false));
+      .sort((a, b) => (b.addedAt || 0) - (a.addedAt || 0));
+    const recentlyAdded = recentlyAddedFull.slice(0, this._config.row_size).map((m) => this._mapItem(m, false));
+    const recommendedFull = (this._recommendedRaw || []).filter(recommendedFilter);
     const recommended = this._getRecommendedForView(view, recommendedFilter)
       .map((m) => this._mapItem(m, false));
-    const popular = (this._popularRaw || [])
-      .filter(popularFilter)
+    const popularFull = (this._popularRaw || []).filter(popularFilter);
+    const popular = popularFull
       .slice(0, Math.min(8, this._config.row_size))
       .map((m) => this._mapItem(m, false));
     const genreRows = this._getGenreRowsForView(view, sectionsForGenres);
@@ -536,11 +543,40 @@ class PlexNetflixCard extends HTMLElement {
 
     const rows = [];
     if (onDeck.length) rows.push({ title: "Continue Watching", items: onDeck, source: "local", landscape: true });
-    if (recentlyAdded.length) rows.push({ title: "Recently Added", items: recentlyAdded, source: "local" });
-    if (watchlist.length) rows.push({ title: "My List", items: watchlist, source: "watchlist" });
+    if (recentlyAdded.length)
+      rows.push({
+        title: "Recently Added",
+        items: recentlyAdded,
+        source: "local",
+        hasMore: recentlyAdded.length < recentlyAddedFull.length || !!this._recentlyAddedHasMore,
+        loadMore: () => this._loadRecentlyAddedFull(recentlyAddedFilter),
+      });
+    if (watchlist.length)
+      rows.push({
+        title: "My List",
+        items: watchlist,
+        source: "watchlist",
+        hasMore: watchlist.length < watchlistFull.length,
+        loadMore: () => watchlistFull,
+      });
     if (recommended.length)
-      rows.push({ title: "Recommended for You", items: recommended, source: "local", landscape: true });
-    if (popular.length) rows.push({ title: "What's Popular", items: popular, source: "local", rankNumbers: true });
+      rows.push({
+        title: "Recommended for You",
+        items: recommended,
+        source: "local",
+        landscape: true,
+        hasMore: recommended.length < recommendedFull.length,
+        loadMore: () => recommendedFull,
+      });
+    if (popular.length)
+      rows.push({
+        title: "What's Popular",
+        items: popular,
+        source: "local",
+        rankNumbers: true,
+        hasMore: popular.length < popularFull.length,
+        loadMore: () => popularFull,
+      });
     rows.push(...genreRows);
     if (collectionsRow) rows.push(collectionsRow);
     if (playlistsRow) rows.push(playlistsRow);
@@ -560,9 +596,8 @@ class PlexNetflixCard extends HTMLElement {
     const view = this._currentView || "home";
     const sectionFilters = SECTION_TYPE_FILTERS[this._sectionForView(view)?.type];
     const watchlistFilter = sectionFilters ? (m) => m.type === sectionFilters.other : () => true;
-    const watchlist = (this._watchlistRaw || [])
-      .filter(watchlistFilter)
-      .map((m) => this._mapItem(m, false));
+    const watchlistFull = (this._watchlistRaw || []).filter(watchlistFilter);
+    const watchlist = watchlistFull.slice(0, this._config.row_size).map((m) => this._mapItem(m, false));
 
     const existing = this._rowsEl.querySelector('[data-row-key="watchlist"]');
     if (!watchlist.length) {
@@ -574,7 +609,17 @@ class PlexNetflixCard extends HTMLElement {
     const rowIndex = existing ? sections.indexOf(existing) : sections.length;
     const nth = this._config.landscape_every_nth;
     const landscape = !!nth && (rowIndex + 1) % nth === 0;
-    const newSection = this._buildRowSection({ title: "My List", items: watchlist, source: "watchlist" }, landscape, rowIndex);
+    const newSection = this._buildRowSection(
+      {
+        title: "My List",
+        items: watchlist,
+        source: "watchlist",
+        hasMore: watchlist.length < watchlistFull.length,
+        loadMore: () => watchlistFull,
+      },
+      landscape,
+      rowIndex
+    );
 
     if (existing) {
       existing.replaceWith(newSection);
@@ -700,10 +745,9 @@ class PlexNetflixCard extends HTMLElement {
     this._profileNav.focusFirst();
   }
 
-  /* Entry point for <streaming-settings-modal>'s Profiles tab (see app.js) - a separate
-     top-level element with no access to this card's private overlay state. Guarded the
-     same way the sidenav item itself is (hidden when there's nothing to switch to)
-     since this can be invoked with no prior check that a switcher is even applicable. */
+  /* Entry point for nav.js's wireProfileButton (gamepad Back/Select). Guarded the same
+     way the sidenav item itself is (hidden when there's nothing to switch to) since this
+     can be invoked with no prior check that a switcher is even applicable. */
   openProfileSwitcher() {
     if (this._profileNavItem.hidden) return;
     this._openProfileOverlay();
@@ -894,19 +938,92 @@ class PlexNetflixCard extends HTMLElement {
   }
 
   _buildAiRows(view) {
-    return buildAiRows(this._aiRowsRaw, this._typeFilterForView(view), {
+    const typeFilter = this._typeFilterForView(view);
+    const rows = buildAiRows(this._aiRowsRaw, typeFilter, {
       mapItem: (m, withProgress) => this._mapItem(m, withProgress),
       rowSize: this._config.row_size,
     });
+    return rows.map((r) => (r.hasMore ? { ...r, loadMore: () => this._loadAiRowFull(r.genres, typeFilter) } : r));
   }
 
   _mergeGenreRows(sections) {
-    return mergeGenreRows(sections, {
+    const rows = mergeGenreRows(sections, {
       genreBySection: this._genreBySection,
       mapItem: (m, withProgress) => this._mapItem(m, withProgress),
       shuffle: (arr) => this._shuffle(arr),
       rowSize: this._config.row_size,
     });
+    return rows.map((r) =>
+      r.hasMore ? { ...r, loadMore: () => this._loadGenreRowFull(r.sectionGenreKeys) } : r
+    );
+  }
+
+  /* "See More" fetchers for rows whose source data was already capped by
+     X-Plex-Container-Size when first loaded (data.js) - re-runs the identical filter with
+     ROW_SEE_MORE_LIMIT instead, same pattern as search-page.js's buildYearMatchHubs/
+     expandSearchSection. Collection rows need no equivalent (see catalog.js's
+     buildCollectionRows) - their source fetch is already unbounded. */
+  async _loadGenreRowFull(sectionGenreKeys) {
+    const perSection = await Promise.all(
+      (sectionGenreKeys || []).map(async ({ key, type, genreKey }) => {
+        try {
+          const data = await plexFetch(this, `/library/sections/${key}/all`, {
+            type,
+            genre: genreKey,
+            sort: "addedAt:desc",
+            "X-Plex-Container-Size": ROW_SEE_MORE_LIMIT,
+          });
+          return data?.MediaContainer?.Metadata || [];
+        } catch (e) {
+          return [];
+        }
+      })
+    );
+    return perSection.flat();
+  }
+
+  async _loadAiRowFull(genres, typeFilter) {
+    const perSection = await Promise.all(
+      (this._config.sections || []).map(async (s) => {
+        const genreEntries = (this._genreBySection && this._genreBySection.get(s.key)) || [];
+        const keys = (genres || []).map((g) => {
+          const norm = g.trim().toLowerCase();
+          const match = genreEntries.find((e) => e.title.trim().toLowerCase() === norm);
+          return match ? match.key : null;
+        });
+        if (!keys.length || keys.some((k) => !k)) return [];
+        try {
+          const data = await plexFetch(this, `/library/sections/${s.key}/all`, {
+            type: s.type,
+            genre: keys,
+            sort: "addedAt:desc",
+            "X-Plex-Container-Size": ROW_SEE_MORE_LIMIT,
+          });
+          return data?.MediaContainer?.Metadata || [];
+        } catch (e) {
+          return [];
+        }
+      })
+    );
+    return perSection.flat().filter(typeFilter);
+  }
+
+  async _loadRecentlyAddedFull(typeFilter) {
+    const perSection = await Promise.all(
+      (this._config.sections || []).map(async (s) => {
+        try {
+          const data = await plexFetch(this, `/library/sections/${s.key}/all`, {
+            type: s.type,
+            sort: "addedAt:desc",
+            "X-Plex-Container-Size": ROW_SEE_MORE_LIMIT,
+          });
+          return data?.MediaContainer?.Metadata || [];
+        } catch (e) {
+          return [];
+        }
+      })
+    );
+    return perSection.flat().filter(typeFilter);
   }
 
   /* Genre-affinity recommender: scores every unwatched library item by how much its
@@ -960,6 +1077,7 @@ class PlexNetflixCard extends HTMLElement {
       onAddToWatchlist: (item, btnEl) => this._addToWatchlist(item, btnEl),
       onRemoveFromWatchlist: (item, btnEl) => this._removeFromWatchlist(item, btnEl),
       onOpenTitleInfo: (item, source) => this._openTitleInfo(item, source),
+      onSeeMoreRow: (row) => openRowSeeMore(this, row),
     };
   }
 

@@ -197,7 +197,7 @@ export function updateShaderPipeline(controller) {
     }
     controller._shaderCanvas.style.display = "block";
     controller._videoEl.style.opacity = "0";
-    controller._applyZoomTransform();
+    controller._applyFitMode();
     startShaderLoop(controller);
 }
 

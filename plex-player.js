@@ -19,7 +19,7 @@
    functions that take this controller instance as an explicit first argument (see each
    file's own header comment for why), and this class keeps a same-named thin delegate
    method for every one of them so every existing internal cross-reference between
-   concerns (e.g. the shader pipeline reaching into applyZoomTransform, the web fallback
+   concerns (e.g. the shader pipeline reaching into applyFitMode, the web fallback
    reaching into the shared control-row/menu chrome) keeps working unchanged. */
 import { registerNavHandler } from "./focus-nav.js";
 import { lockScroll, unlockScroll } from "./scroll-lock.js";
@@ -57,9 +57,8 @@ import {
     buildFloatingPlayButton,
     buildTransportBar,
     openHamburgerMenu,
-    applyZoomTransform,
+    applyFitMode,
     closeInlineMenu,
-    wireZoomPan,
     activeMarkerAt,
     skipLabelFor,
     updateSkipButton,
@@ -116,9 +115,7 @@ class StreamingPlayerController {
         this._lastNativeTimelinePingAt = 0;
         this._sleepTimer = null;
         this._pushedHistoryState = false;
-        this._zoomIndex = 0;
-        this._zoomPanX = 0;
-        this._zoomPanY = 0;
+        this._fitMode = "fit";
         this._activeSkipMarker = null;
         this._skipBtnEl = null;
         this._controlButtons = [];
@@ -831,16 +828,12 @@ class StreamingPlayerController {
         return closeEpisodeListOverlay(this);
     }
 
-    _applyZoomTransform() {
-        return applyZoomTransform(this);
+    _applyFitMode(mode) {
+        return applyFitMode(this, mode ?? this._fitMode);
     }
 
     _closeInlineMenu() {
         return closeInlineMenu(this);
-    }
-
-    _wireZoomPan() {
-        return wireZoomPan(this);
     }
 
     _activeMarkerAt(timeMs) {

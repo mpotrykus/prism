@@ -202,6 +202,28 @@ export function buildPoster(item, source, { glow = true, landscape = false, item
   return el;
 }
 
+const SEE_MORE_ICON_SVG =
+  '<svg viewBox="0 0 24 24" width="22" height="22"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M9 6l6 6-6 6"/></svg>';
+
+/* Trailing card appended to any row whose underlying data has more items than what's
+   capped for display (row.hasMore) - deliberately shares the .poster class (not just its
+   sizing) so it's picked up for free by every existing D-pad/gamepad/Tab navigation path
+   that already queries `.row-section .poster` (see nav.js's wireHomeNav), rather than
+   needing its own nav handler. */
+function buildSeeMoreCard(row, landscape, ctx) {
+  const el = document.createElement("div");
+  el.className = landscape ? "poster landscape see-more-card" : "poster see-more-card";
+  el.tabIndex = 0;
+  el.innerHTML = `
+    <div class="see-more-inner">
+      <div class="see-more-icon">${SEE_MORE_ICON_SVG}</div>
+      <div class="see-more-label">See More</div>
+    </div>
+  `;
+  el.addEventListener("click", () => ctx.onSeeMoreRow(row));
+  return el;
+}
+
 export function buildRowSection(row, landscape, rowIndex, ctx) {
   const section = document.createElement("div");
   section.className = "row-section row-anim-in";
@@ -230,6 +252,7 @@ export function buildRowSection(row, landscape, rowIndex, ctx) {
       scroller.appendChild(poster);
     }
   });
+  if (row.hasMore) scroller.appendChild(buildSeeMoreCard(row, landscape, ctx));
 
   const scrollWrap = document.createElement("div");
   scrollWrap.className = "row-scroll-wrap";

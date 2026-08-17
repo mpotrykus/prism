@@ -25,7 +25,7 @@ class MenuIconView extends View {
 
     enum Icon {
         CHAPTERS, AUDIO_TRACK, SUBTITLES, VERSION, QUALITY_CAP, AUTO_PLAY, EFFECTS, EXTRAS,
-        PERFORMANCE, SHADER, COLOR_BOOST, AMBIENT, SPEED, ZOOM, SLEEP, LOCK, PICTURE_IN_PICTURE,
+        PERFORMANCE, SHADER, COLOR_BOOST, AMBIENT, SPEED, ASPECT, SLEEP, LOCK, PICTURE_IN_PICTURE,
         EPISODES,
     }
 
@@ -87,7 +87,7 @@ class MenuIconView extends View {
             case COLOR_BOOST: drawColorBoost(canvas); break;
             case AMBIENT: drawAmbient(canvas); break;
             case SPEED: drawSpeed(canvas); break;
-            case ZOOM: drawZoom(canvas); break;
+            case ASPECT: drawAspect(canvas); break;
             case SLEEP: drawSleep(canvas); break;
             case LOCK: drawLock(canvas); break;
             case PICTURE_IN_PICTURE: drawPictureInPicture(canvas); break;
@@ -269,10 +269,12 @@ class MenuIconView extends View {
         canvas.drawCircle(12, 18, 1.4f, fillPaint);
     }
 
-    /* Mirrors zoomIconMarkup's magnifying-glass glyph. */
-    private void drawZoom(Canvas canvas) {
-        canvas.drawCircle(10.5f, 10.5f, 6.5f, strokePaint);
-        canvas.drawLine(15.3f, 15.3f, 21, 21, strokePaint);
+    /* Mirrors aspectIconMarkup's frame-within-a-frame glyph. */
+    private void drawAspect(Canvas canvas) {
+        rect.set(3, 5, 21, 19);
+        canvas.drawRoundRect(rect, 2, 2, strokePaint);
+        rect.set(7, 9, 17, 15);
+        canvas.drawRoundRect(rect, 1, 1, strokePaint);
     }
 
     /* Mirrors sleepIconMarkup's crescent-moon glyph - unlike that single SVG path, a
