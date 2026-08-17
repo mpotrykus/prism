@@ -318,20 +318,19 @@ export function wireHomeNav(card) {
   const focusPoster = (el) => {
     el?.focus();
     if (!el) return;
-    /* Not "smooth" - a held/repeating d-pad or stick fires the next move every
-       REPEAT_RATE_MS (150ms, focus-nav.js), faster than a smooth scroll's own animation
-       takes to finish. Each new move interrupted the previous one's in-flight smooth
-       scroll before it ever reached center - confirmed via logging on real hardware, a
-       held stick hit this on nearly every step while an isolated single d-pad tap (no
-       following move to interrupt it) centered correctly. An instant jump can't be
-       interrupted mid-animation, so every step - however fast they arrive - lands
-       exactly centered.
-       Vertical (block) centering is still the real scrollIntoView, against .content
-       (host-reset.css's real scroll container) - inline is left as "nearest" so it can't
-       act on the row itself, which row-scroll.js now owns exclusively (see that module's
-       header comment for why a poster row can't be a native-scrolling element anymore). */
-    el.scrollIntoView({ block: "center", inline: "nearest" });
-    el.closest(".row-scroller")?.rowScroll?.scrollIntoView(el, { inline: "center" });
+    /* Smooth again on both axes - retest against the exact bug that made this instant in
+       the first place before assuming it's fine: a held/repeating d-pad or stick fires the
+       next move every REPEAT_RATE_MS (150ms, focus-nav.js), and native scrollIntoView's
+       "smooth" was previously confirmed on real hardware to sometimes not retarget cleanly
+       when interrupted by the next move before it finished, leaving a held stick never
+       quite settling centered. row-scroll.js's own transform-driven inline (horizontal)
+       centering doesn't have that failure mode (CSS transitions retarget smoothly and
+       predictably when interrupted, unlike that scroll API) - block (vertical) centering
+       below is still the real scrollIntoView against .content, so it's the one actually at
+       risk of reproducing the old bug. If it does, the fix is giving .content the same
+       transform-driven treatment row-scroll.js already gives rows, not reverting to instant. */
+    el.scrollIntoView({ block: "center", inline: "nearest", behavior: "smooth" });
+    el.closest(".row-scroller")?.rowScroll?.scrollIntoView(el, { inline: "center", animate: true });
   };
   /* The hero banner sits at the very top of the page's scroll container, so any focus
      landing on one of its buttons needs the page scrolled all the way up too - otherwise
