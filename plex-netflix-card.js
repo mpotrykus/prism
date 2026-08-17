@@ -264,7 +264,7 @@ class PlexNetflixCard extends HTMLElement {
             <div class="title-info-actions-loading" hidden><span class="spinner"></span></div>
             <div class="title-info-summary"></div>
             <div class="title-info-episodes"></div>
-            <div class="title-info-cast-wrap" hidden>
+            <div class="title-info-cast-wrap" tabindex="0" hidden>
               <div class="title-info-section-title">Cast</div>
               <div class="title-info-cast"></div>
             </div>

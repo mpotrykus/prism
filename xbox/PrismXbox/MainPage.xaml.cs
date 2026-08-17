@@ -199,7 +199,16 @@ namespace PrismXbox
                     CoreDispatcherPriority.Normal, () => playerBridge?.Emit(name, json)),
                 Log);
 
-            var grid = new Grid();
+            var grid = new Grid
+            {
+                // MediaPlayerElement's default control template hardcodes its root Border's
+                // Background to "Transparent" directly in XAML - it is NOT template-bound to the
+                // control's own Background property, so setting Background on the element itself
+                // (tried first) is a no-op. The Stretch=Uniform letterbox gap is genuinely
+                // transparent and falls through to whatever is behind it in the visual tree - this
+                // Grid - so paint it black here instead of relying on the element's own Background.
+                Background = new SolidColorBrush(Colors.Black),
+            };
             grid.Children.Add(playerHost.Element);
             grid.Children.Add(webView);
 

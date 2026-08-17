@@ -156,7 +156,15 @@ function mountBackdrop(controller) {
        recovered. Gamepad input reaches the page as ordinary key events (confirmed in Phase 0: WebView2
        delivers it directly, which is also why the shell's own key forwarding turned out to be dead
        code), so any keydown is the right wake signal. */
-    controller._xboxWakeHandler = () => controller._showControls();
+    controller._xboxWakeHandler = () => {
+        /* Gamepad D-pad input reaches the page as ordinary keydown events (see comment above), which
+           means navigating the More sheet/episode list/etc with the gamepad fires this on every
+           press. Without this guard it would re-show the transport bar out from under whichever
+           overlay openHamburgerMenu's hideControls() just hid it for - the same overlay set
+           scheduleHideControls already keys off in chrome-controls.js. */
+        if (controller._inlineMenuEl || controller._episodeListEl || controller._chapterListEl || controller._audioSubtitlesEl) return;
+        controller._showControls();
+    };
     document.addEventListener("keydown", controller._xboxWakeHandler);
 
     controller._xboxBackdropEl = backdrop;

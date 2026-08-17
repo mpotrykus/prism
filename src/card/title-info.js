@@ -1001,7 +1001,7 @@ export class TitleInfoController {
     });
     this._nav = wireLinearNav(
       this._shadowRoot,
-      ".title-info-close, .title-info-play, .title-info-restart-btn, .title-info-watched-btn, .title-info-watchlist-btn, .title-info-season-select, .title-info-season-option, .title-info-episode, .title-info-similar-item",
+      ".title-info-close, .title-info-play, .title-info-restart-btn, .title-info-watched-btn, .title-info-watchlist-btn, .title-info-season-select, .title-info-season-option, .title-info-episode, .title-info-cast-wrap, .title-info-similar-item",
       { orientation: "vertical", onBack: () => this.close() }
     );
     /* Play/Restart/Watched/Watchlist visually sit in one horizontal row (.title-info-actions,

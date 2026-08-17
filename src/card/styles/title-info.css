@@ -107,6 +107,10 @@
 .title-info-summary { font-size: 14px; line-height: 1.6; color: rgba(255,255,255,0.85); margin-bottom: 28px; max-width: 640px; }
 .title-info-section-title { font-size: 14px; font-weight: 700; margin: 40px 0 16px; }
 .title-info-cast-wrap[hidden], .title-info-similar-wrap[hidden] { display: none; }
+/* Nav stop with no click action of its own - only exists so D-pad/gamepad Down doesn't
+   skip over the cast row entirely (it has no other focusable member above episodes/similar
+   items). No visible focus ring on purpose - see shared-focus.css's opt-in list. */
+.title-info-cast-wrap:focus { outline: none; }
 .title-info-cast { display: grid; grid-template-columns: repeat(auto-fill, minmax(76px, 1fr)); gap: 14px; }
 .title-info-cast-chip { display: flex; flex-direction: column; align-items: center; text-align: center; }
 .title-info-cast-avatar {
