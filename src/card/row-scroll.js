@@ -15,6 +15,17 @@
 
 const ANIMATE_MS = 300;
 const DRAG_THRESHOLD_PX = 4;
+/* Momentum tuning: VELOCITY_SAMPLE_MS is the trailing window used to estimate release
+   velocity (so one slow final pixel right before lift-off can't zero out a fast flick).
+   FRICTION is the fraction of velocity kept per 16.7ms frame - ~0.94 gives a glide that
+   settles in a bit under a second, close to the native overflow-scroll feel this replaced.
+   MIN_FLING_PX_MS is the release-velocity floor below which no momentum kicks in at all
+   (a slow deliberate drag should just stop where the finger lifted, not drift). */
+const VELOCITY_SAMPLE_MS = 100;
+const FRAME_MS = 16.6667;
+const FRICTION = 0.94;
+const MIN_FLING_PX_MS = 0.05;
+const MIN_MOMENTUM_PX_MS = 0.02;
 
 export function createRowScroll(scroller, track) {
   let offset = 0;
@@ -42,6 +53,7 @@ export function createRowScroll(scroller, track) {
   }
 
   function scrollBy(delta, opts) {
+    stopMomentum();
     apply(offset + delta, opts);
   }
 
@@ -63,7 +75,10 @@ export function createRowScroll(scroller, track) {
       if (cRect.left < viewLeft) delta = cRect.left - viewLeft;
       else if (cRect.right > viewRight) delta = cRect.right - viewRight;
     }
-    if (delta !== 0) apply(offset + delta, { animate });
+    if (delta !== 0) {
+      stopMomentum();
+      apply(offset + delta, { animate });
+    }
   }
 
   function onChange(fn) {
@@ -86,11 +101,42 @@ export function createRowScroll(scroller, track) {
     listeners.forEach((fn) => fn(offset, max));
   }
 
+  // --- momentum (post-release glide, mirrors native overflow-scroll's fling) ---
+  let momentumRAF = null;
+
+  function stopMomentum() {
+    if (momentumRAF != null) {
+      cancelAnimationFrame(momentumRAF);
+      momentumRAF = null;
+    }
+  }
+
+  function startMomentum(velocity) {
+    // velocity is in offset-px/ms already (see endDrag) - positive scrolls toward the end.
+    if (Math.abs(velocity) < MIN_FLING_PX_MS) return;
+    let v = velocity;
+    let lastT = performance.now();
+    const step = (t) => {
+      const dt = t - lastT;
+      lastT = t;
+      const next = clamp(offset + v * dt);
+      if (next === offset || Math.abs(v) < MIN_MOMENTUM_PX_MS) {
+        momentumRAF = null;
+        return;
+      }
+      apply(next, { animate: false });
+      v *= Math.pow(FRICTION, dt / FRAME_MS);
+      momentumRAF = requestAnimationFrame(step);
+    };
+    momentumRAF = requestAnimationFrame(step);
+  }
+
   // --- mouse/touch drag ---
   let drag = null;
   scroller.addEventListener("pointerdown", (e) => {
     if (e.button != null && e.button !== 0) return;
-    drag = { startX: e.clientX, startOffset: offset, moved: false, pointerId: e.pointerId };
+    stopMomentum();
+    drag = { startX: e.clientX, startOffset: offset, moved: false, pointerId: e.pointerId, samples: [{ t: e.timeStamp, x: e.clientX }] };
   });
   scroller.addEventListener("pointermove", (e) => {
     if (!drag || e.pointerId !== drag.pointerId) return;
@@ -100,6 +146,8 @@ export function createRowScroll(scroller, track) {
       scroller.setPointerCapture(drag.pointerId);
       scroller.classList.add("dragging");
     }
+    drag.samples.push({ t: e.timeStamp, x: e.clientX });
+    while (drag.samples.length > 2 && e.timeStamp - drag.samples[0].t > VELOCITY_SAMPLE_MS) drag.samples.shift();
     if (drag.moved) {
       apply(drag.startOffset - dx, { animate: false });
       e.preventDefault();
@@ -112,6 +160,11 @@ export function createRowScroll(scroller, track) {
       // Swallow the click a drag-release would otherwise fire on whatever poster it lands
       // on - same "don't treat a drag as a tap" rule native overflow scrolling gives for free.
       scroller.addEventListener("click", (e) => e.stopPropagation(), { capture: true, once: true });
+      const first = drag.samples[0];
+      const last = drag.samples[drag.samples.length - 1];
+      const dt = last.t - first.t;
+      // Offset moves opposite to finger travel (see the apply() call above), so negate.
+      if (dt > 0) startMomentum(-(last.x - first.x) / dt);
     }
     drag = null;
   }

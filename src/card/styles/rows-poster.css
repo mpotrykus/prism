@@ -40,6 +40,13 @@
        hard-clipped the top/bottom of the glow. */
     overflow: hidden;
     padding: 45px 45px 45px;
+    /* Without this, touch-action defaults to auto and Android lets its native gesture
+       recognizer decide pan direction before row-scroll.js's pointermove handler ever
+       gets a chance to preventDefault - it can grab a horizontal row-drag as a page
+       scroll (or just fight it), which is what made touch dragging feel broken. pan-y
+       keeps vertical page scrolling native while forcing horizontal touches through to
+       our own pointer handlers untouched by the browser. */
+    touch-action: pan-y;
 }
 
 .row-scroller.dragging {
