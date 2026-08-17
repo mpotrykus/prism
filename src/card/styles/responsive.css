@@ -54,7 +54,8 @@
   .nav-more { display: flex; }
   .main { padding-bottom: calc(56px + var(--safe-bottom)); }
   .row-title { padding-left: 24px; }
-  .row-scroller { padding-left: 24px; gap: 17px; }
+  .row-scroller { padding-left: 24px; }
+  .row-track { gap: 17px; }
   .poster { flex-basis: 112px; }
   .poster .glow { inset: -10px; filter: blur(14px) saturate(1.2) brightness(0.7); border-radius: 15px; }
   .poster .caption { padding: 88px 8px 8px; }

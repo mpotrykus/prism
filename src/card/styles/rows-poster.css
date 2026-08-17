@@ -27,30 +27,29 @@
 }
 
 .row-scroller {
-    display: flex;
-    gap: 24px;
-    overflow-x: auto;
-    scroll-behavior: smooth;
-    /* overflow-x:auto forces overflow-y to auto too (CSS overflow computed-value rule),
-     so top/bottom padding here isn't cosmetic - it's the only thing keeping the
-     poster glow bleed from being clipped. Note the blur(20px) filter on .glow paints
-     well beyond its own box (roughly 2-3x the blur radius), so this needs much more
-     room than the glow's inset(-14px) box alone would suggest - confirmed empirically,
-     24px/30px still hard-clipped the top/bottom of the glow. */
+    /* The clipping viewport - row-scroll.js drives an inner .row-track's transform instead
+       of this element's native scroll (see that module's own header comment for why: Xbox
+       WebView2 has built-in gamepad-to-scroll handling that hijacks any native overflow:auto
+       container the stick happens to be over, fighting this row's own poster-centering
+       logic). overflow:hidden clips both axes outright, so there's no native scroll surface
+       left for anything external to grab.
+       Note the padding here isn't cosmetic - it's the only thing keeping the poster glow
+       bleed from being clipped. The blur(20px) filter on .glow paints well beyond its own
+       box (roughly 2-3x the blur radius), so this needs much more room than the glow's
+       inset(-14px) box alone would suggest - confirmed empirically, 24px/30px still
+       hard-clipped the top/bottom of the glow. */
+    overflow: hidden;
     padding: 45px 45px 45px;
-    /* Without this, overflow-x:auto computes overflow-y to auto too (see comment
-     above), and rank-number's absolute-positioned bleed past the padding gives
-     What's Popular real vertical scrollable overflow other rows don't have -
-     the mouse wheel was getting captured into that row instead of the page. */
-    overflow-y: hidden;
-    scrollbar-width: none;
-    -ms-overflow-style: none;
 }
 
-.row-scroller::-webkit-scrollbar {
-    display: none;
-    width: 0;
-    height: 0;
+.row-scroller.dragging {
+    cursor: grabbing;
+}
+
+.row-track {
+    display: flex;
+    gap: 24px;
+    will-change: transform;
 }
 
 .scroll-arrow {

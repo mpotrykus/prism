@@ -95,6 +95,21 @@ namespace PrismXbox
         {
             webView = new WebView2();
 
+            // Xbox's "mouse mode" (Application.RequiresPointerMode, set to WhenRequested in
+            // App.xaml.cs) is a per-control override, not just an app-wide default - controls
+            // like WebView/WebView2 that need free pointer movement to be usable at all are
+            // exactly the ones Microsoft's own gamepad-interactions guidance calls out as
+            // needing mouse mode, so leaving this control's own RequiresPointer unset let it
+            // keep engaging mouse mode regardless of the app-level setting above. That's what
+            // was driving the left stick as a continuous virtual pointer/scroll gesture behind
+            // every modal - entirely outside focus-nav.js's keydown pipeline, which is why
+            // fixing that pipeline's cancelable flag had no effect. D-pad was never the
+            // "move the pointer" input in mouse mode, which is why it stayed clean. Every
+            // D-pad/thumbstick keyboard-equivalent nav this app relies on (OnCoreWindowKeyDown,
+            // focus-nav.js's Gamepad API poller) is independent of mouse mode, so this is safe
+            // to force off entirely rather than requesting it per-page.
+            webView.RequiresPointer = Windows.UI.Xaml.Controls.RequiresPointer.Never;
+
             // Match the app shell's background so the WebView2 control's own default draw
             // color doesn't flash before content loads.
             webView.Background = new SolidColorBrush(Color.FromArgb(255, 10, 10, 12));
@@ -376,8 +391,15 @@ namespace PrismXbox
 
             if (!ShouldForwardKeyDown(args)) return;
 
+            // cancelable must be set explicitly - it defaults to false on a constructed event
+            // (unlike a real trusted keydown), which makes focus-nav.js's own e.preventDefault()
+            // a silent no-op and lets the browser's native arrow-key scroll run alongside every
+            // handler here forwards - same gotcha focus-nav.js's own dispatchSyntheticKey already
+            // documents and fixes for its JS-side gamepad poller; this native path needs the same
+            // fix, since the left stick's analog dwell (see ShouldForwardKeyDown above) makes it
+            // hit this path far more often than the d-pad's clean digital edge does.
             _ = webView?.CoreWebView2?.ExecuteScriptAsync(
-                $"document.dispatchEvent(new KeyboardEvent('keydown', {{ key: '{jsKey}', bubbles: true, composed: true }}));");
+                $"document.dispatchEvent(new KeyboardEvent('keydown', {{ key: '{jsKey}', bubbles: true, composed: true, cancelable: true }}));");
         }
 
         // Windows' own OS-level auto-repeat for a held gamepad-mapped VirtualKey fires at its

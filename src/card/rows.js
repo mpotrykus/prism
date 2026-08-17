@@ -3,6 +3,8 @@
    watchlist state/actions, open-title-info callback) rather than methods on the card,
    so this has no hidden dependency on the rest of the card's state. */
 
+import { createRowScroll } from "./row-scroll.js";
+
 const POSTER_FALLBACK_ICON_SVG =
   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="2" fill="currentColor" stroke="none"/><circle cx="12" cy="5.8" r="1.3" fill="currentColor" stroke="none"/><circle cx="17.4" cy="9.3" r="1.3" fill="currentColor" stroke="none"/><circle cx="17.4" cy="14.7" r="1.3" fill="currentColor" stroke="none"/><circle cx="12" cy="18.2" r="1.3" fill="currentColor" stroke="none"/><circle cx="6.6" cy="14.7" r="1.3" fill="currentColor" stroke="none"/><circle cx="6.6" cy="9.3" r="1.3" fill="currentColor" stroke="none"/></svg>';
 
@@ -85,7 +87,7 @@ export function hideLoadingMore(rowsEl) {
   rowsEl.querySelector(".rows-loading-more")?.remove();
 }
 
-export function buildScrollArrow(dir, scroller) {
+export function buildScrollArrow(dir, scroller, rowScroll) {
   const btn = document.createElement("button");
   btn.className = `scroll-arrow ${dir} hidden`;
   btn.type = "button";
@@ -97,21 +99,20 @@ export function buildScrollArrow(dir, scroller) {
   btn.addEventListener("click", (e) => {
     e.stopPropagation();
     const amount = scroller.clientWidth * 0.9 * (dir === "left" ? -1 : 1);
-    scroller.scrollBy({ left: amount, behavior: "smooth" });
+    rowScroll.scrollBy(amount, { animate: true });
   });
   return btn;
 }
 
-export function wireArrowVisibility(scroller, leftArrow, rightArrow) {
-  const update = () => {
-    const maxScroll = scroller.scrollWidth - scroller.clientWidth - 1;
-    leftArrow.classList.toggle("hidden", scroller.scrollLeft <= 0);
-    rightArrow.classList.toggle("hidden", maxScroll <= 0 || scroller.scrollLeft >= maxScroll);
+export function wireArrowVisibility(rowScroll, leftArrow, rightArrow) {
+  const update = (offset, max) => {
+    leftArrow.classList.toggle("hidden", offset <= 0);
+    rightArrow.classList.toggle("hidden", max <= 0 || offset >= max);
   };
-  scroller.addEventListener("scroll", update, { passive: true });
-  window.addEventListener("resize", update);
-  requestAnimationFrame(update);
-  setTimeout(update, 300);
+  rowScroll.onChange(update);
+  window.addEventListener("resize", () => rowScroll.refresh());
+  requestAnimationFrame(() => rowScroll.refresh());
+  setTimeout(() => rowScroll.refresh(), 300);
 }
 
 /* ctx: { escape, isInWatchlist, paintWatchlistButton, onAddToWatchlist, onRemoveFromWatchlist, onOpenTitleInfo } */
@@ -236,6 +237,8 @@ export function buildRowSection(row, landscape, rowIndex, ctx) {
 
   const scroller = document.createElement("div");
   scroller.className = "row-scroller";
+  const track = document.createElement("div");
+  track.className = "row-track";
   row.items.forEach((item, itemIndex) => {
     const poster = buildPoster(item, row.source || "local", { landscape, itemIndex }, ctx);
     if (row.rankNumbers) {
@@ -247,21 +250,26 @@ export function buildRowSection(row, landscape, rowIndex, ctx) {
       num.textContent = String(itemIndex + 1);
       wrap.appendChild(num);
       wrap.appendChild(poster);
-      scroller.appendChild(wrap);
+      track.appendChild(wrap);
     } else {
-      scroller.appendChild(poster);
+      track.appendChild(poster);
     }
   });
-  if (row.hasMore) scroller.appendChild(buildSeeMoreCard(row, landscape, ctx));
+  if (row.hasMore) track.appendChild(buildSeeMoreCard(row, landscape, ctx));
+  scroller.appendChild(track);
+  // Exposed on the DOM node (not returned from buildRowSection) so nav.js's focusPoster can
+  // reach the row a given poster belongs to via posterEl.closest(".row-scroller").rowScroll
+  // without this module needing to hand back or track a parallel list of controllers.
+  scroller.rowScroll = createRowScroll(scroller, track);
 
   const scrollWrap = document.createElement("div");
   scrollWrap.className = "row-scroll-wrap";
-  const leftArrow = buildScrollArrow("left", scroller);
-  const rightArrow = buildScrollArrow("right", scroller);
+  const leftArrow = buildScrollArrow("left", scroller, scroller.rowScroll);
+  const rightArrow = buildScrollArrow("right", scroller, scroller.rowScroll);
   scrollWrap.appendChild(leftArrow);
   scrollWrap.appendChild(scroller);
   scrollWrap.appendChild(rightArrow);
-  wireArrowVisibility(scroller, leftArrow, rightArrow);
+  wireArrowVisibility(scroller.rowScroll, leftArrow, rightArrow);
 
   section.appendChild(h);
   section.appendChild(scrollWrap);

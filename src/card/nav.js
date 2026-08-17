@@ -35,7 +35,7 @@ export function wireNavItem(card, el) {
     if (view === card._currentView) return;
     card._currentView = view;
     card._navItems.forEach((n) => n.classList.toggle("active", n === el));
-    window.scrollTo({ top: 0, behavior: "instant" });
+    card.shadowRoot.querySelector(".content")?.scrollTo({ top: 0, behavior: "instant" });
     card._renderCurrentView();
     card._advanceHero();
   });
@@ -117,24 +117,31 @@ export function dismissSearchKeyboard(card) {
   restoreFocusAfterSearch(card);
 }
 
-/* Gamepad Y toggles the header search box in and out of focus. Every other command in this
-   app is focus-scoped (only meaningful to whichever handler currently owns focus), but "jump
-   to search" is meaningful from anywhere in the browsing UI, so this one has to be gated on
-   app scope explicitly - suppressed while any overlay or the player is up - rather than
-   deciding by focus membership the way wireHomeNav below does. */
-export function wireSearchToggle(card) {
-  const inMainApp = () =>
+/* Whether any overlay/modal (or the player) currently owns the screen - shared by every
+   handler that needs to know "is the home screen actually what's in front of the user"
+   rather than deciding purely from focus membership, since document.activeElement alone
+   can't tell the two apart (see wireHomeNav's own use of this below). */
+function inMainApp(card) {
+  return (
     !card._titleInfo.isOpen() &&
     !card._pin.isOpen() &&
     !card._profileOverlay.classList.contains("open") &&
     !card._moreOverlay.classList.contains("open") &&
     !document.querySelector("streaming-settings-modal")?.isOpen() &&
     !document.querySelector("streaming-plex-signin-modal")?.isOpen() &&
-    !player.isOpen();
+    !player.isOpen()
+  );
+}
 
+/* Gamepad Y toggles the header search box in and out of focus. Every other command in this
+   app is focus-scoped (only meaningful to whichever handler currently owns focus), but "jump
+   to search" is meaningful from anywhere in the browsing UI, so this one has to be gated on
+   app scope explicitly - suppressed while any overlay or the player is up - rather than
+   deciding by focus membership the way wireHomeNav below does. */
+export function wireSearchToggle(card) {
   registerNavHandler((command, e, active) => {
     if (command !== "search") return false;
-    if (!inMainApp()) return false;
+    if (!inMainApp(card)) return false;
 
     if (active !== card._searchInput) {
       /* No explicit card._searchReturnFocusEl assignment here - the shadowRoot-wide
@@ -310,6 +317,7 @@ export function wireHomeNav(card) {
      shows its neighbors above/below too, not just a sliver of the row you jumped to. */
   const focusPoster = (el) => {
     el?.focus();
+    if (!el) return;
     /* Not "smooth" - a held/repeating d-pad or stick fires the next move every
        REPEAT_RATE_MS (150ms, focus-nav.js), faster than a smooth scroll's own animation
        takes to finish. Each new move interrupted the previous one's in-flight smooth
@@ -317,8 +325,13 @@ export function wireHomeNav(card) {
        held stick hit this on nearly every step while an isolated single d-pad tap (no
        following move to interrupt it) centered correctly. An instant jump can't be
        interrupted mid-animation, so every step - however fast they arrive - lands
-       exactly centered. */
-    el?.scrollIntoView({ block: "center", inline: "center" });
+       exactly centered.
+       Vertical (block) centering is still the real scrollIntoView, against .content
+       (host-reset.css's real scroll container) - inline is left as "nearest" so it can't
+       act on the row itself, which row-scroll.js now owns exclusively (see that module's
+       header comment for why a poster row can't be a native-scrolling element anymore). */
+    el.scrollIntoView({ block: "center", inline: "nearest" });
+    el.closest(".row-scroller")?.rowScroll?.scrollIntoView(el, { inline: "center" });
   };
   /* The hero banner sits at the very top of the page's scroll container, so any focus
      landing on one of its buttons needs the page scrolled all the way up too - otherwise
@@ -326,7 +339,7 @@ export function wireHomeNav(card) {
      instead of in full. */
   const focusHero = (el) => {
     el?.focus();
-    window.scrollTo({ top: 0, behavior: "smooth" });
+    card.shadowRoot.querySelector(".content")?.scrollTo({ top: 0, behavior: "smooth" });
   };
   /* Rows scroll horizontally independent of one another, so the same array index in two
      rows can sit at completely different on-screen columns - matching by index made
@@ -356,8 +369,19 @@ export function wireHomeNav(card) {
          active element anywhere, or it's just document.body/the card host with
          nothing focused inside) gets the lazy first-D-pad-press starting point;
          anything else falls through untouched, letting the real owner act instead of
-         this handler stealing focus mid-interaction with some other overlay. */
-      const nothingFocusedYet = !active || active === document.body || active === card;
+         this handler stealing focus mid-interaction with some other overlay.
+         document.activeElement resting on document.body is NOT unique to a true fresh
+         load, though - wireLinearNav's focusItem deliberately blurs the previously-active
+         element without calling .focus() on a text/password/number field it's landing on
+         (real focus there would pop the on-screen keyboard just for passing through it -
+         see focus-nav.js), leaving document.activeElement on document.body while, say, the
+         Settings modal is legitimately open and one of its fields is only virtually
+         highlighted. Without the inMainApp(card) check here too, that state looked
+         identical to "nothing focused anywhere" and this handler grabbed a home-screen
+         poster out from under the open modal - confirmed on real hardware: D-pad/stick
+         left-right on a virtually-highlighted Settings field was silently scrolling the
+         home row behind it. */
+      const nothingFocusedYet = (!active || active === document.body || active === card) && inMainApp(card);
       if (nothingFocusedYet && ["up", "down", "left", "right"].includes(command)) {
         const target = continueWatchingFirstPoster();
         if (target) focusPoster(target);

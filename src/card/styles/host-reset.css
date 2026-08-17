@@ -1,7 +1,8 @@
 :host {
   display: block;
   width: 100%;
-  min-height: 100vh;
+  height: 100vh;
+  overflow: hidden;
   background: linear-gradient(160deg, #121215 0%, #0a0a0c 45%, #131316 100%);
   background-attachment: fixed;
   color: #fff;
@@ -20,5 +21,23 @@
   --safe-bottom: max(env(safe-area-inset-bottom, 0px), var(--safe-area-inset-bottom, 0px));
 }
 * { box-sizing: border-box; }
-.wrap { display: flex; flex-direction: row; min-height: 100vh; }
-.content { display: flex; flex-direction: column; flex: 1 1 auto; min-width: 0; }
+.wrap { display: flex; flex-direction: row; height: 100vh; }
+/* This is the app's real scroll container, not window/document (see this file's own
+   history) - Xbox WebView2's built-in gamepad-to-cursor handling drives window.scrollY
+   directly on the left stick, completely outside any DOM event or UWP-level setting this
+   app can intercept (confirmed on real hardware: happens even with focus-nav.js's own
+   Gamepad API polling fully disabled). Scoping scroll to this element instead of the window
+   makes that behavior invisible - nothing external can move content the app itself isn't
+   scrolling. */
+.content {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 100%;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.content::-webkit-scrollbar { display: none; width: 0; height: 0; }
