@@ -41,6 +41,11 @@
   display: flex; align-items: center; justify-content: center;
 }
 .title-info-close:hover { background: rgba(20,20,20,0.9); }
+/* B/Escape already backs this overlay out for a controller user - see focus-nav.js's
+   controller-active-change comment - so the "X" is a redundant, unreachable-by-D-pad
+   dead end for them. Keyed off the card's own host attribute (set in
+   plex-netflix-card.js's _build), same reasoning as rows-poster.css's watchlist-btn rule. */
+:host([controller-active]) .title-info-close { display: none; }
 .title-info-art {
   width: 100%; height: 280px; background-size: cover; background-position: center;
   position: relative; z-index: 1; background-color: #0d0d0f;

@@ -1,4 +1,4 @@
-import { wireLinearNav, focusAfterPaint } from "./focus-nav.js";
+import { wireLinearNav, focusAfterPaint, isControllerActive } from "./focus-nav.js";
 import { hasSecrets, loadSecrets, saveSecrets } from "./vault.js";
 import MODAL_STYLE from "./src/styles/settings-modal.css?inline";
 
@@ -59,6 +59,12 @@ class StreamingSettingsModal extends HTMLElement {
     if (this._built) return;
     this._built = true;
     this._sections = [];
+    /* Reflected onto this host element, not read via a :root selector inside the shadow
+       stylesheet below - see focus-nav.js's own comment on why :root never matches there. */
+    this.toggleAttribute("controller-active", isControllerActive());
+    document.addEventListener("controller-active-change", (e) => {
+      this.toggleAttribute("controller-active", e.detail.active);
+    });
     this.attachShadow({ mode: "open" });
     this.shadowRoot.innerHTML = `
       <style>${MODAL_STYLE}</style>

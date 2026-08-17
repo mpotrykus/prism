@@ -35,6 +35,10 @@
 }
 .modal-close:hover { color: #fff; }
 .modal-close[hidden] { display: none; }
+/* B/Escape already backs this modal out for a controller user - see focus-nav.js's
+   controller-active-change comment - so the "X" is a redundant, unreachable-by-D-pad
+   dead end for them. */
+:host([controller-active]) .modal-close { display: none; }
 h2 { font-size: 18px; font-weight: 700; margin: 0 0 8px; }
 .subtitle { font-size: 13px; color: rgba(255,255,255,0.55); margin: 0 0 20px; }
 .btn {

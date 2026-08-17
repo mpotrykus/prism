@@ -1,7 +1,7 @@
 /* Plex sign-in, split out from <streaming-settings-modal> so it can gate the whole app
    at boot (see app.js) - blocking until a server is connected - while everything else
    configurable (libraries, trailers, AI rows, display) lives in Settings. */
-import { wireLinearNav, focusAfterPaint } from "./focus-nav.js";
+import { wireLinearNav, focusAfterPaint, isControllerActive } from "./focus-nav.js";
 import { isRemoteDrivenDevice } from "./input-mode.js";
 import * as StreamingPlexAuth from "./plex-auth.js";
 import { loadPlain, savePlain } from "./settings.js";
@@ -14,6 +14,12 @@ class StreamingPlexSigninModal extends HTMLElement {
   connectedCallback() {
     if (this._built) return;
     this._built = true;
+    /* Reflected onto this host element, not read via a :root selector inside the shadow
+       stylesheet below - see focus-nav.js's own comment on why :root never matches there. */
+    this.toggleAttribute("controller-active", isControllerActive());
+    document.addEventListener("controller-active-change", (e) => {
+      this.toggleAttribute("controller-active", e.detail.active);
+    });
     this.attachShadow({ mode: "open" });
     this.shadowRoot.innerHTML = `
       <style>${SIGNIN_MODAL_STYLE}</style>

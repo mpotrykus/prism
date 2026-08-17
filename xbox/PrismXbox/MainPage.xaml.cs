@@ -69,6 +69,17 @@ namespace PrismXbox
             // own.
             Windows.UI.Xaml.Window.Current.CoreWindow.Activated += OnCoreWindowActivated;
 
+            // Confirmed on real hardware: pressing B to close Xbox's on-screen keyboard (shown
+            // automatically by WebView2 when an HTML text input gets focus) is consumed entirely
+            // by the platform before it reaches this app - neither OnCoreWindowKeyDown above nor
+            // focus-nav.js's Gamepad API poller ever see that press, and the web-standard
+            // VirtualKeyboard.geometrychange event the JS side also listens for (nav.js's
+            // wireVirtualKeyboardDismiss) does not fire on this WebView2 build either, leaving the
+            // search input focused with no page-level event of any kind. InputPane is the actual
+            // Windows signal for on-screen-keyboard visibility, independent of both of those and
+            // of whatever control/button triggered the dismissal.
+            Windows.UI.ViewManagement.InputPane.GetForCurrentView().Hiding += OnInputPaneHiding;
+
             // The console stays in whatever display mode it was last put into, so leaving HDR on when
             // the app is suspended or closed leaves the dashboard rendering with inaccurate colour.
             // moonlight-xbox restores only on explicit disconnect and has exactly that bug when killed
@@ -339,6 +350,20 @@ namespace PrismXbox
             _ = webView?.CoreWebView2?.ExecuteScriptAsync(
                 $"window.__prismXboxInputActive = {activeLiteral}; " +
                 $"document.dispatchEvent(new CustomEvent('xbox-input-active-change', {{ detail: {{ active: {activeLiteral} }} }}));");
+        }
+
+        // Dispatched as a plain document-level CustomEvent rather than through the
+        // window.__prismXboxInputActive/xbox-input-active-change channel above - that one
+        // means "something else now owns gamepad input," which isn't true here (the keyboard
+        // never stole CoreWindow activation in the first place, per the comment on the
+        // subscription above). nav.js's wireVirtualKeyboardDismiss listens for this event the
+        // same way it already listens for the web VirtualKeyboard API's own geometrychange -
+        // whichever of the two actually fires on a given build drives the same JS-side handler.
+        private void OnInputPaneHiding(InputPane sender, InputPaneVisibilityEventArgs args)
+        {
+            Log("InputPane hiding - forwarding xbox-keyboard-hiding to JS");
+            _ = webView?.CoreWebView2?.ExecuteScriptAsync(
+                "document.dispatchEvent(new CustomEvent('xbox-keyboard-hiding'));");
         }
 
         private void OnCoreWindowKeyDown(CoreWindow sender, KeyEventArgs args)

@@ -99,6 +99,24 @@ export function restoreFocusAfterSearch(card) {
   focusAfterPaint(usable ? prev : focusFirstAvailable(card));
 }
 
+/* Shared by every "the on-screen keyboard just closed" path below (gamepad B, real Escape,
+   VirtualKeyboard geometrychange) - closing the keyboard is not the same gesture as leaving
+   search entirely. With results on screen, landing on the first result lets the user start
+   browsing them immediately; only an empty results page (nothing to browse into) falls back
+   to fully exiting search and restoring whatever had focus before search was opened. */
+export function dismissSearchKeyboard(card) {
+  const firstResult = card._currentView === "search" ? card.shadowRoot.querySelector(".search-page-grid .poster") : null;
+  card._searchInput.blur();
+  if (firstResult) {
+    focusAfterPaint(firstResult);
+    return;
+  }
+  card._clearSearchInput();
+  card._exitSearch();
+  card._searchWrap.classList.remove("expanded");
+  restoreFocusAfterSearch(card);
+}
+
 /* Gamepad Y toggles the header search box in and out of focus. Every other command in this
    app is focus-scoped (only meaningful to whichever handler currently owns focus), but "jump
    to search" is meaningful from anywhere in the browsing UI, so this one has to be gated on
@@ -138,20 +156,25 @@ export function wireSearchToggle(card) {
     return true;
   });
 
-  /* Gamepad B while browsing the search results page backs all the way out, same as
-     clearing the query by hand (search-page.js's onSearchInput already exits search once
-     the box is empty). Unlike every other handler here, this isn't gated on `active` being
-     the search input - wireSearchNav below gives results-grid posters their own Up/Down/
-     Left/Right, but never registers a "back" of its own, so a poster having focus left B
-     unhandled entirely before this existed. */
+  /* Gamepad B while the search input itself is focused just dismisses the keyboard
+     (dismissSearchKeyboard - lands on the first result if there are any, otherwise backs
+     all the way out). B while a *result poster* already has focus is a different gesture -
+     wireSearchNav below gives results-grid posters their own Up/Down/Left/Right/Activate but
+     never registers a "back" of its own, so without this a poster having focus left B
+     unhandled entirely - there, B always backs all the way out, same as clearing the query
+     by hand (search-page.js's onSearchInput already exits search once the box is empty). */
   registerNavHandler((command, e, active) => {
     if (command !== "back") return false;
     if (!inMainApp() || card._currentView !== "search") return false;
+    if (active === card._searchInput) {
+      dismissSearchKeyboard(card);
+      return true;
+    }
     card._clearSearchInput();
     card._exitSearch();
     card._searchWrap.classList.remove("expanded");
     card._searchInput.blur();
-    focusAfterPaint(focusFirstAvailable(card));
+    restoreFocusAfterSearch(card);
     return true;
   });
 
@@ -172,17 +195,33 @@ export function wireSearchToggle(card) {
 }
 
 /* WebView2's on-screen keyboard (Xbox) is a platform-level overlay, not page content -
-   dismissing it (gamepad B) is very likely consumed entirely by the platform before it
-   ever reaches this app's keydown pipeline, the same way Android's back button eats an
-   IME-dismiss press - so the search input is left focused with no page-level event ever
-   firing to blur it, and only a subsequent Y press (wireSearchToggle above) clears focus.
-   The VirtualKeyboard API's geometrychange event is the one cross-platform signal for
-   "the keyboard just closed" that's independent of whatever button/gesture caused it.
-   Feature-detected: older WebView2/Android WebView builds without it just keep relying on
-   the Y-toggle/Escape paths as before. Unverified on real Xbox hardware whether WebView2
-   actually fires geometrychange for the platform keyboard - confirm before building
-   anything further on top of this. */
+   dismissing it (gamepad B) is confirmed on real Xbox hardware to be consumed entirely by
+   the platform before it ever reaches this app's keydown pipeline (nor even
+   focus-nav.js's Gamepad API poller, which reads raw HID state directly - CoreWindow never
+   deactivates for the on-screen keyboard the way it does for the Guide, so that's not why),
+   the same way Android's back button eats an IME-dismiss press - so the search input is
+   left focused with no page-level event ever firing to blur it, and only a subsequent Y
+   press (wireSearchToggle above) clears focus.
+
+   Two independent "the keyboard just closed" signals are listened for here, since neither
+   is guaranteed to exist/fire on every build this app runs on:
+   - The web-standard VirtualKeyboard API's geometrychange event. Confirmed NOT to fire on
+     the Xbox WebView2 build tested (focus stayed on the search input after a real B press,
+     which this handler would have blurred) - kept for whatever platform/WebView2 version
+     it does work on, feature-detected so its absence is silent elsewhere.
+   - MainPage.xaml.cs's OnInputPaneHiding, forwarding Windows' actual InputPane.Hiding
+     event (the true on-screen-keyboard-visibility signal, independent of both the web API
+     above and of whatever control/button triggered the dismissal) as a plain
+     "xbox-keyboard-hiding" CustomEvent - this is the one confirmed reachable from JS on
+     real Xbox hardware. */
 export function wireVirtualKeyboardDismiss(card) {
+  const dismissIfSearchFocused = () => {
+    if (card.shadowRoot.activeElement !== card._searchInput) return;
+    dismissSearchKeyboard(card);
+  };
+
+  document.addEventListener("xbox-keyboard-hiding", dismissIfSearchFocused);
+
   if (!navigator.virtualKeyboard) return;
   navigator.virtualKeyboard.overlaysContent = true;
   let wasVisible = false;
@@ -190,10 +229,7 @@ export function wireVirtualKeyboardDismiss(card) {
     const visible = navigator.virtualKeyboard.boundingRect.height > 0;
     const justClosed = wasVisible && !visible;
     wasVisible = visible;
-    if (!justClosed || card.shadowRoot.activeElement !== card._searchInput) return;
-    card._searchInput.blur();
-    if (card._currentView !== "search") card._searchWrap.classList.remove("expanded");
-    restoreFocusAfterSearch(card);
+    if (justClosed) dismissIfSearchFocused();
   });
 }
 
@@ -372,6 +408,16 @@ export function wireHomeNav(card) {
     if (command === "left") {
       if (idx <= 0) sidenavItems()[0]?.focus();
       else focusPoster(posters[idx - 1]);
+      return true;
+    }
+    /* LB/RB (see focus-nav.js's chapterPrev/chapterNext - named for their other use in the
+       player's chapter skip, not row-specific) jump 4 posters at once instead of 1, clamped
+       to the row's own ends rather than handing off to the sidenav the way a plain Left off
+       the row's start does - a fast-scroll gesture landing on "nothing further this way" reads
+       as reaching the end of the row, not as a request to leave it. */
+    if (command === "chapterPrev" || command === "chapterNext") {
+      const delta = command === "chapterNext" ? 4 : -4;
+      focusPoster(posters[Math.max(0, Math.min(posters.length - 1, idx + delta))]);
       return true;
     }
     if (command === "down" || command === "up") {

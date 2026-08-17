@@ -40,6 +40,7 @@ import {
   wireVirtualKeyboardDismiss,
   wireStartButton,
   restoreFocusAfterSearch,
+  dismissSearchKeyboard,
 } from "./src/card/nav.js";
 
 import hostResetCss from "./src/card/styles/host-reset.css?inline";
@@ -408,17 +409,7 @@ class PlexNetflixCard extends HTMLElement {
       this._onSearchInput();
     });
     this._searchInput.addEventListener("keydown", (e) => {
-      if (e.key === "Escape") {
-        this._clearSearchInput();
-        this._exitSearch();
-        this._searchWrap.classList.remove("expanded");
-        this._searchInput.blur();
-        /* Blurring alone leaves nothing focused at all - the next D-pad/gamepad press
-           would restart from wireHomeNav's lazy first-press fallback instead of landing
-           somewhere sensible on the view _exitSearch just switched to. Prefer whatever had
-           focus before the search box was opened over that fallback. */
-        restoreFocusAfterSearch(this);
-      }
+      if (e.key === "Escape") dismissSearchKeyboard(this);
     });
     wireSearchToggle(this);
     wireVirtualKeyboardDismiss(this);

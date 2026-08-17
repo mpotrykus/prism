@@ -59,6 +59,13 @@ export function ensurePlayerFocusStyle() {
         .${PLAYER_FOCUSABLE_CLASS}:focus-visible {
             outline: 2px solid #e5a00d;
         }
+        /* B/Escape already backs every one of these overlays out for a controller user
+           (see focus-nav.js's controller-active-change comment, mirrored onto
+           documentElement since this chrome lives in plain document.body, not a shadow
+           root) - the "X" is a redundant, unreachable-by-D-pad dead end for them. */
+        html[data-controller-active="true"] .${OVERLAY_CLOSE_BTN_CLASS} {
+            display: none;
+        }
     `;
     document.head.appendChild(style);
 }

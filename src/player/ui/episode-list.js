@@ -5,7 +5,7 @@ import { plexAssetUrl } from "../core/plex-asset-url.js";
 import { fetchQueueItemsMetadata } from "../core/title-fetch.js";
 import { WATCHED_ICON_SVG } from "../../card/rows.js";
 import { formatRuntime } from "../../card/title-info.js";
-import { OVERLAY_CLOSE_BTN_CLASS, PLAYER_FOCUSABLE_CLASS } from "./shared.js";
+import { PLAYER_FOCUSABLE_CLASS } from "./shared.js";
 
 /* In-player episode/queue list overlay (HBO Max-style) - a bottom sheet over the still-
    playing video (see the "keep playing behind overlay" decision) listing every title in
@@ -100,6 +100,21 @@ function buildQueueScrollArrow(direction, scroller) {
     return btn;
 }
 
+/* Deferred to the next frame for the same WebView2 focus-timing reason as focusAfterPaint
+   above, but doing its own scrollIntoView too (in this exact order - focus() first, then
+   the explicit scrollIntoView) rather than delegating to that helper: a bare .focus() call
+   auto-scrolls the element into view using the browser's own default (edge-aligned, not
+   centered) alignment, so calling scrollIntoView(center) *before* the deferred focus() just
+   gets silently overwritten by that default scroll once the focus actually lands - matches
+   the same focus-then-scrollIntoView order wireLinearNav's own internal focusItem uses. */
+function focusCardCentered(el) {
+    if (!el) return;
+    requestAnimationFrame(() => {
+        el.focus();
+        el.scrollIntoView({ inline: "center", block: "nearest" });
+    });
+}
+
 function wireQueueArrowVisibility(scroller, leftArrow, rightArrow) {
     const update = () => {
         const maxScroll = scroller.scrollWidth - scroller.clientWidth - 1;
@@ -141,9 +156,7 @@ export async function openEpisodeListOverlay(controller) {
         flexDirection: "column",
         gap: "14px",
         /* Only vertical padding here - the header/scroll row apply their own horizontal
-           insets below so the scroll arrows can still sit flush against the true window
-           edges (see buildQueueScrollArrow's left:0/right:0) instead of stopping 40px
-           short of them. */
+           insets below instead. */
         padding: "24px 0 28px",
         background: "linear-gradient(to top, rgba(0,0,0,0.92) 0%, rgba(0,0,0,0.88) 55%, rgba(0,0,0,0.5) 85%, transparent 100%)",
         boxSizing: "border-box",
@@ -154,7 +167,7 @@ export async function openEpisodeListOverlay(controller) {
     });
 
     const header = document.createElement("div");
-    Object.assign(header.style, { display: "flex", alignItems: "center", justifyContent: "space-between", flex: "0 0 auto", padding: "0 24px" });
+    Object.assign(header.style, { display: "flex", alignItems: "center", flex: "0 0 auto", padding: "0 24px" });
 
     const heading = document.createElement("div");
     /* Same seasonNumber-present check chrome-menu.js's Episodes/Up Next row uses to decide
@@ -163,36 +176,17 @@ export async function openEpisodeListOverlay(controller) {
     heading.textContent = session.seasonNumber != null ? "Episodes" : "Up Next";
     Object.assign(heading.style, { color: "#fff", fontSize: "18px", fontWeight: "700" });
     header.appendChild(heading);
-
-    const closeBtn = document.createElement("button");
-    closeBtn.type = "button";
-    closeBtn.classList.add(OVERLAY_CLOSE_BTN_CLASS, PLAYER_FOCUSABLE_CLASS);
-    closeBtn.setAttribute("aria-label", "Close episode list");
-    closeBtn.textContent = "✕";
-    Object.assign(closeBtn.style, {
-        width: "32px",
-        height: "32px",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        border: "none",
-        background: "transparent",
-        color: "#fff",
-        fontSize: "16px",
-        cursor: "pointer",
-        padding: "0",
-    });
-    closeBtn.addEventListener("click", () => closeEpisodeListOverlay(controller));
-    header.appendChild(closeBtn);
+    /* No visible close button here (Xbox has no pointer to click one with anyway) - the
+       scrim click and the "back" nav command (wireLinearNav's onBack below) are the only
+       ways to dismiss this overlay. */
     panel.appendChild(header);
 
     ensureScrollStyle();
     const scroll = document.createElement("div");
     scroll.className = SCROLL_CLASS;
-    /* Horizontal padding leaves room for the 44px-wide scroll arrows (buildQueueScrollArrow),
-       which are absolutely positioned flush against scrollWrap's own true edges - without
-       this, the first/last card would render underneath them. */
-    Object.assign(scroll.style, { display: "flex", gap: "14px", overflowX: "auto", overflowY: "hidden", padding: "4px 54px" });
+    /* No scroll-arrow reservation here (unlike openChapterListOverlay's own 54px) - the
+       episode overlay has no arrows to leave room for. */
+    Object.assign(scroll.style, { display: "flex", gap: "14px", overflowX: "auto", overflowY: "hidden", padding: "4px 24px" });
     ensureSpinnerStyle();
     const loading = document.createElement("div");
     Object.assign(loading.style, {
@@ -220,11 +214,7 @@ export async function openEpisodeListOverlay(controller) {
        is scrolling (see the panel's own overflowY:auto above) - otherwise flexbox would
        squash it to fit the capped box instead of just scrolling to reach the rest. */
     Object.assign(scrollWrap.style, { position: "relative", flexShrink: "0" });
-    const leftArrow = buildQueueScrollArrow("left", scroll);
-    const rightArrow = buildQueueScrollArrow("right", scroll);
-    scrollWrap.appendChild(leftArrow);
     scrollWrap.appendChild(scroll);
-    scrollWrap.appendChild(rightArrow);
     panel.appendChild(scrollWrap);
 
     document.body.appendChild(scrim);
@@ -233,15 +223,17 @@ export async function openEpisodeListOverlay(controller) {
     panel.classList.add(EPISODE_LIST_CLASS);
     /* Horizontal: these are scrolling card rows, so left/right is the axis that matches what is on
        screen. See the audio overlay for why the root is `document`. */
-    const epNav = wireLinearNav(document, `.${EPISODE_LIST_CLASS} button:not(.${OVERLAY_CLOSE_BTN_CLASS})`, {
+    const epNav = wireLinearNav(document, `.${EPISODE_LIST_CLASS} button`, {
         orientation: "horizontal",
         onBack: () => closeEpisodeListOverlay(controller),
     });
     /* No-ops for now - the only thing on screen is the loading spinner (not a button), so
-       items()[0] is undefined. Called again below once the real cards actually exist; without
-       that second call, D-pad/keyboard input (including Back) would never work on this overlay
-       at all - not just after a selection, from the moment it opens - since wireLinearNav's
-       handler only acts when focus is already inside its own list. */
+       items()[0] is undefined. Called again below once the real cards actually exist, this
+       time landing on the current item specifically (see currentCard below) rather than
+       always index 0; without this call here though, D-pad/keyboard input (including Back)
+       would never work on this overlay at all - not just after a selection, from the moment
+       it opens - since wireLinearNav's handler only acts when focus is already inside its
+       own list. */
     epNav.focusFirst();
     controller._episodeListNav = epNav;
     controller._hideControls();
@@ -281,13 +273,12 @@ export async function openEpisodeListOverlay(controller) {
         if (formatted.current) currentCard = card;
     });
 
-    if (currentCard) currentCard.scrollIntoView({ inline: "center", block: "nearest" });
-    /* Wired after the real cards land (not right after scrollWrap is built) - scrollWidth
-       is meaningless against the empty "Loading…" placeholder that was there before. */
-    wireQueueArrowVisibility(scroll, leftArrow, rightArrow);
     /* The cards this overlay actually browses didn't exist yet when focusFirst() was first
-       called above (loading spinner only) - see that call's own comment. */
-    epNav.focusFirst();
+       called above (loading spinner only) - see that call's own comment. Land on the
+       currently-playing card specifically (falling back to the first card if for some
+       reason there isn't one) rather than epNav.focusFirst()'s always-index-0 behavior, so
+       opening the list drops the viewer right where they already are in the queue. */
+    focusCardCentered(currentCard || scroll.querySelector("button"));
 }
 
 export function closeEpisodeListOverlay(controller) {
@@ -341,31 +332,14 @@ export function openChapterListOverlay(controller) {
     });
 
     const header = document.createElement("div");
-    Object.assign(header.style, { display: "flex", alignItems: "center", justifyContent: "space-between", flex: "0 0 auto", padding: "0 24px" });
+    Object.assign(header.style, { display: "flex", alignItems: "center", flex: "0 0 auto", padding: "0 24px" });
     const heading = document.createElement("div");
     heading.textContent = "Chapters";
     Object.assign(heading.style, { color: "#fff", fontSize: "18px", fontWeight: "700" });
     header.appendChild(heading);
-    const closeBtn = document.createElement("button");
-    closeBtn.type = "button";
-    closeBtn.classList.add(OVERLAY_CLOSE_BTN_CLASS, PLAYER_FOCUSABLE_CLASS);
-    closeBtn.setAttribute("aria-label", "Close chapter list");
-    closeBtn.textContent = "✕";
-    Object.assign(closeBtn.style, {
-        width: "32px",
-        height: "32px",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        border: "none",
-        background: "transparent",
-        color: "#fff",
-        fontSize: "16px",
-        cursor: "pointer",
-        padding: "0",
-    });
-    closeBtn.addEventListener("click", () => closeChapterListOverlay(controller));
-    header.appendChild(closeBtn);
+    /* No visible close button here (Xbox has no pointer to click one with anyway) - the
+       scrim click and the "back" nav command (wireLinearNav's onBack below) are the only
+       ways to dismiss this overlay. */
     panel.appendChild(header);
 
     ensureScrollStyle();
@@ -406,11 +380,10 @@ export function openChapterListOverlay(controller) {
     document.body.appendChild(panel);
     controller._chapterListEl = { scrim, panel };
     panel.classList.add(CHAPTER_LIST_CLASS);
-    const chNav = wireLinearNav(document, `.${CHAPTER_LIST_CLASS} button:not(.${OVERLAY_CLOSE_BTN_CLASS})`, {
+    const chNav = wireLinearNav(document, `.${CHAPTER_LIST_CLASS} button`, {
         orientation: "horizontal",
         onBack: () => closeChapterListOverlay(controller),
     });
-    chNav.focusFirst();
     controller._chapterListNav = chNav;
     controller._hideControls();
     requestAnimationFrame(() => {
@@ -418,7 +391,11 @@ export function openChapterListOverlay(controller) {
         panel.style.transform = "translateY(0)";
     });
 
-    if (currentCard) currentCard.scrollIntoView({ inline: "center", block: "nearest" });
+    /* Land on the current chapter specifically (falling back to the first one) rather
+       than chNav.focusFirst()'s always-index-0 behavior - all the cards already exist
+       synchronously by this point (unlike the episode overlay's async fetch), so there's
+       no need for that helper's own two-call dance. */
+    focusCardCentered(currentCard || scroll.querySelector("button"));
     wireQueueArrowVisibility(scroll, leftArrow, rightArrow);
 }
 
