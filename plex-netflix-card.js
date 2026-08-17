@@ -391,6 +391,11 @@ class PlexNetflixCard extends HTMLElement {
        sidesteps that regardless of which entry path fires. */
     this.shadowRoot.addEventListener("focusin", (e) => {
       if (!this._searchWrap.contains(e.target)) this._searchReturnFocusEl = e.target;
+      /* Same continuous-tracking idea, scoped to the sidenav instead of the search box -
+         lets wireHomeNav's/wireSearchNav's sidenav "right" handler return to whatever hero
+         button/poster/result had focus before the user moved into the sidenav, instead of
+         always restarting from the hero's first button. */
+      if (!this._searchWrap.contains(e.target) && !e.target.closest(".sidenav")) this._lastContentFocusEl = e.target;
     });
 
     this._updateSearchToggleIcon();

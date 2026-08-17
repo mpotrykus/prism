@@ -405,12 +405,14 @@
 }
 
 /* D-pad/gamepad nav only ever focuses the .poster itself, never this nested button (see
-   focus-nav.js's data-controller-active comment) - showing it to a controller user just
-   advertises a dead end, since focus-visible on the poster is the only way it'd appear.
-   Keyed off an attribute on the card's own host element (set in plex-netflix-card.js's
-   _build), not :root - this stylesheet is inlined into the card's shadow root, and :root
-   never matches inside a shadow tree. */
-:host([controller-active]) .poster .watchlist-btn {
+   focus-nav.js's data-controller-active comment), so the unchecked "+" affordance is a
+   dead end for controller users - hide it. The checked "added" state stays visible
+   (its own rule above already forces opacity/pointer-events regardless of hover/focus)
+   since that's status info, not an action prompt, and controller users still need to see
+   what's on their list. Keyed off an attribute on the card's own host element (set in
+   plex-netflix-card.js's _build), not :root - this stylesheet is inlined into the card's
+   shadow root, and :root never matches inside a shadow tree. */
+:host([controller-active]) .poster .watchlist-btn:not(.added) {
     display: none;
 }
 

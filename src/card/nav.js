@@ -384,9 +384,17 @@ export function wireHomeNav(card) {
         return true;
       }
       if (command === "right") {
-        const heroTarget = heroItems()[0];
-        if (heroTarget) focusHero(heroTarget);
-        else focusPoster(postersIn(rowSections()[0])[0]);
+        const remembered = card._lastContentFocusEl;
+        const rememberedUsable = remembered?.isConnected && remembered.tabIndex >= 0 && remembered.offsetParent !== null;
+        if (rememberedUsable && heroItems().includes(remembered)) {
+          focusHero(remembered);
+        } else if (rememberedUsable && remembered.classList.contains("poster") && remembered.closest(".row-section")) {
+          focusPoster(remembered);
+        } else {
+          const heroTarget = heroItems()[0];
+          if (heroTarget) focusHero(heroTarget);
+          else focusPoster(postersIn(rowSections()[0])[0]);
+        }
         return true;
       }
       return false;
@@ -523,7 +531,10 @@ export function wireSearchNav(card) {
        go. Enter the grid directly instead. */
     if (sidenavItems().includes(active)) {
       if (command !== "right") return false;
-      focusPoster(allPosters()[0]);
+      const remembered = card._lastContentFocusEl;
+      const rememberedUsable =
+        remembered?.isConnected && remembered.tabIndex >= 0 && remembered.offsetParent !== null && allPosters().includes(remembered);
+      focusPoster(rememberedUsable ? remembered : allPosters()[0]);
       return true;
     }
 

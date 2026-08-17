@@ -240,13 +240,12 @@ export function wireLinearNav(root, selector, { orientation = "vertical", onActi
     requestAnimationFrame(() => focusItem(items()[0]));
   }
 
-  /* Centers the newly-focused item vertically in whatever scroll container it sits in
-     (e.g. title-info.js's overlay, scrollable top-to-bottom) - D-pad/gamepad nav has no
-     hover/cursor to show where focus went, so a focused item scrolled just barely into
-     view (or half-clipped at an edge) is easy to lose track of. inline is left at
-     "nearest" (the default) since this is only about vertical position - a horizontal
-     grid row (cast/similar) shouldn't also jump sideways just because an item near its
-     edge got focus. */
+  /* Centers the newly-focused item along the list's own scroll axis (e.g. title-info.js's
+     top-to-bottom overlay, or episode-list.js's/openChapterListOverlay's left-to-right card
+     row) - D-pad/gamepad nav has no hover/cursor to show where focus went, so a focused item
+     scrolled just barely into view (or half-clipped at an edge) is easy to lose track of. The
+     cross axis stays "nearest" so a vertical list's rows don't also jump sideways (or a
+     horizontal row jump vertically) just because an item near its edge got focus. */
   function focusItem(el) {
     if (!el) return;
     if (isTextEntry(el)) {
@@ -256,7 +255,9 @@ export function wireLinearNav(root, selector, { orientation = "vertical", onActi
       clearHighlight();
       el.focus();
     }
-    el.scrollIntoView({ block: "center", inline: "nearest" });
+    el.scrollIntoView(
+      orientation === "vertical" ? { block: "center", inline: "nearest" } : { block: "nearest", inline: "center" }
+    );
   }
 
   function groupOf(el) {
