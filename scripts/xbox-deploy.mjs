@@ -84,6 +84,22 @@ if (!bundle) {
 }
 console.log(`xbox-deploy: deploying ${bundle.path}`);
 
+// WinAppDeployCmd does NOT search the AppPackages folder's own Dependencies\x64\ subfolder
+// by default (only the app root and SDK dirs) - the framework .appx packages sitting right
+// next to the bundle have to be passed explicitly via -dependency, or install fails with
+// "package depends on a framework that could not be found" even though it's right there.
+const bundleDir = bundle.path.slice(0, bundle.path.lastIndexOf("/") + 1);
+const dependenciesDir = `${bundleDir}Dependencies/x64/`;
+const dependencyPaths = existsSync(dependenciesDir)
+  ? readdirSync(dependenciesDir)
+      .filter((f) => f.endsWith(".appx"))
+      .map((f) => `${dependenciesDir}${f}`)
+  : [];
+if (dependencyPaths.length === 0) {
+  console.error(`xbox-deploy: no .appx dependencies found under ${dependenciesDir}`);
+  process.exit(1);
+}
+
 function findWinAppDeployCmd() {
   const kitsBin = "C:\\Program Files (x86)\\Windows Kits\\10\\bin";
   if (!existsSync(kitsBin)) {
@@ -101,60 +117,67 @@ function findWinAppDeployCmd() {
 }
 
 const winAppDeployCmd = findWinAppDeployCmd();
-const installArgs = ["install", "-file", bundle.path, "-ip", ip];
+const installArgs = ["install", "-file", bundle.path, "-dependency", ...dependencyPaths, "-ip", ip];
 if (pin) installArgs.push("-pin", pin);
 
-// Captures output (rather than inheriting it live) so a failure's text can be inspected -
-// e.g. to detect and recover from the "unpackaged version already installed" conflict below.
-// Printed either way so this stays as visible as a live-streamed command.
+// Captures output (rather than inheriting it live) instead of printing it, so a failure's
+// text can be inspected - e.g. to detect and recover from the "unpackaged version already
+// installed" conflict below - without flooding the console with routine output (the `list`
+// command alone dumps every package installed on the console, ~90 lines).
 function runCapture(cmd, cmdArgs) {
   try {
-    const output = execFileSync(cmd, cmdArgs, { encoding: "utf8" });
-    console.log(output);
-    return output;
+    return execFileSync(cmd, cmdArgs, { encoding: "utf8" });
   } catch (err) {
     const output = `${err.stdout ?? ""}${err.stderr ?? ""}`;
-    console.log(output);
     err.combinedOutput = output;
     throw err;
   }
 }
 
+// The app's own package identity (Package.appxmanifest's <Identity Name>), not the project
+// name - WinAppDeployCmd's `list`/`uninstall` deal in package identities, not project names.
+const packageIdentityName = "com.mpotrykus.prismxbox";
+
 console.log(`xbox-deploy: installing to ${ip}...`);
 try {
-  runCapture(winAppDeployCmd, installArgs);
-} catch (err) {
-  const conflict = /already installed an unpackaged version/i.test(err.combinedOutput ?? "");
-  if (!conflict) throw err;
+  try {
+    runCapture(winAppDeployCmd, installArgs);
+  } catch (err) {
+    const conflict = /already installed an unpackaged version/i.test(err.combinedOutput ?? "");
+    if (!conflict) throw err;
 
-  // Visual Studio's own "Remote Machine" F5 deploy installs the app unpackaged (loose
-  // files, not a signed .msixbundle) - Windows refuses to let a packaged WinAppDeployCmd
-  // install silently replace that, so the conflicting copy has to be uninstalled first.
-  console.log(
-    "xbox-deploy: an unpackaged Visual Studio deploy of this app is already on the console " +
-      "and blocks a packaged install - uninstalling it first..."
-  );
+    // Visual Studio's own "Remote Machine" F5 deploy installs the app unpackaged (loose
+    // files, not a signed .msixbundle) - Windows refuses to let a packaged WinAppDeployCmd
+    // install silently replace that, so the conflicting copy has to be uninstalled first.
+    console.log(
+      "xbox-deploy: an unpackaged Visual Studio deploy of this app is already on the console " +
+        "and blocks a packaged install - uninstalling it first..."
+    );
 
-  const listArgs = ["list", "-ip", ip];
-  if (pin) listArgs.push("-pin", pin);
-  const listOutput = runCapture(winAppDeployCmd, listArgs);
-  const packageFullName = listOutput
-    .split(/\r?\n/)
-    .map((l) => l.trim())
-    .find((l) => /^PrismXbox_/i.test(l));
+    const listArgs = ["list", "-ip", ip];
+    if (pin) listArgs.push("-pin", pin);
+    const listOutput = runCapture(winAppDeployCmd, listArgs);
+    const packageFullName = listOutput
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .find((l) => l.toLowerCase().startsWith(`${packageIdentityName}_`));
 
-  if (!packageFullName) {
-    console.error("xbox-deploy: could not find PrismXbox's PackageFullName in `list` output above to uninstall it.");
-    throw err;
+    if (!packageFullName) {
+      console.log(listOutput);
+      throw new Error(`could not find ${packageIdentityName}'s PackageFullName in \`list\` output to uninstall it.`);
+    }
+
+    console.log(`xbox-deploy: uninstalling ${packageFullName}...`);
+    const uninstallArgs = ["uninstall", "-package", packageFullName, "-ip", ip];
+    if (pin) uninstallArgs.push("-pin", pin);
+    runCapture(winAppDeployCmd, uninstallArgs);
+
+    console.log(`xbox-deploy: retrying install to ${ip}...`);
+    runCapture(winAppDeployCmd, installArgs);
   }
-
-  console.log(`xbox-deploy: uninstalling ${packageFullName}...`);
-  const uninstallArgs = ["uninstall", "-pkg", packageFullName, "-ip", ip];
-  if (pin) uninstallArgs.push("-pin", pin);
-  runCapture(winAppDeployCmd, uninstallArgs);
-
-  console.log(`xbox-deploy: retrying install to ${ip}...`);
-  runCapture(winAppDeployCmd, installArgs);
+} catch (err) {
+  console.error(`xbox-deploy: install failed - ${err.combinedOutput ?? err.message}`);
+  process.exit(1);
 }
 
 console.log(`xbox-deploy: done - installed on ${ip}.`);
