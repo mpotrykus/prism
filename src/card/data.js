@@ -105,11 +105,6 @@ async function fetchRecentlyAddedRaw(card) {
       }
     })
   );
-  /* Same "hit the requested cap -> there may be more" heuristic search-page.js's
-     /hubs/search hub building uses (there's no totalSize on this per-section /all
-     response the way genre listings have) - stashed on the card since this raw fetch
-     result itself has no room for it once flattened below. */
-  card._recentlyAddedHasMore = perSection.some((items) => items.length >= rowSize);
   return perSection.flat();
 }
 

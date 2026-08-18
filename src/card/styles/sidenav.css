@@ -16,7 +16,10 @@
   transition: flex-basis 0.22s ease;
   z-index: 30;
 }
-.sidenav:hover, .sidenav:focus-within {
+/* :focus-within alone would also stay expanded after a mouse click, since a clicked
+   nav-item keeps DOM focus until something else is clicked - gate it on controller-active
+   (focus-nav.js) so only keyboard/D-pad/gamepad-driven focus, not a mouse click, expands it. */
+.sidenav:hover, :host([controller-active]) .sidenav:focus-within {
   flex-basis: 130px;
 }
 .nav-top, .nav-bottom {
@@ -59,7 +62,7 @@
   opacity: 0;
   transition: opacity 0.15s ease;
 }
-.sidenav:hover .nav-label, .sidenav:focus-within .nav-label {
+.sidenav:hover .nav-label, :host([controller-active]) .sidenav:focus-within .nav-label {
   opacity: 1;
 }
 /* Only ever shown at the mobile breakpoint below - the hover sidenav has room for

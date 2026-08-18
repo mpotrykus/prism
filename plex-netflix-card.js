@@ -77,8 +77,8 @@ const SECTION_TYPE_FILTERS = {
   2: { onDeck: "episode", other: "show" },
 };
 
-/* Row "See More" re-fetch limit (genre/AI/recently-added rows - see _loadGenreRowFull/
-   _loadAiRowFull/_loadRecentlyAddedFull) - same value and "large enough that no row's
+/* Row "See More" re-fetch limit (genre/AI rows - see _loadGenreRowFull/
+   _loadAiRowFull) - same value and "large enough that no row's
    true total realistically hits it" reasoning as search-page.js's own
    SEARCH_EXPAND_LIMIT for its "See All" section expansion. */
 const ROW_SEE_MORE_LIMIT = 500;
@@ -535,7 +535,6 @@ class PlexNetflixCard extends HTMLElement {
       .filter(recentlyAddedFilter)
       .sort((a, b) => (b.addedAt || 0) - (a.addedAt || 0));
     const recentlyAdded = recentlyAddedFull.slice(0, this._config.row_size).map((m) => this._mapItem(m, false));
-    const recommendedFull = (this._recommendedRaw || []).filter(recommendedFilter);
     const recommended = this._getRecommendedForView(view, recommendedFilter)
       .map((m) => this._mapItem(m, false));
     const popularFull = (this._popularRaw || []).filter(popularFilter);
@@ -553,8 +552,6 @@ class PlexNetflixCard extends HTMLElement {
         title: "Recently Added",
         items: recentlyAdded,
         source: "local",
-        hasMore: recentlyAdded.length < recentlyAddedFull.length || !!this._recentlyAddedHasMore,
-        loadMore: () => this._loadRecentlyAddedFull(recentlyAddedFilter),
       });
     if (watchlist.length)
       rows.push({
@@ -570,8 +567,6 @@ class PlexNetflixCard extends HTMLElement {
         items: recommended,
         source: "local",
         landscape: true,
-        hasMore: recommended.length < recommendedFull.length,
-        loadMore: () => recommendedFull,
       });
     if (popular.length)
       rows.push({
@@ -579,8 +574,6 @@ class PlexNetflixCard extends HTMLElement {
         items: popular,
         source: "local",
         rankNumbers: true,
-        hasMore: popular.length < popularFull.length,
-        loadMore: () => popularFull,
       });
     rows.push(...genreRows);
     if (collectionsRow) rows.push(collectionsRow);
@@ -1001,24 +994,6 @@ class PlexNetflixCard extends HTMLElement {
           const data = await plexFetch(this, `/library/sections/${s.key}/all`, {
             type: s.type,
             genre: keys,
-            sort: "addedAt:desc",
-            "X-Plex-Container-Size": ROW_SEE_MORE_LIMIT,
-          });
-          return data?.MediaContainer?.Metadata || [];
-        } catch (e) {
-          return [];
-        }
-      })
-    );
-    return perSection.flat().filter(typeFilter);
-  }
-
-  async _loadRecentlyAddedFull(typeFilter) {
-    const perSection = await Promise.all(
-      (this._config.sections || []).map(async (s) => {
-        try {
-          const data = await plexFetch(this, `/library/sections/${s.key}/all`, {
-            type: s.type,
             sort: "addedAt:desc",
             "X-Plex-Container-Size": ROW_SEE_MORE_LIMIT,
           });
