@@ -1,4 +1,4 @@
-package com.mpotrykus.streaming;
+package com.mpotrykus.prism;
 
 /* Native code only ever sees pre-formatted display fields - src/player/ui/episode-list.js's
    formatEpisodeListItem already interprets Plex's own metadata shape ("S1 E1 - Title",

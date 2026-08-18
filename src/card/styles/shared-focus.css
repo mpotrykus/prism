@@ -1,60 +1,54 @@
-/* One shared focus ring for every element focus-nav.js makes navigable - this app was
-   mouse/hover-only until Xbox needed D-pad support, so unlike normal web focus styling
-   (a nice-to-have for keyboard users alongside a mouse), a visible focus indicator here
-   is the *only* signal a gamepad-only user has of where they are on screen at all. */
+/* Every element focus-nav.js makes navigable gets its focus indicator from its own
+   :hover rule (each component file adds a matching :focus-visible selector alongside
+   its :hover one) instead of a generic outline box here - this app was mouse/hover-only
+   until Xbox needed D-pad support, so a visible focus indicator is the *only* signal a
+   gamepad-only user has of where they are on screen, but a uniform yellow outline over
+   every element type read as visually harsher than just reusing the hover look. This
+   file only suppresses the default browser outline so each component's own highlight
+   is the sole indicator. */
 
-.nav-item:focus-visible,
 .poster:focus-visible,
-.hero-info-btn:focus-visible,
-.hero-watchlist-btn:focus-visible,
-.hero-mute-btn:focus-visible,
-.hero-play-btn:focus-visible,
-.scroll-arrow:focus-visible,
-.pin-key:focus-visible,
-.pin-cancel:focus-visible,
-.profile-switch-btn:focus-visible,
-.profile-cancel:focus-visible,
+.title-info-similar-item:focus-visible,
 .title-info-close:focus-visible,
 .title-info-play:focus-visible,
 .title-info-restart-btn:focus-visible,
 .title-info-watched-btn:focus-visible,
 .title-info-watchlist-btn:focus-visible,
-.title-info-episode:focus-visible,
-.title-info-similar-item:focus-visible,
-.title-info-season-select:focus-visible,
-.title-info-season-option:focus-visible,
-.more-sheet-item:focus-visible,
-.more-sheet-cancel:focus-visible {
+.profile-switch-btn:focus-visible,
+.profile-cancel:focus-visible,
+.hero-info-btn:focus-visible,
+.hero-watchlist-btn:focus-visible,
+.hero-mute-btn:focus-visible,
+.hero-play-btn:focus-visible {
     outline: 2px solid #e5a00d;
 }
 
-.nav-item,
 .poster,
-.hero-info-btn,
-.hero-watchlist-btn,
-.hero-mute-btn,
-.hero-play-btn,
-.scroll-arrow,
-.pin-key,
-.pin-cancel,
-.profile-switch-btn,
-.profile-cancel,
+.title-info-similar-item,
 .title-info-close,
 .title-info-play,
 .title-info-restart-btn,
 .title-info-watched-btn,
 .title-info-watchlist-btn,
-.title-info-episode,
-.title-info-similar-item,
-.title-info-season-select,
-.title-info-season-option,
-.more-sheet-item,
-.more-sheet-cancel {
+.profile-switch-btn,
+.profile-cancel,
+.hero-info-btn,
+.hero-watchlist-btn,
+.hero-mute-btn,
+.hero-play-btn {
     outline: 2px solid #e5a00d00;
     outline-offset: 2px;
     transition: .125s;
 }
 
-.nav-item {
-    outline-offset: -2px;
+.nav-item:focus-visible,
+.scroll-arrow:focus-visible,
+.pin-key:focus-visible,
+.pin-cancel:focus-visible,
+.title-info-episode:focus-visible,
+.title-info-season-select:focus-visible,
+.title-info-season-option:focus-visible,
+.more-sheet-item:focus-visible,
+.more-sheet-cancel:focus-visible {
+    outline: none;
 }

@@ -1,4 +1,4 @@
-package com.mpotrykus.streaming;
+package com.mpotrykus.prism;
 
 /* One Plex subtitle search hit - JS resolves the actual search (plex-subtitles.js's
    search(), shared with the web overlay) and hands this pre-formatted shape over the

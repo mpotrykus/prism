@@ -1,4 +1,4 @@
-import { wireLinearNav, focusAfterPaint, isControllerActive } from "./focus-nav.js";
+import { wireLinearNav, focusAfterPaint, isControllerActive, registerNavHandler } from "./focus-nav.js";
 import { hasSecrets, loadSecrets, saveSecrets } from "./vault.js";
 import MODAL_STYLE from "./src/styles/settings-modal.css?inline";
 
@@ -180,8 +180,8 @@ class StreamingSettingsModal extends HTMLElement {
           </div>
           <div class="status save-status"></div>
           <div class="modal-footer">
-            <button type="button" class="btn btn-secondary btn-cancel">Cancel</button>
-            <button type="button" class="btn btn-primary btn-save">Save</button>
+            <button type="button" class="btn btn-secondary btn-cancel" data-nav-group="footer">Cancel</button>
+            <button type="button" class="btn btn-primary btn-save" data-nav-group="footer">Save</button>
           </div>
         </div>
       </div>
@@ -217,7 +217,8 @@ class StreamingSettingsModal extends HTMLElement {
        individually the way the rest of this list works. Fields that sit side-by-side in a
        .row-2col share their own per-row data-nav-group for the same reason (Up/Down should
        skip the pair as one visual row, Left/Right moves within it), matching how they
-       actually appear on screen rather than raw DOM order. A hidden tab panel's fields are
+       actually appear on screen rather than raw DOM order. Cancel/Save share data-nav-
+       group="footer" for the same reason - they sit side by side in .modal-footer. A hidden tab panel's fields are
        automatically excluded already, since items() filters on offsetParent !== null and
        inactive .tab-panels are display:none. Text/password/number inputs don't take real
        focus (and so don't pop the on-screen keyboard) until an explicit "activate" - see
@@ -231,6 +232,24 @@ class StreamingSettingsModal extends HTMLElement {
         ".btn-cancel, .btn-save",
       { orientation: "vertical", onBack: () => this.close() }
     );
+    /* LB/RB (see focus-nav.js's chapterPrev/chapterNext) switch tabs directly regardless of
+       which field currently has focus, rather than requiring the user to nav up to the tab
+       row and step Left/Right through it - a global shortcut layered on top of the linear
+       nav above, not a replacement for it. Registered separately since wireLinearNav's own
+       handler already owns Left/Right within the tab row's data-nav-group="tabs". */
+    registerNavHandler((command) => {
+      if (!this.isOpen()) return false;
+      if (command !== "chapterPrev" && command !== "chapterNext") return false;
+      const keys = TABS.map((t) => t.key);
+      const idx = keys.indexOf(this.shadowRoot.querySelector(".tab-btn.active")?.dataset.tab);
+      if (idx === -1) return false;
+      const nextIdx = Math.max(0, Math.min(keys.length - 1, idx + (command === "chapterNext" ? 1 : -1)));
+      if (nextIdx !== idx) {
+        this._switchTab(keys[nextIdx]);
+        focusAfterPaint(this._el(`.tab-btn[data-tab="${keys[nextIdx]}"]`));
+      }
+      return true;
+    });
   }
 
   /* Toggles the OpenSubtitles credential fields' actual display (not just a CSS class)

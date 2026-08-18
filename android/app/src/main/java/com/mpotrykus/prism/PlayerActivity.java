@@ -1,4 +1,4 @@
-package com.mpotrykus.streaming;
+package com.mpotrykus.prism;
 
 import android.app.PictureInPictureParams;
 import android.content.pm.PackageManager;

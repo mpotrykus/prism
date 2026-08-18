@@ -1,4 +1,4 @@
-package com.mpotrykus.streaming;
+package com.mpotrykus.prism;
 
 import android.content.Intent;
 import android.os.Bundle;

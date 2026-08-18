@@ -17,6 +17,7 @@ import {
     extrasIconMarkup,
     performanceIconMarkup,
     skipIconMarkup,
+    PLAYER_MENU_ROW_CLASS,
 } from "./shared.js";
 /* Circular with episode-list.js (which imports playQueuedTitle/formatTime from
    chrome-transport.js) - safe here because both sides only reference the other module's
@@ -50,7 +51,7 @@ export function renderPickerList(content, items, { rowGap = 0 } = {}) {
     items.forEach((item, index) => {
         const row = document.createElement("button");
         row.type = "button";
-        row.classList.add(PLAYER_FOCUSABLE_CLASS);
+        row.classList.add(PLAYER_FOCUSABLE_CLASS, PLAYER_MENU_ROW_CLASS);
         Object.assign(row.style, {
             display: "flex",
             alignItems: "center",
@@ -118,7 +119,7 @@ export function buildAccordionRow(list, state, section) {
 
     const header = document.createElement("button");
     header.type = "button";
-    header.classList.add(PLAYER_FOCUSABLE_CLASS);
+    header.classList.add(PLAYER_FOCUSABLE_CLASS, PLAYER_MENU_ROW_CLASS);
     Object.assign(header.style, {
         display: "flex",
         alignItems: "center",
@@ -251,7 +252,7 @@ export function buildAccordionRow(list, state, section) {
 export function makeBackRow(onClick) {
     const row = document.createElement("button");
     row.type = "button";
-    row.classList.add(PLAYER_FOCUSABLE_CLASS);
+    row.classList.add(PLAYER_FOCUSABLE_CLASS, PLAYER_MENU_ROW_CLASS);
     row.textContent = "‹  Back";
     Object.assign(row.style, {
         display: "block",

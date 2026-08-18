@@ -31,6 +31,18 @@ export function platformTag() {
     return Capacitor.getPlatform();
 }
 
+/* Mirrored onto documentElement (same self-registering-on-import pattern as input-mode.js's
+   own [data-input-mode]) so CSS elsewhere can key off [data-platform="xbox"] directly rather
+   than every consumer needing its own JS-side platformTag() check. Exists specifically
+   because input-mode.js's own UA/`pointer: none`-based isRemoteDrivenDevice() guess turned
+   out not to reliably catch Xbox's real WebView2 UA/pointer capabilities on hardware - this
+   marker is script-injected by the UWP shell itself (see XBOX_MARKER above), not sniffed,
+   so it doesn't have that problem. Guarded on `document` existing since this module is also
+   imported by plain-Node vitest specs, which have no DOM. */
+if (typeof document !== "undefined") {
+    document.documentElement.dataset.platform = platformTag();
+}
+
 /* The platforms whose native playback bridge actually exists and is wired up. Add "xbox"
    here - and only here - when its bridge lands; nothing else needs to change.
 

@@ -1,4 +1,4 @@
-package com.mpotrykus.streaming;
+package com.mpotrykus.prism;
 
 /* Sharpen/upscale knobs only - no saturation/contrast here anymore, see ColorBoostTuning
    for where those moved (their own independent toggle, not tied to whichever

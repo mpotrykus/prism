@@ -1,4 +1,4 @@
-package com.mpotrykus.streaming;
+package com.mpotrykus.prism;
 
 /* Contrast/saturation "look" boost - its own independent toggle (Color Boost, see
    PlayerActivity.setColorBoostEnabled/setColorBoostStrength and PlayerUiHelper's Color

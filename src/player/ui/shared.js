@@ -52,6 +52,15 @@ export const OVERLAY_CLOSE_BTN_CLASS = "streaming-player-overlay-close-btn";
    this only rounds elements that didn't already have an opinion. */
 export const PLAYER_FOCUSABLE_CLASS = "streaming-player-focusable";
 
+/* The hamburger "More" sheet's own rows (chrome-menu.js's buildAccordionRow/
+   renderPickerList/makeBackRow, also reused by chrome-menu-extras.js/chrome-subtitles.js
+   for their nested screens) get a full-width highlighted background instead of the
+   shared outline above - each row is already a real width:100% button, so the
+   background naturally spans edge-to-edge without needing a separate bleed trick the
+   way the card's narrower nav items do. Layered on top of PLAYER_FOCUSABLE_CLASS
+   (kept for its border-radius/transition), not a replacement for it. */
+export const PLAYER_MENU_ROW_CLASS = "streaming-player-menu-row";
+
 /* Injected once, lazily, the same guarded pattern as ensureMenuScrollStyle below - nothing
    needs this until the first focusable element actually mounts. */
 export function ensurePlayerFocusStyle() {
@@ -68,12 +77,44 @@ export function ensurePlayerFocusStyle() {
         .${PLAYER_FOCUSABLE_CLASS}:focus-visible {
             outline: 2px solid #e5a00d;
         }
-        /* B/Escape already backs every one of these overlays out for a controller user
-           (see focus-nav.js's controller-active-change comment, mirrored onto
-           documentElement since this chrome lives in plain document.body, not a shadow
-           root) - the "X" is a redundant, unreachable-by-D-pad dead end for them. */
-        html[data-controller-active="true"] .${OVERLAY_CLOSE_BTN_CLASS} {
-            display: none;
+        /* focus-nav.js's wireLinearNav never gives a text <input> real DOM focus just for
+           landing on it (arriving there would otherwise pop Xbox/WebView2's on-screen
+           keyboard for no reason) - it marks it "nav-text-highlight" instead, so :focus-visible
+           above never fires for that state and this class needs its own matching outline. */
+        .${PLAYER_FOCUSABLE_CLASS}.nav-text-highlight {
+            outline: 2px solid #e5a00d;
+        }
+        /* outline: none unconditionally (not just on :focus-visible) - PLAYER_FOCUSABLE_CLASS's
+           base rule above still transitions outline every one of these rows inherits, and
+           animating "2px solid transparent" -> "none" (a non-interpolable style flip, unlike
+           the plain alpha fade the other outline-based elements do) is what was flashing black
+           for a frame on every move; removing outline here entirely means that transition never
+           has anything to animate. background is !important because every row this class is
+           applied to (buildAccordionRow/renderPickerList/makeBackRow) sets its own inline
+           style.background directly on the element, which otherwise always wins over any
+           stylesheet class selector regardless of specificity. */
+        .${PLAYER_MENU_ROW_CLASS} {
+            outline: none !important;
+        }
+        .${PLAYER_MENU_ROW_CLASS}:focus-visible {
+            background: rgba(255,255,255,0.08) !important;
+        }
+        /* B/Escape already backs every one of these overlays out for a controller user - the
+           "X" is a redundant, unreachable-by-D-pad dead end for them. Two separate gates,
+           not one: [data-platform="xbox"] (core/platform.js) is script-injected by the UWP
+           shell itself, so it's unconditionally true on real Xbox hardware from first paint
+           regardless of what the page's own input heuristics conclude - input-mode.js's
+           [data-input-mode="keyboard"] (UA/pointer-based sniffing) turned out not to
+           reliably catch Xbox's actual WebView2 UA/pointer capabilities on real hardware.
+           The input-mode gate stays alongside it for Fire TV and any keyboard/gamepad-driven
+           desktop-web session, which platform.js has no marker for. !important because
+           both closeBtn elements (chrome-menu.js/chrome-subtitles.js) set display:"flex" as
+           an inline style directly on the element - same trap as PLAYER_MENU_ROW_CLASS's
+           background above, an inline style always wins over any stylesheet selector here
+           regardless of specificity. */
+        html[data-platform="xbox"] .${OVERLAY_CLOSE_BTN_CLASS},
+        html[data-input-mode="keyboard"] .${OVERLAY_CLOSE_BTN_CLASS} {
+            display: none !important;
         }
     `;
     document.head.appendChild(style);

@@ -1,4 +1,4 @@
-package com.mpotrykus.streaming;
+package com.mpotrykus.prism;
 
 /* Native code only ever sees {mediaIndex, label} - plex-player.js's play() already
    reduced Plex's raw Media[] entries down to this shape (see title-info.js's

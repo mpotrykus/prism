@@ -5,6 +5,7 @@ import { plexAssetUrl } from "../core/plex-asset-url.js";
 import { fetchQueueItemsMetadata } from "../core/title-fetch.js";
 import { WATCHED_ICON_SVG } from "../../card/rows.js";
 import { formatRuntime } from "../../card/title-info.js";
+import { createRowScroll } from "../../card/row-scroll.js";
 import { PLAYER_FOCUSABLE_CLASS } from "./shared.js";
 
 /* In-player episode/queue list overlay (HBO Max-style) - a bottom sheet over the still-
@@ -21,6 +22,12 @@ const ACCENT_COLOR = "#e5a00d";
 const EPISODE_LIST_CLASS = "streaming-player-episode-list";
 const CHAPTER_LIST_CLASS = "streaming-player-chapter-list";
 const SCROLL_CLASS = "streaming-player-episode-scroll";
+/* The chapter list's left/right scroll-arrow buttons (buildQueueScrollArrow) - a D-pad/
+   gamepad user already has Left/Right for this, and a click target is a dead end for
+   them the same way the various "X" close buttons are (see shared.js's own
+   OVERLAY_CLOSE_BTN_CLASS rule). Hidden rather than removed outright: mouse/touch users
+   (and anyone testing on desktop web with a real pointer) still get them. */
+const QUEUE_ARROW_CLASS = "streaming-player-queue-arrow";
 const SPINNER_STYLE_ID = "streaming-player-episode-spinner-style";
 /* Approximates one real row of buildEpisodeCard's cards (135px thumb + title + subtitle +
    summary + the 8px flex gaps between them) so the loading spinner's placeholder doesn't
@@ -49,6 +56,18 @@ function ensureScrollStyle() {
     style.textContent = `
         .${SCROLL_CLASS} { scrollbar-width: none; -ms-overflow-style: none; }
         .${SCROLL_CLASS}::-webkit-scrollbar { display: none; width: 0; height: 0; }
+        /* See QUEUE_ARROW_CLASS's own comment above and shared.js's OVERLAY_CLOSE_BTN_CLASS
+           rule for why two gates: [data-platform="xbox"] (core/platform.js) is the UWP
+           shell's own script-injected marker, reliable on real Xbox hardware regardless of
+           the page's own input-mode heuristics; [data-input-mode="keyboard"] covers Fire TV
+           and any keyboard/gamepad-driven desktop-web session, which has no such marker.
+           !important because buildQueueScrollArrow sets display:"flex" as an inline style
+           directly on the button - an inline style always wins over any stylesheet
+           selector here regardless of specificity. */
+        html[data-platform="xbox"] .${QUEUE_ARROW_CLASS},
+        html[data-input-mode="keyboard"] .${QUEUE_ARROW_CLASS} {
+            display: none !important;
+        }
     `;
     document.head.appendChild(style);
 }
@@ -62,10 +81,10 @@ function ensureScrollStyle() {
    somewhere left to scroll (not hover-revealed like the main page's rows) - this app has
    no reliable hover input on touch/remote targets yet (see this repo's CLAUDE.md
    "Platform work not yet started"). */
-function buildQueueScrollArrow(direction, scroller) {
+function buildQueueScrollArrow(direction, scroller, rowScroll) {
     const btn = document.createElement("button");
     btn.type = "button";
-    btn.classList.add(PLAYER_FOCUSABLE_CLASS);
+    btn.classList.add(PLAYER_FOCUSABLE_CLASS, QUEUE_ARROW_CLASS);
     btn.setAttribute("aria-label", direction === "left" ? "Scroll left" : "Scroll right");
     btn.innerHTML =
         direction === "left" ?
@@ -95,44 +114,44 @@ function buildQueueScrollArrow(direction, scroller) {
     btn.addEventListener("click", (e) => {
         e.stopPropagation();
         const amount = scroller.clientWidth * 0.9 * (direction === "left" ? -1 : 1);
-        scroller.scrollBy({ left: amount, behavior: "smooth" });
+        rowScroll.scrollBy(amount, { animate: true });
     });
     return btn;
 }
 
 /* Deferred to the next frame for the same WebView2 focus-timing reason as focus-nav.js's
-   own focusAfterPaint. Focusing with preventScroll:true (rather than a bare .focus(), the
-   way wireLinearNav's own internal focusItem does it) is deliberate here: the browser's own
-   default auto-scroll-into-view-on-focus can land *after* this script's own explicit
-   scrollIntoView call below rather than before it (that default scroll isn't necessarily
-   synchronous with the focus() call - it can apply during the render update that follows),
-   which was silently overwriting the centering this function exists to guarantee. Disabling
-   it outright leaves the explicit scrollIntoView call as the only thing that ever moves the
-   scroll position, so there's nothing left to race against. */
+   own focusAfterPaint. Centering itself now happens via the panel's own focusin listener
+   (see openEpisodeListOverlay/openChapterListOverlay below), not a scrollIntoView call
+   here - preventScroll:true still guards against the browser's default auto-scroll-into-
+   view-on-focus, in case some ancestor is ever scrollable again. */
 function focusCardCentered(el) {
     if (!el) return;
-    requestAnimationFrame(() => {
-        el.focus({ preventScroll: true });
-        el.scrollIntoView({ inline: "center", block: "nearest" });
-    });
+    requestAnimationFrame(() => el.focus({ preventScroll: true }));
 }
 
-function wireQueueArrowVisibility(scroller, leftArrow, rightArrow) {
-    const update = () => {
-        const maxScroll = scroller.scrollWidth - scroller.clientWidth - 1;
-        const showLeft = scroller.scrollLeft > 0;
-        const showRight = maxScroll > 0 && scroller.scrollLeft < maxScroll;
+/* Mirrors rows.js's wireArrowVisibility (card/row-scroll.js's rowScroll.onChange), not the
+   native scroll-event polling this used before the queue row switched to a transform-driven
+   track - see createRowScroll's own header comment for why a native-scrolling container had
+   to go in the first place. */
+function wireQueueArrowVisibility(rowScroll, leftArrow, rightArrow) {
+    const update = (offset, max) => {
+        const showLeft = offset > 0;
+        const showRight = max > 0 && offset < max;
         leftArrow.style.opacity = showLeft ? "1" : "0";
         leftArrow.style.pointerEvents = showLeft ? "auto" : "none";
         rightArrow.style.opacity = showRight ? "1" : "0";
         rightArrow.style.pointerEvents = showRight ? "auto" : "none";
     };
-    scroller.addEventListener("scroll", update, { passive: true });
-    requestAnimationFrame(update);
-    /* Card images loading in can still be nudging scrollWidth a moment after the initial
-       layout pass - same "check again shortly after" reasoning rows.js's own
-       wireArrowVisibility follows. */
-    setTimeout(update, 300);
+    rowScroll.onChange(update);
+    /* No window resize listener here (unlike rows.js's own wireArrowVisibility) - this
+       overlay's panel/scroll/track get torn down and rebuilt fresh on every open, so a
+       listener added here would otherwise accumulate one per open with nothing in
+       closeChapterListOverlay to remove it again. Card images loading in can still be
+       nudging track.scrollWidth a moment after the initial layout pass though, so this
+       still checks again shortly after, same reasoning rows.js's own wireArrowVisibility
+       follows for that part. */
+    requestAnimationFrame(() => rowScroll.refresh());
+    setTimeout(() => rowScroll.refresh(), 300);
 }
 
 export async function openEpisodeListOverlay(controller) {
@@ -187,8 +206,15 @@ export async function openEpisodeListOverlay(controller) {
     const scroll = document.createElement("div");
     scroll.className = SCROLL_CLASS;
     /* No scroll-arrow reservation here (unlike openChapterListOverlay's own 54px) - the
-       episode overlay has no arrows to leave room for. */
-    Object.assign(scroll.style, { display: "flex", gap: "14px", overflowX: "auto", overflowY: "hidden", padding: "4px 24px" });
+       episode overlay has no arrows to leave room for. This is now the clipping viewport
+       (like rows-poster.css's .row-scroller), not itself a native scroll container - see
+       row-scroll.js's own header comment for why: Xbox WebView2's built-in gamepad-to-
+       scroll handling hijacks any native overflow:auto container the thumbstick happens
+       to be over, fighting this overlay's own D-pad centering. */
+    Object.assign(scroll.style, { overflow: "hidden", padding: "4px 24px" });
+    const track = document.createElement("div");
+    Object.assign(track.style, { display: "flex", gap: "14px" });
+    scroll.appendChild(track);
     ensureSpinnerStyle();
     const loading = document.createElement("div");
     Object.assign(loading.style, {
@@ -209,7 +235,7 @@ export async function openEpisodeListOverlay(controller) {
         animation: "streaming-episode-spin 0.8s linear infinite",
     });
     loading.appendChild(spinner);
-    scroll.appendChild(loading);
+    track.appendChild(loading);
 
     const scrollWrap = document.createElement("div");
     /* flexShrink:0 keeps the card row at its natural height even once the panel itself
@@ -223,6 +249,17 @@ export async function openEpisodeListOverlay(controller) {
     document.body.appendChild(panel);
     controller._episodeListEl = { scrim, panel };
     panel.classList.add(EPISODE_LIST_CLASS);
+    const rowScroll = createRowScroll(scroll, track);
+    /* Centers whatever gains real DOM focus, including wireLinearNav's own focus() calls
+       during ordinary Left/Right nav below - that shared helper's own plain scrollIntoView
+       has nothing to act on any more now that `scroll` is a transform-driven track instead
+       of a native scroll container (see the comment above). Scoped to `track` so focus
+       landing on something else inside `panel` (nothing else is focusable here today, but
+       openChapterListOverlay below shares this same pattern and does have scroll arrows)
+       doesn't get run through row-scroll's card-centering math. */
+    panel.addEventListener("focusin", (e) => {
+        if (track.contains(e.target)) rowScroll.scrollIntoView(e.target, { inline: "center", animate: true });
+    });
     /* Horizontal: these are scrolling card rows, so left/right is the axis that matches what is on
        screen. See the audio overlay for why the root is `document`. */
     const epNav = wireLinearNav(document, `.${EPISODE_LIST_CLASS} button`, {
@@ -249,12 +286,12 @@ export async function openEpisodeListOverlay(controller) {
        flight - bail rather than paint into a panel that's no longer the active one. */
     if (controller._episodeListEl?.panel !== panel) return;
 
-    scroll.innerHTML = "";
+    track.innerHTML = "";
     if (!items.length) {
         const empty = document.createElement("div");
         empty.textContent = "Couldn't load the queue.";
         Object.assign(empty.style, { color: "rgba(255,255,255,0.6)", fontSize: "13px" });
-        scroll.appendChild(empty);
+        track.appendChild(empty);
         return;
     }
 
@@ -271,7 +308,7 @@ export async function openEpisodeListOverlay(controller) {
             closeEpisodeListOverlay(controller);
             playQueuedTitle(controller, queueRatingKeys, index);
         });
-        scroll.appendChild(card);
+        track.appendChild(card);
         if (formatted.current) currentCard = card;
     });
 
@@ -280,7 +317,7 @@ export async function openEpisodeListOverlay(controller) {
        currently-playing card specifically (falling back to the first card if for some
        reason there isn't one) rather than epNav.focusFirst()'s always-index-0 behavior, so
        opening the list drops the viewer right where they already are in the queue. */
-    focusCardCentered(currentCard || scroll.querySelector("button"));
+    focusCardCentered(currentCard || track.querySelector("button"));
 }
 
 export function closeEpisodeListOverlay(controller) {
@@ -347,12 +384,18 @@ export function openChapterListOverlay(controller) {
     ensureScrollStyle();
     const scroll = document.createElement("div");
     scroll.className = SCROLL_CLASS;
-    Object.assign(scroll.style, { display: "flex", gap: "14px", overflowX: "auto", overflowY: "hidden", padding: "4px 54px" });
+    /* Clipping viewport, not itself a native scroll container - see openEpisodeListOverlay's
+       own comment on the same change for why (Xbox WebView2's gamepad-to-scroll hijack). */
+    Object.assign(scroll.style, { overflow: "hidden", padding: "4px 54px" });
+    const track = document.createElement("div");
+    Object.assign(track.style, { display: "flex", gap: "14px" });
+    scroll.appendChild(track);
 
     const scrollWrap = document.createElement("div");
     Object.assign(scrollWrap.style, { position: "relative", flexShrink: "0" });
-    const leftArrow = buildQueueScrollArrow("left", scroll);
-    const rightArrow = buildQueueScrollArrow("right", scroll);
+    const rowScroll = createRowScroll(scroll, track);
+    const leftArrow = buildQueueScrollArrow("left", scroll, rowScroll);
+    const rightArrow = buildQueueScrollArrow("right", scroll, rowScroll);
     scrollWrap.appendChild(leftArrow);
     scrollWrap.appendChild(scroll);
     scrollWrap.appendChild(rightArrow);
@@ -374,7 +417,7 @@ export function openChapterListOverlay(controller) {
             const el = media(controller);
             if (el) el.currentTime = (chapter.startTimeOffset ?? 0) / 1000;
         });
-        scroll.appendChild(card);
+        track.appendChild(card);
         if (isCurrent) currentCard = card;
     });
 
@@ -382,6 +425,13 @@ export function openChapterListOverlay(controller) {
     document.body.appendChild(panel);
     controller._chapterListEl = { scrim, panel };
     panel.classList.add(CHAPTER_LIST_CLASS);
+    /* See openEpisodeListOverlay's own identical listener for why - scoped to `track` so
+       focus landing on the leftArrow/rightArrow buttons (also real <button>s inside `panel`,
+       and also reachable by this list's Left/Right nav) doesn't get run through row-scroll's
+       card-centering math; they aren't part of the scrolling content themselves. */
+    panel.addEventListener("focusin", (e) => {
+        if (track.contains(e.target)) rowScroll.scrollIntoView(e.target, { inline: "center", animate: true });
+    });
     const chNav = wireLinearNav(document, `.${CHAPTER_LIST_CLASS} button`, {
         orientation: "horizontal",
         onBack: () => closeChapterListOverlay(controller),
@@ -397,8 +447,8 @@ export function openChapterListOverlay(controller) {
        than chNav.focusFirst()'s always-index-0 behavior - all the cards already exist
        synchronously by this point (unlike the episode overlay's async fetch), so there's
        no need for that helper's own two-call dance. */
-    focusCardCentered(currentCard || scroll.querySelector("button"));
-    wireQueueArrowVisibility(scroll, leftArrow, rightArrow);
+    focusCardCentered(currentCard || track.querySelector("button"));
+    wireQueueArrowVisibility(rowScroll, leftArrow, rightArrow);
 }
 
 export function closeChapterListOverlay(controller) {

@@ -39,7 +39,7 @@ console.log("android-deploy: launching app...");
 run("adb", [
   "-s", address,
   "shell", "am", "start",
-  "-n", "com.mpotrykus.streaming/.MainActivity",
+  "-n", "com.mpotrykus.prism/.MainActivity",
 ]);
 
 console.log(`android-deploy: done - installed and launched on ${address}.`);

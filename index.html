@@ -11,6 +11,20 @@
   plex-netflix-card { display: block; }
   html { scrollbar-width: none; }
   ::-webkit-scrollbar { display: none; width: 0; height: 0; }
+
+  /* Registered here, not inside plex-netflix-card's shadow-scoped CSS -
+     @font-face inside that shadow root never registers with the browser's
+     font engine (confirmed: no network request for the file, empty
+     document.fonts), silently falling back to sans-serif. Font lookup by
+     name for shadow-tree elements still consults this document-level
+     registration though, so .rank-number's font-family: "Anton" in
+     rows-poster.css picks this up fine. */
+  @font-face {
+    font-family: "Anton";
+    font-style: normal;
+    font-weight: 400;
+    src: url("./assets/fonts/Anton-Regular.ttf") format("truetype");
+  }
 </style>
 
 <streaming-plex-signin-modal></streaming-plex-signin-modal>

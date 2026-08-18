@@ -41,7 +41,23 @@
   white-space: nowrap;
   transition: color 0.15s ease;
 }
-.nav-item:hover { color: #fff; }
+.nav-item:hover, .nav-item:focus-visible { color: #fff; }
+/* Controller-focus highlight bar, independent of the icon/color hover styling above -
+   sized to the sidenav's own expanded flex-basis (130px) rather than 100% so it still
+   reaches the full width once expanded, not just nav-item's own intrinsic content width;
+   .sidenav's overflow:hidden clips it down to the visible rail width while collapsed. */
+.nav-item::before {
+  content: "";
+  position: absolute;
+  top: -4px;
+  bottom: -4px;
+  left: 0;
+  width: 130px;
+  z-index: -1;
+  background: transparent;
+  transition: background-color 0.15s ease;
+}
+.nav-item:focus-visible::before { background: rgba(255,255,255,0.08); }
 .nav-item.active { color: #e5a00d; }
 .nav-icon {
   width: 30px;
@@ -53,7 +69,7 @@
   border-radius: 10px;
   transition: background-color 0.15s ease;
 }
-.nav-item:hover .nav-icon { background: rgba(255,255,255,0.08); }
+.nav-item:hover .nav-icon, .nav-item:focus-visible .nav-icon { background: rgba(255,255,255,0.08); }
 .nav-item.active .nav-icon { background: rgba(229,160,13,0.18); }
 .nav-item svg { width: 20px; height: 20px; flex: none; }
 .nav-label {

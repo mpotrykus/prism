@@ -156,11 +156,12 @@ input.nav-text-highlight {
 }
 .tab-btn {
   border: none; background: transparent; color: rgba(255,255,255,0.55);
-  font-size: 13px; font-weight: 700; padding: 12px 2px; white-space: nowrap;
+  font-size: 13px; font-weight: 700; padding: 12px 8px; white-space: nowrap;
   cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px;
 }
 .tab-btn:hover { color: #fff; }
 .tab-btn.active { color: #fff; border-bottom-color: #e5a00d; }
+.tab-btn:focus-visible { outline: none; background: rgba(255,255,255,0.08); border-radius: 6px 6px 0 0; }
 .tab-panel { display: none; }
 .tab-panel.active { display: block; }
 @media (max-width: 700px) {

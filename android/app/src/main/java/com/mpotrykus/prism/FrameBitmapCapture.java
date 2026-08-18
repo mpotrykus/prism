@@ -1,4 +1,4 @@
-package com.mpotrykus.streaming;
+package com.mpotrykus.prism;
 
 import android.graphics.Bitmap;
 import android.os.Handler;

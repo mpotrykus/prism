@@ -1,4 +1,4 @@
-package com.mpotrykus.streaming;
+package com.mpotrykus.prism;
 
 /* Native code only ever sees {id, label, selected} - plex-player.js's play() already
    reduced the raw Plex Stream objects down to this shape (see NativePlayerPlugin.play's

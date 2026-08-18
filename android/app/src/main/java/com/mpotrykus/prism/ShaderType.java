@@ -1,4 +1,4 @@
-package com.mpotrykus.streaming;
+package com.mpotrykus.prism;
 
 /* Which GLSL algorithm ShaderUpscaleShaderProgram compiles - see that class's header comment for
    why Anime4K's edge-gated shader and the CAS-inspired live-action shader are genuinely different

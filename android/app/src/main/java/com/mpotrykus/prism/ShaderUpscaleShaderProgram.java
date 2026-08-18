@@ -1,4 +1,4 @@
-package com.mpotrykus.streaming;
+package com.mpotrykus.prism;
 
 import android.opengl.GLES20;
 import androidx.media3.common.VideoFrameProcessingException;

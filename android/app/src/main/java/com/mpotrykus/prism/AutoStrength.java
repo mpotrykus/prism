@@ -1,4 +1,4 @@
-package com.mpotrykus.streaming;
+package com.mpotrykus.prism;
 
 /* Auto-strength math for Shader Upscaling/Color Boost - Java port of shaders.js's
    autoUpscaleStrength/autoColorBoostStrength on the web leg, kept as the exact same

@@ -2,6 +2,6 @@
 <resources>
     <string name="app_name">Prism</string>
     <string name="title_activity_main">Prism</string>
-    <string name="package_name">com.mpotrykus.streaming</string>
-    <string name="custom_url_scheme">com.mpotrykus.streaming</string>
+    <string name="package_name">com.mpotrykus.prism</string>
+    <string name="custom_url_scheme">com.mpotrykus.prism</string>
 </resources>

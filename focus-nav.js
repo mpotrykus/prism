@@ -227,7 +227,17 @@ export function wireLinearNav(root, selector, { orientation = "vertical", onActi
      root.activeElement so the two focus styles are interchangeable to the rest of this
      function. */
   function currentActive() {
-    return root.activeElement || virtualActive;
+    /* root.activeElement !== document.body, not a bare truthiness check - on a ShadowRoot,
+       "nothing focused inside me" reads back as null, but on `document` itself (this
+       overlay's root - see wireLinearNav's call site comment) it reads back as <body>,
+       which is truthy. Falling through to virtualActive needs "nothing real is focused",
+       and for `document` that means body, not null - a bare `root.activeElement ||
+       virtualActive` never fell through once cur.blur() (the text-entry "back" path below)
+       sent focus to body, leaving currentActive() stuck returning <body> forever - not in
+       any nav list, so the handler's `!list.includes(cur)` bailed out on every command with
+       no way to recover short of reloading. */
+    const active = root.activeElement;
+    return active && active !== document.body ? active : virtualActive;
   }
   /* A stray highlight can outlive its own move (e.g. a mouse/touch click landing real
      focus somewhere else entirely) - clearing it whenever real focus lands on a different
@@ -260,8 +270,14 @@ export function wireLinearNav(root, selector, { orientation = "vertical", onActi
     );
   }
 
+  /* closest(), not a bare el.dataset read - lets a whole container (e.g.
+     chrome-subtitles.js's two side-by-side Audio/Subtitles columns) carry one
+     data-nav-group for every item inside it, including ones added later by a re-render,
+     instead of every individual item needing the attribute set on itself. Still finds the
+     attribute on `el` itself first when it's set there directly (chrome-menu-effects.js's
+     mode buttons, title-info.js's grouped cards), so existing per-element usage is unchanged. */
   function groupOf(el) {
-    return el?.dataset?.navGroup || null;
+    return el?.closest?.("[data-nav-group]")?.dataset.navGroup || null;
   }
 
   /* Left/Right on a focused <input type=range> (e.g. chrome-menu-effects.js's Shader
@@ -287,22 +303,29 @@ export function wireLinearNav(root, selector, { orientation = "vertical", onActi
   /* Steps past every remaining member of the active element's own group in one go before
      applying the final +/-1 - so a group reads as a single stop for Up/Down (or Left/Right
      in a horizontal list) regardless of which of its members currently has focus. */
-  function centerX(el) {
+  /* The axis groups are laid out along depends on orientation: a vertical list's groups
+     are horizontally-adjacent rows (title-info.js's wrapping poster grid, chrome-menu-
+     effects.js's mode buttons) so matching is by X; a horizontal list's groups are
+     vertically-stacked columns (chrome-subtitles.js's side-by-side Audio/Subtitles panels)
+     so matching is by Y. Using the wrong axis would match by the axis that's constant
+     within a group instead of the one that actually varies member-to-member. */
+  function crossAxisCenter(el) {
     const r = el.getBoundingClientRect();
-    return r.left + r.width / 2;
+    return orientation === "vertical" ? r.left + r.width / 2 : r.top + r.height / 2;
   }
 
   /* When crossing into a *different* group of more than one member (e.g. title-info.js
      dynamically row-grouping a wrapping poster grid so Left/Right stays within a visual
      row - see assignRowNavGroups there), landing on that group's first/last member by
      index alone puts focus wherever the group happens to start in DOM order, with no
-     relationship to the column just left. Picking the member whose horizontal center is
-     closest to the departing element's is what makes Up/Down actually track "the item
-     roughly above/below this one" for a grid, the same positional-matching idea
-     nav.js's closestByPosition uses for the home screen's poster rows. */
-  function closestByCenterX(elements, referenceEl) {
-    const refX = centerX(referenceEl);
-    return elements.reduce((best, el) => (Math.abs(centerX(el) - refX) < Math.abs(centerX(best) - refX) ? el : best));
+     relationship to the item just left. Picking the member whose position on the cross
+     axis (see crossAxisCenter above) is closest to the departing element's is what makes
+     the across-group command actually track "the item roughly here in the next
+     group" instead, the same positional-matching idea nav.js's closestByPosition uses for
+     the home screen's poster rows. */
+  function closestOnCrossAxis(elements, referenceEl) {
+    const ref = crossAxisCenter(referenceEl);
+    return elements.reduce((best, el) => (Math.abs(crossAxisCenter(el) - ref) < Math.abs(crossAxisCenter(best) - ref) ? el : best));
   }
 
   function moveAcrossGroup(delta) {
@@ -327,7 +350,7 @@ export function wireLinearNav(root, selector, { orientation = "vertical", onActi
     if (targetGroup && targetGroup !== group) {
       const groupMembers = list.filter((el) => groupOf(el) === targetGroup);
       if (groupMembers.length > 1) {
-        focusItem(closestByCenterX(groupMembers, activeEl));
+        focusItem(closestOnCrossAxis(groupMembers, activeEl));
         return;
       }
     }

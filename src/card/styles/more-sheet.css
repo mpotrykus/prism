@@ -51,7 +51,7 @@
   text-align: left;
   cursor: pointer;
 }
-.more-sheet-item:hover, .more-sheet-item:active { background: rgba(255,255,255,0.08); }
+.more-sheet-item:hover, .more-sheet-item:active, .more-sheet-item:focus-visible { background: rgba(255,255,255,0.08); }
 .more-sheet-item.active { color: #e5a00d; }
 .more-sheet-item-icon { width: 22px; height: 22px; flex: none; display: flex; align-items: center; justify-content: center; }
 .more-sheet-item-icon svg { width: 20px; height: 20px; }
@@ -68,4 +68,4 @@
   font-weight: 600;
   cursor: pointer;
 }
-.more-sheet-cancel:hover { color: #fff; }
+.more-sheet-cancel:hover, .more-sheet-cancel:focus-visible { color: #fff; }

@@ -1,4 +1,4 @@
-package com.mpotrykus.streaming;
+package com.mpotrykus.prism;
 
 /* Native code only ever sees {title, startTimeOffsetMs, thumbUrl} - Plex's own Chapter
    field names are interpreted once, in plex-player.js/native-bridge.js, and never

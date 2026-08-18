@@ -132,6 +132,7 @@
   background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.12); color: #fff;
   border-radius: 8px; padding: 8px 12px; font-size: 13px; font: inherit; cursor: pointer;
 }
+.title-info-season-select:hover, .title-info-season-select:focus-visible { background: rgba(255,255,255,0.16); }
 .title-info-season-options {
   display: none; position: absolute; top: calc(100% + 4px); left: 0; z-index: 5;
   min-width: 180px; max-height: 260px; overflow-y: auto;
@@ -140,10 +141,14 @@
 }
 .title-info-season-options.open { display: block; }
 .title-info-season-option { padding: 8px 10px; border-radius: 6px; font-size: 13px; color: #fff; cursor: pointer; }
-.title-info-season-option:hover { background: rgba(255,255,255,0.08); }
+.title-info-season-option:hover, .title-info-season-option:focus-visible { background: rgba(255,255,255,0.08); }
 .title-info-season-option.selected { background: #3a3a40; }
 .title-info-episode { display: flex; gap: 12px; padding: 10px 0; border-bottom: 1px solid rgba(255,255,255,0.06); cursor: pointer; }
 .title-info-episode.current { background: rgba(229,160,13,0.08); border-radius: 8px; padding-left: 8px; margin-left: -8px; padding-right: 8px; margin-right: -8px; }
+.title-info-episode:hover:not(.current), .title-info-episode:focus-visible:not(.current) {
+  background: rgba(255,255,255,0.05); border-radius: 8px;
+  padding-left: 8px; margin-left: -8px; padding-right: 8px; margin-right: -8px;
+}
 .title-info-episode-thumb {
   position: relative; width: 140px; height: 79px; border-radius: 6px; flex: none;
   background: rgba(255,255,255,0.05); overflow: hidden;
@@ -176,6 +181,7 @@
 .title-info-episode-summary { font-size: 12.5px; color: rgba(255,255,255,0.6); line-height: 1.4; }
 .title-info-loading { padding: 20px 0; color: rgba(255,255,255,0.5); font-size: 13px; }
 .title-info-similar { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 12px; }
-.title-info-similar-item { cursor: pointer; }
-.title-info-similar-item img { width: 100%; aspect-ratio: 2/3; object-fit: cover; border-radius: 6px; background: rgba(255,255,255,0.05); display: block; }
+.title-info-similar-item { cursor: pointer; border-radius: 6px; }
+.title-info-similar-item img { width: 100%; aspect-ratio: 2/3; object-fit: cover; border-radius: 6px; background: rgba(255,255,255,0.05); display: block; transition: transform 0.18s ease; }
+.title-info-similar-item:hover img { transform: scale(1.06); }
 .title-info-similar-item .t { font-size: 11.5px; margin-top: 6px; color: rgba(255,255,255,0.75); }

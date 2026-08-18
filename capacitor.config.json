@@ -1,5 +1,5 @@
 {
-  "appId": "com.mpotrykus.streaming",
+  "appId": "com.mpotrykus.prism",
   "appName": "Streaming",
   "webDir": "dist",
   "plugins": {

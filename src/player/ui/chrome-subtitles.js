@@ -8,7 +8,7 @@ import { trySwitchAudioTrackLocal } from "../web-fallback.js";
 import { setNativeSubtitle, setNativeSubtitleOffset, notifyNativeSubtitleApplied } from "../native-bridge.js";
 import { hideControls, showControls } from "./chrome-controls.js";
 import { closeInlineMenu, renderPickerList } from "./chrome-menu.js";
-import { SHEET_GRADIENT, MENU_SCROLL_CLASS, OVERLAY_CLOSE_BTN_CLASS, PLAYER_FOCUSABLE_CLASS } from "./shared.js";
+import { SHEET_GRADIENT, MENU_SCROLL_CLASS, OVERLAY_CLOSE_BTN_CLASS, PLAYER_FOCUSABLE_CLASS, PLAYER_MENU_ROW_CLASS } from "./shared.js";
 
 /* Audio Track/Subtitles picker (its own right-anchored overlay, opened from the More menu's
    "Audio & Subtitles" row - see chrome-menu.js's renderMainList) plus everything about
@@ -123,10 +123,17 @@ export function openAudioSubtitlesOverlay(controller) {
     Object.assign(grid.style, { display: "flex", gap: "64px", marginTop: "12px", overflow: "hidden" });
 
     const audioColumn = buildAudioSubtitlesColumn("Audio");
+    /* One data-nav-group per column (read by focus-nav.js's groupOf via closest(), not set
+       on each individual row) - so Left/Right jumps between the Audio and Subtitles columns
+       instead of Up/Down treating both columns as one flat vertical list, matching how the
+       two actually sit side by side. Covers rows added later by a re-render (renderAudioSection's
+       own re-render on select, subtitle search results) for free since it's on the container. */
+    audioColumn.el.dataset.navGroup = "audio-subtitles-audio";
     renderAudioSection(controller, audioColumn.body, { setValue: () => {}, collapse: () => {} });
     grid.appendChild(audioColumn.el);
 
     const subtitlesColumn = buildAudioSubtitlesColumn("Subtitles");
+    subtitlesColumn.el.dataset.navGroup = "audio-subtitles-subtitles";
     renderSubtitleSection(controller, subtitlesColumn.body, { collapse: () => closeAudioSubtitlesOverlay(controller) });
     grid.appendChild(subtitlesColumn.el);
 
@@ -140,8 +147,8 @@ export function openAudioSubtitlesOverlay(controller) {
        wireLinearNav reads root.activeElement, which only exists on Document/ShadowRoot - a plain
        <div> reports undefined and the handler would never consider itself in scope. focusFirst() is
        required: the handler ignores every command until focus is already inside its own list. */
-    const nav = wireLinearNav(document, `.${AUDIO_SUBTITLES_CLASS} button:not(.${OVERLAY_CLOSE_BTN_CLASS})`, {
-        orientation: "vertical",
+    const nav = wireLinearNav(document, `.${AUDIO_SUBTITLES_CLASS} input, .${AUDIO_SUBTITLES_CLASS} button:not(.${OVERLAY_CLOSE_BTN_CLASS})`, {
+        orientation: "horizontal",
         loop: true,
         onBack: () => closeAudioSubtitlesOverlay(controller),
     });
@@ -228,6 +235,7 @@ function buildAudioSubtitlesColumn(title) {
 function renderSubtitleSection(controller, content, { collapse }) {
     const input = document.createElement("input");
     input.type = "text";
+    input.classList.add(PLAYER_FOCUSABLE_CLASS);
     input.placeholder = "Search subtitles…";
     input.value = controller._session?.title || "";
     Object.assign(input.style, {
@@ -298,7 +306,7 @@ function renderSubtitleSection(controller, content, { collapse }) {
             results.forEach((r) => {
                 const row = document.createElement("button");
                 row.type = "button";
-                row.classList.add(PLAYER_FOCUSABLE_CLASS);
+                row.classList.add(PLAYER_FOCUSABLE_CLASS, PLAYER_MENU_ROW_CLASS);
                 const isApplied = subtitleStore.isAppliedResult(appliedRatingKey, r);
                 row.textContent = `${r.label} (${r.languageCode})${isApplied ? "  ✓" : ""}`;
                 Object.assign(row.style, {
