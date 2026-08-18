@@ -61,7 +61,7 @@
   .poster .caption { padding: 88px 8px 8px; }
   .poster.landscape { flex-basis: 224px; }
   .poster.landscape .caption { padding: 42px 8px 8px; }
-  .rank-number { font-size: 182px; letter-spacing: -10px; left: -4px; }
+  .rank-number { font-size: 160px; letter-spacing: -4px; left: -4px; }
   .rank-item .poster { margin-left: 63px; }
   .search-page-group { padding: 0 16px; }
   .search-page-back { padding: 0 16px 20px; }

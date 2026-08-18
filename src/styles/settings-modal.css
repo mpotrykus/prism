@@ -135,7 +135,6 @@ input.nav-text-highlight {
   display: flex; align-items: center; gap: 10px;
   background: rgba(255,255,255,0.05); border-radius: 8px; padding: 8px 10px;
 }
-.section-row input[type="checkbox"] { width: 16px; height: 16px; flex: none; }
 .section-row input[type="text"] { flex: 1; padding: 6px 10px; }
 .section-row .type-badge {
   flex: none; font-size: 10.5px; font-weight: 700; text-transform: uppercase;

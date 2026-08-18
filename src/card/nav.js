@@ -174,6 +174,14 @@ export function wireSearchToggle(card) {
     if (command !== "back") return false;
     if (!inMainApp() || card._currentView !== "search") return false;
     if (active === card._searchInput) {
+      /* Backspace and Escape both map to "back" (focus-nav.js's KEY_TO_COMMAND) - on real
+         Xbox hardware, selecting the on-screen keyboard's Backspace glyph and pressing A
+         fires a real Backspace keydown, which this handler was dismissing the keyboard for
+         instead of letting the input delete a character (same root cause as
+         wireLinearNav's own text-entry "back" handling in focus-nav.js). Only a genuine
+         Escape (real Esc, or gamepad B's synthetic Escape - never Backspace) should
+         dismiss here. */
+      if (e?.key === "Backspace") return false;
       dismissSearchKeyboard(card);
       return true;
     }

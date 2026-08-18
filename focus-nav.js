@@ -369,7 +369,7 @@ export function wireLinearNav(root, selector, { orientation = "vertical", onActi
     return true;
   }
 
-  const unregister = registerNavHandler((command) => {
+  const unregister = registerNavHandler((command, e) => {
     const list = items();
     const cur = currentActive();
     if (!list.includes(cur)) return false;
@@ -381,6 +381,17 @@ export function wireLinearNav(root, selector, { orientation = "vertical", onActi
        typing one step at a time instead of also closing the whole modal/overlay. */
     const editing = isTextEntry(cur) && cur === root.activeElement;
     if (command === "back") {
+      /* Backspace and Escape both map to "back" (KEY_TO_COMMAND) since a real keyboard's
+         Backspace is Fire TV/Android's back-equivalent - but while genuinely editing text,
+         Backspace instead means "delete the character behind the caret", confirmed on real
+         Xbox hardware: selecting the on-screen keyboard's Backspace glyph with the thumbstick
+         and pressing A fires a real Backspace keydown, and this handler was intercepting it
+         as "exit edit mode" before the input's own native deletion ever ran - preventDefault
+         killed the deletion, leaving no way to delete anything typed. Only a genuine Escape
+         (real Esc key, or the gamepad B button, which dispatches a synthetic Escape - see
+         COMMAND_TO_KEY - never Backspace) should exit edit mode; leaving Backspace unhandled
+         here lets it fall through to the input untouched. */
+      if (editing && e?.key === "Backspace") return false;
       if (editing) {
         cur.blur();
         setHighlight(cur);
@@ -422,7 +433,52 @@ export function wireLinearNav(root, selector, { orientation = "vertical", onActi
     return false;
   });
 
-  return { focusFirst, destroy: unregister };
+  /* Confirmed on real Xbox hardware: dismissing the on-screen keyboard with B is consumed
+     entirely by the platform before any keydown reaches this app (see the "back" branch
+     above and nav.js's own wireVirtualKeyboardDismiss, which hit the exact same thing for
+     the header search box) - the keyboard visually closes but the input this list gave real
+     focus to via "activate" never gets a page-level event telling it to blur, so `editing`
+     above stays true and every command silently no-ops until a *second* B press finally
+     produces a real Escape keydown. Two independent "the keyboard just closed" signals,
+     since neither is guaranteed to exist/fire on every build (see nav.js's own comment for
+     why): MainPage.xaml.cs's OnInputPaneHiding (forwarded as "xbox-keyboard-hiding", the one
+     confirmed reachable on real hardware) and the web-standard VirtualKeyboard API's
+     geometrychange (not confirmed to fire on this WebView2 build, kept for whatever
+     platform/version it does work on). Listened for here instead of duplicating this per
+     caller so every wireLinearNav-driven text input gets it for free - a no-op via
+     isTextEntry's own guard when nothing here is really focused. */
+  function exitEditIfFocused() {
+    const cur = root.activeElement;
+    if (isTextEntry(cur)) {
+      cur.blur();
+      setHighlight(cur);
+    }
+  }
+  document.addEventListener("xbox-keyboard-hiding", exitEditIfFocused);
+  let vkWasVisible = false;
+  function onVirtualKeyboardGeometryChange() {
+    const visible = navigator.virtualKeyboard.boundingRect.height > 0;
+    const justClosed = vkWasVisible && !visible;
+    vkWasVisible = visible;
+    if (justClosed) exitEditIfFocused();
+  }
+  if (navigator.virtualKeyboard) {
+    navigator.virtualKeyboard.addEventListener("geometrychange", onVirtualKeyboardGeometryChange);
+  }
+
+  return {
+    focusFirst,
+    /* Each overlay open calls wireLinearNav fresh (see e.g. openAudioSubtitlesOverlay) -
+       the two listeners above must come off again here, or every reopen would pile up one
+       more of each rather than replacing the last. */
+    destroy: () => {
+      unregister();
+      document.removeEventListener("xbox-keyboard-hiding", exitEditIfFocused);
+      if (navigator.virtualKeyboard) {
+        navigator.virtualKeyboard.removeEventListener("geometrychange", onVirtualKeyboardGeometryChange);
+      }
+    },
+  };
 }
 
 /* --- Gamepad bridge: translates raw pad state into the same synthetic KeyboardEvents a

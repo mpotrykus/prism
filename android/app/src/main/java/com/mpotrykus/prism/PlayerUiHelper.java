@@ -1449,24 +1449,55 @@ final class PlayerUiHelper {
         MenuSection speedSection = new MenuSection("Playback Speed");
         speedSection.icon = MenuIconView.Icon.SPEED;
         speedSection.getValue = () -> formatRate(activity.player != null ? activity.player.getPlaybackParameters().speed : 1f);
-        speedSection.render = (content, setValue, collapse) -> renderSpeedSection(activity, content, setValue, collapse);
+        speedSection.showChevron = true;
+        speedSection.onTap = () -> renderSpeedList(activity, list);
         sections.add(speedSection);
 
         MenuSection aspectSection = new MenuSection("Aspect");
         aspectSection.icon = MenuIconView.Icon.ASPECT;
         aspectSection.getValue = () -> aspectDisplayLabel(activity);
-        aspectSection.render = (content, setValue, collapse) -> renderAspectSection(activity, content, setValue, collapse);
+        aspectSection.showChevron = true;
+        aspectSection.onTap = () -> renderAspectList(activity, list);
         sections.add(aspectSection);
 
         MenuSection sleepSection = new MenuSection("Sleep Timer");
         sleepSection.icon = MenuIconView.Icon.SLEEP;
         sleepSection.getValue = () -> activity.sleepMinutes > 0 ? activity.sleepMinutes + "m" : null;
-        sleepSection.render = (content, setValue, collapse) -> renderSleepSection(activity, content, setValue, collapse);
+        sleepSection.showChevron = true;
+        sleepSection.onTap = () -> renderSleepList(activity, list);
         sections.add(sleepSection);
 
         for (MenuSection section : sections) {
             list.addView(buildAccordionSection(activity, density, section, state));
         }
+        clampMenuCardHeight(activity, list);
+    }
+
+    /* Own dedicated screen (matching Quality Cap/Version/Effects/Audio & Subtitles, and
+       the web/Xbox leg's own renderSpeedList - see chrome-menu-extras.js) rather than an
+       in-place accordion expand - reuses renderSpeedSection's picker-list body unchanged,
+       `collapse` just points back at Extras instead of collapsing a row in place. */
+    private static void renderSpeedList(PlayerActivity activity, LinearLayout list) {
+        float density = activity.getResources().getDisplayMetrics().density;
+        list.removeAllViews();
+        list.addView(makeBackRow(activity, density, () -> renderExtrasList(activity, list)));
+        renderSpeedSection(activity, list, (value) -> {}, () -> renderExtrasList(activity, list));
+        clampMenuCardHeight(activity, list);
+    }
+
+    private static void renderAspectList(PlayerActivity activity, LinearLayout list) {
+        float density = activity.getResources().getDisplayMetrics().density;
+        list.removeAllViews();
+        list.addView(makeBackRow(activity, density, () -> renderExtrasList(activity, list)));
+        renderAspectSection(activity, list, (value) -> {}, () -> renderExtrasList(activity, list));
+        clampMenuCardHeight(activity, list);
+    }
+
+    private static void renderSleepList(PlayerActivity activity, LinearLayout list) {
+        float density = activity.getResources().getDisplayMetrics().density;
+        list.removeAllViews();
+        list.addView(makeBackRow(activity, density, () -> renderExtrasList(activity, list)));
+        renderSleepSection(activity, list, (value) -> {}, () -> renderExtrasList(activity, list));
         clampMenuCardHeight(activity, list);
     }
 

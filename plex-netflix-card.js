@@ -375,7 +375,13 @@ class PlexNetflixCard extends HTMLElement {
       else if (this._profileOverlay.classList.contains("open")) this._closeProfileOverlay();
       else if (this._moreOverlay.classList.contains("open")) this._closeMoreSheet();
       else if (settingsModal?.isOpen()) settingsModal.close();
-      else App.exitApp();
+      else if (this._currentView === "search") {
+        this._clearSearchInput();
+        this._exitSearch();
+        this._searchWrap.classList.remove("expanded");
+        this._searchInput.blur();
+        restoreFocusAfterSearch(this);
+      } else App.exitApp();
     });
 
     this._wireHomeNav();

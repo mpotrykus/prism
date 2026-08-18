@@ -400,7 +400,10 @@ class StreamingSettingsModal extends HTMLElement {
       .map(
         (s, i) => `
       <div class="section-row" data-index="${i}">
-        <input type="checkbox" class="s-enabled" data-nav-group="section-row-${i}" ${s.enabled !== false ? "checked" : ""} />
+        <label class="switch">
+          <input type="checkbox" class="s-enabled" data-nav-group="section-row-${i}" ${s.enabled !== false ? "checked" : ""} />
+          <span class="switch-track"></span>
+        </label>
         <input type="text" class="s-label" data-nav-group="section-row-${i}" value="${this._escape(s.label)}" />
         <span class="type-badge">${s.type === 1 ? "Movies" : "TV"}</span>
       </div>`
