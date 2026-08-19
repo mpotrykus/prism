@@ -26,6 +26,14 @@ void main() {
   float edge = clamp(sqrt(gx * gx + gy * gy), 0.0, 1.0);
   vec3 blurredNeighborhood = (n + s + w + e) * 0.25;
   vec3 outColor = center + (center - blurredNeighborhood) * uSharpenStrength * edge;
+  /* Clamp to the local 4-neighbor min/max before the [0,1] clamp - same anti-halo
+     technique as sharpen-cas.frag.glsl. Without this, the unsharp-mask term above
+     overshoots past the neighborhood's actual value range right at high-contrast
+     edges (exactly what anime lineart is), producing a bright/dark halo fringe
+     next to every line instead of a clean sharpened edge. */
+  vec3 minRgb = min(center, min(min(n, s), min(w, e)));
+  vec3 maxRgb = max(center, max(max(n, s), max(w, e)));
+  outColor = clamp(outColor, minRgb, maxRgb);
   outColor = clamp(outColor, 0.0, 1.0);
   /* Shadow protection - (x-0.5)*contrastBoost+0.5 is a linear stretch pivoted at
      mid-gray, and for any contrastBoost > 1 that pushes near-black values negative,
