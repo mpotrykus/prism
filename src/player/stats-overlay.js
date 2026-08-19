@@ -70,26 +70,44 @@ export function stopStatsOverlayLoop(controller) {
 /* Browsers give no reliable way to read a <video> element's real color-space/transfer
    info without WebCodecs (see docs/plezy-player-comparison.md's HDR section) - shown as
    "n/a" rather than guessed, unlike Android's real isHdrContent() check off Format.colorInfo. */
-function shaderStatusLine(controller) {
+/* Sharpening (the hand-written CAS/Anime4K unsharp-mask kernels) and AI Upscaling (the real
+   Anime4K CNN / FSR 1 chains) are independent toggles now - split into their own status lines
+   rather than one that used to silently swap shape depending on which was actually rendering. */
+function sharpeningStatusLine(controller) {
     if (controller._shaderType === "off") return "off";
-    /* _shaderActivePreset is what chooseRenderPreset actually rendered last frame, which can
-       differ from the _shaderType family in both directions: upgraded to the real CNN chain
-       where WebGL2 + float render targets allow it, or dropped back to the sharpen chain
-       when the CNN's own 1.2x upscale gate says the display isn't bigger enough to bother.
-       Reporting the family here instead would make both of those invisible - and "is the CNN
-       actually running on this device" is the main thing this line exists to answer. */
-    const activeKey = controller._shaderActivePreset || controller._shaderType;
-    const preset = SHADER_TYPES[activeKey];
-    const label = preset?.label ?? activeKey;
-    /* A trained network takes no strength, so printing one would be a fabricated number -
-       the pass count and the watchdog's measured frame interval are the numbers that actually
-       matter for a multi-pass chain. */
-    if (preset?.strengthless) return `${label} (${activeChainPassCount(controller, activeKey) ?? preset.passes.length} passes)${watchdogSuffix(controller)}`;
+    const label = SHADER_TYPES[controller._shaderType]?.label ?? controller._shaderType;
     /* Resolves auto vs. manual the same way shader-pipeline.js's renderShaderFrame does
        - reading _shaderStrength directly here would show the frozen manual slider
        position instead of what's actually being applied whenever Auto is on. */
     const strength = controller._upscaleAuto ? (controller._autoUpscaleStrength ?? 0) : controller._shaderStrength;
-    return `${label} @ ${Math.round(strength * 100)}%${controller._upscaleAuto ? " (auto)" : ""}${watchdogSuffix(controller)}`;
+    return `${label} @ ${Math.round(strength * 100)}%${controller._upscaleAuto ? " (auto)" : ""}`;
+}
+
+/* _shaderActivePreset is what chooseRenderPreset actually rendered last frame - the toggle
+   being on doesn't mean this chain is the one currently drawing (the upscale gate may have
+   declined, or the perf watchdog may have stepped it down), so this reports which of those
+   is true rather than just echoing the toggle state back.
+
+   No separate "Deband:" line exists any more - deband is now baked permanently into the
+   CNN/FSR chains themselves (see shaders.js's debandPass), never into the sharpen presets, so
+   it is active exactly when this line reports a running pass count and never otherwise. A
+   dedicated line would just be restating this one. */
+function aiUpscalingStatusLine(controller) {
+    if (!controller._aiUpscalingEnabled) return "off";
+    const familyKey = controller._shaderAutoType;
+    const upgradeKey = SHADER_TYPES[familyKey]?.upgradeTo;
+    const preset = upgradeKey ? SHADER_TYPES[upgradeKey] : null;
+    if (!preset) return "not supported here";
+    if (controller._shaderChainErrors?.[upgradeKey]) return `${preset.label} failed to compile here`;
+    if (!controller._shaderChains?.[upgradeKey]) return "not supported here";
+    /* A trained network takes no strength, so printing one would be a fabricated number -
+       the pass count and the watchdog's measured frame interval are the numbers that actually
+       matter for a multi-pass chain. */
+    if (controller._shaderActivePreset === upgradeKey) {
+        return `${preset.label} (${activeChainPassCount(controller, upgradeKey) ?? preset.passes.length} passes)${watchdogSuffix(controller)}`;
+    }
+    if (controller._shaderWatchdog?.downgraded) return `${preset.label} off - too slow here`;
+    return `${preset.label} idle - source not upscaled`;
 }
 
 /* The measured shader-loop frame interval, and whether the perf watchdog has already stepped
@@ -118,10 +136,21 @@ function activeChainPassCount(controller, key) {
     return controller._shaderChains?.[key]?.passCount ?? null;
 }
 
+/* Saturation and Contrast are fully independent controls now (own enabled/auto, own
+   Auto|On|Off mode - see shader-pipeline.js) - each shows "off" on its own if disabled,
+   otherwise its own auto-derived value (avgSaturation-driven for Saturation, lumaStdDev-
+   driven for Contrast) or its own remembered manual position. */
 function colorBoostStatusLine(controller) {
-    if (!controller._colorBoostEnabled) return "off";
-    const strength = controller._colorBoostAuto ? (controller._autoColorBoostStrength ?? 0) : controller._colorBoostStrength;
-    return `${Math.round(strength * 100)}%${controller._colorBoostAuto ? " (auto)" : ""}`;
+    const satOn = controller._colorBoostSaturationEnabled;
+    const conOn = controller._colorBoostContrastEnabled;
+    if (!satOn && !conOn) return "off";
+    const satAuto = controller._colorBoostSaturationAuto;
+    const conAuto = controller._colorBoostContrastAuto;
+    const saturation = satAuto ? (controller._autoColorBoostSaturationStrength ?? 0) : controller._colorBoostSaturationStrength;
+    const contrast = conAuto ? (controller._autoColorBoostContrastStrength ?? 0) : controller._colorBoostContrastStrength;
+    const satPart = satOn ? `sat ${Math.round(saturation * 100)}%${satAuto ? " (auto)" : ""}` : "sat off";
+    const conPart = conOn ? `con ${Math.round(contrast * 100)}%${conAuto ? " (auto)" : ""}` : "con off";
+    return `${satPart}, ${conPart}`;
 }
 
 function qualityCapStatusLine(controller) {
@@ -224,9 +253,9 @@ export function renderStatsOverlayFrame(controller) {
         hdrStatusLine(controller),
         quality ? `Dropped frames: ${quality.droppedVideoFrames}/${quality.totalVideoFrames}` : null,
         audioStatusLine(controller),
-        `Shader Upscaling: ${shaderStatusLine(controller)}`,
+        `Sharpening: ${sharpeningStatusLine(controller)}`,
+        `AI Upscaling: ${aiUpscalingStatusLine(controller)}`,
         `Color Boost: ${colorBoostStatusLine(controller)}`,
-        `Deband: ${controller._debandEnabled ? "on" : "off"}`,
         `Quality cap: ${qualityCapStatusLine(controller)}`,
         abrDebugLine(controller),
         bufferHealthLine(video),

@@ -33,32 +33,38 @@ import { loadMpvUserShader, loadMpvUserShaderChain } from "./mpv-user-shader.js"
    contrast/saturation moved, as their own independent toggle. */
 
 /* Deband knobs, in units that mean something: threshold and grain in 8-bit LSBs, range in source
-   pixels. The original 1.0/1.5 here did nothing visible on real footage - a 1-LSB threshold
-   assumes noiseless input, but real compression banding steps by more than 1 LSB and real
-   footage carries enough grain/dither noise that almost nothing landed inside so tight a
-   tolerance (confirmed by cranking to an absurd 12/24/20 as a diagnostic - that blended real
-   detail and added obvious noise, proving the pass runs but was mistuned in both directions).
-   mpv's own deband defaults translate to ~2/~3 LSB in these units, which was still too subtle
-   on real playback - confirmed. Threshold doubled from that to actually smooth banding; grain
-   left alone since it was never the complaint and doubling threshold alone already risks edging
-   toward real-detail softening. */
-export const DEBAND_TUNING = { threshold: 6.0, range: 12.0, grain: 1.0 };
+   pixels. Landed here after live A/B against real playback (see the tuning panel in
+   deband-tuning-panel.js) - a narrower range than earlier attempts, since deband now runs after
+   the upscale/sharpen stage rather than before it (see debandPass below) and range is in
+   whatever resolution it's fed, which is now the upscaled one. Grain at 0: no counteracting
+   texture, confirmed not missed once threshold alone was enough to read as smoother. */
+export const DEBAND_TUNING = { threshold: 6.0, range: 2.0, grain: 0.0 };
 
-/* Optional passes make a preset's chain a function of settings rather than a fixed array, so every
-   preset is composed through here. Deband runs FIRST, at source resolution: it repairs the source
-   before anything amplifies it, and running it after an upscaler would mean paying for it over
-   2-4x the pixels while trying to fix banding the upscaler had already smeared.
+/* Deband is exclusively an AI Upscaling thing now - baked permanently into the CNN/FSR chains'
+   own composition, never into the hand-written sharpen presets. Explicit user call: it must
+   track AI Upscaling *actually being the one rendering*, not Sharpening, and not even AI
+   Upscaling's own toggle in isolation - if the upgrade's own upscale gate declines (the source
+   doesn't need it) and the frame falls back to the plain sharpen chain, deband must not run
+   either. Baking it unconditionally into only the CNN/FSR compositions gets both halves of that
+   for free, with no separate on/off state to track at all: chooseRenderPreset already falls
+   back to the plain sharpen chain whenever the upgrade's `when` gate declines or its own toggle
+   is off (see shader-pipeline.js's upgradedPresetKey) - and that plain chain simply never
+   contains a deband pass, so there's nothing to accidentally run. No boolean flag, no sync
+   function, no chain-rebuild-on-toggle: which preset gets chosen each frame already answers
+   "should deband be active" by construction.
 
-   The `from` symbol handed to each preset's builder is what its algorithm passes should read -
-   SOURCE normally, the deband pass when that is enabled. Presets take it as a parameter rather
-   than hardcoding SOURCE, which is what makes them composable at all. */
-function composePasses(buildAlgorithmPasses, options) {
-    const deband = !!(options && options.deband);
-    if (!deband) return buildAlgorithmPasses(SOURCE);
-    return [
-        { name: "deband", frag: DEBAND_FRAG, inputs: [{ uniform: "uTex", from: SOURCE }], scale: 1, float: "required" },
-        ...buildAlgorithmPasses("deband"),
-    ];
+   Deband has to run immediately before whichever pass in the CNN/FSR chain last adds edge
+   contrast - RCAS, or Color Boost's own lift ahead of `present` - not before the upscale that
+   precedes it. Confirmed on real playback, not just a theoretical ordering concern: running
+   deband first and upscaling/sharpening second means that later pass just re-amplifies whatever
+   banding survives deband right back into a visible step, since a band boundary reads as an
+   edge to any contrast-boosting kernel.
+
+   `fromName` is the name of the pass whose output this reads and whose resolution it runs at -
+   the size mirrors it exactly via `ctx.sizeOf`, so slotting this in after an upscale means
+   deband itself runs at the upscaled resolution, not the source's. */
+function debandPass(name, fromName) {
+    return { name, frag: DEBAND_FRAG, inputs: [{ uniform: "uTex", from: fromName }], size: (ctx) => ctx.sizeOf(fromName), float: "required" };
 }
 
 /* `passes` is this preset's pass chain, in execution order, for shader/pass-chain.js -
@@ -72,7 +78,7 @@ export const SHADER_TYPES = {
         useCas: false,
         min: { scale: 1.8, sharpen: 1.8, kernel: 1.5 },
         max: { scale: 2.4, sharpen: 3.8, kernel: 2.8 },
-        buildPasses: (opts) => composePasses((from) => [{ name: "sharpen", frag: SHARPEN_ANIME_FRAG, inputs: [{ uniform: "uTex", from }] }], opts),
+        buildPasses: () => [{ name: "sharpen", frag: SHARPEN_ANIME_FRAG, inputs: [{ uniform: "uTex", from: SOURCE }] }],
         /* Rendered as anime4k_cnn instead wherever that chain builds (see shader-pipeline.js's
            resolveAvailablePreset). This stays the key detectShaderType returns and the key the
            bridge sends to Android/Xbox, both of which only know the two original families -
@@ -85,7 +91,7 @@ export const SHADER_TYPES = {
         useCas: true,
         min: { scale: 1.3, sharpen: 1.0, kernel: 1.2 },
         max: { scale: 1.6, sharpen: 2.2, kernel: 1.8 },
-        buildPasses: (opts) => composePasses((from) => [{ name: "sharpen", frag: SHARPEN_CAS_FRAG, inputs: [{ uniform: "uTex", from }] }], opts),
+        buildPasses: () => [{ name: "sharpen", frag: SHARPEN_CAS_FRAG, inputs: [{ uniform: "uTex", from: SOURCE }] }],
         /* Rendered as live_action_fsr instead wherever that chain builds - same family-key-stays-
            stable reasoning as anime4k's upgradeTo above. */
         upgradeTo: "live_action_fsr",
@@ -110,19 +116,33 @@ export const SHADER_TYPES = {
    the reference player. min/max are pinned to scale 2 (the chain's own fixed ratio) so the
    existing output-sizing math in renderShaderFrame needs no special case. */
 try {
-    /* Loaded per composition rather than once: with deband inserted, the CNN's MAIN has to start at
-       the deband pass, and that symbol is resolved inside the loader (its WIDTH/HEIGHT expressions
-       reference MAIN by name). Parsing is string work measured in single-digit ms and only happens
-       when the deband toggle flips, so re-loading beats the indirection needed to patch symbols
-       afterwards - which is exactly what caused the late-binding bug. */
-    const buildAnime4kCnn = (from) => {
+    const buildAnime4kCnn = () => {
         const loaded = loadMpvUserShaderChain([
             { source: ANIME4K_RESTORE_CNN_S, name: "a4k-restore" },
             { source: ANIME4K_UPSCALE_CNN_X2_S, name: "a4k-upscale" },
-        ], from);
+        ]);
+        const lastCnnPass = loaded.passes[loaded.passes.length - 1];
+        /* Deband slots between the CNN chain and `present` (does Color Boost + dither, not
+           part of "the upscaler") rather than before the CNN, so it repairs whatever banding
+           survived ten conv passes at the CNN's own upscaled resolution instead of banding the
+           CNN itself might reinterpret or smear while reconstructing detail. Unconditional -
+           see debandPass's own comment for why this preset never builds without it.
+
+           `present` is no longer the final pass - Sharpening's own kernel always runs after it
+           now (see the trailing SHARPEN_ANIME_FRAG pass below), so it needs an explicit size
+           to still hit the display-fit target it used to get for free from being final. */
         return [
             ...loaded.passes,
-            { name: "present", frag: PRESENT_FRAG, inputs: [{ uniform: "uTex", from: loaded.passes[loaded.passes.length - 1].name }] },
+            debandPass("deband", lastCnnPass.name),
+            { name: "present", frag: PRESENT_FRAG, inputs: [{ uniform: "uTex", from: "deband" }], size: (ctx) => [ctx.outW, ctx.outH] },
+            /* Stacks Sharpening's own algorithm on top of the CNN's output rather than one
+               toggle silently superseding the other - explicit user call. Reuses the same
+               shader the anime4k family runs standalone (identical kernel, identical Color
+               Boost application), so this is what now does Color Boost for this preset - present
+               no longer does (see PRESENT_FRAG's own comment on why it stopped). At 0 strength
+               (Sharpening off, or Auto genuinely computing 0) this reduces to an exact
+               passthrough, same proof as the standalone case. */
+            { name: "sharpen", frag: SHARPEN_ANIME_FRAG, inputs: [{ uniform: "uTex", from: "present" }] },
         ];
     };
     /* Built once here so a load failure surfaces now rather than on first playback, and to give
@@ -134,7 +154,7 @@ try {
     SHADER_TYPES.anime4k_cnn = {
         label: "Animation (AI CNN)",
         strengthless: true,
-        buildPasses: (opts) => composePasses(buildAnime4kCnn, opts),
+        buildPasses: buildAnime4kCnn,
         /* Anime4K's own //!WHEN clause, parsed out of the upstream files - "only run if the
            display is at least 1.2x the video in both axes". Below that the chain falls back to
            the cheap sharpen rather than spending 10 passes to not upscale. */
@@ -163,22 +183,47 @@ try {
    it ships at upstream's default. */
 try {
     const LUMA_EXTRACT_PASS = "luma-extract";
-    const buildFsr = (from) => {
+    /* Deband slots between EASU (the upscale) and RCAS (the sharpen) rather than before
+       either, unconditionally - see debandPass's own comment for why this preset never builds
+       without it. RCAS is an explicit contrast-at-edges pass by design - running deband any
+       earlier just hands it banding to re-amplify right back into a visible step.
+
+       Patching RCAS's own BIND below (rewriting the one `inputs` entry that pointed at EASU's
+       output to point at deband's instead) is a synchronous, one-time edit while this array is
+       being built - not the late-binding hazard the WIDTH/HEIGHT size-closure bug was, since
+       that bug came from resolving names through a symbol table mutated later, at render time.
+       This is a plain array splice, done once, before the chain ever compiles. */
+    const buildFsr = () => {
         const loaded = loadMpvUserShader(FSR1_EASU_RCAS, { name: "fsr1", inputSymbol: LUMA_EXTRACT_PASS });
+        const [easu, rcas] = loaded.passes;
+        const deband = debandPass("fsr-deband", easu.name);
+        const rcasAfterDeband = { ...rcas, inputs: rcas.inputs.map((input) => (input.from === easu.name ? { ...input, from: deband.name } : input)) };
         return [
-            { name: LUMA_EXTRACT_PASS, frag: LUMA_EXTRACT_FRAG, inputs: [{ uniform: "uTex", from }], scale: 1, float: "required" },
-            ...loaded.passes,
+            { name: LUMA_EXTRACT_PASS, frag: LUMA_EXTRACT_FRAG, inputs: [{ uniform: "uTex", from: SOURCE }], scale: 1, float: "required" },
+            easu,
+            deband,
+            rcasAfterDeband,
+            /* `luma-merge` is no longer the final pass - Sharpening's own kernel always runs
+               after it now (see the trailing SHARPEN_CAS_FRAG pass below), so it needs an
+               explicit size to still hit the display-fit target it used to get for free from
+               being final. */
             {
                 name: "luma-merge",
                 frag: LUMA_MERGE_FRAG,
                 inputs: [
-                    /* The RGB half of the merge must read the same image the luma was extracted from, so
-                       with deband on it is the debanded one - folding a repaired luma back into unrepaired
-                       RGB would leave the banding in the chroma-carrying channels. */
-                    { uniform: "uSource", from },
-                    { uniform: "uLuma", from: loaded.passes[loaded.passes.length - 1].name },
+                    /* The RGB half of the merge must read the same source the luma was extracted
+                       from - SOURCE, always, since deband never runs ahead of luma-extract. */
+                    { uniform: "uSource", from: SOURCE },
+                    { uniform: "uLuma", from: rcasAfterDeband.name },
                 ],
+                size: (ctx) => [ctx.outW, ctx.outH],
             },
+            /* Stacks Sharpening's own algorithm on top of FSR's output rather than one toggle
+               silently superseding the other - explicit user call. Reuses the same shader the
+               live_action family runs standalone, so this is what now does Color Boost for this
+               preset - luma-merge no longer does (see LUMA_MERGE_FRAG's own comment). At 0
+               strength this reduces to an exact passthrough, same proof as the standalone case. */
+            { name: "sharpen", frag: SHARPEN_CAS_FRAG, inputs: [{ uniform: "uTex", from: "luma-merge" }] },
         ];
     };
     const fsr = loadMpvUserShader(FSR1_EASU_RCAS, { name: "fsr1", inputSymbol: LUMA_EXTRACT_PASS });
@@ -193,7 +238,7 @@ try {
            beyond that - matching the CNN preset's fixed ratio. */
         min: { scale: 2, sharpen: 0, kernel: 1 },
         max: { scale: 2, sharpen: 0, kernel: 1 },
-        buildPasses: (opts) => composePasses(buildFsr, opts),
+        buildPasses: buildFsr,
     };
 } catch (e) {
     console.error("StreamingPlayer: FSR 1 preset unavailable -", e.message);
@@ -211,23 +256,29 @@ export function shaderTuningAt(shaderKey, strength) {
     };
 }
 
-/* Contrast/saturation "look" boost - its own independent toggle (Color Boost, see
-   shader-pipeline.js's setColorBoostEnabled/setColorBoostStrength), not tied to
-   whichever shader-upscale algorithm this title's genre detected. Shares the same GL
-   pass as shader upscaling (one frame, one GPU pass - see renderShaderFrame) but is
-   otherwise unrelated: enabling this alone runs with sharpenStrength forced to 0, no
-   upscale, purely the contrast/saturation lift below. */
+/* Contrast/saturation "look" boost - Saturation and Contrast are fully independent controls
+   (Color Boost, see shader-pipeline.js's setColorBoostSaturationEnabled/
+   setColorBoostSaturationStrength/setColorBoostSaturationMode and the Contrast equivalents),
+   not tied to whichever shader-upscale algorithm this title's genre detected. Shares the same
+   GL pass as shader upscaling (one frame, one GPU pass - see renderShaderFrame) but is
+   otherwise unrelated: enabling either alone runs with sharpenStrength forced to 0, no upscale,
+   purely the contrast/saturation lift below. Each has its own strength/range and its own
+   Auto|On|Off mode - they're different "look" adjustments a viewer may want at different
+   amounts (e.g. more punch without crushing shadow detail further), and now even different
+   auto-derived signals (see autoColorBoostStrength/autoContrastBoostStrength below). */
 export const COLOR_BOOST_TUNING = {
-    min: { saturation: 1, contrast: 1 },
-    max: { saturation: 1.3, contrast: 1.15 },
+    saturation: { min: 1, max: 1.3 },
+    contrast: { min: 1, max: 1.15 },
 };
 
-export function colorBoostAt(strength) {
-    const t = Math.max(0, Math.min(1, strength));
-    const lerp = (a, b) => a + (b - a) * t;
+export function colorBoostAt(saturationStrength, contrastStrength) {
+    const lerp = (range, strength) => {
+        const t = Math.max(0, Math.min(1, strength));
+        return range.min + (range.max - range.min) * t;
+    };
     return {
-        saturation: lerp(COLOR_BOOST_TUNING.min.saturation, COLOR_BOOST_TUNING.max.saturation),
-        contrast: lerp(COLOR_BOOST_TUNING.min.contrast, COLOR_BOOST_TUNING.max.contrast),
+        saturation: lerp(COLOR_BOOST_TUNING.saturation, saturationStrength),
+        contrast: lerp(COLOR_BOOST_TUNING.contrast, contrastStrength),
     };
 }
 
@@ -289,6 +340,27 @@ export function autoColorBoostStrength({ avgSaturation }) {
     return clamp((COLOR_BOOST_AUTO_SAT_HIGH - avgSaturation) / (COLOR_BOOST_AUTO_SAT_HIGH - COLOR_BOOST_AUTO_SAT_LOW), 0, 1);
 }
 
+/* Auto-strength math for Contrast, now that Saturation and Contrast are independently
+   auto-able (each its own Auto/On/Off - see shader-pipeline.js's
+   setColorBoostSaturationMode/setColorBoostContrastMode). Contrast can't reuse
+   avgSaturation as its signal - a desaturated frame isn't necessarily a flat/low-contrast
+   one - so it needs its own measurement: lumaStdDev (0..1, the standard deviation of
+   luma across the sampled frame, normalized by 255 - see content-analysis.js's
+   averageLumaStdDev). Low stdDev means a flat, washed-out/hazy image with little tonal
+   range - boost contrast more; a high stdDev means the frame already spans a wide tonal
+   range - boost little to none. Same inverted-lerp shape as autoColorBoostStrength above.
+
+   Unlike SAT_LOW/SAT_HIGH above (tuned and confirmed against real playback), these two
+   thresholds are a first estimate, not yet confirmed against real reference footage -
+   revisit if Auto Contrast reads as pinned to one extreme (near-0 or near-max) across a
+   broad sample of normal content the way the old un-narrowed saturation band once did. */
+const COLOR_BOOST_AUTO_CONTRAST_LOW = 0.1;
+const COLOR_BOOST_AUTO_CONTRAST_HIGH = 0.28;
+
+export function autoContrastBoostStrength({ lumaStdDev }) {
+    return clamp((COLOR_BOOST_AUTO_CONTRAST_HIGH - lumaStdDev) / (COLOR_BOOST_AUTO_CONTRAST_HIGH - COLOR_BOOST_AUTO_CONTRAST_LOW), 0, 1);
+}
+
 /* Picks which of the two SHADER_TYPES algorithms suits a title, from its Plex genre
    tags - Anime4K's edge-gated line-art shader for anything animated (matches "Animation"
    and "Anime" alike, Western or Japanese), CAS everywhere else. Both platforms (this
@@ -305,10 +377,12 @@ export function detectShaderType(genres) {
    variants per pass anyway. */
 export { SHARPEN_ANIME_FRAG as SHADER_FRAGMENT_ANIME, SHARPEN_CAS_FRAG as SHADER_FRAGMENT_CAS };
 
-/* Every preset above declares `buildPasses`; `passes` is its no-optional-passes composition,
-   materialised once. Kept because it is the shape the tests assert against and the natural thing
-   to read for "what does this preset consist of" - while the built chain's own passCount is what
-   the UI reports at runtime, since that reflects the composition actually in use. */
+/* Every preset above declares `buildPasses`; `passes` is its fixed composition, materialised
+   once - there are no more optional passes to compose around now that deband is either always
+   part of a preset (CNN/FSR) or never part of it (the sharpen presets), so this is just each
+   preset's one true chain shape. Kept because it is the natural thing to read for "what does
+   this preset consist of" and the shape the tests assert against, while the built chain's own
+   passCount is what the UI reports at runtime. */
 for (const preset of Object.values(SHADER_TYPES)) {
-    preset.passes = preset.buildPasses({ deband: false });
+    preset.passes = preset.buildPasses();
 }

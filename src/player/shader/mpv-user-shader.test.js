@@ -145,11 +145,13 @@ describe("the vendored Anime4K CNN preset", () => {
     expect(SHADER_TYPES.anime4k_cnn).toBeDefined();
   });
 
-  it("ends in the present pass and reads the last CNN pass", () => {
+  it("ends in Sharpening's own trailing pass, itself reading present, itself reading the last CNN pass", () => {
     const { passes } = SHADER_TYPES.anime4k_cnn;
     const last = passes[passes.length - 1];
-    expect(last.name).toBe("present");
-    expect(last.inputs[0].from).toBe(passes[passes.length - 2].name);
+    const present = passes.find((p) => p.name === "present");
+    expect(last.name).toBe("sharpen");
+    expect(last.inputs[0].from).toBe("present");
+    expect(present.inputs[0].from).toBe(passes[passes.indexOf(present) - 1].name);
   });
 
   it("chains Restore into Upscale for the documented 10 passes", () => {
@@ -191,7 +193,9 @@ describe("the vendored Anime4K CNN preset", () => {
   });
 
   it("requires float render targets on every CNN pass", () => {
-    const cnnPasses = SHADER_TYPES.anime4k_cnn.passes.filter((p) => p.name !== "present");
+    /* present/sharpen are the resolve-and-grade tail - neither needs float, only the CNN's own
+       conv passes (signed activations) and deband (works on their half-float output) do. */
+    const cnnPasses = SHADER_TYPES.anime4k_cnn.passes.filter((p) => p.name !== "present" && p.name !== "sharpen");
     expect(cnnPasses.every((p) => p.float === "required")).toBe(true);
   });
 });
@@ -204,18 +208,23 @@ describe("the vendored FSR 1 preset", () => {
     expect(SHADER_TYPES.live_action_fsr).toBeDefined();
   });
 
-  it("sandwiches FSR's two passes between luma extract and merge", () => {
+  it("sandwiches FSR's two passes (plus the deband pass between them) between luma extract and merge, ending in Sharpening's own trailing pass", () => {
     const names = SHADER_TYPES.live_action_fsr.passes.map((p) => p.name);
-    expect(names).toEqual(["luma-extract", "fsr1#0", "fsr1#1", "luma-merge"]);
+    expect(names).toEqual(["luma-extract", "fsr1#0", "fsr-deband", "fsr1#1", "luma-merge", "sharpen"]);
   });
 
   it("gives the merge pass both the original RGB and the reconstructed luma", () => {
     const { passes } = SHADER_TYPES.live_action_fsr;
-    const merge = passes[passes.length - 1];
+    const merge = passes.find((p) => p.name === "luma-merge");
     expect(merge.inputs).toEqual([
       { uniform: "uSource", from: SOURCE },
       { uniform: "uLuma", from: "fsr1#1" },
     ]);
+    /* Sharpening's own trailing pass (Color Boost included) is what actually finishes the
+       chain now - luma-merge itself no longer applies it (see LUMA_MERGE_FRAG's own comment). */
+    const last = passes[passes.length - 1];
+    expect(last.name).toBe("sharpen");
+    expect(last.inputs[0].from).toBe("luma-merge");
   });
 
   it("feeds EASU the extracted luma plane, not the RGB source", () => {
@@ -254,54 +263,64 @@ describe("the vendored FSR 1 preset", () => {
   });
 });
 
-/* Deband is the first optional pass, so it is also the first test of whether presets really are
-   composable - every one of them has to hand its algorithm passes a different input symbol, and
-   the mpv-loaded ones have to resolve their WIDTH/HEIGHT expressions against it too. */
-describe("optional-pass composition", () => {
-  const withDeband = (key) => SHADER_TYPES[key].buildPasses({ deband: true });
-
-  it("leaves every preset unchanged when deband is off", () => {
-    for (const [key, preset] of Object.entries(SHADER_TYPES)) {
-      expect(preset.buildPasses({ deband: false }).map((p) => p.name), key).toEqual(preset.passes.map((p) => p.name));
-    }
-  });
-
-  it("prepends deband at source resolution for every preset", () => {
-    for (const key of Object.keys(SHADER_TYPES)) {
-      const passes = withDeband(key);
-      expect(passes[0].name, key).toBe("deband");
+/* Deband is exclusively an AI Upscaling thing - baked permanently into the CNN/FSR chains'
+   own composition (never behind a toggle any more: whichever preset chooseRenderPreset picks
+   each frame already decides whether deband runs, just by which chain that is), and never
+   part of the hand-written sharpen presets at all. It has to run immediately before whichever
+   pass last adds edge contrast in each chain - not before the upscale that precedes it
+   (confirmed on real playback: upscaling/sharpening after deband just re-amplifies whatever
+   banding survives it right back into a visible step). That "last contrast-adding pass" sits
+   in a different place in the CNN vs. the FSR chain, so these tests check each one's own seam
+   rather than one shared position. */
+describe("deband composition", () => {
+  it("never appears in the sharpen presets", () => {
+    for (const key of ["anime4k", "live_action"]) {
+      const passes = SHADER_TYPES[key].passes;
+      expect(passes.map((p) => p.name), key).toEqual(["sharpen"]);
       expect(passes[0].inputs, key).toEqual([{ uniform: "uTex", from: SOURCE }]);
-      expect(passes[0].scale, key).toBe(1);
-      expect(passes).toHaveLength(SHADER_TYPES[key].passes.length + 1);
     }
   });
 
-  it("rewires a sharpen preset to read the deband output instead of the source", () => {
-    const passes = withDeband("live_action");
-    expect(passes[1].inputs).toEqual([{ uniform: "uTex", from: "deband" }]);
+  /* CNN's own Restore pass already does gradient reconstruction as a byproduct, so deband slots
+     after the whole chain (right before `present`, which resolves to the display-fit size and
+     dithers, not part of "the upscaler") rather than before Restore - repairing whatever banding
+     the ten conv passes' own upscale left behind instead of banding they might reinterpret while
+     reconstructing. */
+  it("always sits between the CNN chain and the present pass", () => {
+    const passes = SHADER_TYPES.anime4k_cnn.passes;
+    const present = passes.find((p) => p.name === "present");
+    const deband = passes[passes.indexOf(present) - 1];
+    const lastCnnPass = passes[passes.indexOf(present) - 2];
+    expect(present.name).toBe("present");
+    expect(present.inputs).toEqual([{ uniform: "uTex", from: "deband" }]);
+    expect(deband.name).toBe("deband");
+    expect(deband.inputs).toEqual([{ uniform: "uTex", from: lastCnnPass.name }]);
   });
 
-  it("rewires the CNN chain's first pass, and nothing later still reads SOURCE", () => {
-    const passes = withDeband("anime4k_cnn");
-    expect(passes[1].inputs[0].from).toBe("deband");
-    const stillOnSource = passes.slice(1).flatMap((p) => p.inputs).filter((i) => i.from === SOURCE);
-    expect(stillOnSource).toEqual([]);
-  });
-
-  /* Both halves of the luma sandwich must move: folding a debanded luma back into un-debanded RGB
-     would leave the banding in the chroma-carrying channels. */
-  it("rewires both luma-extract and luma-merge's RGB input", () => {
-    const passes = withDeband("live_action_fsr");
+  /* FSR's EASU (upscale) and RCAS (sharpen) are already separate passes, so deband slots
+     cleanly between them: RCAS's own BIND is rewired to read deband's output instead of EASU's,
+     without touching RCAS's shader source. luma-extract/luma-merge always read SOURCE, since
+     deband never runs ahead of either. */
+  it("always sits between FSR's EASU and RCAS passes", () => {
+    const passes = SHADER_TYPES.live_action_fsr.passes;
     const extract = passes.find((p) => p.name === "luma-extract");
     const merge = passes.find((p) => p.name === "luma-merge");
-    expect(extract.inputs).toEqual([{ uniform: "uTex", from: "deband" }]);
-    expect(merge.inputs[0]).toEqual({ uniform: "uSource", from: "deband" });
+    expect(extract.inputs).toEqual([{ uniform: "uTex", from: SOURCE }]);
+    expect(merge.inputs[0]).toEqual({ uniform: "uSource", from: SOURCE });
+    const easu = passes[1];
+    const deband = passes[2];
+    const rcas = passes[3];
+    expect(deband.name).toBe("fsr-deband");
+    expect(deband.inputs).toEqual([{ uniform: "uTex", from: easu.name }]);
+    expect(rcas.inputs.some((i) => i.from === deband.name)).toBe(true);
+    expect(rcas.inputs.some((i) => i.from === easu.name)).toBe(false);
   });
 
-  /* The same allocation-order replay as the un-debanded case: with an extra pass in front, every
-     size expression still has to resolve against something already allocated. */
-  it("still sizes the CNN chain in allocation order with deband inserted", () => {
-    const passes = withDeband("anime4k_cnn");
+  /* Allocation-order replay: every size expression has to resolve against something already
+     allocated, and deband's own size has to match the *upscaled* resolution it's inserted at,
+     not SOURCE's - that's the whole point of running it after the upscale rather than before. */
+  it("sizes the CNN chain's deband pass at the CNN's own upscaled resolution", () => {
+    const passes = SHADER_TYPES.anime4k_cnn.passes;
     const known = new Map([[SOURCE, [960, 540]]]);
     const ctx = {
       sourceW: 960,
@@ -317,7 +336,9 @@ describe("optional-pass composition", () => {
     for (const pass of passes.slice(0, -1)) {
       known.set(pass.name, pass.size ? pass.size(ctx) : [960, 540]);
     }
-    expect(known.get("deband")).toEqual([960, 540]);
-    expect(known.get(passes[passes.length - 2].name)).toEqual([1920, 1080]);
+    const debandIndex = passes.findIndex((p) => p.name === "deband");
+    const lastCnnPass = passes[debandIndex - 1];
+    expect(known.get("deband")).toEqual(known.get(lastCnnPass.name));
+    expect(known.get("deband")).toEqual([1920, 1080]);
   });
 });

@@ -5,6 +5,7 @@ import {
   detectShaderType,
   autoUpscaleStrength,
   autoColorBoostStrength,
+  autoContrastBoostStrength,
   SHADER_TYPES,
   COLOR_BOOST_TUNING,
 } from "./shaders.js";
@@ -53,21 +54,40 @@ describe("shaderTuningAt", () => {
 });
 
 describe("colorBoostAt", () => {
-  it("is neutral (no boost) at strength 0", () => {
-    expect(colorBoostAt(0)).toEqual(COLOR_BOOST_TUNING.min);
+  it("is neutral (no boost) at strength 0/0", () => {
+    expect(colorBoostAt(0, 0)).toEqual({
+      saturation: COLOR_BOOST_TUNING.saturation.min,
+      contrast: COLOR_BOOST_TUNING.contrast.min,
+    });
   });
 
-  it("reaches max boost at strength 1", () => {
-    expect(colorBoostAt(1)).toEqual(COLOR_BOOST_TUNING.max);
+  it("reaches max boost at strength 1/1", () => {
+    expect(colorBoostAt(1, 1)).toEqual({
+      saturation: COLOR_BOOST_TUNING.saturation.max,
+      contrast: COLOR_BOOST_TUNING.contrast.max,
+    });
   });
 
-  it("clamps strength outside 0-1", () => {
-    expect(colorBoostAt(-1)).toEqual(COLOR_BOOST_TUNING.min);
-    expect(colorBoostAt(2)).toEqual(COLOR_BOOST_TUNING.max);
+  it("clamps each strength outside 0-1 independently", () => {
+    expect(colorBoostAt(-1, 2)).toEqual({
+      saturation: COLOR_BOOST_TUNING.saturation.min,
+      contrast: COLOR_BOOST_TUNING.contrast.max,
+    });
+  });
+
+  it("resolves saturation and contrast independently of one another", () => {
+    expect(colorBoostAt(1, 0)).toEqual({
+      saturation: COLOR_BOOST_TUNING.saturation.max,
+      contrast: COLOR_BOOST_TUNING.contrast.min,
+    });
+    expect(colorBoostAt(0, 1)).toEqual({
+      saturation: COLOR_BOOST_TUNING.saturation.min,
+      contrast: COLOR_BOOST_TUNING.contrast.max,
+    });
   });
 
   it("is independent of shader-upscale type/strength", () => {
-    expect(colorBoostAt(0.5)).toEqual(colorBoostAt(0.5));
+    expect(colorBoostAt(0.5, 0.5)).toEqual(colorBoostAt(0.5, 0.5));
   });
 });
 
@@ -112,5 +132,29 @@ describe("autoColorBoostStrength", () => {
   it("interpolates between the low/high saturation thresholds", () => {
     const t = autoColorBoostStrength({ avgSaturation: 0.12 });
     expect(t).toBeCloseTo(0.5);
+  });
+});
+
+describe("autoContrastBoostStrength", () => {
+  it("is 0 once the frame already spans a wide tonal range", () => {
+    expect(autoContrastBoostStrength({ lumaStdDev: 0.28 })).toBe(0);
+    expect(autoContrastBoostStrength({ lumaStdDev: 1 })).toBe(0);
+  });
+
+  it("is 1 for a flat, washed-out frame", () => {
+    expect(autoContrastBoostStrength({ lumaStdDev: 0.1 })).toBe(1);
+    expect(autoContrastBoostStrength({ lumaStdDev: 0 })).toBe(1);
+  });
+
+  it("interpolates between the low/high stdDev thresholds", () => {
+    const t = autoContrastBoostStrength({ lumaStdDev: 0.19 });
+    expect(t).toBeCloseTo(0.5);
+  });
+
+  it("is independent of autoColorBoostStrength - different signal, different result", () => {
+    const sameInput = 0.15;
+    expect(autoContrastBoostStrength({ lumaStdDev: sameInput })).not.toBe(
+      autoColorBoostStrength({ avgSaturation: sameInput })
+    );
   });
 });

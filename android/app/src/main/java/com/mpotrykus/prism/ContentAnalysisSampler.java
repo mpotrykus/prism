@@ -4,9 +4,10 @@ import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.view.View;
 
-/* Backs "Auto strength" for Shader Upscaling/Color Boost (see PlayerActivity's
-   upscaleAuto/colorBoostAuto and shaders.js's autoUpscaleStrength/autoColorBoostStrength
-   on the web leg, which this mirrors). Shares FrameBitmapCapture's capture mechanics with
+/* Backs "Auto strength" for Shader Upscaling/Color Boost Saturation/Color Boost Contrast
+   (see PlayerActivity's upscaleAuto/colorBoostSaturationAuto/colorBoostContrastAuto and
+   shaders.js's autoUpscaleStrength/autoColorBoostStrength/autoContrastBoostStrength on the
+   web leg, which this mirrors). Shares FrameBitmapCapture's capture mechanics with
    AmbientLightSampler but computes whole-frame stats instead of edge zones - strength has
    nothing to do with position, unlike ambient light's per-edge glow.
 
@@ -25,7 +26,7 @@ final class ContentAnalysisSampler {
     private static final float SMOOTHING_FACTOR = 0.3f;
 
     interface StatsListener {
-        void onStats(float avgSaturation, float edgeEnergy);
+        void onStats(float avgSaturation, float edgeEnergy, float lumaStdDev);
     }
 
     private final StatsListener listener;
@@ -33,6 +34,7 @@ final class ContentAnalysisSampler {
     private final int[] pixels = new int[SAMPLE_W * SAMPLE_H];
     private Float smoothedSaturation = null;
     private Float smoothedEdgeEnergy = null;
+    private Float smoothedLumaStdDev = null;
 
     ContentAnalysisSampler(View videoSurfaceView, StatsListener listener) {
         this.listener = listener;
@@ -55,9 +57,11 @@ final class ContentAnalysisSampler {
         bitmap.getPixels(pixels, 0, SAMPLE_W, 0, 0, SAMPLE_W, SAMPLE_H);
         float rawSaturation = averageSaturation();
         float rawEdgeEnergy = averageEdgeEnergy();
+        float rawLumaStdDev = averageLumaStdDev();
         smoothedSaturation = smooth(smoothedSaturation, rawSaturation);
         smoothedEdgeEnergy = smooth(smoothedEdgeEnergy, rawEdgeEnergy);
-        listener.onStats(smoothedSaturation, smoothedEdgeEnergy);
+        smoothedLumaStdDev = smooth(smoothedLumaStdDev, rawLumaStdDev);
+        listener.onStats(smoothedSaturation, smoothedEdgeEnergy, smoothedLumaStdDev);
     }
 
     private static float smooth(Float prev, float raw) {
@@ -107,5 +111,28 @@ final class ContentAnalysisSampler {
 
     private static float luma(int pixel) {
         return 0.299f * Color.red(pixel) + 0.587f * Color.green(pixel) + 0.114f * Color.blue(pixel);
+    }
+
+    /* Standard deviation of luma across the sampled frame, normalized to 0..1 - backs Auto
+       Contrast (see AutoStrength.colorBoostContrast on this leg, shaders.js's
+       autoContrastBoostStrength on the web leg). A flat, washed-out/hazy frame has luma
+       values clustered close together (low stdDev); a frame that already spans a wide
+       tonal range has them spread out (high stdDev). Two passes (mean, then variance)
+       rather than a running-sum-of-squares single pass - this runs once per tick over a
+       tiny 32x18 sample, not a hot per-frame path. */
+    private float averageLumaStdDev() {
+        double total = 0;
+        int count = pixels.length;
+        for (int pixel : pixels) {
+            total += luma(pixel);
+        }
+        if (count == 0) return 0f;
+        double mean = total / count;
+        double variance = 0;
+        for (int pixel : pixels) {
+            double diff = luma(pixel) - mean;
+            variance += diff * diff;
+        }
+        return (float) (Math.sqrt(variance / count) / 255.0);
     }
 }

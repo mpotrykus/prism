@@ -84,9 +84,10 @@ public class PlayerActivity extends AppCompatActivity {
        re-implemented here - one Plex-genre interpretation shared by both platforms
        instead of duplicated in Java. shaderEnabled/upscaleStrength/upscaleAuto below are
        NOT passed this way - they're this Activity's own SharedPreferences-persisted
-       state (see PREF_COLOR_BOOST_ENABLED and friends), same immediate-persistence model
-       as colorBoostEnabled/colorBoostStrength/colorBoostAuto, since there's no JS
-       Settings-modal counterpart to seed a per-video default from any more. */
+       state (see PREF_COLOR_BOOST_SATURATION_ENABLED and friends), same immediate-persistence
+       model as colorBoostSaturationEnabled/colorBoostSaturationStrength/colorBoostSaturationAuto
+       and the Contrast equivalents, since there's no JS Settings-modal counterpart to seed a
+       per-video default from any more. */
     public static final String EXTRA_SHADER_TYPE = "shaderType";
     /* Shown in the transport bar header (see PlayerUiHelper.buildTransportBar) - same
        title/season-episode-or-year fields web-fallback.js's buildTransportBar reads off
@@ -133,9 +134,12 @@ public class PlayerActivity extends AppCompatActivity {
     private static final String PREF_UPSCALE_ENABLED = "upscale_enabled";
     private static final String PREF_UPSCALE_STRENGTH = "upscale_strength";
     private static final String PREF_UPSCALE_AUTO = "upscale_auto";
-    private static final String PREF_COLOR_BOOST_ENABLED = "color_boost_enabled";
-    private static final String PREF_COLOR_BOOST_STRENGTH = "color_boost_strength";
-    private static final String PREF_COLOR_BOOST_AUTO = "color_boost_auto";
+    private static final String PREF_COLOR_BOOST_SATURATION_ENABLED = "color_boost_saturation_enabled";
+    private static final String PREF_COLOR_BOOST_CONTRAST_ENABLED = "color_boost_contrast_enabled";
+    private static final String PREF_COLOR_BOOST_SATURATION_STRENGTH = "color_boost_saturation_strength";
+    private static final String PREF_COLOR_BOOST_CONTRAST_STRENGTH = "color_boost_contrast_strength";
+    private static final String PREF_COLOR_BOOST_SATURATION_AUTO = "color_boost_saturation_auto";
+    private static final String PREF_COLOR_BOOST_CONTRAST_AUTO = "color_boost_contrast_auto";
     private static final String PREF_STATS_OVERLAY_ENABLED = "stats_overlay_enabled";
     private static final String PREF_AUTO_PLAY_ENABLED = "auto_play_enabled";
     private static final String PREF_AUTO_QUALITY_ENABLED = "auto_quality_enabled";
@@ -219,8 +223,8 @@ public class PlayerActivity extends AppCompatActivity {
        same "0% is off" model as plex-player.js's web-side _setShaderStrength. */
     ShaderType detectedShaderType = ShaderType.LIVE_ACTION;
     ShaderType shaderType = ShaderType.OFF;
-    /* Same immediate-persistence model as ambientEnabled/colorBoostEnabled below - see
-       setShaderStrength/setShaderEnabled. No JS Settings-modal default any more (unlike
+    /* Same immediate-persistence model as ambientEnabled/colorBoostSaturationEnabled below -
+       see setShaderStrength/setShaderEnabled. No JS Settings-modal default any more (unlike
        this leg's previous EXTRA_UPSCALE_STRENGTH/EXTRA_SHADER_ENABLED intent extras) -
        whatever this was last set to in-player is what every subsequent video starts
        from. */
@@ -249,17 +253,27 @@ public class PlayerActivity extends AppCompatActivity {
     /* Contrast/saturation "look" boost - same immediate-persistence model as ambient
        lighting above (no per-video/genre concern of its own either), but independent of
        shaderType/shaderEnabled/upscaleStrength above: see ShaderUpscaleEffect's own
-       header comment for how the two toggles now share one GL pass. */
-    boolean colorBoostEnabled = false;
-    float colorBoostStrength = 0.5f;
-    /* Same immediate-persistence model as colorBoostEnabled/upscaleAuto above -
+       header comment for how the two toggles now share one GL pass. Saturation and
+       Contrast are fully independent controls now - each its own enabled/auto pair, each
+       its own Auto|On|Off mode (see PlayerUiHelper's two independent mode rows and
+       ColorBoostTuning.at) - not one shared toggle, since a viewer may want one boosted
+       and not the other. Auto also derives from a different signal per component now
+       (avgSaturation for Saturation, lumaStdDev for Contrast - see AutoStrength's
+       colorBoost/colorBoostContrast), not one shared auto-resolved value. */
+    boolean colorBoostSaturationEnabled = false;
+    boolean colorBoostContrastEnabled = false;
+    float colorBoostSaturationStrength = 0.5f;
+    float colorBoostContrastStrength = 0.5f;
+    /* Same immediate-persistence model as colorBoostSaturationEnabled/upscaleAuto above -
        live-computed strength itself is never persisted, only this flag - see
-       setColorBoostAuto. */
-    boolean colorBoostAuto = false;
-    float autoColorBoostStrength = 0.5f;
-    /* Same immediate-persistence model as ambientEnabled/colorBoostEnabled above - a debug
-       readout has no per-video/genre concern to reconcile either. Read view, not player
-       state - see PlayerUiHelper.buildStatsOverlay/updateStatsOverlay. */
+       setColorBoostSaturationAuto/setColorBoostContrastAuto. */
+    boolean colorBoostSaturationAuto = false;
+    boolean colorBoostContrastAuto = false;
+    float autoColorBoostSaturationStrength = 0.5f;
+    float autoColorBoostContrastStrength = 0.5f;
+    /* Same immediate-persistence model as ambientEnabled/colorBoostSaturationEnabled above -
+       a debug readout has no per-video/genre concern to reconcile either. Read view, not
+       player state - see PlayerUiHelper.buildStatsOverlay/updateStatsOverlay. */
     boolean statsOverlayEnabled = false;
     /* Same immediate-persistence model as statsOverlayEnabled above - see
        setAutoPlayEnabled. Read by the STATE_ENDED handler below to decide whether to
@@ -490,9 +504,12 @@ public class PlayerActivity extends AppCompatActivity {
         shaderType = resolveShaderType();
         ambientEnabled = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(PREF_AMBIENT_ENABLED, false);
         ambientOpacity = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getFloat(PREF_AMBIENT_OPACITY, 0.5f);
-        colorBoostEnabled = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(PREF_COLOR_BOOST_ENABLED, false);
-        colorBoostStrength = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getFloat(PREF_COLOR_BOOST_STRENGTH, 0.5f);
-        colorBoostAuto = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(PREF_COLOR_BOOST_AUTO, false);
+        colorBoostSaturationEnabled = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(PREF_COLOR_BOOST_SATURATION_ENABLED, false);
+        colorBoostContrastEnabled = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(PREF_COLOR_BOOST_CONTRAST_ENABLED, false);
+        colorBoostSaturationStrength = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getFloat(PREF_COLOR_BOOST_SATURATION_STRENGTH, 0.5f);
+        colorBoostContrastStrength = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getFloat(PREF_COLOR_BOOST_CONTRAST_STRENGTH, 0.5f);
+        colorBoostSaturationAuto = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(PREF_COLOR_BOOST_SATURATION_AUTO, false);
+        colorBoostContrastAuto = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(PREF_COLOR_BOOST_CONTRAST_AUTO, false);
         statsOverlayEnabled = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(PREF_STATS_OVERLAY_ENABLED, false);
         /* Defaults to on (unlike every other toggle here, which defaults off) - see
            shared.js's storedAutoPlayEnabled for why. */
@@ -694,9 +711,12 @@ public class PlayerActivity extends AppCompatActivity {
         /* Same "built unconditionally, started only if already needed from a previous
            session" reasoning as ambientSampler above. */
         contentSampler = new ContentAnalysisSampler(playerView.getVideoSurfaceView(),
-            (avgSaturation, edgeEnergy) -> {
-                if (colorBoostAuto) {
-                    autoColorBoostStrength = AutoStrength.colorBoost(avgSaturation);
+            (avgSaturation, edgeEnergy, lumaStdDev) -> {
+                if (colorBoostSaturationAuto) {
+                    autoColorBoostSaturationStrength = AutoStrength.colorBoost(avgSaturation);
+                }
+                if (colorBoostContrastAuto) {
+                    autoColorBoostContrastStrength = AutoStrength.colorBoostContrast(lumaStdDev);
                 }
                 if (upscaleAuto) {
                     autoUpscaleStrength = AutoStrength.upscale(resolveScaleFactor(), edgeEnergy);
@@ -1071,8 +1091,9 @@ public class PlayerActivity extends AppCompatActivity {
             return;
         }
         boolean sharpenOn = shaderType != ShaderType.OFF;
+        boolean colorBoostOn = colorBoostSaturationEnabled || colorBoostContrastEnabled;
         boolean hdr = isHdrContent();
-        if ((!sharpenOn && !colorBoostEnabled) || hdr) {
+        if ((!sharpenOn && !colorBoostOn) || hdr) {
             Log.d(SHADER_TAG, "applyVideoEffects: no effects ("
                 + (hdr ? "HDR content detected, auto-skipping" : "both toggles off") + ")");
             player.setVideoEffects(Collections.emptyList());
@@ -1080,15 +1101,24 @@ public class PlayerActivity extends AppCompatActivity {
             return;
         }
         Log.d(SHADER_TAG, "applyVideoEffects: sharpenOn=" + sharpenOn + " (" + shaderType + " @ " + upscaleStrength
-            + "), colorBoostEnabled=" + colorBoostEnabled + " (" + colorBoostStrength + "), hdr=false");
+            + "), colorBoostSaturationEnabled=" + colorBoostSaturationEnabled + " (" + colorBoostSaturationStrength
+            + "), colorBoostContrastEnabled=" + colorBoostContrastEnabled + " (" + colorBoostContrastStrength + "), hdr=false");
         ShaderType programType = sharpenOn ? shaderType : detectedShaderType;
         /* Auto strength (see ContentAnalysisSampler/AutoStrength) resolves separately
-           from upscaleStrength/colorBoostStrength rather than overwriting them - those
-           stay the remembered manual slider position, restored the moment auto is
-           unchecked, same shape as programType being resolved from shaderType just
-           above. */
+           from upscaleStrength/colorBoostSaturationStrength/colorBoostContrastStrength
+           rather than overwriting them - those stay the remembered manual slider
+           position, restored the moment auto is unchecked, same shape as programType
+           being resolved from shaderType just above. Saturation and Contrast are fully
+           independent now - each its own enabled/auto pair, each auto-deriving from its
+           own signal (avgSaturation vs lumaStdDev, see AutoStrength.colorBoost/
+           colorBoostContrast) - so a component whose toggle is off resolves to strength 0
+           here, which ColorBoostTuning.at's own min-lerp already turns into an exact 1.0
+           (no-op) for that component. */
         float resolvedUpscaleStrength = upscaleAuto ? autoUpscaleStrength : upscaleStrength;
-        float resolvedColorBoostStrength = colorBoostAuto ? autoColorBoostStrength : colorBoostStrength;
+        float resolvedColorBoostSaturationStrength = !colorBoostSaturationEnabled ? 0f
+            : (colorBoostSaturationAuto ? autoColorBoostSaturationStrength : colorBoostSaturationStrength);
+        float resolvedColorBoostContrastStrength = !colorBoostContrastEnabled ? 0f
+            : (colorBoostContrastAuto ? autoColorBoostContrastStrength : colorBoostContrastStrength);
         /* sharpenOn alone isn't enough to gate this - resolveShaderType keeps shaderType
            resolved to a real type throughout Auto mode regardless of the live auto
            strength (it has to, so ContentAnalysisSampler keeps running for whenever a
@@ -1101,7 +1131,9 @@ public class PlayerActivity extends AppCompatActivity {
            0f here too is what actually makes a live 0 look like NEUTRAL, regardless of
            which mode produced it. */
         ShaderTuning sharpenTuning = (sharpenOn && resolvedUpscaleStrength > 0f) ? programType.tuningAt(resolvedUpscaleStrength) : ShaderType.NEUTRAL;
-        ColorBoostTuning colorTuning = colorBoostEnabled ? ColorBoostTuning.at(resolvedColorBoostStrength) : ColorBoostTuning.NEUTRAL;
+        ColorBoostTuning colorTuning = colorBoostOn
+            ? ColorBoostTuning.at(resolvedColorBoostSaturationStrength, resolvedColorBoostContrastStrength)
+            : ColorBoostTuning.NEUTRAL;
         player.setVideoEffects(
             Collections.singletonList(new ShaderUpscaleEffect(this, programType, sharpenTuning, colorTuning)));
         PlayerUiHelper.updateStatsOverlay(this);
@@ -1278,27 +1310,55 @@ public class PlayerActivity extends AppCompatActivity {
     /* Same "toggle IS the persisted setting" immediate-persistence model as
        setAmbientEnabled above. Unlike ambient opacity, this goes through
        applyVideoEffects() (a GL program rebuild via setVideoEffects()), so
-       PlayerUiHelper's Color Boost strength SeekBar gates the actual apply to
+       PlayerUiHelper's Color Boost strength SeekBars gate the actual apply to
        onStopTrackingTouch, same drag-frequency hazard as the Shader Upscaling panel -
-       see that panel's own comment. */
-    void setColorBoostEnabled(boolean enabled) {
-        colorBoostEnabled = enabled;
-        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().putBoolean(PREF_COLOR_BOOST_ENABLED, enabled).apply();
+       see that panel's own comment. Saturation and Contrast are fully independent
+       controls now - each its own enabled/auto pair - rather than one shared Color
+       Boost toggle. */
+    void setColorBoostSaturationEnabled(boolean enabled) {
+        colorBoostSaturationEnabled = enabled;
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().putBoolean(PREF_COLOR_BOOST_SATURATION_ENABLED, enabled).apply();
         applyVideoEffects();
         nudgeVideoPipelineAfterEffectsChange();
     }
 
-    void setColorBoostStrength(float strength) {
-        colorBoostStrength = strength;
-        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().putFloat(PREF_COLOR_BOOST_STRENGTH, strength).apply();
+    void setColorBoostContrastEnabled(boolean enabled) {
+        colorBoostContrastEnabled = enabled;
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().putBoolean(PREF_COLOR_BOOST_CONTRAST_ENABLED, enabled).apply();
         applyVideoEffects();
         nudgeVideoPipelineAfterEffectsChange();
     }
 
-    /* Same immediate-persistence model as setColorBoostEnabled/setUpscaleAuto above. */
-    void setColorBoostAuto(boolean enabled) {
-        colorBoostAuto = enabled;
-        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().putBoolean(PREF_COLOR_BOOST_AUTO, enabled).apply();
+    void setColorBoostSaturationStrength(float strength) {
+        colorBoostSaturationStrength = strength;
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().putFloat(PREF_COLOR_BOOST_SATURATION_STRENGTH, strength).apply();
+        applyVideoEffects();
+        nudgeVideoPipelineAfterEffectsChange();
+    }
+
+    void setColorBoostContrastStrength(float strength) {
+        colorBoostContrastStrength = strength;
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().putFloat(PREF_COLOR_BOOST_CONTRAST_STRENGTH, strength).apply();
+        applyVideoEffects();
+        nudgeVideoPipelineAfterEffectsChange();
+    }
+
+    /* Same immediate-persistence model as setColorBoostSaturationEnabled/setUpscaleAuto
+       above. Independent of setColorBoostContrastAuto below - each auto-derives from its
+       own signal (avgSaturation vs lumaStdDev, see AutoStrength), so there's no shared
+       auto state left to couple them through. */
+    void setColorBoostSaturationAuto(boolean enabled) {
+        colorBoostSaturationAuto = enabled;
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().putBoolean(PREF_COLOR_BOOST_SATURATION_AUTO, enabled).apply();
+        updateContentAnalysis();
+        applyVideoEffects();
+        nudgeVideoPipelineAfterEffectsChange();
+    }
+
+    /* Same reasoning as setColorBoostSaturationAuto above, mirrored for Contrast. */
+    void setColorBoostContrastAuto(boolean enabled) {
+        colorBoostContrastAuto = enabled;
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().putBoolean(PREF_COLOR_BOOST_CONTRAST_AUTO, enabled).apply();
         updateContentAnalysis();
         applyVideoEffects();
         nudgeVideoPipelineAfterEffectsChange();
@@ -1336,23 +1396,35 @@ public class PlayerActivity extends AppCompatActivity {
         setUpscaleAuto("auto".equals(mode));
     }
 
-    /* Same collapsing reasoning as upscaleMode/setUpscaleMode above. */
-    String colorBoostMode() {
-        if (!colorBoostEnabled) return "off";
-        return colorBoostAuto ? "auto" : "on";
+    /* Same collapsing reasoning as upscaleMode/setUpscaleMode above, one independent
+       triple per component now instead of one shared Color Boost mode. */
+    String colorBoostSaturationMode() {
+        if (!colorBoostSaturationEnabled) return "off";
+        return colorBoostSaturationAuto ? "auto" : "on";
     }
 
-    void setColorBoostMode(String mode) {
-        setColorBoostEnabled(!"off".equals(mode));
-        setColorBoostAuto("auto".equals(mode));
+    void setColorBoostSaturationMode(String mode) {
+        setColorBoostSaturationEnabled(!"off".equals(mode));
+        setColorBoostSaturationAuto("auto".equals(mode));
     }
 
-    /* Starts/stops the shared content-analysis capture loop based on whether either auto
+    String colorBoostContrastMode() {
+        if (!colorBoostContrastEnabled) return "off";
+        return colorBoostContrastAuto ? "auto" : "on";
+    }
+
+    void setColorBoostContrastMode(String mode) {
+        setColorBoostContrastEnabled(!"off".equals(mode));
+        setColorBoostContrastAuto("auto".equals(mode));
+    }
+
+    /* Starts/stops the shared content-analysis capture loop based on whether any auto
        mode needs it - mirrors content-analysis.js's updateContentAnalysis on the web leg.
-       Called from setUpscaleAuto/setColorBoostAuto above. */
+       Called from setUpscaleAuto/setColorBoostSaturationAuto/setColorBoostContrastAuto
+       above. */
     void updateContentAnalysis() {
         if (contentSampler == null) return;
-        if (upscaleAuto || colorBoostAuto) {
+        if (upscaleAuto || colorBoostSaturationAuto || colorBoostContrastAuto) {
             contentSampler.start();
         } else {
             contentSampler.stop();

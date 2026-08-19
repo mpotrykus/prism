@@ -30,7 +30,7 @@ import { buildStreamUrl, buildDecisionUrl } from "./src/player/core/stream-url.j
 import { playNative, switchNative, stopNative, pauseNative, resumeNative, buildPlaybackPayload } from "./src/player/native-bridge.js";
 import { playXbox, switchXbox, stopXbox, pauseXbox, resumeXbox, reloadXboxSource } from "./src/player/xbox-bridge.js";
 import { playWeb, attachSource, reloadWebSource, teardownWeb } from "./src/player/web-fallback.js";
-import { setShaderStrength, setColorBoostStrength, setDebandEnabled, updateShaderPipeline, ensureShaderPipeline, stopShaderLoop } from "./src/player/shader-pipeline.js";
+import { setShaderStrength, setColorBoostSaturationStrength, setColorBoostContrastStrength, setAiUpscalingEnabled, updateShaderPipeline, ensureShaderPipeline, stopShaderLoop } from "./src/player/shader-pipeline.js";
 import { setAmbientEnabled, setAmbientOpacity, updateAmbientPipeline, stopAmbientLoop } from "./src/player/ambient-pipeline.js";
 import { setStatsOverlayEnabled, updateStatsOverlayPipeline } from "./src/player/stats-overlay.js";
 import {
@@ -39,10 +39,13 @@ import {
     storedShaderEnabled,
     storedShaderStrength,
     storedUpscaleAuto,
-    storedColorBoostEnabled,
-    storedColorBoostStrength,
-    storedColorBoostAuto,
-    storedDebandEnabled,
+    storedColorBoostSaturationEnabled,
+    storedColorBoostContrastEnabled,
+    storedColorBoostSaturationStrength,
+    storedColorBoostContrastStrength,
+    storedColorBoostSaturationAuto,
+    storedColorBoostContrastAuto,
+    storedAiUpscalingEnabled,
     storedStatsOverlayEnabled,
     storedAutoPlayEnabled,
     storedAutoQualityEnabled,
@@ -157,18 +160,23 @@ class StreamingPlayerController {
         this._shaderQuadBuffer = null;
         this._shaderTexture = null;
         this._shaderRafId = null;
-        this._colorBoostEnabled = false;
-        this._colorBoostStrength = 0.5;
+        this._colorBoostSaturationEnabled = false;
+        this._colorBoostContrastEnabled = false;
+        this._colorBoostSaturationStrength = 0.5;
+        this._colorBoostContrastStrength = 0.5;
         this._upscaleAuto = false;
-        this._colorBoostAuto = false;
-        this._debandEnabled = false;
+        this._colorBoostSaturationAuto = false;
+        this._colorBoostContrastAuto = false;
+        this._aiUpscalingEnabled = false;
         this._autoUpscaleStrength = null;
-        this._autoColorBoostStrength = null;
+        this._autoColorBoostSaturationStrength = null;
+        this._autoColorBoostContrastStrength = null;
         this._contentSampleCanvas = null;
         this._contentSampleCtx = null;
         this._contentLastSampleAt = 0;
         this._contentSmoothedSaturation = null;
         this._contentSmoothedEdgeEnergy = null;
+        this._contentSmoothedLumaStdDev = null;
         this._contentRafId = null;
         this._statsOverlayEnabled = false;
         this._statsOverlayEl = null;
@@ -411,6 +419,9 @@ class StreamingPlayerController {
            values themselves. */
         this._upscaleAuto = storedUpscaleAuto();
         this._shaderType = this._shaderEnabled && (this._upscaleAuto || this._shaderStrength > 0) ? this._shaderAutoType : "off";
+        /* AI Upscaling (the real Anime4K CNN / FSR 1 chains) - independent of Sharpening's
+           state above, no per-video/genre concern of its own either. */
+        this._aiUpscalingEnabled = storedAiUpscalingEnabled();
         this._autoUpscaleStrength = null;
         /* Unlike the shader fields above, ambient lighting has no per-video/genre
            concern to resolve here - storedAmbientEnabled() is the whole answer, the
@@ -419,14 +430,18 @@ class StreamingPlayerController {
         this._ambientEnabled = storedAmbientEnabled();
         this._ambientOpacity = storedAmbientOpacity();
         /* Same no-per-video-concern reasoning as ambient lighting above - Color Boost's
-           contrast/saturation lift has nothing genre-specific to resolve either. */
-        this._colorBoostEnabled = storedColorBoostEnabled();
-        this._colorBoostStrength = storedColorBoostStrength();
-        this._colorBoostAuto = storedColorBoostAuto();
-        this._autoColorBoostStrength = null;
-        /* Read before _updateShaderPipeline runs: buildShaderChains composes every chain around
-           this flag, so a later read would compile the wrong composition first. */
-        this._debandEnabled = storedDebandEnabled();
+           contrast/saturation lift has nothing genre-specific to resolve either. Saturation
+           and Contrast are fully independent controls now (own enabled/auto pair, own
+           Auto|On|Off mode - see shader-pipeline.js's setColorBoostSaturationMode/
+           setColorBoostContrastMode), not one shared toggle. */
+        this._colorBoostSaturationEnabled = storedColorBoostSaturationEnabled();
+        this._colorBoostContrastEnabled = storedColorBoostContrastEnabled();
+        this._colorBoostSaturationStrength = storedColorBoostSaturationStrength();
+        this._colorBoostContrastStrength = storedColorBoostContrastStrength();
+        this._colorBoostSaturationAuto = storedColorBoostSaturationAuto();
+        this._colorBoostContrastAuto = storedColorBoostContrastAuto();
+        this._autoColorBoostSaturationStrength = null;
+        this._autoColorBoostContrastStrength = null;
         this._statsOverlayEnabled = storedStatsOverlayEnabled();
         this._autoPlayEnabled = storedAutoPlayEnabled();
         /* No per-video/genre concern to resolve either - see core/abr.js. Reset every
@@ -723,6 +738,10 @@ class StreamingPlayerController {
         return setShaderStrength(this, strength);
     }
 
+    _setAiUpscalingEnabled(enabled) {
+        return setAiUpscalingEnabled(this, enabled);
+    }
+
     _updateShaderPipeline() {
         return updateShaderPipeline(this);
     }
@@ -735,10 +754,6 @@ class StreamingPlayerController {
         return stopShaderLoop(this);
     }
 
-    _setDebandEnabled(enabled) {
-        setDebandEnabled(this, enabled);
-    }
-
     _setAmbientEnabled(enabled) {
         return setAmbientEnabled(this, enabled);
     }
@@ -747,8 +762,12 @@ class StreamingPlayerController {
         return setAmbientOpacity(this, opacity);
     }
 
-    _setColorBoostStrength(strength) {
-        return setColorBoostStrength(this, strength);
+    _setColorBoostSaturationStrength(strength) {
+        return setColorBoostSaturationStrength(this, strength);
+    }
+
+    _setColorBoostContrastStrength(strength) {
+        return setColorBoostContrastStrength(this, strength);
     }
 
     _setStatsOverlayEnabled(enabled) {

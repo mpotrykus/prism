@@ -250,8 +250,8 @@ export function loadMpvUserShader(source, { name = "user-shader", inputSymbol = 
 export function loadMpvUserShaderChain(sources, inputSymbol = SOURCE) {
     const passes = [];
     const gates = [];
-    /* `inputSymbol` is what the first file's MAIN starts at - SOURCE normally, or an optional
-       preceding pass (deband) when one is composed in front. See shaders.js's composePasses. */
+    /* `inputSymbol` is what the first file's MAIN starts at - SOURCE by default, or any other
+       already-built pass a caller wants to feed in as the chain's starting image. */
     let sourceSymbol = inputSymbol;
 
     sources.forEach(({ source, name }) => {

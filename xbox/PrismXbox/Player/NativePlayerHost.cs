@@ -91,8 +91,8 @@ namespace PrismXbox.Player
             // constructor's `emit` parameter itself is already built to satisfy (see MainPage.xaml.cs's
             // Dispatcher.RunAsync wrapper around it), so simply forwarding through `emit` here is
             // enough; this class does not need its own dispatcher call.
-            EffectSettings.ContentAnalysis += (avgSaturation, edgeEnergy) =>
-                emit("contentAnalysis", $"{{\"avgSaturation\":{avgSaturation:R},\"edgeEnergy\":{edgeEnergy:R}}}");
+            EffectSettings.ContentAnalysis += (avgSaturation, edgeEnergy, lumaStdDev) =>
+                emit("contentAnalysis", $"{{\"avgSaturation\":{avgSaturation:R},\"edgeEnergy\":{edgeEnergy:R},\"lumaStdDev\":{lumaStdDev:R}}}");
             EffectSettings.AmbientColors += (top, bottom, left, right) =>
                 emit("ambientColors",
                     $"{{\"top\":{JsonNumberArray(top)},\"bottom\":{JsonNumberArray(bottom)}," +
@@ -115,9 +115,12 @@ namespace PrismXbox.Player
             SyncEffectAttachment();
         }
 
-        public void SetColorBoost(bool enabled, double strength, bool auto)
+        public void SetColorBoost(
+            bool saturationEnabled, bool contrastEnabled,
+            double saturationStrength, double contrastStrength,
+            bool saturationAuto, bool contrastAuto)
         {
-            EffectSettings.SetColorBoost(enabled, strength, auto);
+            EffectSettings.SetColorBoost(saturationEnabled, contrastEnabled, saturationStrength, contrastStrength, saturationAuto, contrastAuto);
             SyncEffectAttachment();
         }
 

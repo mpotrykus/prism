@@ -3,8 +3,6 @@ import { closeEpisodeListOverlay, closeChapterListOverlay } from "./episode-list
 import { closeAudioSubtitlesOverlay, stopSubtitleLoop } from "./chrome-subtitles.js";
 import { ensurePlayerFocusStyle } from "./shared.js";
 import { platformTag } from "../core/platform.js";
-/* TEMPORARY - see deband-tuning-panel.js's own header comment. */
-import { mountDebandTuningPanel, unmountDebandTuningPanel } from "../shader/deband-tuning-panel.js";
 
 /* Circular with web-fallback.js (which imports mountPlayerChrome/unmountPlayerChrome from here, while
    chrome-subtitles.js above imports trySwitchAudioTrackLocal from it) - safe for the same reason the
@@ -76,13 +74,12 @@ export function mountPlayerChrome(controller, mediaEl, { gpuPipelines }) {
            auto-detected type) before this ran - this just spins up the WebGL pipeline for that starting
            state, same as any other change made through the hamburger menu later in the session. */
         controller._updateShaderPipeline();
-        /* TEMPORARY - see deband-tuning-panel.js's own header comment. */
-        mountDebandTuningPanel(controller);
         /* Same "already-resolved global default, just spin up the pipeline" reasoning as the shader call
            above - controller._ambientEnabled was set from storedAmbientEnabled() in play(). */
         controller._updateAmbientPipeline();
-        /* Same reasoning - controller._upscaleAuto/_colorBoostAuto were set from
-           storedUpscaleAuto()/storedColorBoostAuto() in play(). */
+        /* Same reasoning - controller._upscaleAuto/_colorBoostSaturationAuto/
+           _colorBoostContrastAuto were set from storedUpscaleAuto()/
+           storedColorBoostSaturationAuto()/storedColorBoostContrastAuto() in play(). */
         updateContentAnalysis(controller);
     }
     /* Same reasoning - controller._statsOverlayEnabled was set from storedStatsOverlayEnabled() in
@@ -111,8 +108,6 @@ export function unmountPlayerChrome(controller) {
         controller._statsOverlayEl.remove();
         controller._statsOverlayEl = null;
     }
-    /* TEMPORARY - see deband-tuning-panel.js's own header comment. */
-    unmountDebandTuningPanel(controller);
     controller._closeInlineMenu();
     closeEpisodeListOverlay(controller);
     closeChapterListOverlay(controller);

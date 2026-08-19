@@ -326,10 +326,13 @@ final class PlayerUiHelper {
             ? "off"
             : activity.shaderType.label + " @ " + Math.round(shownUpscaleStrength * 100) + "%"
                 + (activity.upscaleAuto ? " (auto)" : ""));
-        float shownColorBoostStrength = activity.colorBoostAuto ? activity.autoColorBoostStrength : activity.colorBoostStrength;
-        String colorBoostLine = "Color Boost: " + (activity.colorBoostEnabled
-            ? Math.round(shownColorBoostStrength * 100) + "%" + (activity.colorBoostAuto ? " (auto)" : "")
-            : "off");
+        boolean satOn = activity.colorBoostSaturationEnabled;
+        boolean conOn = activity.colorBoostContrastEnabled;
+        float shownColorBoostSaturation = activity.colorBoostSaturationAuto ? activity.autoColorBoostSaturationStrength : activity.colorBoostSaturationStrength;
+        float shownColorBoostContrast = activity.colorBoostContrastAuto ? activity.autoColorBoostContrastStrength : activity.colorBoostContrastStrength;
+        String satPart = satOn ? "sat " + Math.round(shownColorBoostSaturation * 100) + "%" + (activity.colorBoostSaturationAuto ? " (auto)" : "") : "sat off";
+        String conPart = conOn ? "con " + Math.round(shownColorBoostContrast * 100) + "%" + (activity.colorBoostContrastAuto ? " (auto)" : "") : "con off";
+        String colorBoostLine = "Color Boost: " + (!satOn && !conOn ? "off" : satPart + ", " + conPart);
 
         String qualityCapLine = "Quality cap: " + (activity.qualityCapKbps != null ? activity.qualityCapKbps + " kbps" : "original")
             + (activity.autoQualityEnabled ? " (auto)" : "");
@@ -1317,21 +1320,13 @@ final class PlayerUiHelper {
         });
     }
 
-    /* Same pattern as buildShaderEffectRow above, simpler since there's no auto-detected
-       type to show as read-only info here - just the one strength control. Gated to
-       onStopTrackingTouch like Shader Upscaling's own row (not live like Ambient
-       Lighting's opacity below) - PlayerActivity.setColorBoostStrength goes through
-       applyVideoEffects(), the same GL-program-rebuild-per-call hazard documented on
-       buildShaderEffectRow's own SeekBar listener. */
-    private static void buildColorBoostEffectRow(PlayerActivity activity, LinearLayout list, float density) {
-        EffectRowParts row = buildEffectRow(activity, list, density, MenuIconView.Icon.COLOR_BOOST, "Color Boost", null);
+    /* One labeled TextView+SeekBar pair, shared by buildColorBoostEffectRow's Saturation
+       and Contrast rows below - same "commit on release" gating buildShaderEffectRow's
+       own SeekBar uses (PlayerActivity.setColorBoostSaturationStrength/
+       setColorBoostContrastStrength both go through applyVideoEffects(), the same
+       GL-program-rebuild-per-call hazard). */
+    private static SeekBar makeStrengthSeekBar(PlayerActivity activity, float density, String label, TextView strengthLabel, Consumer<Float> onCommit) {
         int padH = Math.round(16 * density);
-
-        TextView strengthLabel = new TextView(activity);
-        strengthLabel.setTextColor(SUBTLE_TEXT);
-        strengthLabel.setTextSize(12);
-        strengthLabel.setPadding(padH, Math.round(6 * density), padH, 0);
-
         SeekBar strengthSeekBar = new SeekBar(activity);
         styleMenuSeekBar(strengthSeekBar, density);
         strengthSeekBar.setMax(100);
@@ -1345,7 +1340,7 @@ final class PlayerUiHelper {
         strengthSeekBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override
             public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
-                strengthLabel.setText("Strength: " + progress + "%");
+                strengthLabel.setText(label + ": " + progress + "%");
             }
 
             @Override
@@ -1353,24 +1348,83 @@ final class PlayerUiHelper {
 
             @Override
             public void onStopTrackingTouch(SeekBar seekBar) {
-                activity.setColorBoostStrength(seekBar.getProgress() / 100f);
+                onCommit.accept(seekBar.getProgress() / 100f);
             }
         });
+        return strengthSeekBar;
+    }
 
-        String[] currentMode = { activity.colorBoostMode() };
-        addModeRow(activity, row.rightSide, density, currentMode[0], (mode) -> {
+    /* One sub-control (its own title, its own Auto|On|Off mode row, its own SeekBar) - shared
+       by buildColorBoostEffectRow's Saturation and Contrast sections below. Fully independent
+       now: each has its own enabled/auto pair and auto-derives from its own signal
+       (avgSaturation for Saturation, lumaStdDev for Contrast - see
+       AutoStrength.colorBoost/colorBoostContrast), so unlike the shared-mode-row this
+       replaced, there's nothing left to couple the two through. */
+    private static void buildColorBoostComponentSection(
+            PlayerActivity activity, LinearLayout container, float density, String title,
+            Supplier<String> modeOf, Consumer<String> setMode,
+            Supplier<Float> getManualValue, Consumer<Float> setStrength, Supplier<Float> getAutoValue) {
+        int padH = Math.round(16 * density);
+
+        LinearLayout section = new LinearLayout(activity);
+        section.setOrientation(LinearLayout.VERTICAL);
+        LinearLayout.LayoutParams sectionParams = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        sectionParams.topMargin = Math.round(8 * density);
+        section.setLayoutParams(sectionParams);
+
+        LinearLayout header = new LinearLayout(activity);
+        header.setOrientation(LinearLayout.HORIZONTAL);
+        header.setGravity(Gravity.CENTER_VERTICAL);
+        header.setPadding(padH, 0, padH, 0);
+        header.setLayoutParams(new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        TextView titleEl = new TextView(activity);
+        titleEl.setText(title);
+        titleEl.setTextColor(Color.WHITE);
+        titleEl.setTextSize(13);
+        titleEl.setTypeface(titleEl.getTypeface(), android.graphics.Typeface.BOLD);
+        titleEl.setLayoutParams(new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        header.addView(titleEl);
+
+        TextView strengthLabel = new TextView(activity);
+        strengthLabel.setTextColor(SUBTLE_TEXT);
+        strengthLabel.setTextSize(12);
+        strengthLabel.setPadding(padH, Math.round(6 * density), padH, 0);
+        SeekBar strengthSeekBar = makeStrengthSeekBar(activity, density, title, strengthLabel, setStrength);
+
+        String[] currentMode = { modeOf.get() };
+        Runnable refresh = () -> applyStrengthDisplay(strengthSeekBar, strengthLabel, title, currentMode[0], getAutoValue.get(), getManualValue.get());
+        addModeRow(activity, header, density, currentMode[0], (mode) -> {
             currentMode[0] = mode;
-            activity.setColorBoostMode(mode);
-            applyStrengthDisplay(strengthSeekBar, strengthLabel, mode, activity.autoColorBoostStrength, activity.colorBoostStrength);
+            setMode.accept(mode);
+            refresh.run();
         });
-        applyStrengthDisplay(strengthSeekBar, strengthLabel, currentMode[0], activity.autoColorBoostStrength, activity.colorBoostStrength);
-        row.wrap.addView(strengthLabel);
-        row.wrap.addView(strengthSeekBar);
+        refresh.run();
+
+        section.addView(header);
+        section.addView(strengthLabel);
+        section.addView(strengthSeekBar);
+        container.addView(section);
         startLiveAutoRefresh(strengthSeekBar, () -> {
-            if ("auto".equals(currentMode[0])) {
-                applyStrengthDisplay(strengthSeekBar, strengthLabel, "auto", activity.autoColorBoostStrength, activity.colorBoostStrength);
-            }
+            if ("auto".equals(currentMode[0])) refresh.run();
         });
+    }
+
+    /* Two fully independent controls now (Saturation, Contrast - each its own Auto/On/Off
+       mode, previously one combined "Strength" knob under one shared mode row) rather than
+       one shared Color Boost toggle - a viewer may want one boosted and not the other, or one
+       on Auto while manually dialing in the other. */
+    private static void buildColorBoostEffectRow(PlayerActivity activity, LinearLayout list, float density) {
+        EffectRowParts row = buildEffectRow(activity, list, density, MenuIconView.Icon.COLOR_BOOST, "Color Boost", null);
+
+        buildColorBoostComponentSection(activity, row.wrap, density, "Saturation",
+            () -> activity.colorBoostSaturationMode(), (mode) -> activity.setColorBoostSaturationMode(mode),
+            () -> activity.colorBoostSaturationStrength, (v) -> activity.setColorBoostSaturationStrength(v),
+            () -> activity.autoColorBoostSaturationStrength);
+        buildColorBoostComponentSection(activity, row.wrap, density, "Contrast",
+            () -> activity.colorBoostContrastMode(), (mode) -> activity.setColorBoostContrastMode(mode),
+            () -> activity.colorBoostContrastStrength, (v) -> activity.setColorBoostContrastStrength(v),
+            () -> activity.autoColorBoostContrastStrength);
     }
 
     /* Same pattern as buildShaderEffectRow above, simpler since there's no auto-detected
@@ -1873,13 +1927,21 @@ final class PlayerUiHelper {
        change, so there's no risk of a live auto-mode refresh (see
        startLiveAutoRefresh) clobbering the remembered manual value. */
     private static void applyStrengthDisplay(SeekBar strengthSeekBar, TextView strengthLabel, String mode, float autoValue, float manualValue) {
+        applyStrengthDisplay(strengthSeekBar, strengthLabel, "Strength", mode, autoValue, manualValue);
+    }
+
+    /* Same as the 5-arg overload above, but with a caller-chosen label prefix - Color
+       Boost's Saturation/Contrast rows share one mode row driving two independent
+       SeekBars (see buildColorBoostEffectRow), so each needs its own label rather than
+       both reading "Strength". */
+    private static void applyStrengthDisplay(SeekBar strengthSeekBar, TextView strengthLabel, String label, String mode, float autoValue, float manualValue) {
         boolean auto = "auto".equals(mode);
         boolean enabled = "on".equals(mode);
         strengthSeekBar.setEnabled(enabled);
         strengthSeekBar.setAlpha(enabled ? 1f : 0.5f);
         int shown = Math.round((auto ? autoValue : manualValue) * 100);
         strengthSeekBar.setProgress(shown);
-        strengthLabel.setText("Strength: " + shown + "%" + (auto ? " (auto)" : ""));
+        strengthLabel.setText(label + ": " + shown + "%" + (auto ? " (auto)" : ""));
     }
 
     /* Ticks `refresh` while `view` stays attached to the window, then stops itself -
@@ -1906,9 +1968,10 @@ final class PlayerUiHelper {
 
     /* 3-way Auto/On/Off segmented control replacing the old separate enabled-toggle
        (hamburger row) + "Auto strength" SwitchCompat (panel) pair - see
-       PlayerActivity.setUpscaleMode/setColorBoostMode for why the underlying
-       shaderEnabled/upscaleAuto (colorBoostEnabled/colorBoostAuto) flags stay as they
-       were rather than being replaced outright. Matches chrome.js's buildModeRow on the
+       PlayerActivity.setUpscaleMode/setColorBoostSaturationMode/setColorBoostContrastMode
+       for why the underlying shaderEnabled/upscaleAuto (colorBoostSaturationEnabled/
+       colorBoostSaturationAuto and the Contrast equivalents) flags stay as they were
+       rather than being replaced outright. Matches chrome.js's buildModeRow on the
        web leg: three equal-weight buttons, tap wires straight through to onModeChange +
        a strength-display refresh, no separate "commit" step. */
     /* Fixed-width buttons (not layout_weight) rather than the old evenly-filled

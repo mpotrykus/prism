@@ -4,12 +4,15 @@ using System.Runtime.InteropServices.WindowsRuntime;
 namespace PrismXboxEffects
 {
     /// <summary>
-    /// (avgSaturation, edgeEnergy) - a plain <c>Action&lt;double,double&gt;</c> is not usable here:
-    /// this assembly compiles as a Windows Runtime Component (<c>OutputType=winmdobj</c>), and
-    /// every public member is projected into Windows Metadata, which does not support open generic
-    /// delegates like <c>System.Action&lt;T&gt;</c> - only a real (non-generic) delegate type.
+    /// (avgSaturation, edgeEnergy, lumaStdDev) - a plain <c>Action&lt;double,double,double&gt;</c>
+    /// is not usable here: this assembly compiles as a Windows Runtime Component
+    /// (<c>OutputType=winmdobj</c>), and every public member is projected into Windows Metadata,
+    /// which does not support open generic delegates like <c>System.Action&lt;T&gt;</c> - only a
+    /// real (non-generic) delegate type. lumaStdDev backs Auto Contrast (see
+    /// ContentAnalysisSampler.AverageLumaStdDev) - added alongside avgSaturation/edgeEnergy once
+    /// Saturation and Contrast became independently auto-able rather than sharing one signal.
     /// </summary>
-    public delegate void ContentAnalysisHandler(double avgSaturation, double edgeEnergy);
+    public delegate void ContentAnalysisHandler(double avgSaturation, double edgeEnergy, double lumaStdDev);
 
     /// <summary>
     /// Four raw per-zone RGB-average arrays (top/bottom/left/right, 24 doubles each - 8 zones * 3
@@ -68,9 +71,16 @@ namespace PrismXboxEffects
         private static string _shaderType = "live_action";
         private static double _shaderStrength;
         private static bool _shaderAuto;
-        private static bool _colorBoostEnabled;
-        private static double _colorBoostStrength;
-        private static bool _colorBoostAuto;
+        /* Saturation and Contrast are fully independent controls now - each its own
+           enabled/auto pair, each auto-deriving from its own signal (avgSaturation for
+           Saturation, lumaStdDev for Contrast - see ContentAnalysisSampler) - not one
+           shared _colorBoostEnabled/_colorBoostAuto pair. */
+        private static bool _colorBoostSaturationEnabled;
+        private static bool _colorBoostContrastEnabled;
+        private static double _colorBoostSaturationStrength;
+        private static double _colorBoostContrastStrength;
+        private static bool _colorBoostSaturationAuto;
+        private static bool _colorBoostContrastAuto;
         private static bool _ambientEnabled;
 
         internal struct Snapshot
@@ -79,24 +89,28 @@ namespace PrismXboxEffects
             public string ShaderType;
             public double ShaderStrength;
             public bool ShaderAuto;
-            public bool ColorBoostEnabled;
-            public double ColorBoostStrength;
-            public bool ColorBoostAuto;
+            public bool ColorBoostSaturationEnabled;
+            public bool ColorBoostContrastEnabled;
+            public double ColorBoostSaturationStrength;
+            public double ColorBoostContrastStrength;
+            public bool ColorBoostSaturationAuto;
+            public bool ColorBoostContrastAuto;
             public bool AmbientEnabled;
         }
 
         /// <summary>True whenever the video-effect pass needs to be attached to the MediaPlayer at
         /// all - either something visual is on, or something needs frame samples (auto-strength or
         /// ambient lighting). Mirrors shader-pipeline.js's updateShaderPipeline gate
-        /// ("_shaderType === 'off' && !_colorBoostEnabled" => stop), extended with the two sampling
-        /// cases web/Android never needed a native equivalent of.</summary>
+        /// ("_shaderType === 'off' && !_colorBoostSaturationEnabled && !_colorBoostContrastEnabled"
+        /// => stop), extended with the two sampling cases web/Android never needed a native
+        /// equivalent of.</summary>
         public static bool ShouldAttach
         {
             get
             {
                 lock (Gate)
                 {
-                    return _shaderEnabled || _colorBoostEnabled || _ambientEnabled;
+                    return _shaderEnabled || _colorBoostSaturationEnabled || _colorBoostContrastEnabled || _ambientEnabled;
                 }
             }
         }
@@ -112,13 +126,19 @@ namespace PrismXboxEffects
             }
         }
 
-        public static void SetColorBoost(bool enabled, double strength, bool auto)
+        public static void SetColorBoost(
+            bool saturationEnabled, bool contrastEnabled,
+            double saturationStrength, double contrastStrength,
+            bool saturationAuto, bool contrastAuto)
         {
             lock (Gate)
             {
-                _colorBoostEnabled = enabled;
-                _colorBoostStrength = strength;
-                _colorBoostAuto = auto;
+                _colorBoostSaturationEnabled = saturationEnabled;
+                _colorBoostContrastEnabled = contrastEnabled;
+                _colorBoostSaturationStrength = saturationStrength;
+                _colorBoostContrastStrength = contrastStrength;
+                _colorBoostSaturationAuto = saturationAuto;
+                _colorBoostContrastAuto = contrastAuto;
             }
         }
 
@@ -142,9 +162,12 @@ namespace PrismXboxEffects
                         ShaderType = _shaderType,
                         ShaderStrength = _shaderStrength,
                         ShaderAuto = _shaderAuto,
-                        ColorBoostEnabled = _colorBoostEnabled,
-                        ColorBoostStrength = _colorBoostStrength,
-                        ColorBoostAuto = _colorBoostAuto,
+                        ColorBoostSaturationEnabled = _colorBoostSaturationEnabled,
+                        ColorBoostContrastEnabled = _colorBoostContrastEnabled,
+                        ColorBoostSaturationStrength = _colorBoostSaturationStrength,
+                        ColorBoostContrastStrength = _colorBoostContrastStrength,
+                        ColorBoostSaturationAuto = _colorBoostSaturationAuto,
+                        ColorBoostContrastAuto = _colorBoostContrastAuto,
                         AmbientEnabled = _ambientEnabled,
                     };
                 }
@@ -159,9 +182,9 @@ namespace PrismXboxEffects
 
         public static event AmbientColorsHandler AmbientColors;
 
-        internal static void RaiseContentAnalysis(double avgSaturation, double edgeEnergy)
+        internal static void RaiseContentAnalysis(double avgSaturation, double edgeEnergy, double lumaStdDev)
         {
-            ContentAnalysis?.Invoke(avgSaturation, edgeEnergy);
+            ContentAnalysis?.Invoke(avgSaturation, edgeEnergy, lumaStdDev);
         }
 
         internal static void RaiseAmbientColors(AmbientZoneColors colors)

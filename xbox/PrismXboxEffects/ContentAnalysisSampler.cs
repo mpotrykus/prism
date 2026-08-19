@@ -54,5 +54,26 @@ namespace PrismXboxEffects
         }
 
         private static double Luma(Color c) => 0.299 * c.R + 0.587 * c.G + 0.114 * c.B;
+
+        /// <summary>Standard deviation of luma across the sampled frame, normalized to 0..1 -
+        /// backs Auto Contrast (see ShaderTuning/content-analysis.js's autoContrastBoostStrength
+        /// on the web leg, which this mirrors the raw pixel-access half of - same "math stays in
+        /// JS" split as AverageSaturation/AverageEdgeEnergy above). A flat, washed-out/hazy frame
+        /// has luma values clustered close together (low stdDev); a frame that already spans a
+        /// wide tonal range has them spread out (high stdDev).</summary>
+        internal static double AverageLumaStdDev(Color[] pixels)
+        {
+            if (pixels.Length == 0) return 0;
+            double total = 0;
+            foreach (Color p in pixels) total += Luma(p);
+            double mean = total / pixels.Length;
+            double variance = 0;
+            foreach (Color p in pixels)
+            {
+                double diff = Luma(p) - mean;
+                variance += diff * diff;
+            }
+            return Math.Sqrt(variance / pixels.Length) / 255.0;
+        }
     }
 }

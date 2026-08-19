@@ -56,8 +56,9 @@ public class NativePlayerPlugin extends Plugin implements PlayerActivity.Playbac
         /* shaderEnabled/upscaleStrength/upscaleAuto are NOT read from the call here any
            more - PlayerActivity now owns them as its own SharedPreferences-persisted
            state (see that class's PREF_UPSCALE_ENABLED and friends), same immediate-
-           persistence model as colorBoostEnabled/colorBoostStrength/colorBoostAuto,
-           which never traveled through this plugin either. */
+           persistence model as colorBoostSaturationEnabled/colorBoostSaturationStrength/
+           colorBoostSaturationAuto and the Contrast equivalents, which never traveled
+           through this plugin either. */
         p.shaderType = call.getString("shaderType", "live_action");
         p.title = call.getString("title", "");
         p.episodeTitle = call.getString("episodeTitle");

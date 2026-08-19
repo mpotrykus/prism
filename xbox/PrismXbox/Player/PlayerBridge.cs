@@ -131,9 +131,12 @@ namespace PrismXbox.Player
                     break;
                 case "setColorBoost":
                     host.SetColorBoost(
-                        p.GetNamedBoolean("enabled", false),
-                        p.GetNamedNumber("strength", 0),
-                        p.GetNamedBoolean("auto", false));
+                        p.GetNamedBoolean("saturationEnabled", false),
+                        p.GetNamedBoolean("contrastEnabled", false),
+                        p.GetNamedNumber("saturationStrength", 0),
+                        p.GetNamedNumber("contrastStrength", 0),
+                        p.GetNamedBoolean("saturationAuto", false),
+                        p.GetNamedBoolean("contrastAuto", false));
                     break;
                 case "setAmbientLighting":
                     host.SetAmbientLighting(p.GetNamedBoolean("enabled", false));

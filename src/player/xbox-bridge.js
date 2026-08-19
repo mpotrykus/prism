@@ -210,8 +210,11 @@ export function postShaderEffect({ enabled, shaderType, strength, auto }) {
     post("setShaderEffect", { enabled, shaderType, strength, auto });
 }
 
-export function postColorBoost({ enabled, strength, auto }) {
-    post("setColorBoost", { enabled, strength, auto });
+/* Saturation and Contrast are fully independent now (own enabled/auto, own Auto|On|Off mode
+   - see shader-pipeline.js's postXboxColorBoostSettings) - no shared "enabled"/"auto" left to
+   send, just the two components' own pairs. */
+export function postColorBoost({ saturationEnabled, contrastEnabled, saturationStrength, contrastStrength, saturationAuto, contrastAuto }) {
+    post("setColorBoost", { saturationEnabled, contrastEnabled, saturationStrength, contrastStrength, saturationAuto, contrastAuto });
 }
 
 export function postAmbientLighting(enabled) {
@@ -318,7 +321,7 @@ function handleMessage(controller, message) {
             controller._xboxStats = params;
             break;
         case "contentAnalysis":
-            applyXboxContentAnalysis(controller, params.avgSaturation, params.edgeEnergy);
+            applyXboxContentAnalysis(controller, params.avgSaturation, params.edgeEnergy, params.lumaStdDev);
             break;
         case "ambientColors":
             applyXboxAmbientColors(controller, {

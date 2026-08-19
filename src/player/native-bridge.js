@@ -218,8 +218,9 @@ export function buildPlaybackPayload(controller, streamUrl, startOffsetMs) {
            instead of one per platform. shaderEnabled/upscaleStrength/upscaleAuto are
            NOT passed here - PlayerActivity owns those itself now (its own
            SharedPreferences-persisted state, see PREF_UPSCALE_ENABLED and friends), same
-           immediate-persistence model as colorBoostEnabled/colorBoostStrength/
-           colorBoostAuto, which never traveled through this bridge either. */
+           immediate-persistence model as colorBoostEnabled/colorBoostSaturationStrength/
+           colorBoostContrastStrength/colorBoostAuto, which never traveled through this
+           bridge either. */
         shaderType: controller._shaderAutoType,
         /* Native code only ever sees {title, startTimeOffsetMs, thumbUrl} - it doesn't
            need to know Plex's own Chapter field names, keeping that one Plex-protocol

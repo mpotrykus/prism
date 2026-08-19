@@ -121,7 +121,10 @@ namespace PrismXboxEffects
                     // the sampler keeps running (see that file's own comment for why).
                     bool hasStrength = settings.ShaderAuto || settings.ShaderStrength > 0;
                     string resolvedShaderType = settings.ShaderEnabled && hasStrength ? settings.ShaderType : "off";
-                    bool visualOn = resolvedShaderType != "off" || settings.ColorBoostEnabled;
+                    // Saturation and Contrast are fully independent controls now - either alone
+                    // (or both) keeps the visual pass alive, same as before this split.
+                    bool colorBoostOn = settings.ColorBoostSaturationEnabled || settings.ColorBoostContrastEnabled;
+                    bool visualOn = resolvedShaderType != "off" || colorBoostOn;
                     ShaderTuning.SharpenTuning sharpen = new ShaderTuning.SharpenTuning { Scale = 1, Sharpen = 0, Kernel = 1 };
                     ShaderTuning.ColorTuning color = new ShaderTuning.ColorTuning { Saturation = 1, Contrast = 1 };
                     string programType = settings.ShaderType;
@@ -139,8 +142,8 @@ namespace PrismXboxEffects
                             sharpen = upscaleStrength > 0
                                 ? ShaderTuning.ShaderTuningAt(programType, upscaleStrength)
                                 : new ShaderTuning.SharpenTuning { Scale = 1, Sharpen = 0, Kernel = 1 };
-                            color = settings.ColorBoostEnabled
-                                ? ShaderTuning.ColorBoostAt(settings.ColorBoostStrength)
+                            color = colorBoostOn
+                                ? ShaderTuning.ColorBoostAt(settings.ColorBoostSaturationStrength, settings.ColorBoostContrastStrength)
                                 : new ShaderTuning.ColorTuning { Saturation = 1, Contrast = 1 };
 
                             PixelShaderEffect effect = GetOrCreateEffect(programType);
@@ -257,7 +260,7 @@ namespace PrismXboxEffects
         /// </summary>
         private void MaybeSampleFrame(EffectSettings.Snapshot settings, CanvasBitmap inputBitmap)
         {
-            bool wantsContent = settings.ShaderAuto || settings.ColorBoostAuto;
+            bool wantsContent = settings.ShaderAuto || settings.ColorBoostSaturationAuto || settings.ColorBoostContrastAuto;
             bool wantsAmbient = settings.AmbientEnabled;
             if (!wantsContent && !wantsAmbient) return;
 
@@ -281,7 +284,8 @@ namespace PrismXboxEffects
                 _contentStopwatch.Restart();
                 double avgSaturation = ContentAnalysisSampler.AverageSaturation(pixels);
                 double edgeEnergy = ContentAnalysisSampler.AverageEdgeEnergy(pixels, SampleW, SampleH);
-                EffectSettings.RaiseContentAnalysis(avgSaturation, edgeEnergy);
+                double lumaStdDev = ContentAnalysisSampler.AverageLumaStdDev(pixels);
+                EffectSettings.RaiseContentAnalysis(avgSaturation, edgeEnergy, lumaStdDev);
             }
             if (ambientDue)
             {
