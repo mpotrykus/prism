@@ -134,6 +134,7 @@ public class PlayerActivity extends AppCompatActivity {
     private static final String PREF_UPSCALE_ENABLED = "upscale_enabled";
     private static final String PREF_UPSCALE_STRENGTH = "upscale_strength";
     private static final String PREF_UPSCALE_AUTO = "upscale_auto";
+    private static final String PREF_AI_UPSCALING_ENABLED = "ai_upscaling_enabled";
     private static final String PREF_COLOR_BOOST_SATURATION_ENABLED = "color_boost_saturation_enabled";
     private static final String PREF_COLOR_BOOST_CONTRAST_ENABLED = "color_boost_contrast_enabled";
     private static final String PREF_COLOR_BOOST_SATURATION_STRENGTH = "color_boost_saturation_strength";
@@ -243,6 +244,18 @@ public class PlayerActivity extends AppCompatActivity {
        above (see setUpscaleAuto). */
     boolean upscaleAuto = false;
     float autoUpscaleStrength = 0f;
+    /* The real Anime4K CNN / FSR 1 chain (see AiUpscalingPresets/AiUpscaleEffect) - independent
+       of shaderEnabled/shaderType (Sharpening) and colorBoost*Enabled, matching the web leg's
+       split (see shaders.js's "AI Upscaling split from Sharpening" note). Defaults ON for a
+       never-touched user, unlike every other toggle here - it silently had this behavior
+       already on the web leg before the split, and defaulting off here would be a regression
+       relative to that. */
+    boolean aiUpscalingEnabled = true;
+    /* Set by AiUpscaleEffect.toGlShaderProgram right after construction, read by
+       PlayerUiHelper's stats overlay for the "AI Upscaling" status line - see
+       AiUpscaleShaderProgram.statusLabel(). Not cleared on release(); a briefly-stale read on a
+       cosmetic debug overlay is an acceptable trade for not needing a listener interface here. */
+    AiUpscaleShaderProgram activeAiUpscaleProgram;
     /* Ambient lighting has no per-video/genre concern to resolve on this leg, so its
        persisted default lives entirely in this Activity's own SharedPreferences (see
        PREFS_NAME/PREF_AMBIENT_ENABLED), read once in onCreate and written back whenever
@@ -502,6 +515,7 @@ public class PlayerActivity extends AppCompatActivity {
            resolveShaderType), so this order matters, not just the values themselves. */
         upscaleAuto = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(PREF_UPSCALE_AUTO, false);
         shaderType = resolveShaderType();
+        aiUpscalingEnabled = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(PREF_AI_UPSCALING_ENABLED, true);
         ambientEnabled = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(PREF_AMBIENT_ENABLED, false);
         ambientOpacity = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getFloat(PREF_AMBIENT_OPACITY, 0.5f);
         colorBoostSaturationEnabled = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(PREF_COLOR_BOOST_SATURATION_ENABLED, false);
@@ -1093,16 +1107,21 @@ public class PlayerActivity extends AppCompatActivity {
         boolean sharpenOn = shaderType != ShaderType.OFF;
         boolean colorBoostOn = colorBoostSaturationEnabled || colorBoostContrastEnabled;
         boolean hdr = isHdrContent();
-        if ((!sharpenOn && !colorBoostOn) || hdr) {
+        // AI Upscaling is a third independent toggle now (see AiUpscaleEffect) - it can be the
+        // only thing rendering while Sharpening and Color Boost both sit off, same as the web
+        // leg's shader-pipeline.js. HDR still auto-skips the whole chain unconditionally - Phase
+        // 4 territory, not revisited here.
+        if ((!sharpenOn && !colorBoostOn && !aiUpscalingEnabled) || hdr) {
             Log.d(SHADER_TAG, "applyVideoEffects: no effects ("
-                + (hdr ? "HDR content detected, auto-skipping" : "both toggles off") + ")");
+                + (hdr ? "HDR content detected, auto-skipping" : "all toggles off") + ")");
             player.setVideoEffects(Collections.emptyList());
             PlayerUiHelper.updateStatsOverlay(this);
             return;
         }
         Log.d(SHADER_TAG, "applyVideoEffects: sharpenOn=" + sharpenOn + " (" + shaderType + " @ " + upscaleStrength
             + "), colorBoostSaturationEnabled=" + colorBoostSaturationEnabled + " (" + colorBoostSaturationStrength
-            + "), colorBoostContrastEnabled=" + colorBoostContrastEnabled + " (" + colorBoostContrastStrength + "), hdr=false");
+            + "), colorBoostContrastEnabled=" + colorBoostContrastEnabled + " (" + colorBoostContrastStrength
+            + "), aiUpscalingEnabled=" + aiUpscalingEnabled + ", hdr=false");
         ShaderType programType = sharpenOn ? shaderType : detectedShaderType;
         /* Auto strength (see ContentAnalysisSampler/AutoStrength) resolves separately
            from upscaleStrength/colorBoostSaturationStrength/colorBoostContrastStrength
@@ -1134,8 +1153,14 @@ public class PlayerActivity extends AppCompatActivity {
         ColorBoostTuning colorTuning = colorBoostOn
             ? ColorBoostTuning.at(resolvedColorBoostSaturationStrength, resolvedColorBoostContrastStrength)
             : ColorBoostTuning.NEUTRAL;
-        player.setVideoEffects(
-            Collections.singletonList(new ShaderUpscaleEffect(this, programType, sharpenTuning, colorTuning)));
+        // AI Upscaling on: always route through AiUpscaleEffect, which internally falls back to
+        // the same single-pass Sharpening math (see AiUpscaleShaderProgram) whenever the CNN/FSR
+        // chain's own upscale gate declines or fails to build on this GPU - so this branch alone
+        // is never a regression risk for the AI-Upscaling-off path below, which is untouched.
+        Effect effect = aiUpscalingEnabled
+            ? new AiUpscaleEffect(this, programType, sharpenTuning, colorTuning)
+            : new ShaderUpscaleEffect(this, programType, sharpenTuning, colorTuning);
+        player.setVideoEffects(Collections.singletonList(effect));
         PlayerUiHelper.updateStatsOverlay(this);
     }
 
@@ -1292,6 +1317,15 @@ public class PlayerActivity extends AppCompatActivity {
         getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().putBoolean(PREF_UPSCALE_AUTO, enabled).apply();
         shaderType = resolveShaderType();
         updateContentAnalysis();
+        applyVideoEffects();
+        nudgeVideoPipelineAfterEffectsChange();
+    }
+
+    /* Same immediate-persistence model as setShaderEnabled/setUpscaleAuto above - independent
+       of Sharpening's own state entirely, see AiUpscaleEffect's own header comment. */
+    void setAiUpscalingEnabled(boolean enabled) {
+        aiUpscalingEnabled = enabled;
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().putBoolean(PREF_AI_UPSCALING_ENABLED, enabled).apply();
         applyVideoEffects();
         nudgeVideoPipelineAfterEffectsChange();
     }

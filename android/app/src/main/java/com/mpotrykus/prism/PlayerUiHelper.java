@@ -333,6 +333,9 @@ final class PlayerUiHelper {
         String satPart = satOn ? "sat " + Math.round(shownColorBoostSaturation * 100) + "%" + (activity.colorBoostSaturationAuto ? " (auto)" : "") : "sat off";
         String conPart = conOn ? "con " + Math.round(shownColorBoostContrast * 100) + "%" + (activity.colorBoostContrastAuto ? " (auto)" : "") : "con off";
         String colorBoostLine = "Color Boost: " + (!satOn && !conOn ? "off" : satPart + ", " + conPart);
+        String aiUpscalingLine = "AI Upscaling: " + (!activity.aiUpscalingEnabled
+            ? "off"
+            : (activity.activeAiUpscaleProgram != null ? activity.activeAiUpscaleProgram.statusLabel() : "starting..."));
 
         String qualityCapLine = "Quality cap: " + (activity.qualityCapKbps != null ? activity.qualityCapKbps + " kbps" : "original")
             + (activity.autoQualityEnabled ? " (auto)" : "");
@@ -345,7 +348,7 @@ final class PlayerUiHelper {
         sb.append(resolutionLine).append('\n').append(hdrLine);
         if (droppedFramesLine != null) sb.append('\n').append(droppedFramesLine);
         if (audioLine != null) sb.append('\n').append(audioLine);
-        sb.append('\n').append(shaderLine).append('\n').append(colorBoostLine).append('\n').append(qualityCapLine);
+        sb.append('\n').append(shaderLine).append('\n').append(aiUpscalingLine).append('\n').append(colorBoostLine).append('\n').append(qualityCapLine);
         if (abrLine != null) sb.append('\n').append(abrLine);
         if (bufferLine != null) sb.append('\n').append(bufferLine);
         text.setText(sb.toString());
@@ -1178,6 +1181,9 @@ final class PlayerUiHelper {
         float density = activity.getResources().getDisplayMetrics().density;
         list.removeAllViews();
         list.addView(makeBackRow(activity, density, () -> renderMainList(activity, list)));
+        // Ahead of Sharpening, not after - same ordering as the web leg's Effects list once AI
+        // Upscaling became its own toggle (chrome-menu-effects.js's renderEffectsList).
+        buildAiUpscaleEffectRow(activity, list, density);
         buildShaderEffectRow(activity, list, density);
         buildColorBoostEffectRow(activity, list, density);
         buildAmbientEffectRow(activity, list, density);
@@ -1256,6 +1262,24 @@ final class PlayerUiHelper {
         wrap.addView(header);
         list.addView(wrap);
         return new EffectRowParts(wrap, rightSide);
+    }
+
+    /* Plain On/Off toggle, no strength slider and no Auto mode - the real Anime4K CNN / FSR 1
+       chain (see AiUpscalingPresets) has no intensity knob to speak of, same reasoning as the
+       equivalent presets on the web leg being "strengthless". Independent of Sharpening below -
+       the two now stack rather than one superseding the other (see AiUpscaleShaderProgram's own
+       header comment) - and independent of Color Boost too. Reuses the SHADER icon rather than
+       adding a fourth entry to MenuIconView.Icon; this and Sharpening are visually similar
+       enough "GPU upscale effect" concepts that a dedicated icon isn't worth the extra draw
+       code for this pass. */
+    private static void buildAiUpscaleEffectRow(PlayerActivity activity, LinearLayout list, float density) {
+        EffectRowParts row = buildEffectRow(activity, list, density, MenuIconView.Icon.SHADER, "AI Upscaling", "Anime4K CNN / FSR 1");
+        SwitchCompat toggle = new SwitchCompat(activity);
+        toggle.setChecked(activity.aiUpscalingEnabled);
+        toggle.setTrackTintList(toggleTrackTint());
+        toggle.setThumbTintList(toggleThumbTint());
+        toggle.setOnCheckedChangeListener((buttonView, checked) -> activity.setAiUpscalingEnabled(checked));
+        row.rightSide.addView(toggle);
     }
 
     /* No more manual Off/Anime4K/Live-Action picker - detectedShaderType came from
