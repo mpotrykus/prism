@@ -146,6 +146,7 @@ export const UPSCALE_AUTO_STORAGE_KEY = "prism_player_upscale_auto";
 export const COLOR_BOOST_STORAGE_KEY = "prism_player_color_boost_enabled";
 export const COLOR_BOOST_STRENGTH_STORAGE_KEY = "prism_player_color_boost_strength";
 export const COLOR_BOOST_AUTO_STORAGE_KEY = "prism_player_color_boost_auto";
+export const DEBAND_STORAGE_KEY = "prism_player_deband_enabled";
 export const STATS_OVERLAY_STORAGE_KEY = "prism_player_stats_overlay_enabled";
 export const AUTO_PLAY_STORAGE_KEY = "prism_player_auto_play_enabled";
 export const AUTO_QUALITY_STORAGE_KEY = "prism_player_auto_quality_enabled";
@@ -225,6 +226,13 @@ export function storedColorBoostAuto() {
     return localStorage.getItem(COLOR_BOOST_AUTO_STORAGE_KEY) === "1";
 }
 
+/* Same immediate-persistence model as storedAmbientEnabled above. Off by default: debanding
+   costs a full extra GPU pass at source resolution on every frame, and it only earns that on
+   low-bitrate sources with visible gradient stepping - which is common, but not universal. */
+export function storedDebandEnabled() {
+    return localStorage.getItem(DEBAND_STORAGE_KEY) === "1";
+}
+
 /* Same immediate-persistence model as storedAmbientEnabled - a debug readout has no
    per-video/genre concern to reconcile either. */
 export function storedStatsOverlayEnabled() {
@@ -246,6 +254,17 @@ export function storedAutoPlayEnabled() {
    shouldn't have Plex silently re-transcoding their stream. */
 export function storedAutoQualityEnabled() {
     return localStorage.getItem(AUTO_QUALITY_STORAGE_KEY) === "1";
+}
+
+/* Deband's glyph: stacked bars of decreasing weight, i.e. the stepped gradient this pass removes. */
+export function debandIconMarkup() {
+    return (
+        '<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">' +
+        '<rect x="3" y="5" width="18" height="3" fill="currentColor" opacity="0.9"/>' +
+        '<rect x="3" y="10" width="18" height="3" fill="currentColor" opacity="0.6"/>' +
+        '<rect x="3" y="15" width="18" height="3" fill="currentColor" opacity="0.3"/>' +
+        "</svg>"
+    );
 }
 
 export function volumeIconMarkup(level) {

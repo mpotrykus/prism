@@ -30,7 +30,7 @@ import { buildStreamUrl, buildDecisionUrl } from "./src/player/core/stream-url.j
 import { playNative, switchNative, stopNative, pauseNative, resumeNative, buildPlaybackPayload } from "./src/player/native-bridge.js";
 import { playXbox, switchXbox, stopXbox, pauseXbox, resumeXbox, reloadXboxSource } from "./src/player/xbox-bridge.js";
 import { playWeb, attachSource, reloadWebSource, teardownWeb } from "./src/player/web-fallback.js";
-import { setShaderStrength, setColorBoostStrength, updateShaderPipeline, ensureShaderPipeline, stopShaderLoop } from "./src/player/shader-pipeline.js";
+import { setShaderStrength, setColorBoostStrength, setDebandEnabled, updateShaderPipeline, ensureShaderPipeline, stopShaderLoop } from "./src/player/shader-pipeline.js";
 import { setAmbientEnabled, setAmbientOpacity, updateAmbientPipeline, stopAmbientLoop } from "./src/player/ambient-pipeline.js";
 import { setStatsOverlayEnabled, updateStatsOverlayPipeline } from "./src/player/stats-overlay.js";
 import {
@@ -42,6 +42,7 @@ import {
     storedColorBoostEnabled,
     storedColorBoostStrength,
     storedColorBoostAuto,
+    storedDebandEnabled,
     storedStatsOverlayEnabled,
     storedAutoPlayEnabled,
     storedAutoQualityEnabled,
@@ -160,6 +161,7 @@ class StreamingPlayerController {
         this._colorBoostStrength = 0.5;
         this._upscaleAuto = false;
         this._colorBoostAuto = false;
+        this._debandEnabled = false;
         this._autoUpscaleStrength = null;
         this._autoColorBoostStrength = null;
         this._contentSampleCanvas = null;
@@ -422,6 +424,9 @@ class StreamingPlayerController {
         this._colorBoostStrength = storedColorBoostStrength();
         this._colorBoostAuto = storedColorBoostAuto();
         this._autoColorBoostStrength = null;
+        /* Read before _updateShaderPipeline runs: buildShaderChains composes every chain around
+           this flag, so a later read would compile the wrong composition first. */
+        this._debandEnabled = storedDebandEnabled();
         this._statsOverlayEnabled = storedStatsOverlayEnabled();
         this._autoPlayEnabled = storedAutoPlayEnabled();
         /* No per-video/genre concern to resolve either - see core/abr.js. Reset every
@@ -728,6 +733,10 @@ class StreamingPlayerController {
 
     _stopShaderLoop() {
         return stopShaderLoop(this);
+    }
+
+    _setDebandEnabled(enabled) {
+        setDebandEnabled(this, enabled);
     }
 
     _setAmbientEnabled(enabled) {

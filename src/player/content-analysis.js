@@ -103,6 +103,18 @@ function stopContentAnalysisLoop(controller) {
     }
 }
 
+/* Mirrors shader-pipeline.js's teardownShaderPipeline and ambient-pipeline.js's
+   teardownAmbient - each pipeline releases what it allocated, rather than teardownWeb
+   having to remember every `_content*` field this module happens to hang off the
+   controller. */
+export function teardownContentAnalysis(controller) {
+    stopContentAnalysisLoop(controller);
+    controller._contentSampleCanvas = null;
+    controller._contentSampleCtx = null;
+    controller._contentSmoothedSaturation = null;
+    controller._contentSmoothedEdgeEnergy = null;
+}
+
 function sampleContentFrame(controller, timestamp) {
     const video = controller._videoEl;
     const ctx = controller._contentSampleCtx;

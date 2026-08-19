@@ -1,7 +1,7 @@
 import { SHADER_TYPES } from "../shader/shaders.js";
-import { setShaderStrength, setColorBoostStrength, upscaleModeOf, setUpscaleMode, colorBoostModeOf, setColorBoostMode } from "../shader-pipeline.js";
+import { setShaderStrength, setColorBoostStrength, upscaleModeOf, setUpscaleMode, colorBoostModeOf, setColorBoostMode, activePresetKey, idleUpgradeLabel } from "../shader-pipeline.js";
 import { setAmbientOpacity } from "../ambient-pipeline.js";
-import { fullscreenIconMarkup, colorBoostIconMarkup, ambientIconMarkup, PLAYER_FOCUSABLE_CLASS } from "./shared.js";
+import { fullscreenIconMarkup, colorBoostIconMarkup, ambientIconMarkup, debandIconMarkup, PLAYER_FOCUSABLE_CLASS } from "./shared.js";
 /* Circular with chrome-menu.js (which imports renderEffectsList from this file for its
    "Effects" row) - safe here because both sides only reference the other module's
    export from inside a function body (makeBackRow/makeToggleSwitch are only called once
@@ -27,6 +27,7 @@ export function renderEffectsList(controller, list, onBack) {
     list.innerHTML = "";
     list.appendChild(makeBackRow(onBack));
     buildShaderEffectRow(controller, list);
+    buildDebandEffectRow(controller, list);
     buildColorBoostEffectRow(controller, list);
     buildAmbientEffectRow(controller, list);
 }
@@ -36,6 +37,11 @@ const MODE_OPTIONS = [
     { key: "on", label: "On" },
     { key: "off", label: "Off" },
 ];
+
+/* A trained CNN preset has no intensity knob, so there is nothing for Auto to compute and
+   nothing for the slider to set - see SHADER_TYPES.anime4k_cnn's `strengthless`. Offering
+   either would be a control that visibly does nothing. */
+const ON_OFF_OPTIONS = MODE_OPTIONS.filter((opt) => opt.key !== "auto");
 
 /* Shared by buildShaderEffectRow/buildColorBoostEffectRow - a 3-way Auto/On/Off segmented control
    replacing the old separate enabled-toggle (hamburger row) + "Auto strength" checkbox
@@ -49,12 +55,15 @@ const MODE_OPTIONS = [
    mode-switch time (not live-ticking while the panel stays open) since
    content-analysis.js only updates every ~750ms and the panel is normally only glanced
    at, not watched. */
-function buildModeRow({ groupId, mode, onModeChange, getAutoValue, getManualValue, strengthInput, strengthLabel }) {
+function buildModeRow({ groupId, mode, onModeChange, getAutoValue, getManualValue, strengthInput, strengthLabel, options = MODE_OPTIONS }) {
     const row = document.createElement("div");
     Object.assign(row.style, { display: "flex", gap: "6px", padding: "0 0 10px" });
 
     let currentMode = mode;
+    /* strengthInput/strengthLabel are omitted entirely by a strengthless preset's row, so
+       every touch of them is guarded rather than the caller being made to pass a dummy. */
     const applyStrengthDisplay = (m) => {
+        if (!strengthInput) return;
         const auto = m === "auto";
         /* Only "on" leaves the slider interactive - "auto" because the value isn't
            user-driven, and "off" because there's no effect running for it to tune, same
@@ -68,13 +77,13 @@ function buildModeRow({ groupId, mode, onModeChange, getAutoValue, getManualValu
         strengthLabel.textContent = `Strength: ${Math.round(value * 100)}%${auto ? " (auto)" : ""}`;
     };
 
-    const buttons = MODE_OPTIONS.map((opt) => {
+    const buttons = options.map((opt) => {
         const btn = document.createElement("button");
         btn.type = "button";
         btn.classList.add(PLAYER_FOCUSABLE_CLASS);
-        /* See focus-nav.js's wireLinearNav: same data-nav-group value on all three buttons
-           makes Left/Right cycle between Auto/On/Off while Up/Down skips the whole row in
-           one step, landing on the slider (or whatever's next) instead of stepping through
+        /* See focus-nav.js's wireLinearNav: the same data-nav-group value on every button in
+           this row makes Left/Right cycle between the modes while Up/Down skips the whole row
+           in one step, landing on the slider (or whatever's next) instead of stepping through
            each mode button individually. */
         btn.dataset.navGroup = groupId;
         btn.textContent = opt.label;
@@ -218,10 +227,26 @@ function buildEffectRow(list, { icon, label, caption, toggleReachable = false })
    slider are the only remaining controls, and dragging strength to 0% in "on" mode is
    what a plain "Off" used to be. */
 function buildShaderEffectRow(controller, list) {
+    /* What is really rendering, gate and perf downgrade included - not merely what could. A
+       CNN/FSR preset that built but isn't currently chosen must NOT take over this row, or the
+       strength slider disappears while the strength-driven sharpen chain is the one actually
+       applying. See shader-pipeline.js's activePresetKey. */
+    const activeKey = activePresetKey(controller, controller._shaderAutoType);
+    const activePreset = SHADER_TYPES[activeKey];
+    if (activePreset?.strengthless) {
+        buildStrengthlessShaderRow(controller, list, activePreset);
+        return;
+    }
+
+    /* Names the better preset that exists but is sitting out, and why. Without this the row
+       reads as "Live-Action" with no hint that FSR was ever involved, which is indistinguishable
+       from the feature being broken - a real round trip was spent on exactly that confusion. */
+    const idle = idleUpgradeLabel(controller, controller._shaderAutoType);
+    const familyLabel = SHADER_TYPES[controller._shaderAutoType].label;
     const { wrap, rightSide } = buildEffectRow(list, {
         icon: fullscreenIconMarkup(false),
         label: "Shader Upscaling",
-        caption: `Detected: ${SHADER_TYPES[controller._shaderAutoType].label}`,
+        caption: idle ? `${familyLabel} · ${idle}` : `Detected: ${familyLabel}`,
     });
 
     const strengthLabel = document.createElement("div");
@@ -251,6 +276,59 @@ function buildShaderEffectRow(controller, list) {
     wrap.appendChild(strengthLabel);
     wrap.appendChild(strengthInput);
     startLiveAutoRefresh(strengthInput, refreshIfAuto);
+}
+
+/* The chain that is actually built, not the preset's default composition - with Deband on, every
+   chain carries one extra pass, and reporting the static count would understate the cost the
+   viewer just opted into. */
+function presetPassCount(controller, preset) {
+    for (const [key, chain] of Object.entries(controller._shaderChains ?? {})) {
+        if (SHADER_TYPES[key] === preset) return chain.passCount;
+    }
+    return preset.passes.length;
+}
+
+/* Deband: repairs banded gradients in the source, independent of any upscaler. A plain on/off
+   toggle rather than a mode row - there is no auto signal for it (content-analysis.js measures
+   saturation and edge energy, neither of which detects banding) and no strength that means
+   anything, since the threshold is pinned at the ~1 LSB that defines banding in the first place.
+   Same toggle-reachable header treatment as Ambient Lighting, for the same D-pad reason. */
+function buildDebandEffectRow(controller, list) {
+    const { rightSide, header } = buildEffectRow(list, {
+        icon: debandIconMarkup(),
+        label: "Deband",
+        caption: "Smooths banded gradients in low-bitrate sources",
+        toggleReachable: true,
+    });
+    const toggleEl = makeToggleSwitch(!!controller._debandEnabled, (checked) => controller._setDebandEnabled(checked));
+    rightSide.appendChild(toggleEl);
+    header.addEventListener("click", () => toggleEl.click());
+}
+
+/* The Shader Upscaling row for a strengthless (trained-CNN) preset: On/Off only, no
+   strength slider, and the caption reports the algorithm and its pass count so the cost is
+   at least visible. Kept as a separate builder rather than a pile of conditionals inside
+   buildShaderEffectRow - the two rows share only the mode buttons, and the shared piece
+   (buildModeRow) is already factored out. */
+function buildStrengthlessShaderRow(controller, list, preset) {
+    const { rightSide } = buildEffectRow(list, {
+        icon: fullscreenIconMarkup(false),
+        label: "Shader Upscaling",
+        caption: `${preset.label} · ${presetPassCount(controller, preset)} passes`,
+    });
+
+    const rawMode = upscaleModeOf(controller);
+    const { row: modeRow } = buildModeRow({
+        groupId: "shader-mode",
+        /* A persisted Auto from a title that *did* have a strength knob is shown as On here
+           rather than being written back to On - the flag is untouched, and it will apply
+           again as soon as a strength-driven preset renders. Mutating it from a render of
+           this row would silently change a setting the viewer never touched. */
+        mode: rawMode === "auto" ? "on" : rawMode,
+        onModeChange: (mode) => setUpscaleMode(controller, mode),
+        options: ON_OFF_OPTIONS,
+    });
+    rightSide.appendChild(modeRow);
 }
 
 /* Same pattern as buildShaderEffectRow above, simpler since there's no auto-detected

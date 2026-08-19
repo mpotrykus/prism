@@ -72,12 +72,50 @@ export function stopStatsOverlayLoop(controller) {
    "n/a" rather than guessed, unlike Android's real isHdrContent() check off Format.colorInfo. */
 function shaderStatusLine(controller) {
     if (controller._shaderType === "off") return "off";
-    const label = SHADER_TYPES[controller._shaderType]?.label ?? controller._shaderType;
+    /* _shaderActivePreset is what chooseRenderPreset actually rendered last frame, which can
+       differ from the _shaderType family in both directions: upgraded to the real CNN chain
+       where WebGL2 + float render targets allow it, or dropped back to the sharpen chain
+       when the CNN's own 1.2x upscale gate says the display isn't bigger enough to bother.
+       Reporting the family here instead would make both of those invisible - and "is the CNN
+       actually running on this device" is the main thing this line exists to answer. */
+    const activeKey = controller._shaderActivePreset || controller._shaderType;
+    const preset = SHADER_TYPES[activeKey];
+    const label = preset?.label ?? activeKey;
+    /* A trained network takes no strength, so printing one would be a fabricated number -
+       the pass count and the watchdog's measured frame interval are the numbers that actually
+       matter for a multi-pass chain. */
+    if (preset?.strengthless) return `${label} (${activeChainPassCount(controller, activeKey) ?? preset.passes.length} passes)${watchdogSuffix(controller)}`;
     /* Resolves auto vs. manual the same way shader-pipeline.js's renderShaderFrame does
        - reading _shaderStrength directly here would show the frozen manual slider
        position instead of what's actually being applied whenever Auto is on. */
     const strength = controller._upscaleAuto ? (controller._autoUpscaleStrength ?? 0) : controller._shaderStrength;
-    return `${label} @ ${Math.round(strength * 100)}%${controller._upscaleAuto ? " (auto)" : ""}`;
+    return `${label} @ ${Math.round(strength * 100)}%${controller._upscaleAuto ? " (auto)" : ""}${watchdogSuffix(controller)}`;
+}
+
+/* The measured shader-loop frame interval, and whether the perf watchdog has already stepped
+   the chain down. Both only exist for multi-pass presets (see perf-watchdog.js on why the
+   single-pass fallback isn't measured), so this contributes nothing on the sharpen path. */
+function watchdogSuffix(controller) {
+    const watchdog = controller._shaderWatchdog;
+    if (!watchdog || !watchdog.meanFrameMs) return "";
+    /* Both numbers, always - the earlier version printed "downgraded (too slow)" *instead of*
+       the measurement, which is exactly the moment the measurement matters most. Diagnosing a
+       downgrade on real hardware meant guessing whether the chain missed by 10% or 10x. The
+       ratio is the interpretable one: 1.0 is real time, and anything under ~1.35 should not
+       have tripped at all. */
+    /* Drop rate is windowed, unlike the cumulative "Dropped frames" line above - a session
+       total can't be A/B'd against toggling the preset, which is the whole point of showing it
+       here. Also note the ratio saturates at 1.00 under frame-driven rendering: rVFC can't
+       deliver frames faster than the source's rate, so 1.00 confirms "keeping up" but says
+       nothing about how much headroom is left. */
+    const dropped = watchdog.dropRate > 0 ? `, ${(watchdog.dropRate * 100).toFixed(1)}% dropped` : "";
+    const measured = `${watchdog.meanFrameMs.toFixed(1)}ms/frame, ${watchdog.keepUpRatio.toFixed(2)}x real time${dropped}`;
+    return watchdog.downgraded ? ` · downgraded (${measured})` : ` · ${measured}`;
+}
+
+/* The live chain's count, so Deband's extra pass is visible here too. */
+function activeChainPassCount(controller, key) {
+    return controller._shaderChains?.[key]?.passCount ?? null;
 }
 
 function colorBoostStatusLine(controller) {
@@ -188,6 +226,7 @@ export function renderStatsOverlayFrame(controller) {
         audioStatusLine(controller),
         `Shader Upscaling: ${shaderStatusLine(controller)}`,
         `Color Boost: ${colorBoostStatusLine(controller)}`,
+        `Deband: ${controller._debandEnabled ? "on" : "off"}`,
         `Quality cap: ${qualityCapStatusLine(controller)}`,
         abrDebugLine(controller),
         bufferHealthLine(video),
