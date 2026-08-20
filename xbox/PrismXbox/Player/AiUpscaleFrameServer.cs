@@ -11,13 +11,17 @@ using Windows.UI.Xaml.Controls;
 namespace PrismXbox.Player
 {
     /// <summary>
-    /// Presents <see cref="MediaPlayer"/>'s frame-server output, run through
+    /// Presents <see cref="MediaPlayer"/>'s frame-server output, optionally run through
     /// <see cref="AiUpscalePixelEffect"/>'s real Anime4K CNN / FSR1 chains, through a Win2D
     /// <see cref="CanvasImageSource"/> in a plain XAML <see cref="Image"/> - the alternate
-    /// presenter to <see cref="NativePlayerHost"/>'s <c>MediaPlayerElement</c>, used only for
-    /// non-HDR titles with AI Upscaling enabled (see <c>NativePlayerHost.Play</c>/
-    /// <c>SwitchTitle</c>). Frame-server mode cannot render HDR, which is why HDR titles never
-    /// route through here at all.
+    /// presenter to <see cref="NativePlayerHost"/>'s <c>MediaPlayerElement</c>, used for every
+    /// non-HDR title regardless of whether AI Upscaling is enabled (see
+    /// <c>NativePlayerHost.SetAiUpscalePathActive</c>'s own comment for why - the native
+    /// swapchain <c>MediaPlayerElement</c> otherwise renders SDR video with crushed
+    /// contrast/shadows on real hardware). AI Upscaling only controls whether
+    /// <see cref="AiUpscalePixelEffect.Render"/> actually runs a chain or falls back to plain
+    /// pass-through - see <c>NativePlayerHost.SetAiUpscaling</c>. Frame-server mode cannot
+    /// render HDR, which is why HDR titles never route through here at all.
     /// </summary>
     internal sealed class AiUpscaleFrameServer
     {

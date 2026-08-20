@@ -193,7 +193,12 @@ namespace PrismXbox.Player
         {
             aiUpscalingEnabled = enabled;
             aiUpscalingPreset = preset ?? "";
-            aiUpscale.SetFamily(aiUpscalingPreset);
+            // Family drives whether AiUpscalePixelEffect.Render actually runs a CNN/FSR chain
+            // or returns null (plain pass-through) - must reflect the enabled flag, not just
+            // the raw preset, now that the frame-server presentation path itself runs for every
+            // SDR title regardless of whether upscaling is turned on (see
+            // SetAiUpscalePathActive's own comment for why).
+            aiUpscale.SetFamily(aiUpscalingEnabled ? aiUpscalingPreset : "");
         }
 
         private void SyncEffectAttachment()
@@ -278,23 +283,34 @@ namespace PrismXbox.Player
 
         /// <summary>
         /// Frame-server mode cannot render HDR (see AiUpscaleFrameServer's own header comment),
-        /// so AI Upscaling is only ever active for a non-HDR title - decided once here, before
-        /// Source is set, same as the HDR display-mode switch above. Toggling
-        /// IsVideoFrameServerEnabled after Source is already playing is not attempted here; a
-        /// mid-playback AI Upscaling toggle takes effect on the next play/switch instead.
+        /// so this only ever runs for a non-HDR title - decided once here, before Source is set,
+        /// same as the HDR display-mode switch above. Toggling IsVideoFrameServerEnabled after
+        /// Source is already playing is not attempted here; a mid-playback AI Upscaling toggle
+        /// takes effect on the next play/switch instead.
+        ///
+        /// Runs for EVERY non-HDR title now, not just when AI Upscaling is enabled. Real bug
+        /// found 2026-08-20: MediaPlayerElement's own swapchain presentation (used whenever this
+        /// was false) crushes shadows/over-contrasts SDR video on real Xbox hardware - the
+        /// frame-server + Win2D CanvasImageSource path (built for AI Upscaling) does not have
+        /// this problem, confirmed by the contrast difference only appearing with AI Upscaling
+        /// off. Whether the CNN/FSR chain itself actually runs is controlled separately, by
+        /// whether SetAiUpscaling has set a real family - see that method's own comment - so
+        /// turning AI Upscaling off here now means "frame-server pass-through", not "back to the
+        /// buggy native swapchain". Needs re-confirming on hardware.
         /// </summary>
         private void SetAiUpscalePathActive(bool isHdr)
         {
-            bool useAiUpscale = aiUpscalingEnabled && !isHdr;
-            player.IsVideoFrameServerEnabled = useAiUpscale;
-            Element.Visibility = useAiUpscale
+            bool useFrameServer = !isHdr;
+            player.IsVideoFrameServerEnabled = useFrameServer;
+            Element.Visibility = useFrameServer
                 ? Windows.UI.Xaml.Visibility.Collapsed
                 : Windows.UI.Xaml.Visibility.Visible;
-            aiUpscale.SetActive(useAiUpscale);
+            aiUpscale.SetActive(useFrameServer);
             // Lets ShaderVideoEffect skip its own now-invisible Sharpening/Color Boost draw -
-            // AiUpscalePixelEffect's trailing-sharpen step already reapplies that same math on the
-            // frame-server surface that's actually shown once useAiUpscale is true.
-            EffectSettings.SetAiUpscaleActive(useAiUpscale);
+            // AiUpscalePixelEffect's trailing-sharpen step already reapplies that same math on
+            // whichever surface (upscaled or plain pass-through) is actually shown once the
+            // frame-server path is active.
+            EffectSettings.SetAiUpscaleActive(useFrameServer);
         }
 
         /// <summary>
