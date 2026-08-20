@@ -48,6 +48,16 @@ namespace PrismXbox.Player
         private bool upscaledLastFrame;
         private string lastError;
 
+        // Guards against OnVideoFrameAvailable (background MF thread) touching canvasDevice's
+        // shared D2D/D3D11 context while a previous frame's Present is still running on the UI
+        // thread (dispatched, not awaited) - Win2D/D2D device contexts are not safe for
+        // concurrent multi-threaded use, unlike the plain D3D11-resource thread-affinity already
+        // discussed above. Without this, real hardware hit an AccessViolationException inside
+        // CopyFrameToVideoSurface after ~tens of seconds of otherwise-correct playback - the two
+        // threads' draws collided. Dropping the occasional frame when the UI thread lags behind
+        // is an accepted trade-off, same spirit as other frame/seek races already dropped elsewhere.
+        private volatile bool framePending;
+
         public Image Element { get; }
 
         public AiUpscaleFrameServer(MediaPlayer player, Action<string, string> emit, Action<string> log)
@@ -89,6 +99,7 @@ namespace PrismXbox.Player
             receivedFrame = false;
             upscaledLastFrame = false;
             lastError = null;
+            framePending = false;
             Element.Visibility = active ? Windows.UI.Xaml.Visibility.Visible : Windows.UI.Xaml.Visibility.Collapsed;
             EmitStatus();
         }
@@ -112,9 +123,15 @@ namespace PrismXbox.Player
             // ShaderVideoEffect.cs already creates/draws from this same kind of worker thread
             // without issue - so the copy below is safe here. CanvasImageSource is not; every
             // touch of it happens inside the dispatched Present call instead.
+            if (framePending) return; // previous frame's Present hasn't finished on the UI thread yet - drop this one rather than race canvasDevice
+            framePending = true;
             try
             {
-                if (frameWidth <= 0 || frameHeight <= 0) return;
+                if (frameWidth <= 0 || frameHeight <= 0)
+                {
+                    framePending = false;
+                    return;
+                }
                 CanvasRenderTarget target = EnsureFrameTarget();
                 sender.CopyFrameToVideoSurface(target);
 
@@ -128,10 +145,21 @@ namespace PrismXbox.Player
                 int width = (int)toPresent.SizeInPixels.Width;
                 int height = (int)toPresent.SizeInPixels.Height;
                 bool upscaled = processed != null;
-                _ = dispatcher.RunAsync(CoreDispatcherPriority.Normal, () => Present(toPresent, width, height, upscaled));
+                _ = dispatcher.RunAsync(CoreDispatcherPriority.Normal, () =>
+                {
+                    try
+                    {
+                        Present(toPresent, width, height, upscaled);
+                    }
+                    finally
+                    {
+                        framePending = false;
+                    }
+                });
             }
             catch (Exception ex)
             {
+                framePending = false;
                 ReportError(ex);
             }
         }
