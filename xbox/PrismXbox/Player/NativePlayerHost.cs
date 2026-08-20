@@ -400,6 +400,9 @@ namespace PrismXbox.Player
             player.Source = null;
             currentUrl = null;
             currentPlaybackItem = null;
+            // player.Source=null does not touch the frame-server presenter's own last-drawn
+            // frame - see AiUpscaleFrameServer.Clear's own comment.
+            aiUpscale.Clear();
             emit("stopped", "{}");
             // Fire-and-forget, but it has to happen: leaving the console in HDR after playback ends makes
             // the dashboard and this app's own UI render with inaccurate colour, text especially.

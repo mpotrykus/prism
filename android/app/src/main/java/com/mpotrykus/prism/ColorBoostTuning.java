@@ -10,9 +10,9 @@ package com.mpotrykus.prism;
    anything under ~7.6% luma to exact 0 post-clamp) - composing that with the strongest
    shader-upscale tuning made the crush worse than necessary. Splitting it into its own
    toggle with its own strength slider keeps that choice in the user's hands independent
-   of sharpening, and ShaderUpscaleShaderProgram's GLSL now also feathers this boost down
-   to 1.0 (no-op) as luma approaches black (shadowProtect) regardless of which toggle
-   drives it.
+   of sharpening, and the sharpen GLSL (see AiUpscaleShaderProgram's ensurePlainChain, and the
+   CNN/FSR chain's own trailing sharpen pass) now also feathers this boost down to 1.0 (no-op)
+   as luma approaches black (shadowProtect) regardless of which toggle drives it.
 
    Saturation and contrast are themselves independent sliders now (see PlayerUiHelper's
    two SeekBars), not one combined "strength" - `at` takes each one's own resolved

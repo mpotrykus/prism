@@ -84,6 +84,7 @@ namespace PrismXboxEffects
         private CanvasRenderTarget rcasTarget;
         private CanvasRenderTarget lumaMergeTarget;
         private CanvasRenderTarget finalTarget;
+        private CanvasRenderTarget nativeFinalTarget;
 
         private int builtWidth;
         private int builtHeight;
@@ -157,17 +158,26 @@ namespace PrismXboxEffects
         /// <summary>
         /// Runs the real AI-upscaling chain for <paramref name="family"/> against
         /// <paramref name="source"/> (the native-resolution decoded frame) and returns the result
-        /// at exactly 2x resolution, ready for the caller's own trailing Sharpening pass. Returns
-        /// null for any other family.
+        /// at exactly 2x resolution, ready for the caller's own trailing Sharpening pass. For any
+        /// other family (AI Upscaling off, or a title the chain doesn't support), no chain runs,
+        /// but Sharpening/Color Boost still have to be applied here at native resolution - the
+        /// frame-server path this feeds is active for every non-HDR title regardless of whether
+        /// AI Upscaling itself is on (see NativePlayerHost.SetAiUpscalePathActive), and
+        /// ShaderVideoEffect deliberately skips its own draw whenever that path is active, on the
+        /// assumption that this method is the one place still drawing that pass. <paramref
+        /// name="chainRan"/> reports only whether a real CNN/FSR chain executed - the stats
+        /// overlay's "upscaled" label needs that, distinct from whether anything was drawn at all.
         /// </summary>
-        public CanvasRenderTarget Render(CanvasRenderTarget source, string family, int nativeWidth, int nativeHeight)
+        public CanvasRenderTarget Render(CanvasRenderTarget source, string family, int nativeWidth, int nativeHeight, out bool chainRan)
         {
-            if (family != "anime4k" && family != "live_action") return null;
+            chainRan = family == "anime4k" || family == "live_action";
 
             EnsureTargets(nativeWidth, nativeHeight);
             frameSeed += 0.6180339887f; // irrational increment - decorrelates the hash across frames without needing a real clock/RNG
             debandEffect.Properties["uFrameSeed"] = frameSeed;
             presentEffect.Properties["uFrameSeed"] = frameSeed;
+
+            if (!chainRan) return ApplyTrailingSharpen(source, nativeFinalTarget, 1.0);
 
             if (family == "live_action") return RenderLiveActionFsr(source);
 
@@ -185,7 +195,7 @@ namespace PrismXboxEffects
             DrawOneInput(debandEffect, debandTarget, upscaleOutputTarget);
             DrawOneInput(presentEffect, presentTarget, debandTarget);
 
-            return ApplyTrailingSharpen(presentTarget);
+            return ApplyTrailingSharpen(presentTarget, finalTarget, 2.0);
         }
 
         /// <summary>
@@ -204,7 +214,7 @@ namespace PrismXboxEffects
             DrawOneInput(rcasEffect, rcasTarget, debandTarget);
             lumaMergePass.Draw(lumaMergeTarget, new[] { frameSeed }, source, rcasTarget);
 
-            return ApplyTrailingSharpen(lumaMergeTarget);
+            return ApplyTrailingSharpen(lumaMergeTarget, finalTarget, 2.0);
         }
 
         /// <summary>
@@ -213,8 +223,12 @@ namespace PrismXboxEffects
         /// ShaderVideoEffect.ProcessFrame's own resolution of EffectSettings.Current exactly, so
         /// the two paths behave identically whenever either is active. Skips the extra pass
         /// entirely when neither is contributing, same as that method's own "off" fast path.
+        /// Also the plain (no-chain) pass-through path's only place to apply either, called with
+        /// <paramref name="outputTarget"/> sized to <paramref name="input"/>'s own resolution and
+        /// <paramref name="kernelScaleMultiplier"/> of 1.0 rather than the chain paths' 2.0 - see
+        /// Render's own comment.
         /// </summary>
-        private CanvasRenderTarget ApplyTrailingSharpen(CanvasRenderTarget input)
+        private CanvasRenderTarget ApplyTrailingSharpen(CanvasRenderTarget input, CanvasRenderTarget outputTarget, double kernelScaleMultiplier)
         {
             EffectSettings.Snapshot settings = EffectSettings.Current;
             bool hasStrength = settings.ShaderAuto || settings.ShaderStrength > 0;
@@ -238,27 +252,27 @@ namespace PrismXboxEffects
                 settings.ColorBoostSaturationEnabled ? settings.ColorBoostSaturationStrength : 0,
                 settings.ColorBoostContrastEnabled ? settings.ColorBoostContrastStrength : 0);
 
-            // The kernel's tap offsets are in real pixels of THIS pass's own input - which is now
-            // the 2x-upscaled image, not the source resolution ShaderTuning's own curve assumes.
-            // Doubling keeps the sharpen kernel's real-world reach pinned to source pixels either
-            // way, same compensation the web leg applies for its own trailing-sharpen-after-an-
-            // upgrade-chain case.
+            // The kernel's tap offsets are in real pixels of THIS pass's own input - for the
+            // chain paths that's the 2x-upscaled image, not the source resolution ShaderTuning's
+            // own curve assumes, hence kernelScaleMultiplier=2.0 there; the plain pass-through
+            // path's input is already native resolution, so it passes 1.0 (no compensation
+            // needed), same as ShaderVideoEffect's own untouched kernelScale.
             // programType is the Sharpening algorithm to run, independent of which AI-upscaling
             // chain produced `input` (both are keyed off the same family, but this is the
             // user-facing Sharpening type, not a re-check of the AI-upscaling family) - same
             // anime4k.cso/live_action.cso split ShaderVideoEffect.GetOrCreateEffect makes.
             PixelShaderEffect sharpenEffect = programType == "anime4k" ? trailingSharpenEffect : trailingSharpenLiveActionEffect;
             sharpenEffect.Source1 = input;
-            sharpenEffect.Properties["kernelScale"] = (float)(sharpen.Kernel * 2.0);
+            sharpenEffect.Properties["kernelScale"] = (float)(sharpen.Kernel * kernelScaleMultiplier);
             sharpenEffect.Properties["sharpenStrength"] = (float)sharpen.Sharpen;
             sharpenEffect.Properties["saturationBoost"] = (float)color.Saturation;
             sharpenEffect.Properties["contrastBoost"] = (float)color.Contrast;
 
-            using (CanvasDrawingSession ds = finalTarget.CreateDrawingSession())
+            using (CanvasDrawingSession ds = outputTarget.CreateDrawingSession())
             {
                 ds.DrawImage(sharpenEffect);
             }
-            return finalTarget;
+            return outputTarget;
         }
 
         private void EnsureTargets(int width, int height)
@@ -285,6 +299,10 @@ namespace PrismXboxEffects
             // Default (8-bit) format, unlike the intermediates above - this is the true final
             // image handed to the caller for presentation, not a stage another pass reads back.
             finalTarget = new CanvasRenderTarget(canvasDevice, width * 2, height * 2, 96);
+            // Same, but at native resolution - the trailing sharpen pass's output target when no
+            // chain ran (AI Upscaling off), since finalTarget above is sized for the 2x chain
+            // output and would only fill the top-left quadrant of a native-resolution draw.
+            nativeFinalTarget = new CanvasRenderTarget(canvasDevice, width, height, 96);
 
             builtWidth = width;
             builtHeight = height;
@@ -355,6 +373,7 @@ namespace PrismXboxEffects
             rcasTarget?.Dispose();
             lumaMergeTarget?.Dispose();
             finalTarget?.Dispose();
+            nativeFinalTarget?.Dispose();
         }
 
         // Same pattern as ShaderVideoEffect.LoadShaderBytes - duplicated rather than shared,

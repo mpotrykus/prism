@@ -39,7 +39,6 @@ import androidx.media3.common.TrackSelectionOverride;
 import androidx.media3.common.Tracks;
 import androidx.media3.common.VideoSize;
 import androidx.media3.common.util.UnstableApi;
-import androidx.media3.common.Effect;
 import androidx.media3.datasource.DefaultDataSource;
 import androidx.media3.datasource.DefaultHttpDataSource;
 import androidx.media3.exoplayer.ExoPlayer;
@@ -274,7 +273,7 @@ public class PlayerActivity extends AppCompatActivity {
     float ambientOpacity = 0.5f;
     /* Contrast/saturation "look" boost - same immediate-persistence model as ambient
        lighting above (no per-video/genre concern of its own either), but independent of
-       shaderType/shaderEnabled/upscaleStrength above: see ShaderUpscaleEffect's own
+       shaderType/shaderEnabled/upscaleStrength above: see AiUpscaleShaderProgram's own
        header comment for how the two toggles now share one GL pass. Saturation and
        Contrast are fully independent controls now - each its own enabled/auto pair, each
        its own Auto|On|Off mode (see PlayerUiHelper's two independent mode rows and
@@ -315,6 +314,17 @@ public class PlayerActivity extends AppCompatActivity {
        notifyStall isn't fed a false positive on cold start or right after a title
        switch/quality-cap reload, all of which rebuild the player from scratch. */
     boolean everStartedPlaying = false;
+    /* Guards applyVideoEffects()'s ONE real player.setVideoEffects() install for this player
+       instance - see that method's own header comment for why every later toggle must never
+       call it again. Reset alongside everStartedPlaying at the top of createPlayer(). */
+    boolean effectsInstalled = false;
+    /* HDR-ness can only be answered once a real track is selected (see isHdrContent()'s own
+       callers) - this flags the FIRST applyVideoEffects() call that has real track info, which
+       is the one and only moment the empty-vs-installed decision gets made for this player
+       instance. Every applyVideoEffects() call before that (the mandatory pre-prepare() one)
+       necessarily sees hdr=false (no track yet) and installs optimistically; this flag is what
+       lets the first real answer still correct that if the title turns out to actually be HDR. */
+    boolean hdrDecided = false;
     TextView statsOverlayText;
     PlayerView playerView;
     AmbientGlowView ambientGlowView;
@@ -795,6 +805,13 @@ public class PlayerActivity extends AppCompatActivity {
             player.release();
         }
         everStartedPlaying = false;
+        effectsInstalled = false;
+        hdrDecided = false;
+        // Stale reference to the just-released player's program, if any - nulled rather than
+        // left dangling so a toggle firing in the brief window before the new instance's own
+        // AiUpscaleEffect.toGlShaderProgram callback lands sees "not installed yet" instead of
+        // silently updating a dead GlShaderProgram (see applyVideoEffects's own comment).
+        activeAiUpscaleProgram = null;
         DefaultHttpDataSource.Factory httpDataSourceFactory = new DefaultHttpDataSource.Factory();
         /* Wrapped in DefaultDataSource.Factory rather than handing httpDataSourceFactory
            to setDataSourceFactory directly - DefaultMediaSourceFactory uses whatever
@@ -1100,77 +1117,98 @@ public class PlayerActivity extends AppCompatActivity {
         PlayerUiHelper.hideSkipButtonInternal(this);
     }
 
-    /* Re-issued on every toggle rather than only once at startup - ExoPlayer's javadoc says
-       setVideoEffects() can be called again mid-playback to swap the active effect list.
+    /* Called from every Effects-panel setter, but player.setVideoEffects() itself now only
+       actually fires ONCE per player instance (the mandatory pre-prepare() call, or - if that
+       one saw real HDR content - the correcting call right after). Every other call just pushes
+       fresh tuning into the already-installed AiUpscaleShaderProgram via updateState(), with no
+       ExoPlayer API call at all.
 
-       Both Shader Upscaling and Color Boost share one GL pass now (see ShaderUpscaleEffect's
-       own header comment) - programType always picks a real algorithm to render through
-       (whichever this title's genre auto-detected) even when shader upscaling itself is off,
-       with sharpenTuning forced to ShaderType.NEUTRAL in that case rather than
-       programType.tuningAt(0) (which would apply that type's lightest-tier sharpen amount, not
-       true zero - see ShaderType.NEUTRAL's own comment). */
+       That used to be different: this method used to build a brand-new Effect and call
+       player.setVideoEffects() on every single toggle, then force a same-position seekTo to
+       unstick the renderer (real-device gotcha: calling setVideoEffects() mid-playback can leave
+       ExoPlayer's video renderer wedged). On a live Plex HLS transcode session that seekTo can
+       itself stall forever re-requesting the same segment - the actual cause of effects toggles
+       "restarting" playback and sometimes never recovering. Rebuilding the pipeline on every
+       toggle is what's gone now, not just the seekTo band-aid over it.
+
+       AiUpscaleEffect.isNoOp() always returns false so this node is never elided from the video
+       graph, and AiUpscaleShaderProgram.configure() pins its output size to this family's own
+       ceiling regardless of live strength/toggle state (see that method's own comment) - both
+       needed so a live update never requires Media3 to reconfigure anything downstream. */
     void applyVideoEffects() {
         if (player == null) {
             return;
         }
-        boolean sharpenOn = shaderType != ShaderType.OFF;
-        boolean colorBoostOn = colorBoostSaturationEnabled || colorBoostContrastEnabled;
         boolean hdr = isHdrContent();
-        // AI Upscaling is a third independent toggle now (see AiUpscaleEffect) - it can be the
-        // only thing rendering while Sharpening and Color Boost both sit off, same as the web
-        // leg's shader-pipeline.js. HDR still auto-skips the whole chain unconditionally - Phase
-        // 4 territory, not revisited here.
-        if ((!sharpenOn && !colorBoostOn && !aiUpscalingEnabled) || hdr) {
-            Log.d(SHADER_TAG, "applyVideoEffects: no effects ("
-                + (hdr ? "HDR content detected, auto-skipping" : "all toggles off") + ")");
-            player.setVideoEffects(Collections.emptyList());
-            PlayerUiHelper.updateStatsOverlay(this);
-            return;
+        boolean hasTrackInfo = selectedVideoFormat() != null;
+        ShaderTuning sharpenTuning = resolveSharpenTuning();
+        ColorBoostTuning colorTuning = resolveColorBoostTuning();
+
+        if (!effectsInstalled) {
+            // Pre-prepare bootstrap: no track is selected yet, so isHdrContent() above is
+            // necessarily false - install optimistically and let the first real
+            // onTracksChanged-driven call below correct this if the title turns out to be HDR.
+            effectsInstalled = true;
+            Log.d(SHADER_TAG, "applyVideoEffects: installing persistent effect (bootstrap)");
+            player.setVideoEffects(Collections.singletonList(
+                new AiUpscaleEffect(this, detectedShaderType, sharpenTuning, colorTuning, aiUpscalingEnabled)));
+        } else if (hasTrackInfo && !hdrDecided) {
+            hdrDecided = true;
+            if (hdr) {
+                Log.d(SHADER_TAG, "applyVideoEffects: HDR content detected, auto-skipping");
+                player.setVideoEffects(Collections.emptyList());
+                activeAiUpscaleProgram = null;
+            }
+            // Else: the bootstrap install above is already correct - nothing more to do here.
         }
-        Log.d(SHADER_TAG, "applyVideoEffects: sharpenOn=" + sharpenOn + " (" + shaderType + " @ " + upscaleStrength
-            + "), colorBoostSaturationEnabled=" + colorBoostSaturationEnabled + " (" + colorBoostSaturationStrength
-            + "), colorBoostContrastEnabled=" + colorBoostContrastEnabled + " (" + colorBoostContrastStrength
-            + "), aiUpscalingEnabled=" + aiUpscalingEnabled + ", hdr=false");
-        ShaderType programType = sharpenOn ? shaderType : detectedShaderType;
-        /* Auto strength (see ContentAnalysisSampler/AutoStrength) resolves separately
-           from upscaleStrength/colorBoostSaturationStrength/colorBoostContrastStrength
-           rather than overwriting them - those stay the remembered manual slider
-           position, restored the moment auto is unchecked, same shape as programType
-           being resolved from shaderType just above. Saturation and Contrast are fully
-           independent now - each its own enabled/auto pair, each auto-deriving from its
-           own signal (avgSaturation vs lumaStdDev, see AutoStrength.colorBoost/
-           colorBoostContrast) - so a component whose toggle is off resolves to strength 0
-           here, which ColorBoostTuning.at's own min-lerp already turns into an exact 1.0
-           (no-op) for that component. */
+
+        if (activeAiUpscaleProgram != null) {
+            activeAiUpscaleProgram.updateState(aiUpscalingEnabled, sharpenTuning, colorTuning);
+        }
+        PlayerUiHelper.updateStatsOverlay(this);
+    }
+
+    /* Both Sharpening and Color Boost share one GL pass (see AiUpscaleShaderProgram's own header
+       comment) - detectedShaderType always picks a real algorithm to render through (whichever
+       this title's genre auto-detected) even when Sharpening itself is off, with the returned
+       tuning forced to ShaderType.NEUTRAL in that case rather than detectedShaderType.tuningAt(0)
+       (which would apply that type's lightest-tier sharpen amount, not true zero - see
+       ShaderType.NEUTRAL's own comment).
+
+       sharpenOn alone isn't enough to gate this - resolveShaderType keeps shaderType resolved to
+       a real type throughout Auto mode regardless of the live auto strength (it has to, so
+       ContentAnalysisSampler keeps running for whenever a nonzero value does arrive). But
+       tuningAt(0) returns that type's own MIN tuning, not true zero - the same "0 strength" that
+       means fully off in manual mode (there, shaderType itself already becomes OFF at exactly 0,
+       hitting the sharpenOn=false branch below) would otherwise render as still-visibly-sharpened
+       once auto legitimately computes 0 (source doesn't need upscaling). Checking
+       resolvedUpscaleStrength > 0f here too is what actually makes a live 0 look like NEUTRAL,
+       regardless of which mode produced it. */
+    private ShaderTuning resolveSharpenTuning() {
+        boolean sharpenOn = shaderType != ShaderType.OFF;
         float resolvedUpscaleStrength = upscaleAuto ? autoUpscaleStrength : upscaleStrength;
+        return (sharpenOn && resolvedUpscaleStrength > 0f)
+            ? detectedShaderType.tuningAt(resolvedUpscaleStrength)
+            : ShaderType.NEUTRAL;
+    }
+
+    /* Auto strength (see ContentAnalysisSampler/AutoStrength) resolves separately from
+       colorBoostSaturationStrength/colorBoostContrastStrength rather than overwriting them -
+       those stay the remembered manual slider position, restored the moment auto is unchecked.
+       Saturation and Contrast are fully independent - each its own enabled/auto pair, each
+       auto-deriving from its own signal (avgSaturation vs lumaStdDev, see
+       AutoStrength.colorBoost/colorBoostContrast) - so a component whose toggle is off resolves
+       to strength 0 here, which ColorBoostTuning.at's own min-lerp already turns into an exact
+       1.0 (no-op) for that component. */
+    private ColorBoostTuning resolveColorBoostTuning() {
+        boolean colorBoostOn = colorBoostSaturationEnabled || colorBoostContrastEnabled;
         float resolvedColorBoostSaturationStrength = !colorBoostSaturationEnabled ? 0f
             : (colorBoostSaturationAuto ? autoColorBoostSaturationStrength : colorBoostSaturationStrength);
         float resolvedColorBoostContrastStrength = !colorBoostContrastEnabled ? 0f
             : (colorBoostContrastAuto ? autoColorBoostContrastStrength : colorBoostContrastStrength);
-        /* sharpenOn alone isn't enough to gate this - resolveShaderType keeps shaderType
-           resolved to a real type throughout Auto mode regardless of the live auto
-           strength (it has to, so ContentAnalysisSampler keeps running for whenever a
-           nonzero value does arrive). But tuningAt(0) returns that type's own MIN tuning,
-           not true zero (see this method's own header comment on NEUTRAL vs tuningAt(0))
-           - the same "0 strength" that means fully off in manual mode (there, shaderType
-           itself already becomes OFF at exactly 0, hitting the sharpenOn=false branch
-           below) would otherwise render as still-visibly-sharpened once auto legitimately
-           computes 0 (source doesn't need upscaling). Checking resolvedUpscaleStrength >
-           0f here too is what actually makes a live 0 look like NEUTRAL, regardless of
-           which mode produced it. */
-        ShaderTuning sharpenTuning = (sharpenOn && resolvedUpscaleStrength > 0f) ? programType.tuningAt(resolvedUpscaleStrength) : ShaderType.NEUTRAL;
-        ColorBoostTuning colorTuning = colorBoostOn
+        return colorBoostOn
             ? ColorBoostTuning.at(resolvedColorBoostSaturationStrength, resolvedColorBoostContrastStrength)
             : ColorBoostTuning.NEUTRAL;
-        // AI Upscaling on: always route through AiUpscaleEffect, which internally falls back to
-        // the same single-pass Sharpening math (see AiUpscaleShaderProgram) whenever the CNN/FSR
-        // chain's own upscale gate declines or fails to build on this GPU - so this branch alone
-        // is never a regression risk for the AI-Upscaling-off path below, which is untouched.
-        Effect effect = aiUpscalingEnabled
-            ? new AiUpscaleEffect(this, programType, sharpenTuning, colorTuning)
-            : new ShaderUpscaleEffect(this, programType, sharpenTuning, colorTuning);
-        player.setVideoEffects(Collections.singletonList(effect));
-        PlayerUiHelper.updateStatsOverlay(this);
     }
 
     /* Shared by isHdrContent() and resolveVideoAR() below (and PlayerUiHelper's stats
@@ -1206,7 +1244,7 @@ public class PlayerActivity extends AppCompatActivity {
        PQ/HLG transfer function) skip this GL effects pass entirely rather than composing an
        SDR-tuned contrast/saturation/sharpen boost on top of it, the same reasoning Plezy's own
        ShaderService._isHdrContent()/autoHdrSkip uses (see docs/plezy-player-comparison.md's HDR
-       notes) - our shadow-crush fix (see ShaderUpscaleShaderProgram's shadowProtect) was tuned
+       notes) - our shadow-crush fix (see the shared sharpen shaders' shadowProtect) was tuned
        against SDR luma assumptions, not PQ/HLG's own much wider range. This is NOT full HDR
        passthrough (no Dolby Vision profile handling, no display HDR-mode switching à la Plezy's
        matchDynamicRange on Windows) - that's tracked separately, deliberately scoped out here;
@@ -1300,20 +1338,18 @@ public class PlayerActivity extends AppCompatActivity {
         getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().putBoolean(PREF_UPSCALE_ENABLED, enabled).apply();
         shaderType = resolveShaderType();
         applyVideoEffects();
-        nudgeVideoPipelineAfterEffectsChange();
     }
 
-    /* Same immediate-persistence model as setShaderEnabled above. Gated to
-       onStopTrackingTouch by PlayerUiHelper's Shader Upscaling SeekBar, not called at
-       drag frequency - applyVideoEffects() rebuilds ExoPlayer's whole video-effects
-       pipeline on every call, previously observed to get the renderer stuck when called
-       that often (see that panel's own SeekBar listener comment). */
+    /* Same immediate-persistence model as setShaderEnabled above. Still gated to
+       onStopTrackingTouch by PlayerUiHelper's Shader Upscaling SeekBar rather than drag
+       frequency - applyVideoEffects() itself is cheap now (see its own header comment), so
+       this is no longer load-bearing for correctness, just avoids a SharedPreferences write
+       and a stats-overlay refresh per drag frame. */
     void setShaderStrength(float strength) {
         upscaleStrength = strength;
         getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().putFloat(PREF_UPSCALE_STRENGTH, strength).apply();
         shaderType = resolveShaderType();
         applyVideoEffects();
-        nudgeVideoPipelineAfterEffectsChange();
     }
 
     /* Same immediate-persistence model as setShaderEnabled/setShaderStrength above - only
@@ -1327,7 +1363,6 @@ public class PlayerActivity extends AppCompatActivity {
         shaderType = resolveShaderType();
         updateContentAnalysis();
         applyVideoEffects();
-        nudgeVideoPipelineAfterEffectsChange();
     }
 
     /* Same immediate-persistence model as setShaderEnabled/setUpscaleAuto above - independent
@@ -1336,7 +1371,6 @@ public class PlayerActivity extends AppCompatActivity {
         aiUpscalingEnabled = enabled;
         getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().putBoolean(PREF_AI_UPSCALING_ENABLED, enabled).apply();
         applyVideoEffects();
-        nudgeVideoPipelineAfterEffectsChange();
     }
 
     /* Whether the shader actually renders as OFF can't just check upscaleStrength > 0f -
@@ -1351,39 +1385,33 @@ public class PlayerActivity extends AppCompatActivity {
     }
 
     /* Same "toggle IS the persisted setting" immediate-persistence model as
-       setAmbientEnabled above. Unlike ambient opacity, this goes through
-       applyVideoEffects() (a GL program rebuild via setVideoEffects()), so
-       PlayerUiHelper's Color Boost strength SeekBars gate the actual apply to
-       onStopTrackingTouch, same drag-frequency hazard as the Shader Upscaling panel -
-       see that panel's own comment. Saturation and Contrast are fully independent
-       controls now - each its own enabled/auto pair - rather than one shared Color
-       Boost toggle. */
+       setAmbientEnabled above. Saturation and Contrast are fully independent controls -
+       each its own enabled/auto pair - rather than one shared Color Boost toggle.
+       PlayerUiHelper's Color Boost strength SeekBars still gate the actual apply to
+       onStopTrackingTouch rather than drag frequency, though that's no longer load-bearing
+       for correctness - see setShaderStrength's own comment. */
     void setColorBoostSaturationEnabled(boolean enabled) {
         colorBoostSaturationEnabled = enabled;
         getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().putBoolean(PREF_COLOR_BOOST_SATURATION_ENABLED, enabled).apply();
         applyVideoEffects();
-        nudgeVideoPipelineAfterEffectsChange();
     }
 
     void setColorBoostContrastEnabled(boolean enabled) {
         colorBoostContrastEnabled = enabled;
         getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().putBoolean(PREF_COLOR_BOOST_CONTRAST_ENABLED, enabled).apply();
         applyVideoEffects();
-        nudgeVideoPipelineAfterEffectsChange();
     }
 
     void setColorBoostSaturationStrength(float strength) {
         colorBoostSaturationStrength = strength;
         getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().putFloat(PREF_COLOR_BOOST_SATURATION_STRENGTH, strength).apply();
         applyVideoEffects();
-        nudgeVideoPipelineAfterEffectsChange();
     }
 
     void setColorBoostContrastStrength(float strength) {
         colorBoostContrastStrength = strength;
         getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().putFloat(PREF_COLOR_BOOST_CONTRAST_STRENGTH, strength).apply();
         applyVideoEffects();
-        nudgeVideoPipelineAfterEffectsChange();
     }
 
     /* Same immediate-persistence model as setColorBoostSaturationEnabled/setUpscaleAuto
@@ -1395,7 +1423,6 @@ public class PlayerActivity extends AppCompatActivity {
         getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().putBoolean(PREF_COLOR_BOOST_SATURATION_AUTO, enabled).apply();
         updateContentAnalysis();
         applyVideoEffects();
-        nudgeVideoPipelineAfterEffectsChange();
     }
 
     /* Same reasoning as setColorBoostSaturationAuto above, mirrored for Contrast. */
@@ -1404,22 +1431,6 @@ public class PlayerActivity extends AppCompatActivity {
         getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().putBoolean(PREF_COLOR_BOOST_CONTRAST_AUTO, enabled).apply();
         updateContentAnalysis();
         applyVideoEffects();
-        nudgeVideoPipelineAfterEffectsChange();
-    }
-
-    /* Real-device gotcha: calling player.setVideoEffects() mid-playback (every one of the
-       Effects-panel setters above, via applyVideoEffects()) can leave ExoPlayer's video
-       renderer wedged - frames stop advancing and even toggling play/pause again doesn't
-       unstick it (see docs/plezy-player-comparison.md's own account of this). A same-
-       position seekTo forces ExoPlayer to flush and restart feeding the renderer, which
-       does unstick it, and since the position doesn't actually change it's a no-op for
-       anything already buffered. Deliberately NOT called from ContentAnalysisSampler's own
-       ~750ms Auto-mode tick (see onCreate's contentSampler listener) - that path already
-       calls applyVideoEffects() this often without tripping this on a real device, so
-       nudging there too would just add a seek every tick for no benefit. */
-    private void nudgeVideoPipelineAfterEffectsChange() {
-        if (player == null) return;
-        player.seekTo(player.getCurrentPosition());
     }
 
     /* "auto"/"on"/"off" - the three-way state PlayerUiHelper's mode row presents in place

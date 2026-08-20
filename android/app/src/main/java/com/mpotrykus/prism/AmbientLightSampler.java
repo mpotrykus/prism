@@ -8,8 +8,8 @@ import android.view.View;
 /* Averages a periodically-captured tiny downscaled snapshot of PlayerView's underlying
    video surface (via FrameBitmapCapture) into per-zone RGB colors for AmbientGlowView to
    render - see docs/plezy-player-comparison.md's "Ambient lighting" deferred-feature note
-   for why ShaderUpscaleEffect's GlShaderProgram pipeline (see ShaderUpscaleShaderProgram)
-   can't reach this any other way: those frames stay GPU-side inside ExoPlayer's own
+   for why AiUpscaleEffect's GlShaderProgram pipeline (see AiUpscaleShaderProgram) can't reach
+   this any other way: those frames stay GPU-side inside ExoPlayer's own
    VideoFrameProcessor with no CPU readback path already wired up.
 
    Capture mechanics (PixelCopy/TextureView duality, scheduling) live in

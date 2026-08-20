@@ -1311,11 +1311,11 @@ final class PlayerUiHelper {
         strengthSeekBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override
             public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
-                /* Label only here - applyVideoEffects() recompiles/relinks a brand-new GL
-                   shader program and rebuilds ExoPlayer's whole video-effects pipeline on
-                   every call. Calling that at drag frequency previously got the renderer
-                   stuck (playback paused and wouldn't resume) - committed once on release
-                   instead, below. */
+                /* Label only here, actual apply committed once on release below - no longer a
+                   renderer-freeze risk (applyVideoEffects() now just pushes tuning into an
+                   already-installed GL program, see PlayerActivity.setShaderStrength's own
+                   comment), just avoids a SharedPreferences write and overlay refresh per drag
+                   frame. */
                 strengthLabel.setText("Strength: " + progress + "%");
             }
 

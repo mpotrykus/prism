@@ -15,9 +15,9 @@ void main() {
   vec3 s = texture2D(uTex, uv + vec2(0.0,  off.y)).rgb;
   vec3 w = texture2D(uTex, uv + vec2(-off.x, 0.0)).rgb;
   vec3 e = texture2D(uTex, uv + vec2( off.x, 0.0)).rgb;
-  float lc = luma(c); float ln = luma(n); float ls = luma(s); float lw = luma(w); float le = luma(e);
-  float minL = min(lc, min(min(ln, ls), min(lw, le)));
-  float maxL = max(lc, max(max(ln, ls), max(lw, le)));
+  float lc0 = luma(c); float ln = luma(n); float ls = luma(s); float lw = luma(w); float le = luma(e);
+  float minL = min(lc0, min(min(ln, ls), min(lw, le)));
+  float maxL = max(lc0, max(max(ln, ls), max(lw, le)));
   float contrastRange = max(maxL - minL, 0.0001);
   /* *10.0 (was *4.0) - the old threshold only ever hit full weight on very high-contrast
      edges, so on already-compressed/softly-filtered streamed video almost the whole frame

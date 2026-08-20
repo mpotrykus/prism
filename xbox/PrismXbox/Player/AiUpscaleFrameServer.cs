@@ -107,6 +107,24 @@ namespace PrismXbox.Player
 
         public void SetStretch(Windows.UI.Xaml.Media.Stretch stretch) => Element.Stretch = stretch;
 
+        /// <summary>
+        /// Wipes the presented frame to black. Called from <c>NativePlayerHost.Stop</c> -
+        /// <see cref="imageSource"/> keeps whatever CopyFrameToVideoSurface/pixelEffect last drew
+        /// into it regardless of the MediaPlayer's own Source, so without this the next title's
+        /// loading screen would show the previous title's last frame until its own first decoded
+        /// frame arrives. Same UI-thread dispatch as Present, for the same reason.
+        /// </summary>
+        public void Clear()
+        {
+            receivedFrame = false;
+            upscaledLastFrame = false;
+            _ = dispatcher.RunAsync(CoreDispatcherPriority.Normal, () =>
+            {
+                if (imageSource == null) return;
+                using (imageSource.CreateDrawingSession(Windows.UI.Colors.Black)) { }
+            });
+        }
+
         /// <summary>Family key ("anime4k"/"live_action") - see NativePlayerHost.SetAiUpscaling.</summary>
         public void SetFamily(string family)
         {
@@ -183,21 +201,22 @@ namespace PrismXbox.Player
                 // overlay wants to show); CopyFrameToVideoSurface and the dispatcher hop below are
                 // not part of that cost.
                 Stopwatch renderStopwatch = Stopwatch.StartNew();
-                CanvasRenderTarget processed = pixelEffect.Render(target, family, frameWidth, frameHeight);
+                CanvasRenderTarget processed = pixelEffect.Render(target, family, frameWidth, frameHeight, out bool chainRan);
                 renderStopwatch.Stop();
                 framesRenderedInWindow++;
                 renderMsSumInWindow += renderStopwatch.Elapsed.TotalMilliseconds;
                 MaybeFlushStatsWindow();
 
-                CanvasRenderTarget toPresent = processed ?? target;
-                int width = (int)toPresent.SizeInPixels.Width;
-                int height = (int)toPresent.SizeInPixels.Height;
-                bool upscaled = processed != null;
+                // Render now always returns a real target (native pass-through with Sharpening/
+                // Color Boost already applied when no chain ran) - chainRan, not a null check,
+                // is what tells the stats overlay whether a real CNN/FSR chain actually ran.
+                int width = (int)processed.SizeInPixels.Width;
+                int height = (int)processed.SizeInPixels.Height;
                 _ = dispatcher.RunAsync(CoreDispatcherPriority.Normal, () =>
                 {
                     try
                     {
-                        Present(toPresent, width, height, upscaled);
+                        Present(processed, width, height, chainRan);
                     }
                     finally
                     {
