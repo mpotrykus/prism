@@ -151,10 +151,23 @@
     deleting it unconditionally left it permanently missing after an AppxBundle build and
     broke Visual Studio's own Deploy step (DEP0600 null-reference) when it expected to read
     it back.
+    The root cause traces one level further than the obj\ caches above: MSBuild's own
+    "copy content to output" step for bin\<platform>\<config>\AppX\www\assets\ is itself
+    incremental - it copies new hashed files in but never removes an old build's now-gone
+    ones, so both an old and new index-*.js/web-*.js end up sitting there together. The
+    resfiles/PackageLayout caches above can then end up pointing at whichever one MakeAppx
+    decides is stale. Deleting the old hashed files out of that AppX\www\assets\ layout
+    copy directly - the same root fix xbox-sync.mjs already applies to the source www\
+    folder (wipe-then-copy instead of overlay-copy) - removes the mismatch at its source
+    instead of only clearing downstream caches of it. This still reproduced when building
+    from Visual Studio directly (not just `npm run xbox:build`), since it's this csproj's
+    own incremental copy behavior, not the npm script, that leaves the stale files behind.
   -->
   <Target Name="PrismCleanStaleAppxLayout" BeforeTargets="Build;Rebuild">
     <ItemGroup>
       <_PrismStaleLayoutFiles Include="$(IntermediateOutputPath)*.layout.resfiles*" />
+      <_PrismStaleLayoutFiles Include="$(OutDir)AppX\www\assets\index-*.js" />
+      <_PrismStaleLayoutFiles Include="$(OutDir)AppX\www\assets\web-*.js" />
     </ItemGroup>
     <Delete Files="@(_PrismStaleLayoutFiles)" />
     <RemoveDir Directories="$(IntermediateOutputPath)PackageLayout" Condition="Exists('$(IntermediateOutputPath)PackageLayout')" />
