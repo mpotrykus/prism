@@ -90,8 +90,19 @@ final class ShaderUpscaleShaderProgram extends BaseGlShaderProgram {
           + "  float shadowProtect = smoothstep(0.0, 0.22, luma(outColor));\n"
           + "  float contrast = mix(1.0, uContrastBoost, shadowProtect);\n"
           + "  float saturation = mix(1.0, uSaturationBoost, shadowProtect);\n"
-          + "  outColor = (outColor - 0.5) * contrast + 0.5;\n"
-          + "  outColor = mix(vec3(luma(outColor)), outColor, saturation);\n"
+          // Saturation and Contrast are independent controls - each must be a true no-op on
+          // the other. Real bug fixed 2026-08-20, second (deeper) round: a first attempt
+          // just reordered contrast/saturation, but a per-channel stretch
+          // (x-0.5)*contrast+0.5 multiplies EVERY channel value by contrast, including the
+          // differences BETWEEN channels - which is exactly what chroma/saturation is - so
+          // contrast still visibly scaled saturation regardless of order. Fix: apply
+          // contrast to LUMA ONLY via an additive delta to R/G/B (preserves every channel
+          // difference, i.e. chroma, exactly - same trick this codebase's luma-merge
+          // shader already uses), then lerp saturation toward that contrast-adjusted luma.
+          + "  float l0 = luma(outColor);\n"
+          + "  float lc = (l0 - 0.5) * contrast + 0.5;\n"
+          + "  vec3 contrastedColor = outColor + (lc - l0);\n"
+          + "  outColor = mix(vec3(lc), contrastedColor, saturation);\n"
           + "  gl_FragColor = vec4(clamp(outColor, 0.0, 1.0), 1.0);\n"
           + "}\n";
 
@@ -132,8 +143,12 @@ final class ShaderUpscaleShaderProgram extends BaseGlShaderProgram {
           + "  float shadowProtect = smoothstep(0.0, 0.22, luma(outColor));\n"
           + "  float contrast = mix(1.0, uContrastBoost, shadowProtect);\n"
           + "  float saturation = mix(1.0, uSaturationBoost, shadowProtect);\n"
-          + "  outColor = (outColor - 0.5) * contrast + 0.5;\n"
-          + "  outColor = mix(vec3(luma(outColor)), outColor, saturation);\n"
+          // Saturation and Contrast are independent controls - see FRAGMENT_SHADER_ANIME's
+          // own comment on this fix (2026-08-20).
+          + "  float l0 = luma(outColor);\n"
+          + "  float lc = (l0 - 0.5) * contrast + 0.5;\n"
+          + "  vec3 contrastedColor = outColor + (lc - l0);\n"
+          + "  outColor = mix(vec3(lc), contrastedColor, saturation);\n"
           + "  gl_FragColor = vec4(clamp(outColor, 0.0, 1.0), 1.0);\n"
           + "}\n";
 

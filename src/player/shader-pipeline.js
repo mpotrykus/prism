@@ -20,7 +20,7 @@ import { hasNativePlayer, platformTag } from "./core/platform.js";
    the other cycles in src/player/ui/ are: postShaderEffect/postColorBoost are only referenced
    inside function bodies below (updateShaderPipeline, postXboxShaderSettings), never at
    top-level module-evaluation time. */
-import { postShaderEffect, postColorBoost } from "./xbox-bridge.js";
+import { postShaderEffect, postColorBoost, postAiUpscaling } from "./xbox-bridge.js";
 
 function isXbox() {
     return hasNativePlayer() && platformTag() === "xbox";
@@ -54,6 +54,17 @@ export function postXboxShaderSettings(controller) {
    auto-derived value (_autoColorBoostSaturationStrength from avgSaturation,
    _autoColorBoostContrastStrength from lumaStdDev - see content-analysis.js), so there is no
    longer one shared "strength"/"auto" to send, there are two independent ones. */
+/* AI Upscaling's native counterpart - see NativePlayerHost.SetAiUpscaling. preset mirrors the
+   family key postXboxShaderSettings sends as shaderType (_shaderAutoType: "anime4k"/
+   "live_action"), since AI Upscaling has no algorithm choice of its own - it upgrades whichever
+   family Sharpening would have used, same as the web leg's upgradeTo. */
+export function postXboxAiUpscalingSettings(controller) {
+    postAiUpscaling({
+        enabled: !!controller._aiUpscalingEnabled,
+        preset: controller._shaderAutoType,
+    });
+}
+
 export function postXboxColorBoostSettings(controller) {
     postColorBoost({
         saturationEnabled: !!controller._colorBoostSaturationEnabled,
@@ -120,6 +131,20 @@ export function setAiUpscalingEnabled(controller, enabled) {
     controller._aiUpscalingEnabled = enabled;
     localStorage.setItem(AI_UPSCALING_STORAGE_KEY, enabled ? "1" : "0");
     updateShaderPipeline(controller);
+    /* Xbox only: postXboxAiUpscalingSettings (called by updateShaderPipeline above) just relays
+       the new flag to native - it does NOT make AI Upscaling actually switch mid-playback.
+       NativePlayerHost.SetAiUpscaling only updates its own fields; the real work (flipping
+       IsVideoFrameServerEnabled, swapping which visual element is shown, aiUpscale.SetActive)
+       lives in SetAiUpscalePathActive, which only runs from Play/SwitchTitle. Real bug hit and
+       fixed 2026-08-20: without this, toggling the switch while a title was already playing had
+       no visible effect at all until the viewer happened to switch/restart a title - reported as
+       "zero difference when toggling AI Upscaling". _reloadSource (the same in-place restart
+       Quality Cap/Version/audio-track changes and every Xbox seek already use, since a Plex
+       progressive stream can't be repositioned in place) re-runs SwitchTitle at the current
+       position with no other overrides, which re-evaluates SetAiUpscalePathActive with the now-
+       current enabled/preset state. Already safe to call before any title has loaded -
+       reloadXboxSource itself no-ops when controller._session isn't set yet. */
+    if (isXbox()) controller._reloadSource({});
 }
 
 /* The "more" menu's inline toggle (see chrome.js's openHamburgerMenu) - flips whether the
@@ -254,6 +279,7 @@ export function updateShaderPipeline(controller) {
     if (isXbox()) {
         postXboxShaderSettings(controller);
         postXboxColorBoostSettings(controller);
+        postXboxAiUpscalingSettings(controller);
         return;
     }
     /* Any of these keeps this GL pass alive - Color Boost's Saturation/Contrast alone (either

@@ -44,7 +44,20 @@ void main() {
   float shadowProtect = smoothstep(0.0, 0.22, luma(outColor));
   float contrast = mix(1.0, uContrastBoost, shadowProtect);
   float saturation = mix(1.0, uSaturationBoost, shadowProtect);
-  outColor = (outColor - 0.5) * contrast + 0.5;
-  outColor = mix(vec3(luma(outColor)), outColor, saturation);
+  /* Saturation and Contrast are independent controls - each must be a true no-op on the
+     other whenever it's at its own neutral value, regardless of what the other is doing.
+     Real bug fixed 2026-08-20, second (deeper) round: a first attempt just reordered
+     contrast/saturation, but a per-channel stretch (x-0.5)*contrast+0.5 multiplies EVERY
+     channel value by contrast, including the differences BETWEEN channels - which is
+     exactly what chroma/saturation is - so contrast still visibly scaled saturation
+     regardless of order. Fix: apply contrast to LUMA ONLY, via the same additive-delta
+     trick luma-merge.frag.glsl already uses (adding the same value to R/G/B shifts luma by
+     exactly that amount while leaving every channel DIFFERENCE, i.e. chroma, untouched).
+     Saturation then lerps toward that contrast-adjusted luma, so it never touches
+     brightness either - textbook independent luma/chroma control. */
+  float l0 = luma(outColor);
+  float lc = (l0 - 0.5) * contrast + 0.5;
+  vec3 contrastedColor = outColor + (lc - l0);
+  outColor = mix(vec3(lc), contrastedColor, saturation);
   gl_FragColor = vec4(clamp(outColor, 0.0, 1.0), 1.0);
 }

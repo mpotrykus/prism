@@ -295,6 +295,31 @@ function presetPassCount(controller, preset) {
     return preset.passes.length;
 }
 
+/* Mirrors stats-overlay.js's xboxAiUpscalingStatusLine, worded for the Effects menu rather than
+   the debug overlay - reads native's own reported state (AiUpscaleFrameServer's "aiUpscaleStatus"
+   event, stashed on controller._xboxAiUpscaleStatus by xbox-bridge.js) instead of the JS GL
+   chain checks the web leg relies on, which never exist on Xbox. Only called while the toggle is
+   already known to be on (see buildAiUpscalingEffectRow). */
+function xboxAiUpscalingCaption(controller, preset) {
+    if (controller._session?.isHdr) return "Not supported on HDR titles";
+    const status = controller._xboxAiUpscaleStatus;
+    if (!status) return "Starting...";
+    if (status.error) return `Error: ${status.error}`;
+    if (!status.receivedFrame) return "Waiting for video...";
+    /* preset is already the resolved UPGRADE entry (e.g. SHADER_TYPES.anime4k_cnn, label
+       "Animation (AI CNN)") - status.family is only the bare family key ("anime4k"), whose own
+       label ("Animation") says nothing about the real CNN/FSR chain actually running. Real bug
+       hit and fixed 2026-08-20: this used to prefer SHADER_TYPES[status.family]?.label, which
+       resolves to the plain family label every time (it's never null/undefined) - so this
+       caption never actually distinguished "running" from "off" state, and toggling AI
+       Upscaling produced no visible caption change at all. */
+    if (status.upscaled) return `${preset.label} running`;
+    // Native reports "not upscaled" for two different reasons: FSR1 (live-action) isn't ported
+    // yet (Stage 2b), or an error mid-chain fell back to plain pass-through this frame.
+    if (status.family && status.family !== "anime4k") return `${status.family} not supported here yet`;
+    return `${preset.label} idle - pass-through`;
+}
+
 /* AI Upscaling (the real Anime4K CNN / FSR 1 chains): a plain on/off toggle, independent of
    Sharpening's own toggle - no strength slider (see `strengthless`, a trained network/analytic
    upscaler has no intensity knob) and no Auto (there's nothing for Auto to compute either). Same
@@ -312,10 +337,19 @@ function buildAiUpscalingEffectRow(controller, list) {
     const familyKey = controller._shaderAutoType;
     const upgradeKey = SHADER_TYPES[familyKey]?.upgradeTo;
     const preset = upgradeKey ? SHADER_TYPES[upgradeKey] : null;
+    const isXbox = controller._xboxIsHdr !== undefined;
 
     let caption;
     if (!preset) {
         caption = "Not supported on this device";
+    } else if (isXbox) {
+        /* Xbox has no JS-side GL pass chain at all - native does the work (see
+           AiUpscaleFrameServer) - so the _shaderChainErrors/_shaderChains checks below never
+           apply here and unconditionally read "Not supported on this device" regardless of
+           whether AI Upscaling is actually running. Real bug hit and fixed 2026-08-20: the
+           same class of bug stats-overlay.js's xboxAiUpscalingStatusLine already guards
+           against, just never applied to this (far more visible) menu caption too. */
+        caption = controller._aiUpscalingEnabled ? xboxAiUpscalingCaption(controller, preset) : preset.label;
     } else if (controller._shaderChainErrors?.[upgradeKey]) {
         caption = `${preset.label} failed to compile here`;
     } else if (!controller._shaderChains?.[upgradeKey]) {

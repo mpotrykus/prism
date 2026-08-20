@@ -221,6 +221,13 @@ export function postAmbientLighting(enabled) {
     post("setAmbientLighting", { enabled });
 }
 
+/* preset is the family key ("anime4k"/"live_action", i.e. controller._shaderAutoType) - native
+   maps it to its own anime4k_cnn/live_action_fsr chain, mirroring how upgradeTo resolves the same
+   family key on the web leg. See shader-pipeline.js's postXboxAiUpscalingSettings. */
+export function postAiUpscaling({ enabled, preset }) {
+    post("setAiUpscaling", { enabled, preset });
+}
+
 /* "fit"/"cover"/"stretch" - see chrome-menu-extras.js's applyFitMode. There is no
    controller._videoEl on this leg to set a CSS object-fit on, so the equivalent
    (MediaPlayerElement.Stretch) is applied natively instead - see
@@ -319,6 +326,13 @@ function handleMessage(controller, message) {
             /* Read by stats-overlay.js. Notably includes real colour-space/transfer state, which the
                web leg can never provide - its HDR line is hardcoded "n/a (browser)". */
             controller._xboxStats = params;
+            break;
+        case "aiUpscaleStatus":
+            /* From AiUpscaleFrameServer - the web leg's own _shaderChains (what
+               stats-overlay.js's aiUpscalingStatusLine normally checks) is never built on Xbox,
+               so native reports its own state here instead. See stats-overlay.js's
+               xboxAiUpscalingStatusLine. */
+            controller._xboxAiUpscaleStatus = params;
             break;
         case "contentAnalysis":
             applyXboxContentAnalysis(controller, params.avgSaturation, params.edgeEnergy, params.lumaStdDev);

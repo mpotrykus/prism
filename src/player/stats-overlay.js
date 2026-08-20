@@ -98,6 +98,11 @@ function aiUpscalingStatusLine(controller) {
     const upgradeKey = SHADER_TYPES[familyKey]?.upgradeTo;
     const preset = upgradeKey ? SHADER_TYPES[upgradeKey] : null;
     if (!preset) return "not supported here";
+    /* Xbox has no JS-side GL pass chain at all (native does the work - see
+       AiUpscaleFrameServer) - _xboxIsHdr is set on every Xbox loadedMetadata regardless of
+       whether AI Upscaling is even on, same detection hdrStatusLine already relies on, so this
+       stays reliable even before any "aiUpscaleStatus" event has arrived. */
+    if (controller._xboxIsHdr !== undefined) return xboxAiUpscalingStatusLine(controller, preset);
     if (controller._shaderChainErrors?.[upgradeKey]) return `${preset.label} failed to compile here`;
     if (!controller._shaderChains?.[upgradeKey]) return "not supported here";
     /* A trained network takes no strength, so printing one would be a fabricated number -
@@ -108,6 +113,31 @@ function aiUpscalingStatusLine(controller) {
     }
     if (controller._shaderWatchdog?.downgraded) return `${preset.label} off - too slow here`;
     return `${preset.label} idle - source not upscaled`;
+}
+
+/* Frame-server mode cannot render HDR (see AiUpscaleFrameServer's own header comment), so an
+   HDR title never activates this path at all - reported distinctly from "off" since the toggle
+   IS on, just inapplicable to this title. controller._session?.isHdr mirrors the same isHdr
+   value already sent to native's Play/SwitchTitle (see xbox-bridge.js's playXbox/switchXbox),
+   same field hdrStatusLine above already reads for the equivalent purpose. */
+function xboxAiUpscalingStatusLine(controller, preset) {
+    if (controller._session?.isHdr) return "unsupported (HDR)";
+    const status = controller._xboxAiUpscaleStatus;
+    if (!status) return "starting...";
+    if (status.error) return `error: ${status.error}`;
+    if (!status.receivedFrame) return "no frames received";
+    /* preset is the resolved UPGRADE entry (e.g. SHADER_TYPES.anime4k_cnn, label "Animation (AI
+       CNN)") - status.family is only the bare family key ("anime4k"), whose own label ("Animation")
+       says nothing about the real CNN/FSR chain actually running. Real bug hit and fixed
+       2026-08-20: this used to read SHADER_TYPES[status.family]?.label, which is always the plain
+       family label - so "running" and "off" looked identical here, and toggling AI Upscaling
+       produced no visible change in this line at all. */
+    if (status.upscaled) return preset.label;
+    // Native reports "not upscaled" for two different reasons: FSR1 (live-action) isn't ported
+    // yet (Stage 2b), or an error mid-chain fell back to plain pass-through this frame (see
+    // AiUpscalePixelEffect.Render's own null return / AiUpscaleFrameServer's catch fallback).
+    if (status.family && status.family !== "anime4k") return `${status.family} not supported here yet`;
+    return "pass-through (not upscaling)";
 }
 
 /* The measured shader-loop frame interval, and whether the perf watchdog has already stepped

@@ -77,9 +77,20 @@ D2D_PS_ENTRY(main)
     float shadowProtect = smoothstep(0.0, 0.22, luma(outColor));
     float contrast = lerp(1.0, contrastBoost, shadowProtect);
     float saturationAmt = lerp(1.0, saturationBoost, shadowProtect);
-    outColor = (outColor - 0.5) * contrast + 0.5;
-    float l = luma(outColor);
-    outColor = lerp(float3(l, l, l), outColor, saturationAmt);
+    // Saturation and Contrast are independent controls - each must be a true no-op on the
+    // other. Real bug fixed 2026-08-20 (duplicated across all 3 platform copies of this
+    // shader - see sharpen-anime.frag.glsl's own comment), second (deeper) round: a first
+    // attempt just reordered contrast/saturation, but a per-channel stretch
+    // (x-0.5)*contrast+0.5 multiplies EVERY channel value by contrast, including the
+    // differences BETWEEN channels - which is exactly what chroma/saturation is - so
+    // contrast still visibly scaled saturation regardless of order. Fix: apply contrast to
+    // LUMA ONLY via an additive delta to R/G/B (preserves every channel difference, i.e.
+    // chroma, exactly - same trick this codebase's luma-merge.frag.glsl already uses), then
+    // lerp saturation toward that contrast-adjusted luma.
+    float l0 = luma(outColor);
+    float lc = (l0 - 0.5) * contrast + 0.5;
+    float3 contrastedColor = outColor + (lc - l0);
+    outColor = lerp(float3(lc, lc, lc), contrastedColor, saturationAmt);
     outColor = saturate(outColor);
 
     return float4(outColor, center4.a);

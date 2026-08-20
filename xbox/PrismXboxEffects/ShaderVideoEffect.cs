@@ -142,9 +142,15 @@ namespace PrismXboxEffects
                             sharpen = upscaleStrength > 0
                                 ? ShaderTuning.ShaderTuningAt(programType, upscaleStrength)
                                 : new ShaderTuning.SharpenTuning { Scale = 1, Sharpen = 0, Kernel = 1 };
-                            color = colorBoostOn
-                                ? ShaderTuning.ColorBoostAt(settings.ColorBoostSaturationStrength, settings.ColorBoostContrastStrength)
-                                : new ShaderTuning.ColorTuning { Saturation = 1, Contrast = 1 };
+                            // Real bug hit and fixed 2026-08-20: ColorBoostAt was given BOTH raw
+                            // strengths whenever EITHER was enabled, so turning e.g. Contrast off
+                            // while Saturation stayed on kept applying Contrast's own last
+                            // remembered strength - "off" only disabled that slider's UI, not the
+                            // actual boost. Each strength must independently zero out (-> neutral
+                            // 1.0 via ColorBoostAt) when its OWN enabled flag is false.
+                            color = ShaderTuning.ColorBoostAt(
+                                settings.ColorBoostSaturationEnabled ? settings.ColorBoostSaturationStrength : 0,
+                                settings.ColorBoostContrastEnabled ? settings.ColorBoostContrastStrength : 0);
 
                             PixelShaderEffect effect = GetOrCreateEffect(programType);
                             effect.Source1 = inputBitmap;

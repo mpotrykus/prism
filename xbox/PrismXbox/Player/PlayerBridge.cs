@@ -141,6 +141,11 @@ namespace PrismXbox.Player
                 case "setAmbientLighting":
                     host.SetAmbientLighting(p.GetNamedBoolean("enabled", false));
                     break;
+                case "setAiUpscaling":
+                    host.SetAiUpscaling(
+                        p.GetNamedBoolean("enabled", false),
+                        p.GetNamedString("preset", ""));
+                    break;
                 default:
                     log($"unhandled bridge method: {method}");
                     break;

@@ -1,0 +1,222 @@
+using System;
+using Microsoft.Graphics.Canvas;
+using Microsoft.Graphics.Canvas.UI.Xaml;
+using PrismXboxEffects;
+using Windows.Media.Playback;
+using Windows.UI.Core;
+using Windows.UI.Xaml.Controls;
+
+namespace PrismXbox.Player
+{
+    /// <summary>
+    /// Presents <see cref="MediaPlayer"/>'s frame-server output, run through
+    /// <see cref="AiUpscalePixelEffect"/>'s real Anime4K CNN chain, through a Win2D
+    /// <see cref="CanvasImageSource"/> in a plain XAML <see cref="Image"/> - the alternate
+    /// presenter to <see cref="NativePlayerHost"/>'s <c>MediaPlayerElement</c>, used only for
+    /// non-HDR titles with AI Upscaling enabled (see <c>NativePlayerHost.Play</c>/
+    /// <c>SwitchTitle</c>). Frame-server mode cannot render HDR, which is why HDR titles never
+    /// route through here at all.
+    /// </summary>
+    internal sealed class AiUpscaleFrameServer
+    {
+        private readonly Action<string, string> emit;
+        private readonly Action<string> log;
+        private readonly CoreDispatcher dispatcher;
+        private readonly CanvasDevice canvasDevice = new CanvasDevice();
+        private readonly AiUpscalePixelEffect pixelEffect;
+
+        private CanvasRenderTarget frameTarget;
+        private int frameWidth;
+        private int frameHeight;
+        // Family key ("anime4k"/"live_action") from NativePlayerHost.SetAiUpscaling - only
+        // "anime4k" produces a real chain until Stage 2b ports FSR1 (live-action).
+        private string family = "";
+
+        // Touched only on the UI thread (see Present) - CanvasImageSource is XAML-interop (a
+        // SurfaceImageSource under the hood), unlike the plain Direct3D-backed CanvasRenderTarget
+        // above, and threw RPC_E_WRONG_THREAD when constructed/drawn from the frame-server
+        // callback's own Media Foundation worker thread on real hardware.
+        private CanvasImageSource imageSource;
+        private int presentedWidth;
+        private int presentedHeight;
+
+        // Surfaced to JS as the "aiUpscaleStatus" event (see xbox-bridge.js/stats-overlay.js) -
+        // the shared stats overlay has no other way to know whether this path is actually
+        // running, since Xbox never builds the web leg's _shaderChains at all.
+        private bool active;
+        private bool receivedFrame;
+        private bool upscaledLastFrame;
+        private string lastError;
+
+        public Image Element { get; }
+
+        public AiUpscaleFrameServer(MediaPlayer player, Action<string, string> emit, Action<string> log)
+        {
+            this.emit = emit;
+            this.log = log ?? (_ => { });
+            // Captured once, since this class is only ever constructed from the UI thread (same
+            // as NativePlayerHost itself) - used to marshal every CanvasImageSource touch onto
+            // that same thread (see Present).
+            dispatcher = Windows.UI.Xaml.Window.Current.Dispatcher;
+
+            Element = new Image
+            {
+                // Same invariant documented on NativePlayerHost.Element (there enforced via
+                // IsTabStop too, a Control-only property Image doesn't have - Image is never
+                // keyboard-focusable in the first place, so IsHitTestVisible alone is sufficient
+                // here to keep the WebView2 the only thing gamepad/pointer input can reach).
+                IsHitTestVisible = false,
+                Stretch = Windows.UI.Xaml.Media.Stretch.Uniform,
+                Visibility = Windows.UI.Xaml.Visibility.Collapsed,
+            };
+
+            pixelEffect = new AiUpscalePixelEffect(canvasDevice);
+
+            player.VideoFrameAvailable += OnVideoFrameAvailable;
+        }
+
+        public void SetStretch(Windows.UI.Xaml.Media.Stretch stretch) => Element.Stretch = stretch;
+
+        /// <summary>Family key ("anime4k"/"live_action") - see NativePlayerHost.SetAiUpscaling.</summary>
+        public void SetFamily(string family)
+        {
+            this.family = family ?? "";
+        }
+
+        public void SetActive(bool active)
+        {
+            this.active = active;
+            receivedFrame = false;
+            upscaledLastFrame = false;
+            lastError = null;
+            Element.Visibility = active ? Windows.UI.Xaml.Visibility.Visible : Windows.UI.Xaml.Visibility.Collapsed;
+            EmitStatus();
+        }
+
+        /// <summary>
+        /// Called from <c>NativePlayerHost.OnMediaOpened</c> once real decoded dimensions are
+        /// known. <c>VideoFrameAvailable</c> is not expected to fire before <c>MediaOpened</c>,
+        /// but <see cref="OnVideoFrameAvailable"/> guards on <c>frameWidth/Height</c> regardless,
+        /// so an out-of-order callback just drops that one frame rather than faulting.
+        /// </summary>
+        public void ConfigureSize(int videoWidth, int videoHeight)
+        {
+            frameWidth = videoWidth;
+            frameHeight = videoHeight;
+        }
+
+        private void OnVideoFrameAvailable(MediaPlayer sender, object args)
+        {
+            // Raised off the UI thread (a Media Foundation work thread). CanvasRenderTarget has
+            // no XAML/UI-thread affinity - a plain Direct3D-backed surface, the same kind
+            // ShaderVideoEffect.cs already creates/draws from this same kind of worker thread
+            // without issue - so the copy below is safe here. CanvasImageSource is not; every
+            // touch of it happens inside the dispatched Present call instead.
+            try
+            {
+                if (frameWidth <= 0 || frameHeight <= 0) return;
+                CanvasRenderTarget target = EnsureFrameTarget();
+                sender.CopyFrameToVideoSurface(target);
+
+                // Safe on this background thread - PixelShaderEffect/CanvasRenderTarget/
+                // CanvasDrawingSession are D2D/Direct3D-backed, not XAML-interop, the same
+                // "no UI-thread affinity" category ShaderVideoEffect.ProcessFrame already relies
+                // on for the exact same kind of drawing from this exact kind of worker thread.
+                // Only CanvasImageSource (touched in Present below) needs the dispatcher hop.
+                CanvasRenderTarget processed = pixelEffect.Render(target, family, frameWidth, frameHeight);
+                CanvasRenderTarget toPresent = processed ?? target;
+                int width = (int)toPresent.SizeInPixels.Width;
+                int height = (int)toPresent.SizeInPixels.Height;
+                bool upscaled = processed != null;
+                _ = dispatcher.RunAsync(CoreDispatcherPriority.Normal, () => Present(toPresent, width, height, upscaled));
+            }
+            catch (Exception ex)
+            {
+                ReportError(ex);
+            }
+        }
+
+        /// <summary>
+        /// UI-thread only. The one place <see cref="imageSource"/> is ever constructed or drawn
+        /// into - see this class's header comment for why that split exists.
+        /// </summary>
+        private void Present(CanvasRenderTarget target, int width, int height, bool upscaled)
+        {
+            try
+            {
+                if (imageSource == null || presentedWidth != width || presentedHeight != height)
+                {
+                    // Sized to whatever pixelEffect.Render actually produced - native resolution
+                    // for plain pass-through (family unsupported, or an error fell back to
+                    // target), or the fixed 2x scale once a real chain is running.
+                    imageSource = new CanvasImageSource(canvasDevice, width, height, 96);
+                    presentedWidth = width;
+                    presentedHeight = height;
+                    Element.Source = imageSource;
+                }
+
+                using (CanvasDrawingSession ds = imageSource.CreateDrawingSession(Windows.UI.Colors.Black))
+                {
+                    ds.DrawImage(target);
+                }
+
+                if (!receivedFrame || upscaledLastFrame != upscaled)
+                {
+                    receivedFrame = true;
+                    upscaledLastFrame = upscaled;
+                    lastError = null;
+                    EmitStatus();
+                }
+            }
+            catch (Exception ex)
+            {
+                ReportError(ex);
+            }
+        }
+
+        private void ReportError(Exception ex)
+        {
+            string message = $"{ex.GetType().Name}: {ex.Message}";
+            log($"[aiupscale] error: {message}");
+            if (lastError != message)
+            {
+                lastError = message;
+                EmitStatus();
+            }
+        }
+
+        private void EmitStatus()
+        {
+            emit?.Invoke("aiUpscaleStatus",
+                $"{{\"active\":{(active ? "true" : "false")}," +
+                $"\"receivedFrame\":{(receivedFrame ? "true" : "false")}," +
+                $"\"upscaled\":{(upscaledLastFrame ? "true" : "false")}," +
+                $"\"family\":{JsonString(family)}," +
+                $"\"error\":{JsonString(lastError)}}}");
+        }
+
+        // Minimal JSON string escaping, enough for an exception message - mirrors
+        // NativePlayerHost's own JsonString helper (kept local since this class shouldn't need to
+        // reach into that one for a two-line utility).
+        private static string JsonString(string value)
+        {
+            if (value == null) return "null";
+            return "\"" + value.Replace("\\", "\\\\").Replace("\"", "\\\"")
+                               .Replace("\r", " ").Replace("\n", " ") + "\"";
+        }
+
+        private CanvasRenderTarget EnsureFrameTarget()
+        {
+            if (frameTarget != null
+                && frameTarget.SizeInPixels.Width == (uint)frameWidth
+                && frameTarget.SizeInPixels.Height == (uint)frameHeight)
+            {
+                return frameTarget;
+            }
+
+            frameTarget?.Dispose();
+            frameTarget = new CanvasRenderTarget(canvasDevice, frameWidth, frameHeight, 96);
+            return frameTarget;
+        }
+    }
+}

@@ -45,8 +45,23 @@ namespace PrismXbox.Player
         // mirrors shader-pipeline.js's own "only spin the pipeline up/down at the 0%/on-off
         // boundary" reasoning.
         private bool effectAttached;
+        private readonly AiUpscaleFrameServer aiUpscale;
+        // Read at the start of Play/SwitchTitle only (see those methods' own comments) - a
+        // mid-playback toggle takes effect on the next play/switch, same as isHdr re-evaluation
+        // already only happening at those two call sites.
+        private bool aiUpscalingEnabled;
+        // Family key ("anime4k"/"live_action"), mirroring _shaderAutoType on the JS side, forwarded
+        // to AiUpscaleFrameServer. Only "anime4k" produces a real chain (AiUpscalePixelEffect) until
+        // Stage 2b ports FSR1 for "live_action".
+        private string aiUpscalingPreset = "";
 
         public MediaPlayerElement Element { get; }
+
+        /// <summary>
+        /// The alternate presenter used instead of <see cref="Element"/> whenever AI Upscaling is
+        /// active for the current (non-HDR) title - see <see cref="Play"/>/<see cref="SwitchTitle"/>.
+        /// </summary>
+        public Image AiUpscaleElement => aiUpscale.Element;
 
         /// <param name="emit">(eventName, jsonParams) - forwarded to JS by PlayerBridge.</param>
         public NativePlayerHost(Action<string, string> emit, Action<string> log)
@@ -70,6 +85,7 @@ namespace PrismXbox.Player
                 Stretch = Windows.UI.Xaml.Media.Stretch.Uniform,
             };
             Element.SetMediaPlayer(player);
+            aiUpscale = new AiUpscaleFrameServer(player, this.emit, this.log);
 
             MediaPlaybackSession session = player.PlaybackSession;
             session.PositionChanged += (s, e) => EmitProgress(s);
@@ -92,7 +108,19 @@ namespace PrismXbox.Player
             // Dispatcher.RunAsync wrapper around it), so simply forwarding through `emit` here is
             // enough; this class does not need its own dispatcher call.
             EffectSettings.ContentAnalysis += (avgSaturation, edgeEnergy, lumaStdDev) =>
+            {
+                // Temporary diagnostic for the still-unsolved 0x80070057/E_INVALIDARG
+                // PostWebMessageAsJson failure on this emit specifically (see PlayerBridge.Emit's
+                // catch, which only logs the HResult, not why). Two rounds of static review of
+                // ContentAnalysisSampler's math (every division guarded, every sqrt argument a
+                // sum of squares) found no way for these three values to be NaN/Infinity - logging
+                // the actual raw values on every attempt instead of guessing a third time. Remove
+                // once the real cause is found.
+                log($"[diag] contentAnalysis raw: avgSaturation={avgSaturation:G17} edgeEnergy={edgeEnergy:G17} lumaStdDev={lumaStdDev:G17}" +
+                    $" nan=({double.IsNaN(avgSaturation)},{double.IsNaN(edgeEnergy)},{double.IsNaN(lumaStdDev)})" +
+                    $" inf=({double.IsInfinity(avgSaturation)},{double.IsInfinity(edgeEnergy)},{double.IsInfinity(lumaStdDev)})");
                 emit("contentAnalysis", $"{{\"avgSaturation\":{avgSaturation:R},\"edgeEnergy\":{edgeEnergy:R},\"lumaStdDev\":{lumaStdDev:R}}}");
+            };
             EffectSettings.AmbientColors += (top, bottom, left, right) =>
                 emit("ambientColors",
                     $"{{\"top\":{JsonNumberArray(top)},\"bottom\":{JsonNumberArray(bottom)}," +
@@ -128,6 +156,19 @@ namespace PrismXbox.Player
         {
             EffectSettings.SetAmbientLighting(enabled);
             SyncEffectAttachment();
+        }
+
+        /// <summary>
+        /// Stage 1: enable/disable only, no preset selection yet (Stage 2 adds the real FSR1/
+        /// Anime4K shader chain; Stage 3 threads a preset string through from the bridge). Takes
+        /// effect at the next <see cref="Play"/>/<see cref="SwitchTitle"/>, not mid-playback -
+        /// same as <c>isHdr</c>'s own re-evaluation only happening at those two call sites.
+        /// </summary>
+        public void SetAiUpscaling(bool enabled, string preset)
+        {
+            aiUpscalingEnabled = enabled;
+            aiUpscalingPreset = preset ?? "";
+            aiUpscale.SetFamily(aiUpscalingPreset);
         }
 
         private void SyncEffectAttachment()
@@ -171,6 +212,7 @@ namespace PrismXbox.Player
             // switching afterwards makes the TV resync mid-playback.
             if (isHdr) await hdr.EnableAsync();
             else await hdr.RestoreAsync();
+            SetAiUpscalePathActive(isHdr);
             // Plex encodes the start position in the URL itself (offset=), so there is no seek to
             // perform here - the stream begins where it should. startPositionMs is still recorded above
             // (see baseOffsetMs) since session.Position reports 0-based from this point, not from the
@@ -178,6 +220,23 @@ namespace PrismXbox.Player
             log($"play @{startPositionMs}ms");
             player.Source = MediaSource.CreateFromUri(new Uri(url));
             player.Play();
+        }
+
+        /// <summary>
+        /// Frame-server mode cannot render HDR (see AiUpscaleFrameServer's own header comment),
+        /// so AI Upscaling is only ever active for a non-HDR title - decided once here, before
+        /// Source is set, same as the HDR display-mode switch above. Toggling
+        /// IsVideoFrameServerEnabled after Source is already playing is not attempted here; a
+        /// mid-playback AI Upscaling toggle takes effect on the next play/switch instead.
+        /// </summary>
+        private void SetAiUpscalePathActive(bool isHdr)
+        {
+            bool useAiUpscale = aiUpscalingEnabled && !isHdr;
+            player.IsVideoFrameServerEnabled = useAiUpscale;
+            Element.Visibility = useAiUpscale
+                ? Windows.UI.Xaml.Visibility.Collapsed
+                : Windows.UI.Xaml.Visibility.Visible;
+            aiUpscale.SetActive(useAiUpscale);
         }
 
         /// <summary>
@@ -193,6 +252,7 @@ namespace PrismXbox.Player
             // too, not only on a cold start.
             if (isHdr) await hdr.EnableAsync();
             else await hdr.RestoreAsync();
+            SetAiUpscalePathActive(isHdr);
             log($"switchTitle @{startPositionMs}ms");
             player.Source = MediaSource.CreateFromUri(new Uri(url));
             player.Play();
@@ -231,9 +291,12 @@ namespace PrismXbox.Player
         /// </summary>
         public void SetStretch(string mode)
         {
-            if (mode == "cover") Element.Stretch = Windows.UI.Xaml.Media.Stretch.UniformToFill;
-            else if (mode == "stretch") Element.Stretch = Windows.UI.Xaml.Media.Stretch.Fill;
-            else Element.Stretch = Windows.UI.Xaml.Media.Stretch.Uniform;
+            Windows.UI.Xaml.Media.Stretch stretch =
+                mode == "cover" ? Windows.UI.Xaml.Media.Stretch.UniformToFill
+                : mode == "stretch" ? Windows.UI.Xaml.Media.Stretch.Fill
+                : Windows.UI.Xaml.Media.Stretch.Uniform;
+            Element.Stretch = stretch;
+            aiUpscale.SetStretch(stretch);
         }
 
         public void Stop()
@@ -296,6 +359,7 @@ namespace PrismXbox.Player
             // these - stats-overlay.js hardcodes "HDR: n/a (browser)" because a browser cannot read a
             // <video>'s colour space without WebCodecs.
             log($"MediaOpened: {session.NaturalVideoWidth}x{session.NaturalVideoHeight}");
+            aiUpscale.ConfigureSize((int)session.NaturalVideoWidth, (int)session.NaturalVideoHeight);
             emit("loadedMetadata",
                 $"{{\"videoWidth\":{session.NaturalVideoWidth},\"videoHeight\":{session.NaturalVideoHeight}," +
                 $"\"durationMs\":{(long)session.NaturalDuration.TotalMilliseconds}," +

@@ -36,7 +36,14 @@ void main() {
   float shadowProtect = smoothstep(0.0, 0.22, luma(outColor));
   float contrast = mix(1.0, uContrastBoost, shadowProtect);
   float saturation = mix(1.0, uSaturationBoost, shadowProtect);
-  outColor = (outColor - 0.5) * contrast + 0.5;
-  outColor = mix(vec3(luma(outColor)), outColor, saturation);
+  /* Saturation and Contrast are independent controls - see sharpen-anime.frag.glsl's own
+     comment on this fix (2026-08-20): contrast is applied to LUMA ONLY via an additive
+     delta to R/G/B (preserves every channel difference, i.e. chroma, exactly), and
+     saturation lerps toward that contrast-adjusted luma - so neither control ever touches
+     the other's own contribution. */
+  float l0 = luma(outColor);
+  float lc = (l0 - 0.5) * contrast + 0.5;
+  vec3 contrastedColor = outColor + (lc - l0);
+  outColor = mix(vec3(lc), contrastedColor, saturation);
   gl_FragColor = vec4(clamp(outColor, 0.0, 1.0), 1.0);
 }
