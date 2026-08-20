@@ -183,6 +183,13 @@ namespace PrismXbox.Player
 
         private void SyncEffectAttachment()
         {
+            // Deliberately NOT gated on hdr.IsHdrActive here - ShouldAttach also covers Ambient
+            // Lighting's own frame sampling (see its own doc comment), which has nothing to do
+            // with the SDR-tuned Sharpening/Color Boost shader and should keep working on HDR
+            // titles too. The HDR skip belongs at the actual draw, inside ShaderVideoEffect
+            // itself (see EffectSettings.IsHdrActive / ShaderVideoEffect.ProcessFrame) - the same
+            // "sampling keeps running, only the draw is skipped" split already used for the AI
+            // Upscaling frame-server case.
             bool shouldAttach = EffectSettings.ShouldAttach;
             if (shouldAttach == effectAttached) return;
             if (shouldAttach)
@@ -223,6 +230,11 @@ namespace PrismXbox.Player
             if (isHdr) await hdr.EnableAsync();
             else await hdr.RestoreAsync();
             SetAiUpscalePathActive(isHdr);
+            // hdr.IsHdrActive (the real, re-read state - not the raw isHdr request, in case
+            // EnableAsync silently didn't take) just changed above - hand it to ShaderVideoEffect
+            // via EffectSettings so its next ProcessFrame skips the SDR-tuned Sharpening/Color
+            // Boost draw on this title if it's HDR, without affecting Ambient's own sampling.
+            EffectSettings.SetHdrActive(hdr.IsHdrActive);
             // Plex encodes the start position in the URL itself (offset=), so there is no seek to
             // perform here - the stream begins where it should. startPositionMs is still recorded above
             // (see baseOffsetMs) since session.Position reports 0-based from this point, not from the
@@ -263,6 +275,11 @@ namespace PrismXbox.Player
             if (isHdr) await hdr.EnableAsync();
             else await hdr.RestoreAsync();
             SetAiUpscalePathActive(isHdr);
+            // hdr.IsHdrActive (the real, re-read state - not the raw isHdr request, in case
+            // EnableAsync silently didn't take) just changed above - hand it to ShaderVideoEffect
+            // via EffectSettings so its next ProcessFrame skips the SDR-tuned Sharpening/Color
+            // Boost draw on this title if it's HDR, without affecting Ambient's own sampling.
+            EffectSettings.SetHdrActive(hdr.IsHdrActive);
             log($"switchTitle @{startPositionMs}ms");
             player.Source = MediaSource.CreateFromUri(new Uri(url));
             player.Play();

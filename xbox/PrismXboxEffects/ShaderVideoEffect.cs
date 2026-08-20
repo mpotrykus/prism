@@ -124,7 +124,15 @@ namespace PrismXboxEffects
                     // Saturation and Contrast are fully independent controls now - either alone
                     // (or both) keeps the visual pass alive, same as before this split.
                     bool colorBoostOn = settings.ColorBoostSaturationEnabled || settings.ColorBoostContrastEnabled;
-                    bool visualOn = resolvedShaderType != "off" || colorBoostOn;
+                    // Matches Android's isHdrContent() skip (PlayerActivity.applyVideoEffects) -
+                    // the SDR-tuned Sharpening/Color Boost shader has no business running on HDR
+                    // content, same reasoning AI Upscaling's own frame-server path is gated off
+                    // HDR for (NativePlayerHost.SetAiUpscalePathActive). Real bug, fixed
+                    // 2026-08-20: this previously ran unconditionally regardless of HDR. Gated
+                    // here rather than at MediaPlayer.AddVideoEffect's own attachment so Ambient
+                    // Lighting's frame sampling below (MaybeSampleFrame) keeps running on HDR
+                    // titles too - it has nothing to do with this shader.
+                    bool visualOn = (resolvedShaderType != "off" || colorBoostOn) && !settings.IsHdrActive;
                     ShaderTuning.SharpenTuning sharpen = new ShaderTuning.SharpenTuning { Scale = 1, Sharpen = 0, Kernel = 1 };
                     ShaderTuning.ColorTuning color = new ShaderTuning.ColorTuning { Saturation = 1, Contrast = 1 };
                     string programType = settings.ShaderType;

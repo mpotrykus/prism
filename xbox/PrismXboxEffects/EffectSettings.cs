@@ -82,6 +82,12 @@ namespace PrismXboxEffects
         private static bool _colorBoostSaturationAuto;
         private static bool _colorBoostContrastAuto;
         private static bool _ambientEnabled;
+        // Set by NativePlayerHost right after hdr.EnableAsync()/RestoreAsync() settles (the real,
+        // re-read display state, not the raw request) - lets ShaderVideoEffect skip its SDR-tuned
+        // Sharpening/Color Boost draw on HDR titles (see ProcessFrame) without touching
+        // ShouldAttach, which Ambient Lighting's own frame sampling also depends on and has
+        // nothing to do with this.
+        private static bool _isHdrActive;
 
         internal struct Snapshot
         {
@@ -96,6 +102,7 @@ namespace PrismXboxEffects
             public bool ColorBoostSaturationAuto;
             public bool ColorBoostContrastAuto;
             public bool AmbientEnabled;
+            public bool IsHdrActive;
         }
 
         /// <summary>True whenever the video-effect pass needs to be attached to the MediaPlayer at
@@ -150,6 +157,14 @@ namespace PrismXboxEffects
             }
         }
 
+        public static void SetHdrActive(bool isHdrActive)
+        {
+            lock (Gate)
+            {
+                _isHdrActive = isHdrActive;
+            }
+        }
+
         internal static Snapshot Current
         {
             get
@@ -169,6 +184,7 @@ namespace PrismXboxEffects
                         ColorBoostSaturationAuto = _colorBoostSaturationAuto,
                         ColorBoostContrastAuto = _colorBoostContrastAuto,
                         AmbientEnabled = _ambientEnabled,
+                        IsHdrActive = _isHdrActive,
                     };
                 }
             }
