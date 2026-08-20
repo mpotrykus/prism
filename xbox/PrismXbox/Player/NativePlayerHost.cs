@@ -52,8 +52,7 @@ namespace PrismXbox.Player
         // already only happening at those two call sites.
         private bool aiUpscalingEnabled;
         // Family key ("anime4k"/"live_action"), mirroring _shaderAutoType on the JS side, forwarded
-        // to AiUpscaleFrameServer. Only "anime4k" produces a real chain (AiUpscalePixelEffect) until
-        // Stage 2b ports FSR1 for "live_action".
+        // to AiUpscaleFrameServer - both produce a real chain (AiUpscalePixelEffect).
         private string aiUpscalingPreset = "";
 
         public MediaPlayerElement Element { get; }

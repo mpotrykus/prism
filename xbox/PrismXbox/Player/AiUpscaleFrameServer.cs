@@ -10,7 +10,7 @@ namespace PrismXbox.Player
 {
     /// <summary>
     /// Presents <see cref="MediaPlayer"/>'s frame-server output, run through
-    /// <see cref="AiUpscalePixelEffect"/>'s real Anime4K CNN chain, through a Win2D
+    /// <see cref="AiUpscalePixelEffect"/>'s real Anime4K CNN / FSR1 chains, through a Win2D
     /// <see cref="CanvasImageSource"/> in a plain XAML <see cref="Image"/> - the alternate
     /// presenter to <see cref="NativePlayerHost"/>'s <c>MediaPlayerElement</c>, used only for
     /// non-HDR titles with AI Upscaling enabled (see <c>NativePlayerHost.Play</c>/
@@ -28,8 +28,8 @@ namespace PrismXbox.Player
         private CanvasRenderTarget frameTarget;
         private int frameWidth;
         private int frameHeight;
-        // Family key ("anime4k"/"live_action") from NativePlayerHost.SetAiUpscaling - only
-        // "anime4k" produces a real chain until Stage 2b ports FSR1 (live-action).
+        // Family key ("anime4k"/"live_action") from NativePlayerHost.SetAiUpscaling - both
+        // produce a real chain (AiUpscalePixelEffect).
         private string family = "";
 
         // Touched only on the UI thread (see Present) - CanvasImageSource is XAML-interop (a

@@ -126,6 +126,19 @@
     <EmbeddedResource Include="Shaders\aiupscale\present.cso">
       <LogicalName>present.cso</LogicalName>
     </EmbeddedResource>
+    <!-- AI Upscaling (Stage 2b, FSR1 EASU+RCAS for live_action) - see AiUpscalePixelEffect.cs. -->
+    <EmbeddedResource Include="Shaders\aiupscale\fsr_luma_extract.cso">
+      <LogicalName>fsr_luma_extract.cso</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Shaders\aiupscale\fsr_easu.cso">
+      <LogicalName>fsr_easu.cso</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Shaders\aiupscale\fsr_rcas.cso">
+      <LogicalName>fsr_rcas.cso</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Shaders\aiupscale\fsr_luma_merge.cso">
+      <LogicalName>fsr_luma_merge.cso</LogicalName>
+    </EmbeddedResource>
   </ItemGroup>
   <ItemGroup>
     <!--

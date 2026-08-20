@@ -49,7 +49,8 @@ $d2dAiUpscaleShaders = @(
     "aiupscale\anime4k_restore_conv2", "aiupscale\anime4k_restore_conv3",
     "aiupscale\anime4k_upscale_conv0", "aiupscale\anime4k_upscale_conv1",
     "aiupscale\anime4k_upscale_conv2", "aiupscale\anime4k_upscale_conv3",
-    "aiupscale\deband", "aiupscale\present"
+    "aiupscale\deband", "aiupscale\present",
+    "aiupscale\fsr_luma_extract", "aiupscale\fsr_rcas"
 )
 foreach ($name in $d2dAiUpscaleShaders) {
     $src = Join-Path $PSScriptRoot "$name.hlsl"
@@ -61,7 +62,7 @@ foreach ($name in $d2dAiUpscaleShaders) {
     }
 }
 
-$rawPixelShaders = @("aiupscale\anime4k_depth_to_space")
+$rawPixelShaders = @("aiupscale\anime4k_depth_to_space", "aiupscale\fsr_easu", "aiupscale\fsr_luma_merge")
 foreach ($name in $rawPixelShaders) {
     $src = Join-Path $PSScriptRoot "$name.hlsl"
     $out = Join-Path $PSScriptRoot "$name.cso"

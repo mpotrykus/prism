@@ -9,12 +9,12 @@ using Windows.Foundation;
 namespace PrismXboxEffects
 {
     /// <summary>
-    /// Real AI Upscaling for Xbox: the Anime4K CNN chain (restore + upscale, fixed 2x scale),
-    /// ported from the same vendored, upstream-verbatim source the web/Android legs use
-    /// (src/player/shader/glsl/vendor/anime4k-{restore,upscale}-cnn-*.glsl, bloc97/Anime4K, MIT).
-    /// FSR1 (live-action) is not ported yet - Stage 2b - so <see cref="Render"/> only produces a
-    /// real result for the "anime4k" family; anything else returns null and the caller
-    /// (AiUpscaleFrameServer) falls back to plain pass-through.
+    /// Real AI Upscaling for Xbox: the Anime4K CNN chain (restore + upscale, fixed 2x scale) for
+    /// the "anime4k" family, and the AMD FSR1 EASU+RCAS chain for the "live_action" family - both
+    /// ported from the same vendored, upstream-verbatim sources the web/Android legs use
+    /// (src/player/shader/glsl/vendor/{anime4k-{restore,upscale}-cnn-*,fsr1-easu-rcas}.glsl,
+    /// bloc97/Anime4K + AMD, both MIT). <see cref="Render"/> returns null for any other family,
+    /// and the caller (AiUpscaleFrameServer) falls back to plain pass-through.
     ///
     /// Two kinds of pass, split for a real reason, not style: every same-resolution, single- or
     /// dual-input pass (the 7 CNN convolutions, deband, present) is a Win2D
@@ -54,7 +54,19 @@ namespace PrismXboxEffects
         private PixelShaderEffect debandEffect;
         private PixelShaderEffect presentEffect;
         private PixelShaderEffect trailingSharpenEffect;
+        private PixelShaderEffect trailingSharpenLiveActionEffect;
         private RawD3D11Pass depthToSpacePass;
+
+        // FSR1 (live_action family, Stage 2b) - luma-extract and RCAS are same-size Win2D
+        // passes; EASU and the final luma-merge both change resolution and/or read two
+        // differently-sized inputs at once, so they're raw D3D11 like depthToSpacePass above.
+        // deband is shared with the Anime4K chain (see debandEffect/debandTarget) - it's a
+        // generic same-size 1-input pass with fixed tuning, and only one family is ever active
+        // per playback session, so there's no cross-frame conflict from reusing it.
+        private PixelShaderEffect lumaExtractEffect;
+        private PixelShaderEffect rcasEffect;
+        private RawD3D11Pass fsrEasuPass;
+        private RawD3D11Pass lumaMergePass;
 
         private CanvasRenderTarget restoreConv0Target;
         private CanvasRenderTarget restoreConv1Target;
@@ -67,6 +79,10 @@ namespace PrismXboxEffects
         private CanvasRenderTarget upscaleOutputTarget;
         private CanvasRenderTarget debandTarget;
         private CanvasRenderTarget presentTarget;
+        private CanvasRenderTarget lumaExtractTarget;
+        private CanvasRenderTarget fsrEasuTarget;
+        private CanvasRenderTarget rcasTarget;
+        private CanvasRenderTarget lumaMergeTarget;
         private CanvasRenderTarget finalTarget;
 
         private int builtWidth;
@@ -109,6 +125,23 @@ namespace PrismXboxEffects
             trailingSharpenEffect = new PixelShaderEffect(LoadShaderBytes("anime4k.cso"));
             trailingSharpenEffect.Source1Mapping = SamplerCoordinateMapping.Offset;
             trailingSharpenEffect.MaxSamplerOffset = (int)Math.Ceiling(2 * ShaderTuning.MaxKernelScale);
+
+            // FSR1's own trailing sharpen needs live_action.cso, not anime4k.cso - same
+            // per-family split ShaderVideoEffect.GetOrCreateEffect already makes for the plain
+            // (non-AI-Upscaling) Sharpening path.
+            trailingSharpenLiveActionEffect = new PixelShaderEffect(LoadShaderBytes("live_action.cso"));
+            trailingSharpenLiveActionEffect.Source1Mapping = SamplerCoordinateMapping.Offset;
+            trailingSharpenLiveActionEffect.MaxSamplerOffset = (int)Math.Ceiling(2 * ShaderTuning.MaxKernelScale);
+
+            // No offset sampling (plain D2DGetInput(0) read) - same reason presentEffect above
+            // needs no Source1Mapping/MaxSamplerOffset either.
+            lumaExtractEffect = new PixelShaderEffect(LoadShaderBytes("fsr_luma_extract.cso"));
+            fsrEasuPass = new RawD3D11Pass(d3dDevice, fullscreenVertexShader, LoadShaderBytes("fsr_easu.cso"));
+            // RCAS taps a 4-neighbor cross at exactly 1 pixel each - same offset magnitude as the
+            // CNN conv passes, so CreateOffsetEffect's MaxSamplerOffset=2 already covers it.
+            rcasEffect = CreateOffsetEffect("fsr_rcas.cso");
+            // One float (uFrameSeed) rounded up to a full 16-byte constant buffer by RawD3D11Pass.
+            lumaMergePass = new RawD3D11Pass(d3dDevice, fullscreenVertexShader, LoadShaderBytes("fsr_luma_merge.cso"), constantFloatCount: 1);
         }
 
         private PixelShaderEffect CreateOffsetEffect(string resourceName)
@@ -122,19 +155,21 @@ namespace PrismXboxEffects
         }
 
         /// <summary>
-        /// Runs the Anime4K CNN chain against <paramref name="source"/> (the native-resolution
-        /// decoded frame) and returns the result at exactly 2x resolution, clamped and dithered -
-        /// ready for the caller's own trailing Sharpening pass. Returns null for any family other
-        /// than "anime4k" (FSR1/live-action is Stage 2b, not built yet).
+        /// Runs the real AI-upscaling chain for <paramref name="family"/> against
+        /// <paramref name="source"/> (the native-resolution decoded frame) and returns the result
+        /// at exactly 2x resolution, ready for the caller's own trailing Sharpening pass. Returns
+        /// null for any other family.
         /// </summary>
         public CanvasRenderTarget Render(CanvasRenderTarget source, string family, int nativeWidth, int nativeHeight)
         {
-            if (family != "anime4k") return null;
+            if (family != "anime4k" && family != "live_action") return null;
 
             EnsureTargets(nativeWidth, nativeHeight);
             frameSeed += 0.6180339887f; // irrational increment - decorrelates the hash across frames without needing a real clock/RNG
             debandEffect.Properties["uFrameSeed"] = frameSeed;
             presentEffect.Properties["uFrameSeed"] = frameSeed;
+
+            if (family == "live_action") return RenderLiveActionFsr(source);
 
             DrawOneInput(restoreConv0, restoreConv0Target, source);
             DrawOneInput(restoreConv1, restoreConv1Target, restoreConv0Target);
@@ -151,6 +186,25 @@ namespace PrismXboxEffects
             DrawOneInput(presentEffect, presentTarget, debandTarget);
 
             return ApplyTrailingSharpen(presentTarget);
+        }
+
+        /// <summary>
+        /// AMD FSR1: luma-extract (Win2D) -> EASU (raw D3D11, the 2x resize) -> deband (Win2D,
+        /// shared with the Anime4K chain) -> RCAS (Win2D) -> luma-merge (raw D3D11, folds the
+        /// reconstructed luma back into <paramref name="source"/>'s RGB at 2x). Mirrors the
+        /// composition in src/player/shader/shaders.js's buildFsr exactly, minus the trailing
+        /// sharpen pass (added by the shared <see cref="ApplyTrailingSharpen"/> afterward, same
+        /// as the Anime4K chain).
+        /// </summary>
+        private CanvasRenderTarget RenderLiveActionFsr(CanvasRenderTarget source)
+        {
+            DrawOneInput(lumaExtractEffect, lumaExtractTarget, source);
+            fsrEasuPass.Draw(fsrEasuTarget, lumaExtractTarget);
+            DrawOneInput(debandEffect, debandTarget, fsrEasuTarget);
+            DrawOneInput(rcasEffect, rcasTarget, debandTarget);
+            lumaMergePass.Draw(lumaMergeTarget, new[] { frameSeed }, source, rcasTarget);
+
+            return ApplyTrailingSharpen(lumaMergeTarget);
         }
 
         /// <summary>
@@ -189,15 +243,20 @@ namespace PrismXboxEffects
             // Doubling keeps the sharpen kernel's real-world reach pinned to source pixels either
             // way, same compensation the web leg applies for its own trailing-sharpen-after-an-
             // upgrade-chain case.
-            trailingSharpenEffect.Source1 = input;
-            trailingSharpenEffect.Properties["kernelScale"] = (float)(sharpen.Kernel * 2.0);
-            trailingSharpenEffect.Properties["sharpenStrength"] = (float)sharpen.Sharpen;
-            trailingSharpenEffect.Properties["saturationBoost"] = (float)color.Saturation;
-            trailingSharpenEffect.Properties["contrastBoost"] = (float)color.Contrast;
+            // programType is the Sharpening algorithm to run, independent of which AI-upscaling
+            // chain produced `input` (both are keyed off the same family, but this is the
+            // user-facing Sharpening type, not a re-check of the AI-upscaling family) - same
+            // anime4k.cso/live_action.cso split ShaderVideoEffect.GetOrCreateEffect makes.
+            PixelShaderEffect sharpenEffect = programType == "anime4k" ? trailingSharpenEffect : trailingSharpenLiveActionEffect;
+            sharpenEffect.Source1 = input;
+            sharpenEffect.Properties["kernelScale"] = (float)(sharpen.Kernel * 2.0);
+            sharpenEffect.Properties["sharpenStrength"] = (float)sharpen.Sharpen;
+            sharpenEffect.Properties["saturationBoost"] = (float)color.Saturation;
+            sharpenEffect.Properties["contrastBoost"] = (float)color.Contrast;
 
             using (CanvasDrawingSession ds = finalTarget.CreateDrawingSession())
             {
-                ds.DrawImage(trailingSharpenEffect);
+                ds.DrawImage(sharpenEffect);
             }
             return finalTarget;
         }
@@ -219,6 +278,10 @@ namespace PrismXboxEffects
             upscaleOutputTarget = NewTarget(width * 2, height * 2);
             debandTarget = NewTarget(width * 2, height * 2);
             presentTarget = NewTarget(width * 2, height * 2);
+            lumaExtractTarget = NewTarget(width, height);
+            fsrEasuTarget = NewTarget(width * 2, height * 2);
+            rcasTarget = NewTarget(width * 2, height * 2);
+            lumaMergeTarget = NewTarget(width * 2, height * 2);
             // Default (8-bit) format, unlike the intermediates above - this is the true final
             // image handed to the caller for presentation, not a stage another pass reads back.
             finalTarget = new CanvasRenderTarget(canvasDevice, width * 2, height * 2, 96);
@@ -287,6 +350,10 @@ namespace PrismXboxEffects
             upscaleOutputTarget?.Dispose();
             debandTarget?.Dispose();
             presentTarget?.Dispose();
+            lumaExtractTarget?.Dispose();
+            fsrEasuTarget?.Dispose();
+            rcasTarget?.Dispose();
+            lumaMergeTarget?.Dispose();
             finalTarget?.Dispose();
         }
 
@@ -317,6 +384,8 @@ namespace PrismXboxEffects
         {
             DisposeTargets();
             depthToSpacePass?.Dispose();
+            fsrEasuPass?.Dispose();
+            lumaMergePass?.Dispose();
             fullscreenVertexShader?.Dispose();
             d3dDevice?.Dispose();
         }

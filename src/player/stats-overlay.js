@@ -133,10 +133,9 @@ function xboxAiUpscalingStatusLine(controller, preset) {
        family label - so "running" and "off" looked identical here, and toggling AI Upscaling
        produced no visible change in this line at all. */
     if (status.upscaled) return preset.label;
-    // Native reports "not upscaled" for two different reasons: FSR1 (live-action) isn't ported
-    // yet (Stage 2b), or an error mid-chain fell back to plain pass-through this frame (see
+    // Both families (anime4k, live_action) have a real chain now (Stage 2b shipped) - "not
+    // upscaled" here means an error mid-chain fell back to plain pass-through this frame (see
     // AiUpscalePixelEffect.Render's own null return / AiUpscaleFrameServer's catch fallback).
-    if (status.family && status.family !== "anime4k") return `${status.family} not supported here yet`;
     return "pass-through (not upscaling)";
 }
 

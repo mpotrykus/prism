@@ -21,8 +21,9 @@ namespace PrismXboxEffects
         private readonly ID3D11VertexShader vertexShader;
         private readonly ID3D11PixelShader pixelShader;
         private readonly ID3D11SamplerState sampler;
+        private readonly ID3D11Buffer constantBuffer;
 
-        internal RawD3D11Pass(ID3D11Device device, ID3D11VertexShader sharedVertexShader, byte[] pixelShaderBytecode)
+        internal RawD3D11Pass(ID3D11Device device, ID3D11VertexShader sharedVertexShader, byte[] pixelShaderBytecode, int constantFloatCount = 0)
         {
             this.device = device;
             context = device.ImmediateContext;
@@ -37,9 +38,26 @@ namespace PrismXboxEffects
                 ComparisonFunc = ComparisonFunction.Never,
                 MaxLOD = float.MaxValue,
             });
+            if (constantFloatCount > 0)
+            {
+                // Constant buffers must be a multiple of 16 bytes (4 floats) - round up rather
+                // than require every caller to pad its own float[] to that boundary. Default
+                // usage + UpdateSubresource (not Dynamic + Map) - this only needs updating once
+                // per frame, at most a few floats, so the extra ceremony Dynamic buffers exist
+                // for buys nothing here.
+                int byteWidth = ((constantFloatCount * sizeof(float)) + 15) / 16 * 16;
+                constantBuffer = device.CreateBuffer(byteWidth, BindFlags.ConstantBuffer);
+            }
         }
 
-        internal void Draw(CanvasRenderTarget output, params CanvasRenderTarget[] inputs)
+        internal void Draw(CanvasRenderTarget output, params CanvasRenderTarget[] inputs) => Draw(output, null, inputs);
+
+        /// <summary>
+        /// <paramref name="constants"/>, if non-null, is uploaded to register(b0) - the pass must
+        /// have been constructed with a matching <c>constantFloatCount</c> for this to have any
+        /// effect. Pass null (the other overload) for a pass with no cbuffer at all.
+        /// </summary>
+        internal void Draw(CanvasRenderTarget output, float[] constants, params CanvasRenderTarget[] inputs)
         {
             // Classic using-block syntax, not C# 8's using-declaration - this project has no
             // explicit LangVersion set, which defaults to a C# version that predates them (same
@@ -55,6 +73,12 @@ namespace PrismXboxEffects
                     {
                         textures[i] = D3D11Interop.GetD3D11Texture(inputs[i]);
                         srvs[i] = device.CreateShaderResourceView(textures[i]);
+                    }
+
+                    if (constantBuffer != null && constants != null)
+                    {
+                        context.UpdateSubresource(constants, constantBuffer);
+                        context.PSSetConstantBuffer(0, constantBuffer);
                     }
 
                     context.OMSetRenderTargets(rtv);
@@ -73,6 +97,10 @@ namespace PrismXboxEffects
                     // dispatch; the same reasoning applies here.
                     context.PSSetShaderResources(0, new ID3D11ShaderResourceView[inputs.Length]);
                     context.OMSetRenderTargets((ID3D11RenderTargetView)null);
+                    if (constantBuffer != null && constants != null)
+                    {
+                        context.PSUnsetConstantBuffer(0);
+                    }
                 }
                 finally
                 {
@@ -86,6 +114,7 @@ namespace PrismXboxEffects
         {
             pixelShader?.Dispose();
             sampler?.Dispose();
+            constantBuffer?.Dispose();
         }
     }
 }
