@@ -139,6 +139,15 @@ namespace PrismXbox.Player
             // itself (it's the same delegate MainPage.xaml.cs wires up for everything else), so no
             // extra dispatcher call is needed here either.
             EffectSettings.EffectLog += (message) => log($"[effect] {message}");
+            // Same thread/marshaling situation as ContentAnalysis above - two plain doubles, no
+            // format-hole risk (see that handler's own comment on why NOT to inline a :format
+            // spec against a JSON template's closing braces on this toolchain regardless).
+            EffectSettings.FrameLoad += (fps, avgFrameMs) =>
+            {
+                string fpsStr = fps.ToString("R", CultureInfo.InvariantCulture);
+                string avgFrameMsStr = avgFrameMs.ToString("R", CultureInfo.InvariantCulture);
+                emit("effectLoadStatus", $"{{\"fps\":{fpsStr},\"avgFrameMs\":{avgFrameMsStr}}}");
+            };
         }
 
         /// <summary>
@@ -259,6 +268,10 @@ namespace PrismXbox.Player
                 ? Windows.UI.Xaml.Visibility.Collapsed
                 : Windows.UI.Xaml.Visibility.Visible;
             aiUpscale.SetActive(useAiUpscale);
+            // Lets ShaderVideoEffect skip its own now-invisible Sharpening/Color Boost draw -
+            // AiUpscalePixelEffect's trailing-sharpen step already reapplies that same math on the
+            // frame-server surface that's actually shown once useAiUpscale is true.
+            EffectSettings.SetAiUpscaleActive(useAiUpscale);
         }
 
         /// <summary>

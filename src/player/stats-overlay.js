@@ -139,6 +139,39 @@ function xboxAiUpscalingStatusLine(controller, preset) {
     return "pass-through (not upscaling)";
 }
 
+/* A fixed-position load line, always showing whichever native Xbox pipeline is actually doing
+   per-frame GPU/CPU work, rather than a suffix tacked onto the "AI Upscaling:" line above (which
+   shifts/disappears as that line's own text changes, and only ever existed while AI Upscaling
+   itself was on). Two independent native pipelines can report load here:
+     - AiUpscaleFrameServer's windowed fps/avgRenderMs/dropRate ("aiUpscaleStatus") - the CNN/FSR
+       frame-server chain, only running while AI Upscaling is enabled and the title is non-HDR.
+     - ShaderVideoEffect's own windowed fps/avgFrameMs ("effectLoadStatus") - the plain
+       Sharpening/Color Boost/Ambient IBasicVideoEffect pipeline, attached whenever
+       EffectSettings.ShouldAttach is true, independent of AI Upscaling entirely. This is what
+       keeps a load number visible even with AI Upscaling off, as long as Sharpening/Color
+       Boost/Ambient is on.
+   AI Upscale's own number is preferred when both are reporting, since it's the heavier of the
+   two and the one this feature's own perf work cares most about - ShaderVideoEffect's number
+   already shrinks to near-nothing while AI Upscaling is active (see visualOn's own comment), so
+   showing both at once would just be redundant. Neither line has anything to report (and no
+   native pipeline is even attached at all) when Sharpening/Color Boost/Ambient/AI Upscaling are
+   all off - same "both numbers, always" reasoning as watchdogSuffix below still applies once
+   there IS a number: a bare "keeping up" says nothing about how close to the edge it is. Gated
+   on fps alone (not e.g. receivedFrame, which flips true well before a full stats window has
+   elapsed) - doubles as "don't show this line until its pipeline has run a full window". */
+function xboxFrameLoadLine(controller) {
+    const ai = controller._xboxAiUpscaleStatus;
+    if (ai?.fps) {
+        const dropped = ai.dropRate > 0 ? `, ${(ai.dropRate * 100).toFixed(1)}% dropped` : "";
+        return `AI Upscale Load: ${ai.avgRenderMs.toFixed(1)}ms/frame, ${ai.fps.toFixed(1)}fps${dropped}`;
+    }
+    const effect = controller._xboxEffectLoadStatus;
+    if (effect?.fps) {
+        return `Effect Load: ${effect.avgFrameMs.toFixed(1)}ms/frame, ${effect.fps.toFixed(1)}fps`;
+    }
+    return null;
+}
+
 /* The measured shader-loop frame interval, and whether the perf watchdog has already stepped
    the chain down. Both only exist for multi-pass presets (see perf-watchdog.js on why the
    single-pass fallback isn't measured), so this contributes nothing on the sharpen path. */
@@ -284,6 +317,7 @@ export function renderStatsOverlayFrame(controller) {
         audioStatusLine(controller),
         `Sharpening: ${sharpeningStatusLine(controller)}`,
         `AI Upscaling: ${aiUpscalingStatusLine(controller)}`,
+        xboxFrameLoadLine(controller),
         `Color Boost: ${colorBoostStatusLine(controller)}`,
         `Quality cap: ${qualityCapStatusLine(controller)}`,
         abrDebugLine(controller),

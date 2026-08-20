@@ -33,6 +33,11 @@ namespace PrismXboxEffects
     /// marshaling attributes the way AmbientColorsHandler's arrays did.</summary>
     public delegate void EffectLogHandler(string message);
 
+    /// <summary>Windowed fps + average per-frame processing time from ShaderVideoEffect's own
+    /// Sharpening/Color Boost/Ambient pipeline - see that class's RecordFrameLoad. Two plain
+    /// doubles need no custom marshaling, same as ContentAnalysisHandler's three.</summary>
+    public delegate void FrameLoadHandler(double fps, double avgFrameMs);
+
     /// <summary>
     /// Shared state between <see cref="PrismXbox.Player.NativePlayerHost"/> (UI thread, a
     /// different assembly - PrismXbox.csproj references this project) and
@@ -88,6 +93,13 @@ namespace PrismXboxEffects
         // ShouldAttach, which Ambient Lighting's own frame sampling also depends on and has
         // nothing to do with this.
         private static bool _isHdrActive;
+        // Set by NativePlayerHost's SetAiUpscalePathActive alongside player.IsVideoFrameServerEnabled.
+        // AiUpscalePixelEffect's own trailing-sharpen step (see that class) already reapplies
+        // Sharpening/Color Boost on the frame-server surface that's actually shown once this is
+        // true, so ShaderVideoEffect's own visual draw here would be pure duplicate GPU work on a
+        // surface nobody sees (Element.Visibility is Collapsed at that point) - lets ProcessFrame
+        // skip it the same way IsHdrActive does, again without touching ShouldAttach/sampling.
+        private static bool _isAiUpscaleActive;
 
         internal struct Snapshot
         {
@@ -103,6 +115,7 @@ namespace PrismXboxEffects
             public bool ColorBoostContrastAuto;
             public bool AmbientEnabled;
             public bool IsHdrActive;
+            public bool IsAiUpscaleActive;
         }
 
         /// <summary>True whenever the video-effect pass needs to be attached to the MediaPlayer at
@@ -165,6 +178,14 @@ namespace PrismXboxEffects
             }
         }
 
+        public static void SetAiUpscaleActive(bool isAiUpscaleActive)
+        {
+            lock (Gate)
+            {
+                _isAiUpscaleActive = isAiUpscaleActive;
+            }
+        }
+
         internal static Snapshot Current
         {
             get
@@ -185,6 +206,7 @@ namespace PrismXboxEffects
                         ColorBoostContrastAuto = _colorBoostContrastAuto,
                         AmbientEnabled = _ambientEnabled,
                         IsHdrActive = _isHdrActive,
+                        IsAiUpscaleActive = _isAiUpscaleActive,
                     };
                 }
             }
@@ -218,6 +240,13 @@ namespace PrismXboxEffects
         internal static void RaiseLog(string message)
         {
             EffectLog?.Invoke(message);
+        }
+
+        public static event FrameLoadHandler FrameLoad;
+
+        internal static void RaiseFrameLoad(double fps, double avgFrameMs)
+        {
+            FrameLoad?.Invoke(fps, avgFrameMs);
         }
     }
 }

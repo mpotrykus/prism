@@ -1,4 +1,6 @@
 using System;
+using System.Diagnostics;
+using System.Globalization;
 using Microsoft.Graphics.Canvas;
 using Microsoft.Graphics.Canvas.UI.Xaml;
 using PrismXboxEffects;
@@ -47,6 +49,20 @@ namespace PrismXbox.Player
         private bool receivedFrame;
         private bool upscaledLastFrame;
         private string lastError;
+
+        // Load stats - touched only from OnVideoFrameAvailable's own worker thread (see that
+        // method's own thread-affinity comment), so no lock is needed here any more than the
+        // existing fields above need one. Windowed (reset every StatsWindowMs) rather than a
+        // running average since the whole point is answering "is it keeping up right now" -
+        // a session-long average would hide a chain that just started struggling.
+        private const double StatsWindowMs = 1000;
+        private readonly Stopwatch statsWindowStopwatch = Stopwatch.StartNew();
+        private int framesRenderedInWindow;
+        private double renderMsSumInWindow;
+        private int framesDroppedForBackpressureInWindow;
+        private double lastFps;
+        private double lastAvgRenderMs;
+        private double lastDropRate;
 
         // Guards against OnVideoFrameAvailable (background MF thread) touching canvasDevice's
         // shared D2D/D3D11 context while a previous frame's Present is still running on the UI
@@ -100,6 +116,13 @@ namespace PrismXbox.Player
             upscaledLastFrame = false;
             lastError = null;
             framePending = false;
+            framesRenderedInWindow = 0;
+            renderMsSumInWindow = 0;
+            framesDroppedForBackpressureInWindow = 0;
+            lastFps = 0;
+            lastAvgRenderMs = 0;
+            lastDropRate = 0;
+            statsWindowStopwatch.Restart();
             Element.Visibility = active ? Windows.UI.Xaml.Visibility.Visible : Windows.UI.Xaml.Visibility.Collapsed;
             EmitStatus();
         }
@@ -123,7 +146,17 @@ namespace PrismXbox.Player
             // ShaderVideoEffect.cs already creates/draws from this same kind of worker thread
             // without issue - so the copy below is safe here. CanvasImageSource is not; every
             // touch of it happens inside the dispatched Present call instead.
-            if (framePending) return; // previous frame's Present hasn't finished on the UI thread yet - drop this one rather than race canvasDevice
+            if (framePending)
+            {
+                // The pipeline is falling behind the source's own frame rate - counted
+                // separately from a mid-chain error fallback (see upscaledLastFrame), since this
+                // is a distinct failure mode (too slow, not broken) that the plain "pass-through"
+                // status line can't otherwise tell apart from a healthy chain running at full
+                // rate with margin to spare.
+                framesDroppedForBackpressureInWindow++;
+                MaybeFlushStatsWindow();
+                return; // previous frame's Present hasn't finished on the UI thread yet - drop this one rather than race canvasDevice
+            }
             framePending = true;
             try
             {
@@ -140,7 +173,18 @@ namespace PrismXbox.Player
                 // "no UI-thread affinity" category ShaderVideoEffect.ProcessFrame already relies
                 // on for the exact same kind of drawing from this exact kind of worker thread.
                 // Only CanvasImageSource (touched in Present below) needs the dispatcher hop.
+                //
+                // Timed specifically around this call, not the whole method - this is the actual
+                // GPU/CPU work the CNN/FSR chain does per frame (the "load" the performance
+                // overlay wants to show); CopyFrameToVideoSurface and the dispatcher hop below are
+                // not part of that cost.
+                Stopwatch renderStopwatch = Stopwatch.StartNew();
                 CanvasRenderTarget processed = pixelEffect.Render(target, family, frameWidth, frameHeight);
+                renderStopwatch.Stop();
+                framesRenderedInWindow++;
+                renderMsSumInWindow += renderStopwatch.Elapsed.TotalMilliseconds;
+                MaybeFlushStatsWindow();
+
                 CanvasRenderTarget toPresent = processed ?? target;
                 int width = (int)toPresent.SizeInPixels.Width;
                 int height = (int)toPresent.SizeInPixels.Height;
@@ -162,6 +206,29 @@ namespace PrismXbox.Player
                 framePending = false;
                 ReportError(ex);
             }
+        }
+
+        /// <summary>
+        /// Windowed rather than cumulative - see the fields' own comment for why. Runs on the
+        /// same worker thread as every other touch of these fields, so no lock is needed. Calls
+        /// EmitStatus itself on flush rather than leaving that to the caller, since every call
+        /// site needs it and there is no other work to interleave in between.
+        /// </summary>
+        private void MaybeFlushStatsWindow()
+        {
+            double elapsedMs = statsWindowStopwatch.Elapsed.TotalMilliseconds;
+            if (elapsedMs < StatsWindowMs) return;
+
+            int attempted = framesRenderedInWindow + framesDroppedForBackpressureInWindow;
+            lastFps = framesRenderedInWindow / (elapsedMs / 1000.0);
+            lastAvgRenderMs = framesRenderedInWindow > 0 ? renderMsSumInWindow / framesRenderedInWindow : 0;
+            lastDropRate = attempted > 0 ? (double)framesDroppedForBackpressureInWindow / attempted : 0;
+
+            framesRenderedInWindow = 0;
+            renderMsSumInWindow = 0;
+            framesDroppedForBackpressureInWindow = 0;
+            statsWindowStopwatch.Restart();
+            EmitStatus();
         }
 
         /// <summary>
@@ -215,11 +282,22 @@ namespace PrismXbox.Player
 
         private void EmitStatus()
         {
+            // Formatted to a string first, then interpolated as a bare token with no :format left
+            // inside any hole - the same fix NativePlayerHost.cs's contentAnalysis emit needed
+            // (see its own comment) for a real .NET Native (UWP AOT) bug where a composite-format
+            // hole sitting immediately against a JSON template's closing braces gets mis-lowered,
+            // leaking the format specifier itself into the output as a literal token.
+            string fpsStr = lastFps.ToString("R", CultureInfo.InvariantCulture);
+            string avgRenderMsStr = lastAvgRenderMs.ToString("R", CultureInfo.InvariantCulture);
+            string dropRateStr = lastDropRate.ToString("R", CultureInfo.InvariantCulture);
             emit?.Invoke("aiUpscaleStatus",
                 $"{{\"active\":{(active ? "true" : "false")}," +
                 $"\"receivedFrame\":{(receivedFrame ? "true" : "false")}," +
                 $"\"upscaled\":{(upscaledLastFrame ? "true" : "false")}," +
                 $"\"family\":{JsonString(family)}," +
+                $"\"fps\":{fpsStr}," +
+                $"\"avgRenderMs\":{avgRenderMsStr}," +
+                $"\"dropRate\":{dropRateStr}," +
                 $"\"error\":{JsonString(lastError)}}}");
         }
 

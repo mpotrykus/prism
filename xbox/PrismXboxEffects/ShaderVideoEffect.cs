@@ -61,6 +61,19 @@ namespace PrismXboxEffects
         private readonly Stopwatch _ambientStopwatch = Stopwatch.StartNew();
         private readonly Stopwatch _diagStopwatch = Stopwatch.StartNew();
 
+        // Windowed fps/load stats for this pipeline (Sharpening/Color Boost/Ambient's own draw +
+        // sampling cost) - same "windowed rather than cumulative" reasoning and the same shape as
+        // AiUpscaleFrameServer's own stats (see that class), added specifically so the
+        // performance overlay still has a real load number whenever THIS pipeline is attached
+        // (ShouldAttach true), independent of whether AI Upscaling's separate frame-server
+        // pipeline is running at all. ProcessFrame only ever runs on one Media Foundation work
+        // thread for a given effect instance, so - same as AiUpscaleFrameServer's fields - no lock
+        // is needed here.
+        private const double LoadStatsWindowMs = 1000;
+        private readonly Stopwatch _loadStatsWindowStopwatch = Stopwatch.StartNew();
+        private int _framesInLoadWindow;
+        private double _frameMsSumInLoadWindow;
+
         public bool IsReadOnly => false;
 
         public IReadOnlyList<VideoEncodingProperties> SupportedEncodingProperties
@@ -109,6 +122,7 @@ namespace PrismXboxEffects
         public void ProcessFrame(ProcessVideoFrameContext context)
         {
             EffectSettings.Snapshot settings = EffectSettings.Current;
+            Stopwatch frameStopwatch = Stopwatch.StartNew();
 
             try
             {
@@ -132,7 +146,15 @@ namespace PrismXboxEffects
                     // here rather than at MediaPlayer.AddVideoEffect's own attachment so Ambient
                     // Lighting's frame sampling below (MaybeSampleFrame) keeps running on HDR
                     // titles too - it has nothing to do with this shader.
-                    bool visualOn = (resolvedShaderType != "off" || colorBoostOn) && !settings.IsHdrActive;
+                    //
+                    // Also skipped whenever AI Upscaling's frame-server path is active: this
+                    // effect's output feeds the MediaPlayerElement, whose Element.Visibility is
+                    // Collapsed at that point (SetAiUpscalePathActive) - AiUpscalePixelEffect's own
+                    // trailing-sharpen step already reapplies the same sharpen/color-boost math on
+                    // the frame-server surface that's actually shown, so drawing it here too would
+                    // just be duplicate GPU work on a surface nobody sees.
+                    bool visualOn = (resolvedShaderType != "off" || colorBoostOn)
+                        && !settings.IsHdrActive && !settings.IsAiUpscaleActive;
                     ShaderTuning.SharpenTuning sharpen = new ShaderTuning.SharpenTuning { Scale = 1, Sharpen = 0, Kernel = 1 };
                     ShaderTuning.ColorTuning color = new ShaderTuning.ColorTuning { Saturation = 1, Contrast = 1 };
                     string programType = settings.ShaderType;
@@ -196,6 +218,14 @@ namespace PrismXboxEffects
                         EffectSettings.RaiseLog($"sample error: {ex.GetType().Name}: {ex.Message}");
                     }
                 }
+
+                // Whole-body timing (draw + sampling), not just the draw - this is this
+                // pipeline's real total per-frame cost, and it's meant to stay meaningful even
+                // when visualOn is false (e.g. AI Upscaling active - see that flag's own comment):
+                // showing a small number there is exactly what confirms the draw-skip fix is
+                // working, not something to hide by timing a narrower slice.
+                frameStopwatch.Stop();
+                RecordFrameLoad(frameStopwatch.Elapsed.TotalMilliseconds);
             }
             catch (Exception ex)
             {
@@ -221,6 +251,30 @@ namespace PrismXboxEffects
                     EffectSettings.RaiseLog($"fallback draw also failed: {fallbackEx.GetType().Name}: {fallbackEx.Message}");
                 }
             }
+        }
+
+        /// <summary>
+        /// Accumulates one frame's total ProcessFrame time and, once a full window has elapsed,
+        /// resolves fps/avg-ms and raises them via EffectSettings.RaiseFrameLoad - the same
+        /// "flush on whichever call notices the window elapsed" shape as
+        /// AiUpscaleFrameServer.MaybeFlushStatsWindow, just with only one call site here since
+        /// this pipeline has no separate backpressure-drop case to also flush on.
+        /// </summary>
+        private void RecordFrameLoad(double frameMs)
+        {
+            _framesInLoadWindow++;
+            _frameMsSumInLoadWindow += frameMs;
+
+            double elapsedMs = _loadStatsWindowStopwatch.Elapsed.TotalMilliseconds;
+            if (elapsedMs < LoadStatsWindowMs) return;
+
+            double fps = _framesInLoadWindow / (elapsedMs / 1000.0);
+            double avgMs = _frameMsSumInLoadWindow / _framesInLoadWindow;
+
+            _framesInLoadWindow = 0;
+            _frameMsSumInLoadWindow = 0;
+            _loadStatsWindowStopwatch.Restart();
+            EffectSettings.RaiseFrameLoad(fps, avgMs);
         }
 
         private PixelShaderEffect GetOrCreateEffect(string shaderType)

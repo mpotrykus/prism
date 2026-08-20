@@ -334,6 +334,14 @@ function handleMessage(controller, message) {
                xboxAiUpscalingStatusLine. */
             controller._xboxAiUpscaleStatus = params;
             break;
+        case "effectLoadStatus":
+            /* From ShaderVideoEffect's own windowed fps/avgFrameMs (Sharpening/Color Boost/
+               Ambient's pipeline) - see stats-overlay.js's xboxFrameLoadLine. Distinct from
+               aiUpscaleStatus above: this pipeline is attached whenever EffectSettings.ShouldAttach
+               is true, independent of whether AI Upscaling's separate frame-server pipeline is
+               running at all. */
+            controller._xboxEffectLoadStatus = params;
+            break;
         case "contentAnalysis":
             applyXboxContentAnalysis(controller, params.avgSaturation, params.edgeEnergy, params.lumaStdDev);
             break;
