@@ -1,4 +1,5 @@
 using System;
+using System.Globalization;
 using System.Threading.Tasks;
 using PrismXboxEffects;
 using Windows.Foundation.Collections;
@@ -109,17 +110,27 @@ namespace PrismXbox.Player
             // enough; this class does not need its own dispatcher call.
             EffectSettings.ContentAnalysis += (avgSaturation, edgeEnergy, lumaStdDev) =>
             {
-                // Temporary diagnostic for the still-unsolved 0x80070057/E_INVALIDARG
-                // PostWebMessageAsJson failure on this emit specifically (see PlayerBridge.Emit's
-                // catch, which only logs the HResult, not why). Two rounds of static review of
-                // ContentAnalysisSampler's math (every division guarded, every sqrt argument a
-                // sum of squares) found no way for these three values to be NaN/Infinity - logging
-                // the actual raw values on every attempt instead of guessing a third time. Remove
-                // once the real cause is found.
-                log($"[diag] contentAnalysis raw: avgSaturation={avgSaturation:G17} edgeEnergy={edgeEnergy:G17} lumaStdDev={lumaStdDev:G17}" +
-                    $" nan=({double.IsNaN(avgSaturation)},{double.IsNaN(edgeEnergy)},{double.IsNaN(lumaStdDev)})" +
-                    $" inf=({double.IsInfinity(avgSaturation)},{double.IsInfinity(edgeEnergy)},{double.IsInfinity(lumaStdDev)})");
-                emit("contentAnalysis", $"{{\"avgSaturation\":{avgSaturation:R},\"edgeEnergy\":{edgeEnergy:R},\"lumaStdDev\":{lumaStdDev:R}}}");
+                // Real bug found and fixed 2026-08-20: this used to interpolate each value
+                // inline (`{lumaStdDev:R}`) directly inside the JSON template. The hole for
+                // the LAST value sat immediately against the JSON literal's own escaped
+                // closing braces (`...:R}}}"`), and this specific .NET Native (UWP AOT)
+                // toolchain mis-lowers a composite-format hole in that exact position - the
+                // format specifier itself ("R") leaked into the output as a literal,
+                // unquoted token instead of being applied, producing invalid JSON
+                // (`"lumaStdDev":R}`) that PostWebMessageAsJson rejected with E_INVALIDARG
+                // (0x80070057) on every single attempt. avgSaturation/edgeEnergy's holes
+                // were each followed by a comma, not `}}`, so they formatted fine - only the
+                // last field ever broke. Confirmed via a temporary diagnostic that logged the
+                // exact assembled string (now removed): the numbers themselves were always
+                // finite (never NaN/Infinity, ruling out ContentAnalysisSampler's math) and
+                // always period-decimal (ruling out locale). JsonNumberArray/ambientColors
+                // never hit this because it formats via a plain `.ToString("R")` method call,
+                // never inline interpolation - same fix applied here: format to a string
+                // first, then interpolate a bare variable with no `:format` in the hole at all.
+                string avgSaturationStr = avgSaturation.ToString("R", CultureInfo.InvariantCulture);
+                string edgeEnergyStr = edgeEnergy.ToString("R", CultureInfo.InvariantCulture);
+                string lumaStdDevStr = lumaStdDev.ToString("R", CultureInfo.InvariantCulture);
+                emit("contentAnalysis", $"{{\"avgSaturation\":{avgSaturationStr},\"edgeEnergy\":{edgeEnergyStr},\"lumaStdDev\":{lumaStdDevStr}}}");
             };
             EffectSettings.AmbientColors += (top, bottom, left, right) =>
                 emit("ambientColors",
