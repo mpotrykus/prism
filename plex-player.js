@@ -24,9 +24,9 @@
 import { registerNavHandler } from "./focus-nav.js";
 import { lockScroll, unlockScroll } from "./scroll-lock.js";
 import { detectShaderType } from "./src/player/shader/shaders.js";
-import { hasNativePlayer, platformTag, plexPlatformTag, usesProgressiveStream, supportsHdr } from "./src/player/core/platform.js";
+import { hasNativePlayer, platformTag, plexPlatformTag, usesProgressiveStream, supportsHdr, getDecodeCapabilities } from "./src/player/core/platform.js";
 import { media } from "./src/player/core/media-facade.js";
-import { buildStreamUrl, buildDecisionUrl } from "./src/player/core/stream-url.js";
+import { buildStreamUrl, buildDecisionUrl, resolvePlaybackUrl } from "./src/player/core/stream-url.js";
 import { playNative, switchNative, stopNative, pauseNative, resumeNative, buildPlaybackPayload } from "./src/player/native-bridge.js";
 import { playXbox, switchXbox, stopXbox, pauseXbox, resumeXbox, reloadXboxSource } from "./src/player/xbox-bridge.js";
 import { playWeb, attachSource, reloadWebSource, teardownWeb } from "./src/player/web-fallback.js";
@@ -286,7 +286,7 @@ class StreamingPlayerController {
             this._pingTimer = null;
         }
         if (this._session) this._reportTimeline("stopped");
-        const { streamUrl, startOffsetMs } = this._prepareSession(item);
+        const { streamUrl, startOffsetMs } = await this._prepareSession(item);
         /* This leg reuses the transport bar mounted for the previous title (see
            _switchTitle's own comment on why native takes this in-place path instead of
            web's teardown-then-rebegin) - nothing else repaints its title/subtitle text
@@ -303,7 +303,7 @@ class StreamingPlayerController {
     }
 
     async _beginSession(item) {
-        const { streamUrl, startOffsetMs } = this._prepareSession(item);
+        const { streamUrl, startOffsetMs } = await this._prepareSession(item);
         if (hasNativePlayer()) {
             await this._playNative(streamUrl, startOffsetMs);
             /* Native's own equivalent lives in native-bridge.js's "progress" listener
@@ -331,12 +331,16 @@ class StreamingPlayerController {
        the per-video shader/ambient/color-boost/stats-overlay state, with no opinion on
        how playback actually gets started (native Activity launch, native in-place swap,
        or the <video>+hls.js fallback each handle that themselves). */
-    _prepareSession(item) {
+    async _prepareSession(item) {
         const { ratingKey, plexUrl, plexToken } = item;
         const key = item.key || `/library/metadata/${ratingKey}`;
         const sessionId = crypto.randomUUID();
         const startOffsetMs = item.startOffsetMs || 0;
-        const streamUrl = this._buildStreamUrl({
+        /* First play never overrides the audio track - it always starts on whichever
+           stream Plex's own metadata already marked "selected" - so isDefaultAudioTrack
+           is unconditionally true here; only a reload (session-reload.js) can request a
+           non-default one. */
+        const { streamUrl, isDirectPlay } = await this._resolvePlaybackUrl({
             plexUrl,
             plexToken,
             key,
@@ -344,6 +348,8 @@ class StreamingPlayerController {
             startOffsetMs,
             mediaIndex: item.mediaIndex || 0,
             qualityCapKbps: item.qualityCapKbps ?? null,
+            partKey: item.partKey ?? null,
+            isDefaultAudioTrack: true,
         });
         const audioStreams = item.audioStreams || [];
         this._session = {
@@ -361,6 +367,11 @@ class StreamingPlayerController {
                the old session had died off (e.g. after a full stop()+replay gave it
                time to expire), so an explicit stop is what makes it immediate. */
             transcodeSessionId: sessionId,
+            /* Whether the URL above is a real direct play (raw file, no transcode/HLS
+               session behind it at all) rather than today's always-transcode path - see
+               stream-url.js's resolvePlaybackUrl. Read by session-reload.js to skip
+               stopping a transcode session that never existed. */
+            isDirectPlay,
             durationMs: item.durationMs || 0,
             lastTimeMs: startOffsetMs,
             state: "playing",
@@ -385,6 +396,9 @@ class StreamingPlayerController {
                audio-track switch (see web-fallback.js's reloadWebSource and
                native-bridge.js's buildPlaybackPayload), not just request one. */
             partId: item.partId ?? null,
+            /* Plex's own direct-file path for this Part - see title-info.js's
+               extractPartInfo and stream-url.js's resolvePlaybackUrl. */
+            partKey: item.partKey ?? null,
             /* Read from Plex's own video-stream metadata before playback starts (title-info.js's
                isHdrVideo). The Xbox leg needs it up front to switch the console's HDMI output into an
                HDR mode before the first frame - see HdrDisplayController. Harmless everywhere else. */
@@ -523,6 +537,7 @@ class StreamingPlayerController {
             platform: plexPlatformTag(),
             progressive: usesProgressiveStream(),
             hdr: supportsHdr(),
+            ...getDecodeCapabilities(),
         });
     }
 
@@ -537,6 +552,22 @@ class StreamingPlayerController {
             platform: plexPlatformTag(),
             progressive: usesProgressiveStream(),
             hdr: supportsHdr(),
+            ...getDecodeCapabilities(),
+        });
+    }
+
+    /* Same opts shape as _buildStreamUrl/_buildDecisionUrl above, plus `partKey` and
+       `isDefaultAudioTrack` - the two extra signals resolvePlaybackUrl needs to decide
+       whether a real direct play is even worth asking Plex's decision engine about. See
+       stream-url.js's resolvePlaybackUrl for the fork itself. */
+    _resolvePlaybackUrl(opts) {
+        return resolvePlaybackUrl({
+            ...opts,
+            clientIdentifier: clientIdentifier(),
+            platform: plexPlatformTag(),
+            progressive: usesProgressiveStream(),
+            hdr: supportsHdr(),
+            ...getDecodeCapabilities(),
         });
     }
 

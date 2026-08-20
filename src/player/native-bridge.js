@@ -4,6 +4,7 @@ import { playQueuedTitle, applyRememberedSubtitle } from "./ui/chrome.js";
 import { getQueueItems, formatEpisodeListItem } from "./ui/episode-list.js";
 import * as StreamingSubtitles from "./core/subtitle-provider.js";
 import * as subtitleStore from "./core/subtitle-store.js";
+import { reloadTranscodeSession } from "./core/session-reload.js";
 
 const NativePlayer = registerPlugin("NativePlayer");
 /* Deliberately a local copy of plex-player.js's own TIMELINE_PING_MS, not a shared
@@ -202,6 +203,30 @@ export async function playNative(controller, streamUrl, startOffsetMs) {
             subtitleStore.setAppliedOffsetMs(controller._session?.ratingKey, offsetMs);
         })
     );
+    /* PlayerUiHelper's Quality Cap/Version/Audio Track menus normally rewrite the
+       transcode URL's query params entirely natively - this fires instead when
+       PlayerActivity.isTranscodeUrl finds currentUrl is a real direct-play file URL,
+       where that rewrite would silently mean nothing to Plex. Routes through the exact
+       same shared reloadTranscodeSession (session-reload.js) every other platform's
+       reload already goes through - resolvePlaybackUrl there is the one place that can
+       correctly decide whether this stays direct play or needs a genuine transcode.
+       `generation` must travel back to applyReloadedUrl completely unchanged - see
+       PlayerActivity.requestJsReload's own comment on why native, not JS, has to be the
+       one to judge staleness here (native has no visibility into this bridge's own
+       Promise ordering). */
+    controller._nativeListenerHandles.push(
+        await NativePlayer.addListener("directPlayReloadRequested", ({ kind, value, resumeMs, generation }) => {
+            if (!controller._session) return;
+            const overrides = { startOffsetMs: Number(resumeMs) };
+            if (kind === "qualityCap") overrides.qualityCapKbps = value != null ? Number(value) : null;
+            else if (kind === "mediaVersion") overrides.mediaIndex = Number(value);
+            else if (kind === "audioStreamID") overrides.audioStreamID = value;
+            else return;
+            reloadTranscodeSession(controller, overrides, (streamUrl, offsetMs) => {
+                NativePlayer.applyReloadedUrl({ url: streamUrl, startPositionMs: offsetMs, generation });
+            });
+        })
+    );
     await NativePlayer.play(buildPlaybackPayload(controller, streamUrl, startOffsetMs));
 }
 
@@ -259,6 +284,14 @@ export function buildPlaybackPayload(controller, streamUrl, startOffsetMs) {
            PUT never fired, and Plex's transcode decision correctly kept honoring
            whatever was last actually selected there instead of the new pick. */
         partId: controller._session.partId != null ? String(controller._session.partId) : null,
+        /* Whether streamUrl above is a real direct play (raw file, no transcode session -
+           see stream-url.js's resolvePlaybackUrl) rather than the usual transcode URL.
+           Android ignores this field entirely - PlayerActivity.isTranscodeUrl checks the
+           URL shape itself, since its own native reload methods need that check anyway.
+           Xbox's NativePlayerHost.Play/SwitchTitle read it directly, since only Xbox
+           wraps the MediaSource in a MediaPlaybackItem (needed for AudioTracks local
+           switching) when it's true - see PlayerBridge.cs's "play"/"switchTitle" cases. */
+        isDirectPlay: !!controller._session.isDirectPlay,
         /* {mediaIndex, label} per Plex Media[] entry (see title-info.js's
            extractMediaVersions) plus the currently-selected index/cap - PlayerUiHelper's
            Video Quality menu rebuilds the transcode URL itself when the user picks one

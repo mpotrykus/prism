@@ -156,6 +156,15 @@ public class PlayerActivity extends AppCompatActivity {
         void onSubtitleSelectRequested(String fileId, String label, String languageCode);
         void onSubtitleCleared();
         void onSubtitleOffsetChanged(long offsetMs);
+        /* Fired instead of this class's own query-param URL surgery (see
+           switchQualityCap/switchMediaVersion/switchAudioStreamViaRestart) when
+           currentUrl is a real direct-play file URL, not a transcode URL - there's no
+           transcode-shaped query param to rewrite, so JS has to resolve a real new URL
+           (via stream-url.js's resolvePlaybackUrl, the same decision-aware logic every
+           other platform's reload already goes through) and hand it back via
+           NativePlayer.applyReloadedUrl. See native-bridge.js's own listener for this
+           event and NativePlayerPlugin.applyReloadedUrl for the reply leg. */
+        void onDirectPlayReloadRequested(String kind, String value, long resumeMs, long generation);
     }
 
     private static PlaybackListener listener;
@@ -2387,6 +2396,11 @@ public class PlayerActivity extends AppCompatActivity {
             onReloadComplete();
             return;
         }
+        if (!isTranscodeUrl(currentUrl)) {
+            currentAudioStreamId = streamId;
+            requestJsReload("audioStreamID", streamId, player.getCurrentPosition());
+            return;
+        }
         long myGeneration = ++reloadGeneration;
         long resumeMs = player.getCurrentPosition();
         Uri oldUri = Uri.parse(currentUrl);
@@ -2502,6 +2516,68 @@ public class PlayerActivity extends AppCompatActivity {
        re-evaluation. Called from the same background thread PlexHttp.runAsync already
        submits switchAudioStreamViaRestart's PUT/stop work to, never from the caller
        (switchMediaVersion/switchQualityCap) directly - see their own call sites. */
+    /* Real direct play (see stream-url.js's resolvePlaybackUrl) means currentUrl is a raw
+       Plex file URL, not a /video/:/transcode/universal/... one - none of the query-param
+       rewrites below (mediaIndex/maxVideoBitrate/audioStreamID/session) mean anything to
+       Plex's static file endpoint, so doing them would silently no-op instead of actually
+       switching anything. */
+    private static boolean isTranscodeUrl(String url) {
+        return url != null && url.contains("/video/:/transcode/universal/");
+    }
+
+    /* Hands a quality-cap/version/audio-track change back to JS instead of doing the
+       query-param rewrite this class normally does itself - only reached when currentUrl
+       is a real direct-play URL (see isTranscodeUrl above), since JS's
+       stream-url.js/resolvePlaybackUrl is the one place that can correctly resolve a new
+       URL for that case (it may stay direct play, e.g. a mediaVersion switch to another
+       equally-playable version, or it may need to fall back to a genuine transcode - a
+       raw file has no bitrate to cap and no server-side track mux for a non-default audio
+       track).
+
+       Bumps reloadGeneration itself and sends it to JS to carry back unchanged - the JS
+       round trip (a decision fetch, up to ~1.5s) is a real gap another reload could land
+       in, unlike this class's other async gaps which are all short native PlexHttp calls.
+       applyPreResolvedUrl below compares the returned generation against the CURRENT one
+       before applying, so a stale response from a superseded request can't stomp on
+       whatever a newer one already did.
+
+       Immediately frees this native reload's serialization slot (see
+       runSerializedReload's own field comment) since native itself isn't doing anything
+       further here - the eventual JS response applies as its own fresh reload via
+       applyPreResolvedUrl, not a continuation of this one. */
+    private void requestJsReload(String kind, String value, long resumeMs) {
+        long myGeneration = ++reloadGeneration;
+        if (listener != null) listener.onDirectPlayReloadRequested(kind, value, resumeMs, myGeneration);
+        onReloadComplete();
+    }
+
+    /* Applies a URL JS already fully resolved (via resolvePlaybackUrl) - no askDecision
+       call here, unlike applyReloadedUrlAfterDecision below, since JS's own decision call
+       already happened before it computed this URL; asking again would be redundant and,
+       for a genuine direct-play URL, meaningless (Plex's decision endpoint has nothing to
+       do with a raw file path). Called from NativePlayerPlugin.applyReloadedUrl - the
+       reply leg of requestJsReload above. `generation` is whatever requestJsReload sent
+       JS at the start of this same round trip - see that method's own comment on why it
+       has to be checked here, not just re-bumped. */
+    public static void applyPreResolvedUrl(String newUrl, long resumeMs, long generation) {
+        if (activeInstance != null) activeInstance.runSerializedReload(() -> activeInstance.doApplyPreResolvedUrl(newUrl, resumeMs, generation));
+    }
+
+    private void doApplyPreResolvedUrl(String newUrl, long resumeMs, long generation) {
+        if (generation == reloadGeneration) {
+            currentUrl = newUrl;
+            MediaItem.Builder itemBuilder = new MediaItem.Builder().setUri(Uri.parse(currentUrl));
+            MediaItem.SubtitleConfiguration subtitleConfig = currentSubtitleConfigOrNull();
+            if (subtitleConfig != null) itemBuilder.setSubtitleConfigurations(java.util.Collections.singletonList(subtitleConfig));
+            if (player != null) {
+                player.setMediaItem(itemBuilder.build(), resumeMs);
+                player.prepare();
+            }
+            if (abrMonitor != null) abrMonitor.notifyReload();
+        }
+        onReloadComplete();
+    }
+
     private static void askDecision(String newUrl) throws IOException {
         /* Plain string replacement, not Uri.Builder.path() - confirmed the actual reason
            this silently never worked on Android despite working on web: path() re-encodes
@@ -2534,6 +2610,11 @@ public class PlayerActivity extends AppCompatActivity {
     private void doSwitchMediaVersion(int mediaIndex) {
         if (player == null || currentUrl == null) {
             onReloadComplete();
+            return;
+        }
+        if (!isTranscodeUrl(currentUrl)) {
+            currentMediaIndex = mediaIndex;
+            requestJsReload("mediaVersion", String.valueOf(mediaIndex), player.getCurrentPosition());
             return;
         }
         long resumeMs = player.getCurrentPosition();
@@ -2569,6 +2650,11 @@ public class PlayerActivity extends AppCompatActivity {
     private void doSwitchQualityCap(Integer kbps) {
         if (player == null || currentUrl == null) {
             onReloadComplete();
+            return;
+        }
+        if (!isTranscodeUrl(currentUrl)) {
+            qualityCapKbps = kbps;
+            requestJsReload("qualityCap", kbps != null ? String.valueOf(kbps) : null, player.getCurrentPosition());
             return;
         }
         long resumeMs = player.getCurrentPosition();

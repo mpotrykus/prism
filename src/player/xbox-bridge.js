@@ -254,6 +254,41 @@ export function reloadXboxSource(controller, overrides = {}, payloadFor) {
     });
 }
 
+/* Local, in-place audio-track switch for a direct-played title (see stream-url.js's
+   resolvePlaybackUrl) - no session/URL rebuild, mirroring web-fallback.js's
+   trySwitchAudioTrackLocal for the transcode/HLS case, but via NativePlayerHost's own
+   MediaPlaybackItem.AudioTracks (see PlayerBridge.cs's "switchAudioTrackLocally" case)
+   since there is no hls.js object on this leg at all. Only attempted during direct play -
+   the existing transcode-path audio switch (via _reloadSource) is already
+   hardware-confirmed and untouched by this.
+
+   Maps by Stream ORDER, not id - the local player's AudioTracks list has its own index,
+   unrelated to Plex's own stream ids. Unverified against a real multi-audio-track file
+   that Plex's Part.Stream order always matches the container's own track order - see
+   this feature's own risk notes. Returns whether the local switch was even attempted
+   (fire-and-forget over the bridge - there is no reply confirming the native side found a
+   matching index), so a genuine mismatch is only visible as "audio didn't change",
+   nothing worse. */
+export function trySwitchAudioTrackLocallyXbox(controller, audioStreamID) {
+    const s = controller._session;
+    if (!s || !s.isDirectPlay) return false;
+    const streams = s.audioStreams || [];
+    const index = streams.findIndex((stream) => stream.id === audioStreamID);
+    if (index < 0) return false;
+    post("switchAudioTrackLocally", { index });
+    s.audioStreamId = audioStreamID;
+    /* Fire-and-forget, same as trySwitchAudioTrackLocal's own PUT - keeps Plex's
+       server-side "selected" bookkeeping in sync for other clients/the next launch. */
+    if (s.partId) {
+        const putUrl = new URL(`${s.plexUrl}/library/parts/${s.partId}`);
+        putUrl.searchParams.set("audioStreamID", String(audioStreamID));
+        putUrl.searchParams.set("allParts", "1");
+        putUrl.searchParams.set("X-Plex-Token", s.plexToken);
+        fetch(putUrl, { method: "PUT" }).catch(() => {});
+    }
+    return true;
+}
+
 /* --- The media facade the chrome talks to --- */
 
 /* Wires the <video>-shaped surface in core/media-facade.js to bridge calls, so the transport bar,

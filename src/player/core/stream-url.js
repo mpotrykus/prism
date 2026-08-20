@@ -17,23 +17,37 @@
    which is what makes the MDE choose direct stream and copy the video untouched. Only passed on a
    backend that can actually present HDR (see core/platform.js's supportsHdr) - advertising it from a
    player that cannot would make Plex hand over HDR frames to be displayed as washed-out SDR, which is
-   worse than the tone-mapped transcode it replaces. */
-function clientCapabilities(hdr) {
+   worse than the tone-mapped transcode it replaces.
+
+   `hevcMain10_2160` (see core/platform.js's getDecodeCapabilities) widens it to plain SDR HEVC 2160p
+   even when `hdr` is false - a real per-device decode-capability signal, not a static platform fact
+   like `hdr` is. This is what lets Plex direct-play/direct-stream a genuine 4K HEVC SDR source instead
+   of forcing it down to 1080p h264, on any browser/device that can actually decode it. */
+function clientCapabilities({ hdr, hevcMain10_2160 } = {}) {
   const protocols =
     "protocols=http-live-streaming,http-mp4-streaming,http-mp4-video,http-mp4-video-720p,http-mp4-video-1080p";
   const audio = "audioDecoders=mp3,aac,ac3,eac3,dts,truehd";
-  if (!hdr) {
-    return `${protocols}&videoDecoders=h264{profile:high&resolution:1080&level:51}&${audio}`;
+  const h264 = "h264{profile:high&resolution:1080&level:51}";
+  if (hdr) {
+    /* hevc listed before h264: Plex takes the order as preference, and the point of this branch is to
+       have HEVC chosen when the source is HEVC rather than falling back to an h264 transcode. */
+    return (
+      `${protocols},http-mp4-video-2160p` +
+      "&videoDecoders=hevc{profile:main10&resolution:2160&level:153&colorSpace:bt2020nc&colorTrc:smpte2084}," +
+      "hevc{profile:main&resolution:2160&level:153}," +
+      `${h264}` +
+      `&${audio}`
+    );
   }
-  /* hevc listed before h264: Plex takes the order as preference, and the point of this branch is to
-     have HEVC chosen when the source is HEVC rather than falling back to an h264 transcode. */
-  return (
-    `${protocols},http-mp4-video-2160p` +
-    "&videoDecoders=hevc{profile:main10&resolution:2160&level:153&colorSpace:bt2020nc&colorTrc:smpte2084}," +
-    "hevc{profile:main&resolution:2160&level:153}," +
-    "h264{profile:high&resolution:1080&level:51}" +
-    `&${audio}`
-  );
+  if (hevcMain10_2160) {
+    /* No colorSpace/colorTrc here - this is the SDR-tone-mapped HEVC case, distinct from the hdr
+       branch above. Still listed before h264 for the same preference-ordering reason. */
+    return (
+      `${protocols},http-mp4-video-2160p` +
+      `&videoDecoders=hevc{profile:main10&resolution:2160&level:153},${h264}&${audio}`
+    );
+  }
+  return `${protocols}&videoDecoders=${h264}&${audio}`;
 }
 
 function buildTranscodeUrl(endpoint, {
@@ -50,6 +64,7 @@ function buildTranscodeUrl(endpoint, {
   platform,
   progressive = false,
   hdr = false,
+  hevcMain10_2160 = false,
 }) {
   const url = new URL(`${plexUrl}${endpoint}`);
   url.searchParams.set("path", key);
@@ -122,7 +137,7 @@ function buildTranscodeUrl(endpoint, {
      before finding this (checkmark not updating, stale transcode sessions, the video
      element needing a hard reset) was chasing effects of this one missing param, not
      separate bugs. */
-  url.searchParams.set("X-Plex-Client-Capabilities", clientCapabilities(hdr));
+  url.searchParams.set("X-Plex-Client-Capabilities", clientCapabilities({ hdr, hevcMain10_2160 }));
   url.searchParams.set("X-Plex-Token", plexToken);
   return url.toString();
 }
@@ -152,4 +167,57 @@ export function buildStreamUrl(opts) {
    attempt that follows) before rebuilding the stream on any reload. */
 export function buildDecisionUrl(opts) {
   return buildTranscodeUrl("/video/:/transcode/universal/decision", opts);
+}
+
+/* The one place both first-play (plex-player.js's _prepareSession) and reload
+   (session-reload.js) resolve a playback URL - the same "one shared helper, not two
+   divergent copies" discipline session-reload.js's own header comment already applies to
+   everything else in that file.
+
+   Attempts a real, zero-cost Plex direct play (the raw file itself, no transcode/HLS
+   session) when the decision engine's response gives an EXPLICIT, unambiguous "directplay"
+   signal - never on an absent/ambiguous field. That asymmetry is deliberate: guessing wrong
+   in the other direction (treating an absent/unexpected field as "direct play IS possible")
+   risks handing the player a raw file it genuinely can't decode, which breaks playback;
+   guessing conservatively only costs a missed optimization, never a regression - the
+   fallback path below is byte-identical to buildStreamUrl's existing behavior.
+
+   THE EXACT decision-response field/value shape below is NOT YET CONFIRMED against a real
+   server - flagged in this feature's own plan as needing empirical verification. The
+   console.info left in deliberately surfaces the raw Part every time a decision call
+   resolves, so the first real run can confirm (or correct) the field name/value this
+   checks. Until confirmed, this only widens behavior when it recognizes something - it
+   never narrows or breaks the existing path. */
+export async function resolvePlaybackUrl(urlOpts) {
+  const fallback = () => ({ streamUrl: buildStreamUrl(urlOpts), isDirectPlay: false });
+
+  /* A user-set quality cap has no meaning against a raw file, and a non-default audio
+     track has no server-side mux to fall back on for legs that can't switch it natively
+     (see Part 3 of this feature) - both force the existing transcode path. */
+  if (urlOpts.qualityCapKbps != null) return fallback();
+  if (urlOpts.isDefaultAudioTrack === false) return fallback();
+  if (!urlOpts.partKey) return fallback();
+
+  try {
+    const res = await Promise.race([
+      fetch(buildDecisionUrl(urlOpts), { headers: { Accept: "application/json" } }),
+      /* A slow decision response must never stall first-play - same "a failed decision
+         call shouldn't block /start" principle this file's own buildDecisionUrl comment
+         already documents for the reload case. */
+      new Promise((_, reject) => setTimeout(() => reject(new Error("decision timeout")), 1500)),
+    ]);
+    if (!res.ok) return fallback();
+    const text = await res.text();
+    const data = text ? JSON.parse(text) : null;
+    const part = data?.MediaContainer?.Metadata?.[0]?.Media?.[0]?.Part?.[0];
+    if (!part) return fallback();
+    // eslint-disable-next-line no-console
+    console.info("[direct-play] decision Part (verify shape against this):", part);
+    if (part.decision !== "directplay") return fallback();
+    const url = new URL(`${urlOpts.plexUrl}${urlOpts.partKey}`);
+    url.searchParams.set("X-Plex-Token", urlOpts.plexToken);
+    return { streamUrl: url.toString(), isDirectPlay: true };
+  } catch {
+    return fallback();
+  }
 }

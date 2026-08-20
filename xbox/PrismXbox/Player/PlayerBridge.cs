@@ -99,11 +99,11 @@ namespace PrismXbox.Player
             {
                 case "play":
                     host.Play(p.GetNamedString("url", ""), ReadLong(p, "startPositionMs"),
-                        p.GetNamedBoolean("isHdr", false));
+                        p.GetNamedBoolean("isHdr", false), p.GetNamedBoolean("isDirectPlay", false));
                     break;
                 case "switchTitle":
                     host.SwitchTitle(p.GetNamedString("url", ""), ReadLong(p, "startPositionMs"),
-                        p.GetNamedBoolean("isHdr", false));
+                        p.GetNamedBoolean("isHdr", false), p.GetNamedBoolean("isDirectPlay", false));
                     break;
                 case "stop":
                     host.Stop();
@@ -152,6 +152,9 @@ namespace PrismXbox.Player
                     host.SetAiUpscaling(
                         p.GetNamedBoolean("enabled", false),
                         p.GetNamedString("preset", ""));
+                    break;
+                case "switchAudioTrackLocally":
+                    host.SwitchAudioTrackLocally((int)ReadLong(p, "index"));
                     break;
                 default:
                     log($"unhandled bridge method: {method}");

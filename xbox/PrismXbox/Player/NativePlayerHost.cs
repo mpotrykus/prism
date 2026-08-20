@@ -32,6 +32,12 @@ namespace PrismXbox.Player
         private readonly Action<string> log;
         private string currentUrl;
         private bool everPlayed;
+        // Non-null only while a real direct-play title (see stream-url.js's resolvePlaybackUrl) is
+        // active - a MediaPlaybackItem wrapper is what exposes AudioTracks/SelectedIndex for
+        // SwitchAudioTrackLocally below. The ordinary transcode/HLS path keeps assigning a bare
+        // MediaSource to player.Source exactly as before, unchanged - this wrapper is additive, not a
+        // replacement, to avoid any risk to the already-hardware-confirmed transcode path.
+        private MediaPlaybackItem currentPlaybackItem;
         // Plex always bakes the resume point into the URL as offset= (see Play's own comment), so
         // MediaPlaybackSession.Position is 0-based from THAT point, not from the start of the title -
         // while NaturalDuration keeps reporting the title's real full length regardless of offset
@@ -229,7 +235,7 @@ namespace PrismXbox.Player
         /// decoder to report its own format would be too late. Native re-reports what it actually got
         /// in loadedMetadata.
         /// </param>
-        public async void Play(string url, long startPositionMs, bool isHdr)
+        public async void Play(string url, long startPositionMs, bool isHdr, bool isDirectPlay)
         {
             everPlayed = false;
             currentUrl = url;
@@ -248,9 +254,26 @@ namespace PrismXbox.Player
             // perform here - the stream begins where it should. startPositionMs is still recorded above
             // (see baseOffsetMs) since session.Position reports 0-based from this point, not from the
             // start of the title.
-            log($"play @{startPositionMs}ms");
-            player.Source = MediaSource.CreateFromUri(new Uri(url));
+            log($"play @{startPositionMs}ms isDirectPlay={isDirectPlay}");
+            SetSource(url, isDirectPlay);
             player.Play();
+        }
+
+        // See currentPlaybackItem's own field comment for why this wrapping is conditional rather than
+        // universal.
+        private void SetSource(string url, bool isDirectPlay)
+        {
+            MediaSource source = MediaSource.CreateFromUri(new Uri(url));
+            if (isDirectPlay)
+            {
+                currentPlaybackItem = new MediaPlaybackItem(source);
+                player.Source = currentPlaybackItem;
+            }
+            else
+            {
+                currentPlaybackItem = null;
+                player.Source = source;
+            }
         }
 
         /// <summary>
@@ -278,7 +301,7 @@ namespace PrismXbox.Player
         /// In-place title swap. The player instance is reused so the page's chrome never sees a
         /// teardown - the JS bridge deliberately keeps its listeners registered across this.
         /// </summary>
-        public async void SwitchTitle(string url, long startPositionMs, bool isHdr)
+        public async void SwitchTitle(string url, long startPositionMs, bool isHdr, bool isDirectPlay)
         {
             everPlayed = false;
             currentUrl = url;
@@ -293,9 +316,25 @@ namespace PrismXbox.Player
             // via EffectSettings so its next ProcessFrame skips the SDR-tuned Sharpening/Color
             // Boost draw on this title if it's HDR, without affecting Ambient's own sampling.
             EffectSettings.SetHdrActive(hdr.IsHdrActive);
-            log($"switchTitle @{startPositionMs}ms");
-            player.Source = MediaSource.CreateFromUri(new Uri(url));
+            log($"switchTitle @{startPositionMs}ms isDirectPlay={isDirectPlay}");
+            SetSource(url, isDirectPlay);
             player.Play();
+        }
+
+        /// <summary>
+        /// Local, in-place audio-track switch for a direct-played file - no session/URL rebuild at
+        /// all, since a raw file has no server-side track mux to restart against (see this feature's
+        /// own plan for why this only applies during direct play). No-ops safely if
+        /// currentPlaybackItem is null (not currently direct-playing) or index is out of range -
+        /// mapping Plex's Stream order to this list's index is the caller's (xbox-bridge.js)
+        /// responsibility, unverified against a real multi-audio-track file yet, see this feature's
+        /// own risk notes.
+        /// </summary>
+        public void SwitchAudioTrackLocally(int index)
+        {
+            MediaPlaybackAudioTrackList tracks = currentPlaybackItem?.AudioTracks;
+            if (tracks == null || index < 0 || index >= tracks.Count) return;
+            tracks.SelectedIndex = index;
         }
 
         public void Pause() => player.Pause();
@@ -344,6 +383,7 @@ namespace PrismXbox.Player
             player.Pause();
             player.Source = null;
             currentUrl = null;
+            currentPlaybackItem = null;
             emit("stopped", "{}");
             // Fire-and-forget, but it has to happen: leaving the console in HDR after playback ends makes
             // the dashboard and this app's own UI render with inaccurate colour, text especially.
