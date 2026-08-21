@@ -6,6 +6,9 @@ import { closeEpisodeListOverlay, closeChapterListOverlay } from "./ui/episode-l
 import { updateAbrMonitor, stopAbrLoop, notifyStall, setBandwidthSource } from "./core/abr.js";
 import { reloadTranscodeSession } from "./core/session-reload.js";
 import { mountPlayerChrome, unmountPlayerChrome } from "./ui/player-chrome.js";
+import { teardownShaderPipeline } from "./shader-pipeline.js";
+import { teardownAmbient } from "./ambient-pipeline.js";
+import { teardownContentAnalysis } from "./content-analysis.js";
 /* Circular with chrome.js (which already imports reloadWebSource from this file) - safe
    here for the same reason that one is: closeAudioSubtitlesOverlay is only ever called
    from inside teardownWeb's own function body below, never at module-top-level
@@ -246,32 +249,13 @@ export function teardownWeb(controller) {
         controller._hls.destroy();
         controller._hls = null;
     }
-    controller._stopShaderLoop();
-    if (controller._shaderCanvas) {
-        controller._shaderCanvas.remove();
-        controller._shaderCanvas = null;
-    }
-    controller._shaderGl = null;
-    controller._shaderPrograms = null;
-    controller._shaderQuadBuffer = null;
-    controller._shaderTexture = null;
-    controller._stopAmbientLoop();
-    if (controller._ambientGlowContainer) {
-        controller._ambientGlowContainer.remove();
-        controller._ambientGlowContainer = null;
-    }
-    controller._ambientGlowPanels = null;
-    controller._ambientSampleCanvas = null;
-    controller._ambientSampleCtx = null;
-    controller._ambientSmoothed = null;
-    if (controller._contentRafId) {
-        cancelAnimationFrame(controller._contentRafId);
-        controller._contentRafId = null;
-    }
-    controller._contentSampleCanvas = null;
-    controller._contentSampleCtx = null;
-    controller._contentSmoothedSaturation = null;
-    controller._contentSmoothedEdgeEnergy = null;
+    /* Each GPU/canvas pipeline tears itself down through its own module rather than this
+       function nulling their fields by hand. The shader pipeline is the reason: its pass
+       chains own GL programs, framebuffers and intermediate textures that no amount of
+       field-nulling from out here would actually release. */
+    teardownShaderPipeline(controller);
+    teardownAmbient(controller);
+    teardownContentAnalysis(controller);
     /* The chrome half of teardown lives in ui/player-chrome.js, so the Xbox leg tears down exactly
        the same things it mounted - a missing unmount there left the transport bar, center controls and
        options sheet on screen after backing out of native playback. */

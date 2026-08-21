@@ -47,9 +47,12 @@ D2D_PS_ENTRY(main)
     float shadowProtect = smoothstep(0.0, 0.22, luma(outColor));
     float contrast = lerp(1.0, contrastBoost, shadowProtect);
     float saturationAmt = lerp(1.0, saturationBoost, shadowProtect);
-    outColor = (outColor - 0.5) * contrast + 0.5;
-    float l = luma(outColor);
-    outColor = lerp(float3(l, l, l), outColor, saturationAmt);
+    // Saturation and Contrast are independent controls - see anime4k.hlsl's own comment on
+    // this fix (2026-08-20).
+    float outL0 = luma(outColor);
+    float outLc = (outL0 - 0.5) * contrast + 0.5;
+    float3 contrastedColor = outColor + (outLc - outL0);
+    outColor = lerp(float3(outLc, outLc, outLc), contrastedColor, saturationAmt);
     outColor = saturate(outColor);
 
     return float4(outColor, center4.a);

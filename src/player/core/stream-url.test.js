@@ -48,6 +48,30 @@ describe("buildStreamUrl", () => {
   });
 });
 
+describe("clientCapabilities via X-Plex-Client-Capabilities", () => {
+  it("defaults to the conservative h264-1080p-only string", () => {
+    const caps = new URL(buildStreamUrl(base)).searchParams.get("X-Plex-Client-Capabilities");
+    expect(caps).toContain("h264{profile:high&resolution:1080&level:51}");
+    expect(caps).not.toContain("hevc");
+  });
+
+  it("widens to SDR HEVC 2160p when hevcMain10_2160 is true but hdr is false", () => {
+    const caps = new URL(buildStreamUrl({ ...base, hevcMain10_2160: true }))
+      .searchParams.get("X-Plex-Client-Capabilities");
+    expect(caps).toContain("hevc{profile:main10&resolution:2160&level:153}");
+    expect(caps).not.toContain("colorSpace");
+    expect(caps).not.toContain("colorTrc");
+    /* h264 stays as the fallback entry, listed after hevc for preference ordering. */
+    expect(caps).toContain("h264{profile:high&resolution:1080&level:51}");
+  });
+
+  it("keeps the HDR branch (colorSpace/colorTrc) unaffected by hevcMain10_2160", () => {
+    const caps = new URL(buildStreamUrl({ ...base, hdr: true, hevcMain10_2160: true }))
+      .searchParams.get("X-Plex-Client-Capabilities");
+    expect(caps).toContain("colorSpace:bt2020nc&colorTrc:smpte2084");
+  });
+});
+
 describe("buildDecisionUrl", () => {
   it("targets the decision endpoint with the same params as buildStreamUrl", () => {
     const opts = { ...base, qualityCapKbps: 4000, audioStreamID: 7 };

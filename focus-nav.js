@@ -300,6 +300,20 @@ export function wireLinearNav(root, selector, { orientation = "vertical", onActi
     el.dispatchEvent(new Event("input", { bubbles: true }));
   }
 
+  /* LB/RB's big-jump equivalent for a focused range input (e.g. chrome-menu-effects.js's
+     Effects sliders) - a fixed 10% of the slider's own min/max span, not step-multiplied
+     like adjustRange's Left/Right, so it's still a real 10% jump on a slider whose step
+     isn't 1. */
+  function jumpRange(el, percent) {
+    const min = el.min !== "" ? Number(el.min) : 0;
+    const max = el.max !== "" ? Number(el.max) : 100;
+    const delta = ((max - min) * percent) / 100;
+    const next = Math.max(min, Math.min(max, Number(el.value) + delta));
+    if (next === Number(el.value)) return;
+    el.value = String(next);
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+  }
+
   /* Steps past every remaining member of the active element's own group in one go before
      applying the final +/-1 - so a group reads as a single stop for Up/Down (or Left/Right
      in a horizontal list) regardless of which of its members currently has focus. */
@@ -429,6 +443,10 @@ export function wireLinearNav(root, selector, { orientation = "vertical", onActi
         return true;
       }
       return moveWithinGroup(delta);
+    }
+    if ((command === "chapterPrev" || command === "chapterNext") && cur?.tagName === "INPUT" && cur.type === "range") {
+      jumpRange(cur, command === "chapterNext" ? 10 : -10);
+      return true;
     }
     return false;
   });

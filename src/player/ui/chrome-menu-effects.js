@@ -1,7 +1,19 @@
 import { SHADER_TYPES } from "../shader/shaders.js";
-import { setShaderStrength, setColorBoostStrength, upscaleModeOf, setUpscaleMode, colorBoostModeOf, setColorBoostMode } from "../shader-pipeline.js";
+import {
+    setShaderStrength,
+    setColorBoostSaturationStrength,
+    setColorBoostContrastStrength,
+    upscaleModeOf,
+    setUpscaleMode,
+    colorBoostSaturationModeOf,
+    setColorBoostSaturationMode,
+    colorBoostContrastModeOf,
+    setColorBoostContrastMode,
+    idleUpgradeLabel,
+    sourceWillUpscale,
+} from "../shader-pipeline.js";
 import { setAmbientOpacity } from "../ambient-pipeline.js";
-import { fullscreenIconMarkup, colorBoostIconMarkup, ambientIconMarkup, PLAYER_FOCUSABLE_CLASS } from "./shared.js";
+import { fullscreenIconMarkup, colorBoostIconMarkup, ambientIconMarkup, aiUpscalingIconMarkup, PLAYER_FOCUSABLE_CLASS } from "./shared.js";
 /* Circular with chrome-menu.js (which imports renderEffectsList from this file for its
    "Effects" row) - safe here because both sides only reference the other module's
    export from inside a function body (makeBackRow/makeToggleSwitch are only called once
@@ -9,23 +21,26 @@ import { fullscreenIconMarkup, colorBoostIconMarkup, ambientIconMarkup, PLAYER_F
    loading), never at top-level module-evaluation time. */
 import { makeBackRow, makeToggleSwitch } from "./chrome-menu.js";
 
-/* The hamburger "More" sheet's Effects sub-screen: Shader Upscaling/Color Boost/Ambient
-   Lighting, each a plain always-visible row (not an accordion section, see
-   renderEffectsList) landing on a slider. */
+/* The hamburger "More" sheet's Effects sub-screen: AI Upscaling/Sharpening/Color Boost/
+   Ambient Lighting, each a plain always-visible row (not an accordion section, see
+   renderEffectsList). Sharpening and AI Upscaling used to be one row that silently swapped
+   which algorithm it meant depending on runtime state - split into two independent toggles
+   since they're genuinely different algorithms (a hand-written sharpen kernel vs. a trained
+   CNN/analytic upscaler) with different costs and no reason to share one on/off state. */
 
 /* "Effects" navigates to a whole separate list (see chrome-menu.js's buildAccordionRow
-   `nav` case) rather than expanding in place - Shader Upscaling/Color Boost/Ambient
-   Lighting read better as their own dedicated screen than squeezed inline under a fourth
-   row. Clears and rebuilds `list` in place (same element, new contents) rather than
-   swapping in a second list element, so the sheet's own scroll position/height logic
-   doesn't need to know which screen is currently showing. Unlike the main list's rows,
-   these three are plain always-visible rows (see buildEffectRow) rather than accordion
-   sections - with only three of them and every one landing on a slider, tap-to-expand
-   just added a step between opening "Effects" and reaching the control someone came here
-   for. */
+   `nav` case) rather than expanding in place - these four read better as their own
+   dedicated screen than squeezed inline under a fifth row. Clears and rebuilds `list` in
+   place (same element, new contents) rather than swapping in a second list element, so the
+   sheet's own scroll position/height logic doesn't need to know which screen is currently
+   showing. Unlike the main list's rows, these are plain always-visible rows (see
+   buildEffectRow) rather than accordion sections - each one landing on either a slider or a
+   toggle, so tap-to-expand would only have added a step between opening "Effects" and
+   reaching the control someone came here for. */
 export function renderEffectsList(controller, list, onBack) {
     list.innerHTML = "";
     list.appendChild(makeBackRow(onBack));
+    buildAiUpscalingEffectRow(controller, list);
     buildShaderEffectRow(controller, list);
     buildColorBoostEffectRow(controller, list);
     buildAmbientEffectRow(controller, list);
@@ -48,8 +63,14 @@ const MODE_OPTIONS = [
    while the effect itself isn't currently applied). Snapshotting only happens at
    mode-switch time (not live-ticking while the panel stays open) since
    content-analysis.js only updates every ~750ms and the panel is normally only glanced
-   at, not watched. */
-function buildModeRow({ groupId, mode, onModeChange, getAutoValue, getManualValue, strengthInput, strengthLabel }) {
+   at, not watched.
+
+   `strips` is a list of {strengthInput, strengthLabel, getAutoValue, getManualValue, label}
+   rather than one flat set of those params - Color Boost's Saturation and Contrast are two
+   independent sliders sharing this one mode row (there's only one avgSaturation-driven auto
+   signal, so both strips read the same getAutoValue in "auto"), while Sharpening still just
+   passes a single-entry array. */
+function buildModeRow({ groupId, mode, onModeChange, strips }) {
     const row = document.createElement("div");
     Object.assign(row.style, { display: "flex", gap: "6px", padding: "0 0 10px" });
 
@@ -60,21 +81,23 @@ function buildModeRow({ groupId, mode, onModeChange, getAutoValue, getManualValu
            user-driven, and "off" because there's no effect running for it to tune, same
            reasoning "off" already gets a dimmed/disabled mode button of its own. */
         const enabled = m === "on";
-        strengthInput.disabled = !enabled;
-        strengthInput.style.opacity = enabled ? "1" : "0.5";
-        strengthInput.style.cursor = enabled ? "pointer" : "default";
-        const value = auto ? (getAutoValue() ?? 0) : getManualValue();
-        strengthInput.value = String(Math.round(value * 100));
-        strengthLabel.textContent = `Strength: ${Math.round(value * 100)}%${auto ? " (auto)" : ""}`;
+        strips.forEach(({ strengthInput, strengthLabel, getAutoValue, getManualValue, label }) => {
+            strengthInput.disabled = !enabled;
+            strengthInput.style.opacity = enabled ? "1" : "0.5";
+            strengthInput.style.cursor = enabled ? "pointer" : "default";
+            const value = auto ? (getAutoValue() ?? 0) : getManualValue();
+            strengthInput.value = String(Math.round(value * 100));
+            strengthLabel.textContent = `${label}: ${Math.round(value * 100)}%${auto ? " (auto)" : ""}`;
+        });
     };
 
     const buttons = MODE_OPTIONS.map((opt) => {
         const btn = document.createElement("button");
         btn.type = "button";
         btn.classList.add(PLAYER_FOCUSABLE_CLASS);
-        /* See focus-nav.js's wireLinearNav: same data-nav-group value on all three buttons
-           makes Left/Right cycle between Auto/On/Off while Up/Down skips the whole row in
-           one step, landing on the slider (or whatever's next) instead of stepping through
+        /* See focus-nav.js's wireLinearNav: the same data-nav-group value on every button in
+           this row makes Left/Right cycle between the modes while Up/Down skips the whole row
+           in one step, landing on the slider (or whatever's next) instead of stepping through
            each mode button individually. */
         btn.dataset.navGroup = groupId;
         btn.textContent = opt.label;
@@ -149,7 +172,7 @@ function startLiveAutoRefresh(el, refresh) {
    the row itself (`wrap`) for the caller to append full-width content (e.g. a slider) below
    the header line.
 
-   `header` is a plain, unclickable div unless `toggleReachable` is set - Shader Upscaling
+   `header` is a plain, unclickable div unless `toggleReachable` is set - Sharpening
    and Color Boost don't need it: their Auto/On/Off mode buttons (buildModeRow) are real
    `<button>`s already reachable by chrome-menu.js's wireLinearNav. Ambient Lighting has no
    such button, only a bare on/off toggle switch (a div, see makeToggleSwitch - never a
@@ -211,17 +234,24 @@ function buildEffectRow(list, { icon, label, caption, toggleReachable = false })
     return { wrap, rightSide, header };
 }
 
-/* Reuses fullscreenIconMarkup's expand-corners glyph - upscaling is, visually, the same
+/* Reuses fullscreenIconMarkup's expand-corners glyph - a sharpen kernel is, visually, the same
    "stretch the picture outward" idea. No manual Off/Anime4K/Live-Action picker -
    controller._shaderAutoType is decided once per video from its Plex genre tags (see
-   detectShaderType) and shown here as read-only info via the caption. The mode row +
-   slider are the only remaining controls, and dragging strength to 0% in "on" mode is
-   what a plain "Off" used to be. */
+   detectShaderType) and shown here as read-only info via the caption. The mode row + slider
+   are the only remaining controls, and dragging strength to 0% in "on" mode is what a plain
+   "Off" used to be.
+
+   This is deliberately always the full mode-row+slider now, with no branching on whether AI
+   Upscaling happens to be the thing actually rendering - that branching (via activePresetKey/
+   strengthless) is what made this feel like one feature secretly swapping algorithms
+   underneath a single toggle. AI Upscaling is its own row below with its own toggle;
+   Sharpening's own row no longer needs to know or care what it's doing. */
 function buildShaderEffectRow(controller, list) {
+    const familyLabel = SHADER_TYPES[controller._shaderAutoType].label;
     const { wrap, rightSide } = buildEffectRow(list, {
         icon: fullscreenIconMarkup(false),
-        label: "Shader Upscaling",
-        caption: `Detected: ${SHADER_TYPES[controller._shaderAutoType].label}`,
+        label: "Sharpening",
+        caption: `Detected: ${familyLabel}`,
     });
 
     const strengthLabel = document.createElement("div");
@@ -242,10 +272,13 @@ function buildShaderEffectRow(controller, list) {
         groupId: "shader-mode",
         mode: upscaleModeOf(controller),
         onModeChange: (mode) => setUpscaleMode(controller, mode),
-        getAutoValue: () => controller._autoUpscaleStrength,
-        getManualValue: () => controller._shaderStrength,
-        strengthInput,
-        strengthLabel,
+        strips: [{
+            strengthInput,
+            strengthLabel,
+            label: "Strength",
+            getAutoValue: () => controller._autoUpscaleStrength,
+            getManualValue: () => controller._shaderStrength,
+        }],
     });
     rightSide.appendChild(modeRow);
     wrap.appendChild(strengthLabel);
@@ -253,14 +286,133 @@ function buildShaderEffectRow(controller, list) {
     startLiveAutoRefresh(strengthInput, refreshIfAuto);
 }
 
-/* Same pattern as buildShaderEffectRow above, simpler since there's no auto-detected
-   type to show as read-only info here - just the one strength control. Unlike
-   Android's equivalent panel, this applies live on every `input` event rather than
-   gating to release: both compiled GL programs stay resident (see
-   ensureShaderPipeline), so a strength change here is only a uniform update on the next
-   frame, not a program rebuild. */
-function buildColorBoostEffectRow(controller, list) {
-    const { wrap, rightSide } = buildEffectRow(list, { icon: colorBoostIconMarkup(), label: "Color Boost" });
+/* The chain that is actually built, not the preset's own `passes` - for the CNN/FSR presets
+   that's the same thing (their composition is fixed, deband included), but reading the real
+   compiled chain here is what stays correct if that ever stops being true. */
+function presetPassCount(controller, preset) {
+    for (const [key, chain] of Object.entries(controller._shaderChains ?? {})) {
+        if (SHADER_TYPES[key] === preset) return chain.passCount;
+    }
+    return preset.passes.length;
+}
+
+/* Mirrors stats-overlay.js's xboxAiUpscalingStatusLine, worded for the Effects menu rather than
+   the debug overlay - reads native's own reported state (AiUpscaleFrameServer's "aiUpscaleStatus"
+   event, stashed on controller._xboxAiUpscaleStatus by xbox-bridge.js) instead of the JS GL
+   chain checks the web leg relies on, which never exist on Xbox. Only called while the toggle is
+   already known to be on (see buildAiUpscalingEffectRow). */
+function xboxAiUpscalingCaption(controller, preset) {
+    if (controller._session?.isHdr) return "Not supported on HDR titles";
+    const status = controller._xboxAiUpscaleStatus;
+    if (!status) return "Starting...";
+    if (status.error) return `Error: ${status.error}`;
+    if (!status.receivedFrame) return "Waiting for video...";
+    /* preset is already the resolved UPGRADE entry (e.g. SHADER_TYPES.anime4k_cnn, label
+       "Animation (AI CNN)") - status.family is only the bare family key ("anime4k"), whose own
+       label ("Animation") says nothing about the real CNN/FSR chain actually running. Real bug
+       hit and fixed 2026-08-20: this used to prefer SHADER_TYPES[status.family]?.label, which
+       resolves to the plain family label every time (it's never null/undefined) - so this
+       caption never actually distinguished "running" from "off" state, and toggling AI
+       Upscaling produced no visible caption change at all. */
+    if (status.upscaled) return `${preset.label} running`;
+    // Both families (anime4k, live_action) have a real chain now (Stage 2b shipped) - "not
+    // upscaled" here means an error mid-chain fell back to plain pass-through this frame.
+    return `${preset.label} idle - pass-through`;
+}
+
+/* AI Upscaling (the real Anime4K CNN / FSR 1 chains): a plain on/off toggle, independent of
+   Sharpening's own toggle - no strength slider (see `strengthless`, a trained network/analytic
+   upscaler has no intensity knob) and no Auto (there's nothing for Auto to compute either). Same
+   toggle-reachable header treatment as Ambient Lighting, for the same D-pad reason.
+
+   "Independent" no longer means "mutually exclusive": Sharpening's own kernel always runs as a
+   trailing pass on top of AI Upscaling's output now (see shaders.js's buildAnime4kCnn/buildFsr)
+   rather than one toggle silently superseding the other - explicit user call. The pass count in
+   the caption below already reflects that extra pass when it applies.
+
+   The caption does the same explaining idleUpgradeLabel always did, just covering the "off"
+   and "unsupported" states too now that this is its own row rather than one that only existed
+   when the upgrade was already the thing rendering. */
+function buildAiUpscalingEffectRow(controller, list) {
+    const familyKey = controller._shaderAutoType;
+    const upgradeKey = SHADER_TYPES[familyKey]?.upgradeTo;
+    const preset = upgradeKey ? SHADER_TYPES[upgradeKey] : null;
+    const isXbox = controller._xboxIsHdr !== undefined;
+    /* Xbox's native CNN/FSR chain always applies its own fixed 2x upscale once enabled - there's
+       no geometry gate on that leg at all (see AiUpscalePixelEffect.Render), so a toggle there is
+       never a no-op the way it can be here. Only the web leg's `when` gate can make this true. */
+    const noUpscaleNeeded = !isXbox && !!preset && !!controller._shaderChains?.[upgradeKey] && !sourceWillUpscale(controller, familyKey);
+
+    let caption;
+    if (!preset) {
+        caption = "Not supported on this device";
+    } else if (isXbox) {
+        /* Xbox has no JS-side GL pass chain at all - native does the work (see
+           AiUpscaleFrameServer) - so the _shaderChainErrors/_shaderChains checks below never
+           apply here and unconditionally read "Not supported on this device" regardless of
+           whether AI Upscaling is actually running. Real bug hit and fixed 2026-08-20: the
+           same class of bug stats-overlay.js's xboxAiUpscalingStatusLine already guards
+           against, just never applied to this (far more visible) menu caption too. */
+        caption = controller._aiUpscalingEnabled ? xboxAiUpscalingCaption(controller, preset) : preset.label;
+    } else if (controller._shaderChainErrors?.[upgradeKey]) {
+        caption = `${preset.label} failed to compile here`;
+    } else if (!controller._shaderChains?.[upgradeKey]) {
+        caption = "Not supported on this device";
+    } else if (noUpscaleNeeded) {
+        /* Same underlying gate idleUpgradeLabel's own "idle - source not upscaled" wording
+           reports for an already-enabled toggle, checked here before the toggle is even flipped
+           on so the row can grey it out instead of leaving it interactive for no effect. */
+        caption = `${preset.label} - source already matches display`;
+    } else if (!controller._aiUpscalingEnabled) {
+        caption = preset.label;
+    } else {
+        /* Already fully worded ("... idle - source not upscaled" / "... off - too slow here")
+           when there's a reason it isn't currently the one rendering - only the running case
+           needs assembling here. */
+        caption = idleUpgradeLabel(controller, familyKey) ?? `${preset.label} · ${presetPassCount(controller, preset)} passes`;
+    }
+
+    const { rightSide, header } = buildEffectRow(list, {
+        icon: aiUpscalingIconMarkup(),
+        label: "AI Upscaling",
+        caption,
+        toggleReachable: true,
+    });
+    const toggleEl = makeToggleSwitch(!!controller._aiUpscalingEnabled, (checked) => controller._setAiUpscalingEnabled(checked));
+    rightSide.appendChild(toggleEl);
+    header.addEventListener("click", () => toggleEl.click());
+
+    if (noUpscaleNeeded) {
+        /* header.disabled (a real <button>, see buildEffectRow) is what focus-nav.js's own
+           items() filter already skips - same pattern as the strength/opacity sliders' own
+           .disabled toggling elsewhere in this file, not a bespoke disabled state. toggleEl
+           itself is a plain div (see makeToggleSwitch), so it needs its own pointer-events/
+           opacity treatment rather than inheriting header's disabled semantics automatically. */
+        header.disabled = true;
+        header.style.opacity = "0.5";
+        header.style.cursor = "default";
+        toggleEl.style.opacity = "0.5";
+        toggleEl.style.pointerEvents = "none";
+    }
+}
+
+/* One sub-control (its own title, its own Auto/On/Off mode row, its own slider) - shared by
+   buildColorBoostEffectRow's Saturation and Contrast sections below. Fully independent now:
+   each has its own enabled/auto pair and auto-derives from its own signal (avgSaturation for
+   Saturation, lumaStdDev for Contrast - see shaders.js's autoColorBoostStrength/
+   autoContrastBoostStrength), so unlike the shared-mode-row this replaced, there's nothing left
+   to couple the two through. Own groupId per section so focus-nav.js's Left/Right cycling
+   between mode buttons stays scoped to one section's own three buttons, not both. */
+function buildColorBoostComponentSection(controller, { title, groupId, modeOf, setMode, getManualValue, setStrength, getAutoValue }) {
+    const section = document.createElement("div");
+    Object.assign(section.style, { marginTop: "10px" });
+
+    const header = document.createElement("div");
+    Object.assign(header.style, { display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px" });
+    const titleEl = document.createElement("span");
+    titleEl.textContent = title;
+    Object.assign(titleEl.style, { color: "rgba(255,255,255,0.85)", fontSize: "13px", fontWeight: "600" });
+    header.appendChild(titleEl);
 
     const strengthLabel = document.createElement("div");
     Object.assign(strengthLabel.style, { color: "rgba(255,255,255,0.7)", fontSize: "12px", padding: "10px 0 4px" });
@@ -272,23 +424,53 @@ function buildColorBoostEffectRow(controller, list) {
     strengthInput.classList.add(PLAYER_FOCUSABLE_CLASS);
     Object.assign(strengthInput.style, { display: "block", width: "100%", accentColor: "#e5a00d", cursor: "pointer", boxSizing: "border-box" });
     strengthInput.addEventListener("input", () => {
-        strengthLabel.textContent = `Strength: ${strengthInput.value}%`;
-        setColorBoostStrength(controller, Number(strengthInput.value) / 100);
+        strengthLabel.textContent = `${title}: ${strengthInput.value}%`;
+        setStrength(controller, Number(strengthInput.value) / 100);
     });
 
     const { row: modeRow, refreshIfAuto } = buildModeRow({
-        groupId: "colorboost-mode",
-        mode: colorBoostModeOf(controller),
-        onModeChange: (mode) => setColorBoostMode(controller, mode),
-        getAutoValue: () => controller._autoColorBoostStrength,
-        getManualValue: () => controller._colorBoostStrength,
-        strengthInput,
-        strengthLabel,
+        groupId,
+        mode: modeOf(controller),
+        onModeChange: (mode) => setMode(controller, mode),
+        strips: [{ strengthInput, strengthLabel, label: title, getAutoValue, getManualValue }],
     });
-    rightSide.appendChild(modeRow);
-    wrap.appendChild(strengthLabel);
-    wrap.appendChild(strengthInput);
+    header.appendChild(modeRow);
+
+    section.appendChild(header);
+    section.appendChild(strengthLabel);
+    section.appendChild(strengthInput);
     startLiveAutoRefresh(strengthInput, refreshIfAuto);
+    return section;
+}
+
+/* Two fully independent controls now (Saturation, Contrast - each its own Auto/On/Off mode,
+   previously one combined "Strength" knob under one shared mode row) rather than one shared
+   Color Boost toggle - a viewer may want one boosted and not the other, or one on Auto while
+   manually dialing in the other. Unlike Android's equivalent panel, both apply live on every
+   `input` event rather than gating to release: both compiled GL programs stay resident (see
+   ensureShaderPipeline), so a strength change here is only a uniform update on the next frame,
+   not a program rebuild. */
+function buildColorBoostEffectRow(controller, list) {
+    const { wrap } = buildEffectRow(list, { icon: colorBoostIconMarkup(), label: "Color Boost" });
+
+    wrap.appendChild(buildColorBoostComponentSection(controller, {
+        title: "Saturation",
+        groupId: "colorboost-saturation-mode",
+        modeOf: colorBoostSaturationModeOf,
+        setMode: setColorBoostSaturationMode,
+        getManualValue: () => controller._colorBoostSaturationStrength,
+        setStrength: setColorBoostSaturationStrength,
+        getAutoValue: () => controller._autoColorBoostSaturationStrength,
+    }));
+    wrap.appendChild(buildColorBoostComponentSection(controller, {
+        title: "Contrast",
+        groupId: "colorboost-contrast-mode",
+        modeOf: colorBoostContrastModeOf,
+        setMode: setColorBoostContrastMode,
+        getManualValue: () => controller._colorBoostContrastStrength,
+        setStrength: setColorBoostContrastStrength,
+        getAutoValue: () => controller._autoColorBoostContrastStrength,
+    }));
 }
 
 /* Same pattern as buildShaderEffectRow above (a continuous slider can't be expressed as

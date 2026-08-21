@@ -33,13 +33,16 @@ export function reloadTranscodeSession(controller, overrides = {}, rebuild) {
     const nextQualityCapKbps = "qualityCapKbps" in overrides ? overrides.qualityCapKbps : s.qualityCapKbps;
     const nextAudioStreamID = overrides.audioStreamID ?? s.audioStreamId;
     const oldSessionId = s.transcodeSessionId;
+    /* Captured before resolvePlaybackUrl below overwrites s.isDirectPlay - stopOldSession needs to
+       know whether the SESSION BEING REPLACED was a real transcode session at all. */
+    const wasDirectPlay = s.isDirectPlay;
     s.mediaIndex = nextMediaIndex;
     s.qualityCapKbps = nextQualityCapKbps;
     s.audioStreamId = nextAudioStreamID;
 
-    /* Generated once up front, not inside the rebuild - askDecision below needs the exact same session
-       id /start will use (see buildDecisionUrl's own comment: a /decision call only reliably predicts
-       what /start does when every param, session id included, matches). */
+    /* Generated once up front, not inside the rebuild - a /decision call only reliably predicts
+       what /start does when every param, session id included, matches (see buildDecisionUrl's own
+       comment). */
     const sessionId = crypto.randomUUID();
     const urlOpts = {
         plexUrl: s.plexUrl,
@@ -50,6 +53,11 @@ export function reloadTranscodeSession(controller, overrides = {}, rebuild) {
         mediaIndex: nextMediaIndex,
         qualityCapKbps: nextQualityCapKbps,
         audioStreamID: nextAudioStreamID,
+        partKey: s.partKey,
+        /* A raw direct-played file has no server-side track mux to fall back on for legs that
+           can't switch it natively (see this feature's Part 3) - only the account's own default
+           track keeps direct play eligible on a reload. */
+        isDefaultAudioTrack: nextAudioStreamID == null || nextAudioStreamID === s.audioStreams?.find((a) => a.selected)?.id,
     };
 
     /* audioStreamID on the transcode start URL alone doesn't reliably make Plex actually mux the
@@ -79,38 +87,41 @@ export function reloadTranscodeSession(controller, overrides = {}, rebuild) {
 
        This also matters for server load, not just correctness: an abandoned session leaves an ffmpeg
        process transcoding on the server. Confirmed on real hardware during the Xbox spikes, where
-       orphaned sessions starved the player badly enough to fail it outright. */
-    const stopOldSession = oldSessionId
+       orphaned sessions starved the player badly enough to fail it outright.
+
+       Skipped when the session being replaced was itself a real direct play - there was never a
+       transcode session on Plex's side to stop. */
+    const stopOldSession = oldSessionId && !wasDirectPlay
         ? fetch(
               `${s.plexUrl}/video/:/transcode/universal/stop?session=${encodeURIComponent(oldSessionId)}` +
                   `&X-Plex-Token=${encodeURIComponent(s.plexToken)}`
           ).catch(() => {})
         : Promise.resolve();
 
-    /* The actual, whole reason a switch never took effect until backing out and back in - confirmed
-       against a real server (raspi-server), reading Plex's own session state via /status/sessions
-       mid-switch. Everything above this comment (the Part-selection PUT, the explicit old-session stop,
-       a brand-new session id) was already correct and already being done, and STILL wasn't enough on
-       its own: a /start request alone - even with all of that in place - kept transcoding the previous
-       audio selection. Only once a /video/:/transcode/universal/decision call went out FIRST, with the
-       exact same params /start was about to use (see buildDecisionUrl's own comment), did the Media
-       Decision Engine actually re-evaluate and the following /start honor the new selection
-       immediately. Best-effort like the requests above it - a failed decision call shouldn't block the
-       /start attempt that follows, it just means this particular attempt is back to relying on Plex's
-       own eventual re-evaluation. */
-    const askDecision = () => fetch(controller._buildDecisionUrl(urlOpts)).catch(() => {});
+    /* resolvePlaybackUrl (stream-url.js) is what used to be a bare, response-discarding
+       /video/:/transcode/universal/decision fetch here - the actual, whole reason a switch never
+       took effect until backing out and back in, confirmed against a real server (raspi-server) by
+       reading Plex's own session state via /status/sessions mid-switch: a /start request alone -
+       even with the Part-selection PUT, the explicit old-session stop, and a brand-new session id
+       all already correct and in place - kept transcoding the previous audio selection, and only
+       actually honored the new one once a /decision call went out FIRST with the exact same params.
+       Now also decides the real direct-play fork on every reload, not just first play - so clearing
+       a quality cap or switching back to the default audio track can land back on direct play, not
+       just fall further away from it. */
+    const finish = () =>
+        Promise.all([selectAudio, stopOldSession])
+            .then(() => controller._resolvePlaybackUrl(urlOpts), () => controller._resolvePlaybackUrl(urlOpts))
+            .then(({ streamUrl, isDirectPlay }) => {
+                s.transcodeSessionId = sessionId;
+                s.isDirectPlay = isDirectPlay;
+                rebuild(streamUrl, offsetMs);
+                /* A fresh transcode session means whatever Auto Quality streak/cooldown state was
+                   building against the old one no longer applies - see core/abr.js's notifyReload.
+                   Also re-checks whether the monitor should be running at all, since the rebuild may
+                   have replaced the bandwidth source. */
+                notifyReload(controller);
+                updateAbrMonitor(controller);
+            });
 
-    const finish = () => {
-        const streamUrl = controller._buildStreamUrl(urlOpts);
-        s.transcodeSessionId = sessionId;
-        rebuild(streamUrl, offsetMs);
-        /* A fresh transcode session means whatever Auto Quality streak/cooldown state was building
-           against the old one no longer applies - see core/abr.js's notifyReload. Also re-checks
-           whether the monitor should be running at all, since the rebuild may have replaced the
-           bandwidth source. */
-        notifyReload(controller);
-        updateAbrMonitor(controller);
-    };
-
-    Promise.all([selectAudio, stopOldSession]).then(askDecision, askDecision).then(finish, finish);
+    finish();
 }

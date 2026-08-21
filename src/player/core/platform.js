@@ -1,4 +1,4 @@
-import { Capacitor } from "@capacitor/core";
+import { Capacitor, registerPlugin } from "@capacitor/core";
 
 /* The one place that answers "which player backend is this build talking to". Before this
    existed, `Capacitor.isNativePlatform() && Capacitor.getPlatform() === "android"` was
@@ -101,4 +101,65 @@ export function usesProgressiveStream() {
    stop tone-mapping and hand over PQ frames to be displayed as washed-out SDR. */
 export function supportsHdr() {
     return platformTag() === "xbox";
+}
+
+/* What this device can actually decode, beyond the conservative h264-1080p floor every leg
+   advertises today (see core/stream-url.js's clientCapabilities). Cached after the first probe -
+   decode hardware doesn't change mid-session - and defaulting to today's exact conservative
+   behavior (false) until primeDecodeCapabilities() resolves, so a play() that somehow races the
+   probe just gets the same h264-only treatment as before this existed, never a false positive. */
+let _decodeCaps = { hevcMain10_2160: false };
+
+/* Call once at boot (see app.js), fire-and-forget - by the time a user reaches a title's Play
+   button (after sign-in, browsing, picking something), this has virtually always resolved.
+   Swallows every failure into the conservative default rather than throwing, since a capability
+   probe should never be able to block or break playback. */
+export async function primeDecodeCapabilities() {
+    const tag = platformTag();
+    if (tag === "xbox") {
+        /* Static hardware fact, not a probe - every Xbox console this ships to (One S and later,
+           the only device family Xbox UWP apps target) has a hardware HEVC Main10 decoder. Same
+           "whole device family" reasoning supportsHdr() above already relies on. */
+        _decodeCaps = { hevcMain10_2160: true };
+        return;
+    }
+    if (tag === "android") {
+        try {
+            /* A fresh registerPlugin("NativePlayer") call, not an import from native-bridge.js -
+               that file already documents one real circular-import failure of its own (see its
+               NATIVE_TIMELINE_PING_MS comment) from importing back the other way. registerPlugin
+               returns the same underlying plugin proxy regardless of how many call sites request
+               it, so this is safe and keeps platform.js's own module graph simple. */
+            const caps = await registerPlugin("NativePlayer").getDecodeCapabilities();
+            _decodeCaps = { hevcMain10_2160: !!caps?.hevcMain10_2160 };
+        } catch {
+            /* Leave the conservative default. */
+        }
+        return;
+    }
+    try {
+        if (typeof navigator !== "undefined" && navigator.mediaCapabilities) {
+            /* Codec string unverified against a real Chrome/Edge build - decodingInfo() is picky
+               about the exact fourCC/profile/level and a wrong string just silently reports
+               unsupported (safe: falls back to today's h264-only behavior), not an error. Verify
+               this isn't ALWAYS falling back before trusting a `true` result here matters. */
+            const result = await navigator.mediaCapabilities.decodingInfo({
+                type: "file",
+                video: {
+                    contentType: 'video/mp4; codecs="hvc1.2.4.L153.90"',
+                    width: 3840,
+                    height: 2160,
+                    bitrate: 20_000_000,
+                    framerate: 24,
+                },
+            });
+            _decodeCaps = { hevcMain10_2160: !!result?.supported };
+        }
+    } catch {
+        /* Leave the conservative default. */
+    }
+}
+
+export function getDecodeCapabilities() {
+    return _decodeCaps;
 }

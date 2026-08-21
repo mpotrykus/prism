@@ -479,10 +479,10 @@ export function openHamburgerMenu(controller, anchor) {
         },
     });
     sections.push({
-        /* Navigates to a dedicated Shader Upscaling/Color Boost/Ambient Lighting list
-           (see chrome-menu-effects.js's renderEffectsList) rather than expanding in
-           place - three sub-controls read better as their own screen than squeezed
-           inline under a fourth row. */
+        /* Navigates to a dedicated AI Upscaling/Sharpening/Color Boost/Ambient Lighting
+           list (see chrome-menu-effects.js's renderEffectsList) rather than expanding in
+           place - four sub-controls read better as their own screen than squeezed
+           inline under a fifth row. */
         key: "effects",
         label: "Effects",
         icon: effectsIconMarkup(),

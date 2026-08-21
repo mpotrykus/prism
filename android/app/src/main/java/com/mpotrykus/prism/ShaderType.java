@@ -64,4 +64,14 @@ enum ShaderType {
     private static float lerp(float a, float b, float t) {
         return a + (b - a) * t;
     }
+
+    /** The scale this type could ever ask for, at 100% strength - see AiUpscaleShaderProgram's
+     * own use of this: the output size it declares to Media3 has to stay fixed across a live
+     * strength/toggle change (Media3 only reconfigures a GlShaderProgram's output size when the
+     * *input* resolution changes, not on request - see BaseGlShaderProgram.queueInputFrame), so
+     * the external contract is pinned to this ceiling rather than whatever the live strength
+     * would produce. */
+    float maxScaleFactor() {
+        return maxTuning != null ? maxTuning.scaleFactor : 1f;
+    }
 }

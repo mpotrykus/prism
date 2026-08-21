@@ -22,6 +22,9 @@ const apkPath = fileURLToPath(
 const run = (cmd, args, opts = {}) =>
   execFileSync(cmd, args, { stdio: "inherit", shell: true, ...opts });
 
+console.log("android-deploy: syncing shader sources...");
+run("node", ["scripts/android-sync-shaders.mjs"]);
+
 console.log("android-deploy: building web app...");
 run("npx", ["vite", "build"]);
 

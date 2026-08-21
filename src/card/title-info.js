@@ -94,13 +94,24 @@ export function bifIndexPath(media, mediaIndex) {
   return part?.indexes ? `/library/parts/${part.id}/indexes/sd` : null;
 }
 
-/* The Part's own id - needed to PUT /library/parts/<id>?audioStreamID=...&allParts=1
-   when the player's Audio Track menu switches streams (see web-fallback.js's
-   reloadWebSource and PlayerActivity.switchAudioStream) - Plex's transcode start URL
-   doesn't reliably honor a bare audioStreamID query param on its own, but does honor
-   whichever stream is currently marked "selected" on the Part. */
-export function extractPartId(media, mediaIndex) {
-  return media?.[mediaIndex]?.Part?.[0]?.id ?? null;
+/* The Part's own id and key. `partId` is needed to PUT
+   /library/parts/<id>?audioStreamID=...&allParts=1 when the player's Audio Track menu
+   switches streams (see web-fallback.js's reloadWebSource and
+   PlayerActivity.switchAudioStream) - Plex's transcode start URL doesn't reliably honor
+   a bare audioStreamID query param on its own, but does honor whichever stream is
+   currently marked "selected" on the Part.
+
+   `partKey` is Plex's own direct-file path (e.g. "/library/parts/12345/167xxxx/file.mkv")
+   - the URL a real direct play (no transcode session at all) is built from, see
+   core/stream-url.js's resolvePlaybackUrl. Its exact shape comes from the same
+   already-fetched metadata response `partId` does, no extra request - but unlike
+   `partId` (long-verified against a real server), `partKey`'s value has not yet been
+   confirmed against one; log it once on first real direct-play attempt before trusting
+   it blindly, matching this project's own established discipline for every other Plex
+   response shape. */
+export function extractPartInfo(media, mediaIndex) {
+  const part = media?.[mediaIndex]?.Part?.[0];
+  return { partId: part?.id ?? null, partKey: part?.key ?? null };
 }
 
 export function formatRuntime(ms) {
@@ -378,7 +389,7 @@ export class TitleInfoController {
        like every other item type here. */
     const metaPath = item.type === "playlist" ? `/playlists/${ratingKey}` : `/library/metadata/${ratingKey}`;
     try {
-      const data = await this._ctx.plexFetch(metaPath, { includeChapters: 1 });
+      const data = await this._ctx.plexFetch(metaPath, { includeChapters: 1, includeMarkers: 1 });
       const meta = data?.MediaContainer?.Metadata?.[0];
       if (meta && this._item === item) this._renderDetail(meta);
     } catch (e) {
@@ -694,7 +705,7 @@ export class TitleInfoController {
       isHdr: isHdrVideo(this._media, mediaIndex),
       subtitleTracks: extractSubtitleTracks(this._media, mediaIndex),
       bifIndexPath: bifIndexPath(this._media, mediaIndex),
-      partId: extractPartId(this._media, mediaIndex),
+      ...extractPartInfo(this._media, mediaIndex),
       ...queue,
     });
   }
@@ -778,7 +789,7 @@ export class TitleInfoController {
     const showRatingKey = this._item?.ratingKey;
     try {
       const [data, queueRatingKeys] = await Promise.all([
-        this._ctx.plexFetch(`/library/metadata/${ratingKey}`, { includeChapters: 1 }),
+        this._ctx.plexFetch(`/library/metadata/${ratingKey}`, { includeChapters: 1, includeMarkers: 1 }),
         showRatingKey ? this._getShowEpisodeQueue(showRatingKey) : Promise.resolve([]),
       ]);
       const meta = data?.MediaContainer?.Metadata?.[0];
@@ -795,7 +806,7 @@ export class TitleInfoController {
         isHdr: isHdrVideo(meta.Media, 0),
         subtitleTracks: extractSubtitleTracks(meta.Media, 0),
         bifIndexPath: bifIndexPath(meta.Media, 0),
-        partId: extractPartId(meta.Media, 0),
+        ...extractPartInfo(meta.Media, 0),
         ...(queueIndex >= 0 ? { queueRatingKeys, queueIndex } : {}),
       });
     } catch (e) {
@@ -818,7 +829,7 @@ export class TitleInfoController {
     });
     if (index < 0) return;
     try {
-      const data = await this._ctx.plexFetch(`/library/metadata/${rawItems[index].ratingKey}`, { includeChapters: 1 });
+      const data = await this._ctx.plexFetch(`/library/metadata/${rawItems[index].ratingKey}`, { includeChapters: 1, includeMarkers: 1 });
       const meta = data?.MediaContainer?.Metadata?.[0];
       if (!meta || this._item?.ratingKey !== ratingKey) return;
       await this._ctx.onPlayItem(this._ctx.mapItem(meta, true), {
@@ -832,7 +843,7 @@ export class TitleInfoController {
         isHdr: isHdrVideo(meta.Media, 0),
         subtitleTracks: extractSubtitleTracks(meta.Media, 0),
         bifIndexPath: bifIndexPath(meta.Media, 0),
-        partId: extractPartId(meta.Media, 0),
+        ...extractPartInfo(meta.Media, 0),
         queueRatingKeys: rawItems.map((m) => m.ratingKey),
         queueIndex: index,
       });

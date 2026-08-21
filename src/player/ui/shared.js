@@ -143,9 +143,13 @@ export const AMBIENT_OPACITY_STORAGE_KEY = "prism_player_ambient_opacity";
 export const UPSCALE_ENABLED_STORAGE_KEY = "prism_player_upscale_enabled";
 export const UPSCALE_STRENGTH_STORAGE_KEY = "prism_player_upscale_strength";
 export const UPSCALE_AUTO_STORAGE_KEY = "prism_player_upscale_auto";
-export const COLOR_BOOST_STORAGE_KEY = "prism_player_color_boost_enabled";
-export const COLOR_BOOST_STRENGTH_STORAGE_KEY = "prism_player_color_boost_strength";
-export const COLOR_BOOST_AUTO_STORAGE_KEY = "prism_player_color_boost_auto";
+export const COLOR_BOOST_SATURATION_ENABLED_STORAGE_KEY = "prism_player_color_boost_saturation_enabled";
+export const COLOR_BOOST_CONTRAST_ENABLED_STORAGE_KEY = "prism_player_color_boost_contrast_enabled";
+export const COLOR_BOOST_SATURATION_STRENGTH_STORAGE_KEY = "prism_player_color_boost_saturation_strength";
+export const COLOR_BOOST_CONTRAST_STRENGTH_STORAGE_KEY = "prism_player_color_boost_contrast_strength";
+export const COLOR_BOOST_SATURATION_AUTO_STORAGE_KEY = "prism_player_color_boost_saturation_auto";
+export const COLOR_BOOST_CONTRAST_AUTO_STORAGE_KEY = "prism_player_color_boost_contrast_auto";
+export const AI_UPSCALING_STORAGE_KEY = "prism_player_ai_upscaling_enabled";
 export const STATS_OVERLAY_STORAGE_KEY = "prism_player_stats_overlay_enabled";
 export const AUTO_PLAY_STORAGE_KEY = "prism_player_auto_play_enabled";
 export const AUTO_QUALITY_STORAGE_KEY = "prism_player_auto_quality_enabled";
@@ -186,8 +190,9 @@ export function storedShaderEnabled() {
 /* Same immediate-persistence model as storedShaderEnabled above. 0.65 (not documented
    anywhere else now) was "Medium"'s value back when this was a Settings-modal preset
    dropdown (light/medium/strong) rather than a raw persisted slider position - kept as
-   the default for a first-ever session, same reasoning storedColorBoostStrength's own
-   0.5 default follows. Same `stored !== null` reasoning as storedAmbientOpacity above -
+   the default for a first-ever session, same reasoning storedColorBoostSaturationStrength/
+   storedColorBoostContrastStrength's own 0.5 default follows. Same `stored !== null`
+   reasoning as storedAmbientOpacity above -
    without it, a never-set key silently defaults to strength 0 instead of 0.65 (Number(null)
    is 0, not NaN), which combined with setUpscaleAuto not re-resolving _shaderType made
    Auto mode look permanently stuck at 0% for anyone who'd never touched the manual
@@ -205,24 +210,58 @@ export function storedUpscaleAuto() {
     return localStorage.getItem(UPSCALE_AUTO_STORAGE_KEY) === "1";
 }
 
-/* Same immediate-persistence model as storedAmbientEnabled - Color Boost (contrast/
-   saturation) has no per-video/genre concern to reconcile against either. */
-export function storedColorBoostEnabled() {
-    return localStorage.getItem(COLOR_BOOST_STORAGE_KEY) === "1";
+/* Same immediate-persistence model as storedAmbientEnabled - Color Boost's Saturation and
+   Contrast have no per-video/genre concern to reconcile against either, and are fully
+   independent controls now (see shader-pipeline.js's setColorBoostSaturationMode/
+   setColorBoostContrastMode) - each gets its own enabled key rather than sharing one. */
+export function storedColorBoostSaturationEnabled() {
+    return localStorage.getItem(COLOR_BOOST_SATURATION_ENABLED_STORAGE_KEY) === "1";
 }
 
-/* Same `stored !== null` reasoning as storedAmbientOpacity/storedShaderStrength above. */
-export function storedColorBoostStrength() {
-    const stored = localStorage.getItem(COLOR_BOOST_STRENGTH_STORAGE_KEY);
+export function storedColorBoostContrastEnabled() {
+    return localStorage.getItem(COLOR_BOOST_CONTRAST_ENABLED_STORAGE_KEY) === "1";
+}
+
+/* Same `stored !== null` reasoning as storedAmbientOpacity/storedShaderStrength above.
+   Saturation and contrast are independent sliders now (see shader-pipeline.js's
+   setColorBoostSaturationStrength/setColorBoostContrastStrength) - each gets its own
+   persisted key rather than sharing the one "strength" this used to be. */
+export function storedColorBoostSaturationStrength() {
+    const stored = localStorage.getItem(COLOR_BOOST_SATURATION_STRENGTH_STORAGE_KEY);
     const raw = Number(stored);
     return stored !== null && Number.isFinite(raw) && raw >= 0 && raw <= 1 ? raw : 0.5;
 }
 
-/* Same immediate-persistence model as storedColorBoostEnabled/storedUpscaleAuto above -
-   the resolved auto strength itself is never persisted, only this flag - see
-   shader-pipeline.js's renderShaderFrame. */
-export function storedColorBoostAuto() {
-    return localStorage.getItem(COLOR_BOOST_AUTO_STORAGE_KEY) === "1";
+export function storedColorBoostContrastStrength() {
+    const stored = localStorage.getItem(COLOR_BOOST_CONTRAST_STRENGTH_STORAGE_KEY);
+    const raw = Number(stored);
+    return stored !== null && Number.isFinite(raw) && raw >= 0 && raw <= 1 ? raw : 0.5;
+}
+
+/* Same immediate-persistence model as storedColorBoostSaturationEnabled/storedUpscaleAuto
+   above - the resolved auto strength itself is never persisted, only this flag - see
+   shader-pipeline.js's renderShaderFrame. Independent per component: each auto-derives
+   from its own signal (avgSaturation vs lumaStdDev), so there's no shared auto state left
+   to key one flag off. */
+export function storedColorBoostSaturationAuto() {
+    return localStorage.getItem(COLOR_BOOST_SATURATION_AUTO_STORAGE_KEY) === "1";
+}
+
+export function storedColorBoostContrastAuto() {
+    return localStorage.getItem(COLOR_BOOST_CONTRAST_AUTO_STORAGE_KEY) === "1";
+}
+
+/* AI Upscaling (the real Anime4K CNN / FSR 1 chains) used to run automatically whenever
+   Shader Upscaling (now "Sharpening") was on and the source needed it - splitting it into
+   its own independent toggle means a never-touched user needs to keep getting that
+   automatic behavior rather than losing AI Upscaling silently until they find a new switch.
+   Same `stored === null` default-on reasoning as storedAutoPlayEnabled above, not the
+   default-off every other toggle here uses - this one already had an equivalent behavior
+   shipping, unlike Deband (which had never been enabled for anyone before its own toggle
+   existed) or Stats Overlay (self-evidently opt-in). */
+export function storedAiUpscalingEnabled() {
+    const stored = localStorage.getItem(AI_UPSCALING_STORAGE_KEY);
+    return stored === null ? true : stored === "1";
 }
 
 /* Same immediate-persistence model as storedAmbientEnabled - a debug readout has no
@@ -391,6 +430,16 @@ export function ambientIconMarkup() {
             <line x1="4.2" y1="19.8" x2="6.3" y2="17.7"/>
             <line x1="17.7" y1="6.3" x2="19.8" y2="4.2"/>
         </g>
+    </svg>`;
+}
+
+/* AI Upscaling's glyph: a four-point sparkle, the common shorthand for "AI-enhanced" - distinct
+   from Sharpening's expand-corners glyph (fullscreenIconMarkup) since the two are now
+   independent toggles, not one feature that silently swaps which algorithm is behind it. */
+export function aiUpscalingIconMarkup() {
+    return `<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
+        <path d="M12 2l1.8 5.2L19 9l-5.2 1.8L12 16l-1.8-5.2L5 9l5.2-1.8z"/>
+        <path d="M19 15l0.9 2.1 2.1 0.9-2.1 0.9-0.9 2.1-0.9-2.1-2.1-0.9 2.1-0.9z"/>
     </svg>`;
 }
 

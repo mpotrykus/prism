@@ -146,13 +146,15 @@ export class HeroController {
       const url = new URL("https://www.googleapis.com/youtube/v3/search");
       url.searchParams.set("part", "snippet");
       url.searchParams.set("type", "video");
-      url.searchParams.set("maxResults", "1");
+      url.searchParams.set("maxResults", "5");
       url.searchParams.set("q", query);
       url.searchParams.set("key", config.youtube_api_key);
       const res = await fetch(url);
       if (!res.ok) return null;
       const data = await res.json();
-      const videoId = data?.items?.[0]?.id?.videoId;
+      const videoIds = (data?.items || []).map((it) => it?.id?.videoId).filter(Boolean);
+      if (!videoIds.length) return null;
+      const videoId = await this._pickEmbeddableVideo(videoIds, config.youtube_api_key);
       if (!videoId) return null;
       /* enablejsapi=1 is required for the postMessage mute/unMute commands used by the
          mute button; embedding a specific known videoId (vs. the old listType=search
@@ -163,6 +165,34 @@ export class HeroController {
       };
     } catch (e) {
       return null;
+    }
+  }
+
+  /* Age-restricted videos refuse to actually play in an embedded iframe - YouTube
+     shows a "Sign in to confirm your age" wall instead, and the embed just sits there
+     dead with no error we were previously listening for. Filter those (and
+     embedding-disabled videos) out via videos.list's status/contentDetails before
+     picking one, rather than discovering it after the hero is already stuck. */
+  async _pickEmbeddableVideo(videoIds, apiKey) {
+    try {
+      const url = new URL("https://www.googleapis.com/youtube/v3/videos");
+      url.searchParams.set("part", "status,contentDetails");
+      url.searchParams.set("id", videoIds.join(","));
+      url.searchParams.set("key", apiKey);
+      const res = await fetch(url);
+      if (!res.ok) return videoIds[0];
+      const data = await res.json();
+      const byId = new Map((data?.items || []).map((it) => [it.id, it]));
+      for (const id of videoIds) {
+        const info = byId.get(id);
+        if (!info) continue;
+        if (info.status?.embeddable === false) continue;
+        if (info.contentDetails?.contentRating?.ytRating === "ytAgeRestricted") continue;
+        return id;
+      }
+      return null;
+    } catch (e) {
+      return videoIds[0];
     }
   }
 
@@ -226,6 +256,7 @@ export class HeroController {
     incoming.innerHTML = "";
     this._muteBtn.style.display = this._video ? "" : "none";
     this._playBtn.style.display = this._video ? "" : "none";
+    this._heroEl.style.cursor = this._video ? "pointer" : "";
     if (this._video?.type === "plex") {
       incoming.innerHTML = `<video src="${this._video.url}" autoplay muted playsinline></video>`;
       const heroVideoEl = incoming.querySelector("video");
@@ -348,6 +379,18 @@ export class HeroController {
       this._userPaused = !this._userPaused;
       this.updatePlayback();
     });
+    /* Clicking anywhere else in the hero (over the video/iframe/backdrop) toggles
+       play/pause too - but not over .hero-info (title/subtitle/summary/info-btn/
+       watchlist-btn) or the dedicated play/mute buttons, which have their own
+       click behavior. Guarding via closest() here (rather than requiring every
+       excluded control to stopPropagation) also covers whitespace inside
+       .hero-info that isn't itself a button. */
+    this._heroEl.addEventListener("click", (e) => {
+      if (!this._video) return;
+      if (e.target.closest(".hero-info, .hero-play-btn, .hero-mute-btn")) return;
+      this._userPaused = !this._userPaused;
+      this.updatePlayback();
+    });
     /* Auto play/pause: resume only when the tab is focused/visible AND the hero is
        actually scrolled into view, but never override an explicit user pause. */
     this._observer = new IntersectionObserver(
@@ -402,6 +445,15 @@ export class HeroController {
         return;
       }
       if (data.event === "infoDelivery" && data.info && data.info.playerState === 0) {
+        this.advance();
+      }
+      /* Belt-and-suspenders for the age-restriction/embedding-disabled case the
+         videos.list filter in _resolveVideo should already keep us from picking: if one
+         still slips through (e.g. a video that gets age-restricted after being cached),
+         YouTube posts an error here instead of ever reaching playerState - without this,
+         the hero was just stuck on a dead, silent embed. */
+      const errorCode = data.event === "onError" ? data.info : data.info?.errorCode;
+      if (errorCode !== undefined) {
         this.advance();
       }
     });

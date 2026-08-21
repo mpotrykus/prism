@@ -1,6 +1,9 @@
 package com.mpotrykus.prism;
 
 import android.content.Intent;
+import android.media.MediaCodecInfo;
+import android.media.MediaCodecList;
+import android.media.MediaFormat;
 import androidx.activity.result.ActivityResult;
 import com.getcapacitor.JSArray;
 import com.getcapacitor.JSObject;
@@ -56,8 +59,9 @@ public class NativePlayerPlugin extends Plugin implements PlayerActivity.Playbac
         /* shaderEnabled/upscaleStrength/upscaleAuto are NOT read from the call here any
            more - PlayerActivity now owns them as its own SharedPreferences-persisted
            state (see that class's PREF_UPSCALE_ENABLED and friends), same immediate-
-           persistence model as colorBoostEnabled/colorBoostStrength/colorBoostAuto,
-           which never traveled through this plugin either. */
+           persistence model as colorBoostSaturationEnabled/colorBoostSaturationStrength/
+           colorBoostSaturationAuto and the Contrast equivalents, which never traveled
+           through this plugin either. */
         p.shaderType = call.getString("shaderType", "live_action");
         p.title = call.getString("title", "");
         p.episodeTitle = call.getString("episodeTitle");
@@ -277,6 +281,36 @@ public class NativePlayerPlugin extends Plugin implements PlayerActivity.Playbac
         call.resolve();
     }
 
+    /* First request/response bridge method in this file - everything else here is
+       fire-and-forget or event-based (notifyListeners). Backs core/platform.js's
+       primeDecodeCapabilities(), called once at app boot to widen what's honestly
+       advertised to Plex (see stream-url.js's clientCapabilities) beyond the
+       conservative h264-1080p floor. A pure device query - doesn't touch
+       PlayerActivity/playback state at all. */
+    @PluginMethod
+    public void getDecodeCapabilities(PluginCall call) {
+        JSObject result = new JSObject();
+        result.put("hevcMain10_2160", deviceSupportsHevcMain10());
+        call.resolve(result);
+    }
+
+    private static boolean deviceSupportsHevcMain10() {
+        MediaCodecList codecList = new MediaCodecList(MediaCodecList.REGULAR_CODECS);
+        for (MediaCodecInfo info : codecList.getCodecInfos()) {
+            if (info.isEncoder()) continue;
+            for (String type : info.getSupportedTypes()) {
+                if (!type.equalsIgnoreCase(MediaFormat.MIMETYPE_VIDEO_HEVC)) continue;
+                MediaCodecInfo.CodecCapabilities caps = info.getCapabilitiesForType(type);
+                for (MediaCodecInfo.CodecProfileLevel level : caps.profileLevels) {
+                    if (level.profile == MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
     @Override
     public void onProgress(long positionMs, long durationMs) {
         JSObject data = new JSObject();
@@ -363,5 +397,36 @@ public class NativePlayerPlugin extends Plugin implements PlayerActivity.Playbac
         JSObject data = new JSObject();
         data.put("offsetMs", offsetMs);
         notifyListeners("subtitleOffsetChanged", data);
+    }
+
+    /* PlayerUiHelper's Quality Cap/Version/Audio Track menus normally rewrite the
+       transcode URL's query params entirely natively - this fires only when
+       PlayerActivity finds currentUrl is a real direct-play file URL instead, where that
+       rewrite would silently mean nothing to Plex. JS resolves a real new URL (via
+       stream-url.js's resolvePlaybackUrl, native-bridge.js's own listener for this event)
+       and calls applyReloadedUrl below with the result - the `generation` value must
+       travel back unchanged, see PlayerActivity.requestJsReload's own comment on why. */
+    @Override
+    public void onDirectPlayReloadRequested(String kind, String value, long resumeMs, long generation) {
+        JSObject data = new JSObject();
+        data.put("kind", kind);
+        data.put("value", value);
+        data.put("resumeMs", resumeMs);
+        data.put("generation", generation);
+        notifyListeners("directPlayReloadRequested", data);
+    }
+
+    /* Reply leg of onDirectPlayReloadRequested above. */
+    @PluginMethod
+    public void applyReloadedUrl(PluginCall call) {
+        String url = call.getString("url");
+        Long startPositionMs = call.getLong("startPositionMs", 0L);
+        Long generation = call.getLong("generation");
+        if (url == null || generation == null) {
+            call.reject("Missing required parameter: url and/or generation");
+            return;
+        }
+        PlayerActivity.applyPreResolvedUrl(url, startPositionMs, generation);
+        call.resolve();
     }
 }

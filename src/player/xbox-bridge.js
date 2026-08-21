@@ -210,12 +210,22 @@ export function postShaderEffect({ enabled, shaderType, strength, auto }) {
     post("setShaderEffect", { enabled, shaderType, strength, auto });
 }
 
-export function postColorBoost({ enabled, strength, auto }) {
-    post("setColorBoost", { enabled, strength, auto });
+/* Saturation and Contrast are fully independent now (own enabled/auto, own Auto|On|Off mode
+   - see shader-pipeline.js's postXboxColorBoostSettings) - no shared "enabled"/"auto" left to
+   send, just the two components' own pairs. */
+export function postColorBoost({ saturationEnabled, contrastEnabled, saturationStrength, contrastStrength, saturationAuto, contrastAuto }) {
+    post("setColorBoost", { saturationEnabled, contrastEnabled, saturationStrength, contrastStrength, saturationAuto, contrastAuto });
 }
 
 export function postAmbientLighting(enabled) {
     post("setAmbientLighting", { enabled });
+}
+
+/* preset is the family key ("anime4k"/"live_action", i.e. controller._shaderAutoType) - native
+   maps it to its own anime4k_cnn/live_action_fsr chain, mirroring how upgradeTo resolves the same
+   family key on the web leg. See shader-pipeline.js's postXboxAiUpscalingSettings. */
+export function postAiUpscaling({ enabled, preset }) {
+    post("setAiUpscaling", { enabled, preset });
 }
 
 /* "fit"/"cover"/"stretch" - see chrome-menu-extras.js's applyFitMode. There is no
@@ -242,6 +252,41 @@ export function reloadXboxSource(controller, overrides = {}, payloadFor) {
            native progress tick lands, which reads as the scrubber snapping back. */
         media(controller)?.applyProgress({ positionMs: offsetMs });
     });
+}
+
+/* Local, in-place audio-track switch for a direct-played title (see stream-url.js's
+   resolvePlaybackUrl) - no session/URL rebuild, mirroring web-fallback.js's
+   trySwitchAudioTrackLocal for the transcode/HLS case, but via NativePlayerHost's own
+   MediaPlaybackItem.AudioTracks (see PlayerBridge.cs's "switchAudioTrackLocally" case)
+   since there is no hls.js object on this leg at all. Only attempted during direct play -
+   the existing transcode-path audio switch (via _reloadSource) is already
+   hardware-confirmed and untouched by this.
+
+   Maps by Stream ORDER, not id - the local player's AudioTracks list has its own index,
+   unrelated to Plex's own stream ids. Unverified against a real multi-audio-track file
+   that Plex's Part.Stream order always matches the container's own track order - see
+   this feature's own risk notes. Returns whether the local switch was even attempted
+   (fire-and-forget over the bridge - there is no reply confirming the native side found a
+   matching index), so a genuine mismatch is only visible as "audio didn't change",
+   nothing worse. */
+export function trySwitchAudioTrackLocallyXbox(controller, audioStreamID) {
+    const s = controller._session;
+    if (!s || !s.isDirectPlay) return false;
+    const streams = s.audioStreams || [];
+    const index = streams.findIndex((stream) => stream.id === audioStreamID);
+    if (index < 0) return false;
+    post("switchAudioTrackLocally", { index });
+    s.audioStreamId = audioStreamID;
+    /* Fire-and-forget, same as trySwitchAudioTrackLocal's own PUT - keeps Plex's
+       server-side "selected" bookkeeping in sync for other clients/the next launch. */
+    if (s.partId) {
+        const putUrl = new URL(`${s.plexUrl}/library/parts/${s.partId}`);
+        putUrl.searchParams.set("audioStreamID", String(audioStreamID));
+        putUrl.searchParams.set("allParts", "1");
+        putUrl.searchParams.set("X-Plex-Token", s.plexToken);
+        fetch(putUrl, { method: "PUT" }).catch(() => {});
+    }
+    return true;
 }
 
 /* --- The media facade the chrome talks to --- */
@@ -317,8 +362,23 @@ function handleMessage(controller, message) {
                web leg can never provide - its HDR line is hardcoded "n/a (browser)". */
             controller._xboxStats = params;
             break;
+        case "aiUpscaleStatus":
+            /* From AiUpscaleFrameServer - the web leg's own _shaderChains (what
+               stats-overlay.js's aiUpscalingStatusLine normally checks) is never built on Xbox,
+               so native reports its own state here instead. See stats-overlay.js's
+               xboxAiUpscalingStatusLine. */
+            controller._xboxAiUpscaleStatus = params;
+            break;
+        case "effectLoadStatus":
+            /* From ShaderVideoEffect's own windowed fps/avgFrameMs (Sharpening/Color Boost/
+               Ambient's pipeline) - see stats-overlay.js's xboxFrameLoadLine. Distinct from
+               aiUpscaleStatus above: this pipeline is attached whenever EffectSettings.ShouldAttach
+               is true, independent of whether AI Upscaling's separate frame-server pipeline is
+               running at all. */
+            controller._xboxEffectLoadStatus = params;
+            break;
         case "contentAnalysis":
-            applyXboxContentAnalysis(controller, params.avgSaturation, params.edgeEnergy);
+            applyXboxContentAnalysis(controller, params.avgSaturation, params.edgeEnergy, params.lumaStdDev);
             break;
         case "ambientColors":
             applyXboxAmbientColors(controller, {

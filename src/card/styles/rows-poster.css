@@ -87,10 +87,6 @@
     left: 0;
 }
 
-.scroll-arrow:hover {
-    background-color: rgba(0, 0, 0, 0.35);
-}
-
 .scroll-arrow:focus-visible {
     background-color: rgba(0, 0, 0, 0.35);
     opacity: 1;
@@ -101,8 +97,18 @@
     pointer-events: none;
 }
 
-.row-scroll-wrap:hover .scroll-arrow:not(.hidden) {
-    opacity: 1;
+/* Guarded behind a real pointing device: hovering anywhere in the row (including over a
+   poster) matches this ancestor selector, and on touch that same tap only synthesizes
+   :hover - leaving this unguarded meant a poster's first tap was consumed settling this
+   row-wide hover state instead of firing its own click. */
+@media (hover: hover) {
+    .scroll-arrow:hover {
+        background-color: rgba(0, 0, 0, 0.35);
+    }
+
+    .row-scroll-wrap:hover .scroll-arrow:not(.hidden) {
+        opacity: 1;
+    }
 }
 
 .message,
@@ -229,8 +235,15 @@
     transition: transform 0.18s ease;
 }
 
-.poster:hover .card {
-    transform: scale(1.06);
+/* Touch devices report a synthetic :hover on first tap (no true pointer to hover with) -
+   an unguarded :hover rule that changes the tapped element's own visual state means that
+   first tap is consumed settling into the "hovered" look, and only a second tap actually
+   fires click. Gating on (hover: hover) - true only for a real pointing device - keeps
+   this scale effect for mouse users without costing touch users a tap. */
+@media (hover: hover) {
+    .poster:hover .card {
+        transform: scale(1.06);
+    }
 }
 
 .poster .card img {
@@ -386,15 +399,31 @@
     transition: opacity 0.15s ease, background 0.15s ease;
 }
 
-.poster:hover .watchlist-btn,
 .poster:focus-visible .watchlist-btn,
 .poster .watchlist-btn:focus-visible {
     opacity: 1;
     pointer-events: auto;
 }
 
-.poster .watchlist-btn:hover {
-    background: rgba(20, 20, 24, 0.85);
+@media (hover: hover) {
+    .poster:hover .watchlist-btn {
+        opacity: 1;
+        pointer-events: auto;
+    }
+
+    .poster .watchlist-btn:hover {
+        background: rgba(20, 20, 24, 0.85);
+    }
+}
+
+/* Touch has no hover to reveal this with, so show it unconditionally there instead -
+   matches (hover: hover) rather than a poster-width media query since some touch devices
+   (tablets) are wide enough to otherwise match a desktop breakpoint. */
+@media (hover: none) {
+    .poster .watchlist-btn {
+        opacity: 1;
+        pointer-events: auto;
+    }
 }
 
 .poster .watchlist-btn.added {
@@ -462,11 +491,18 @@
     aspect-ratio: 16 / 9;
 }
 
-.poster.see-more-card:hover .see-more-inner,
 .poster.see-more-card:focus-visible .see-more-inner {
     transform: scale(1.06);
     background: #202027;
     color: #e5a00d;
+}
+
+@media (hover: hover) {
+    .poster.see-more-card:hover .see-more-inner {
+        transform: scale(1.06);
+        background: #202027;
+        color: #e5a00d;
+    }
 }
 
 .poster.see-more-card .see-more-icon {
@@ -538,7 +574,12 @@
     transition: transform 0.18s ease, opacity 0.18s ease;
 }
 
-.rank-item:hover .rank-number,
 .rank-item:focus-within .rank-number {
     opacity: 0.45;
+}
+
+@media (hover: hover) {
+    .rank-item:hover .rank-number {
+        opacity: 0.45;
+    }
 }

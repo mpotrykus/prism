@@ -40,4 +40,48 @@ foreach ($name in $shaders) {
     }
 }
 
+# AI Upscaling (aiupscale\) - two kinds, per AiUpscalePixelEffect.cs's own header comment:
+# Win2D PixelShaderEffect passes (D2D custom effects, need d2d1effecthelpers.hlsli + D2D_ENTRY,
+# same as anime4k/live_action above) and raw-D3D11 passes (plain ps_4_0/vs_4_0, no D2D
+# boilerplate at all - driven by our own draw call, not registered as a D2D effect).
+$d2dAiUpscaleShaders = @(
+    "aiupscale\anime4k_restore_conv0", "aiupscale\anime4k_restore_conv1",
+    "aiupscale\anime4k_restore_conv2", "aiupscale\anime4k_restore_conv3",
+    "aiupscale\anime4k_upscale_conv0", "aiupscale\anime4k_upscale_conv1",
+    "aiupscale\anime4k_upscale_conv2", "aiupscale\anime4k_upscale_conv3",
+    "aiupscale\deband", "aiupscale\present",
+    "aiupscale\fsr_luma_extract", "aiupscale\fsr_rcas"
+)
+foreach ($name in $d2dAiUpscaleShaders) {
+    $src = Join-Path $PSScriptRoot "$name.hlsl"
+    $out = Join-Path $PSScriptRoot "$name.cso"
+    Write-Host "Compiling $name.hlsl -> $name.cso (D2D pixel shader)"
+    & $fxc /nologo /T ps_4_0 /E main /D D2D_ENTRY=main /I "$includeDir" /Fo "$out" "$src"
+    if ($LASTEXITCODE -ne 0) {
+        throw "fxc failed compiling $name.hlsl (exit $LASTEXITCODE)"
+    }
+}
+
+$rawPixelShaders = @("aiupscale\anime4k_depth_to_space", "aiupscale\fsr_easu", "aiupscale\fsr_luma_merge")
+foreach ($name in $rawPixelShaders) {
+    $src = Join-Path $PSScriptRoot "$name.hlsl"
+    $out = Join-Path $PSScriptRoot "$name.cso"
+    Write-Host "Compiling $name.hlsl -> $name.cso (raw D3D11 pixel shader)"
+    & $fxc /nologo /T ps_4_0 /E main /Fo "$out" "$src"
+    if ($LASTEXITCODE -ne 0) {
+        throw "fxc failed compiling $name.hlsl (exit $LASTEXITCODE)"
+    }
+}
+
+$rawVertexShaders = @("aiupscale\fullscreen_quad_vs")
+foreach ($name in $rawVertexShaders) {
+    $src = Join-Path $PSScriptRoot "$name.hlsl"
+    $out = Join-Path $PSScriptRoot "$name.cso"
+    Write-Host "Compiling $name.hlsl -> $name.cso (raw D3D11 vertex shader)"
+    & $fxc /nologo /T vs_4_0 /E main /Fo "$out" "$src"
+    if ($LASTEXITCODE -ne 0) {
+        throw "fxc failed compiling $name.hlsl (exit $LASTEXITCODE)"
+    }
+}
+
 Write-Host "Done. Re-add the .cso files as EmbeddedResource in PrismXboxEffects.csproj if this is their first build."

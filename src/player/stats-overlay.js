@@ -70,7 +70,10 @@ export function stopStatsOverlayLoop(controller) {
 /* Browsers give no reliable way to read a <video> element's real color-space/transfer
    info without WebCodecs (see docs/plezy-player-comparison.md's HDR section) - shown as
    "n/a" rather than guessed, unlike Android's real isHdrContent() check off Format.colorInfo. */
-function shaderStatusLine(controller) {
+/* Sharpening (the hand-written CAS/Anime4K unsharp-mask kernels) and AI Upscaling (the real
+   Anime4K CNN / FSR 1 chains) are independent toggles now - split into their own status lines
+   rather than one that used to silently swap shape depending on which was actually rendering. */
+function sharpeningStatusLine(controller) {
     if (controller._shaderType === "off") return "off";
     const label = SHADER_TYPES[controller._shaderType]?.label ?? controller._shaderType;
     /* Resolves auto vs. manual the same way shader-pipeline.js's renderShaderFrame does
@@ -80,10 +83,136 @@ function shaderStatusLine(controller) {
     return `${label} @ ${Math.round(strength * 100)}%${controller._upscaleAuto ? " (auto)" : ""}`;
 }
 
+/* _shaderActivePreset is what chooseRenderPreset actually rendered last frame - the toggle
+   being on doesn't mean this chain is the one currently drawing (the upscale gate may have
+   declined, or the perf watchdog may have stepped it down), so this reports which of those
+   is true rather than just echoing the toggle state back.
+
+   No separate "Deband:" line exists any more - deband is now baked permanently into the
+   CNN/FSR chains themselves (see shaders.js's debandPass), never into the sharpen presets, so
+   it is active exactly when this line reports a running pass count and never otherwise. A
+   dedicated line would just be restating this one. */
+function aiUpscalingStatusLine(controller) {
+    if (!controller._aiUpscalingEnabled) return "off";
+    const familyKey = controller._shaderAutoType;
+    const upgradeKey = SHADER_TYPES[familyKey]?.upgradeTo;
+    const preset = upgradeKey ? SHADER_TYPES[upgradeKey] : null;
+    if (!preset) return "not supported here";
+    /* Xbox has no JS-side GL pass chain at all (native does the work - see
+       AiUpscaleFrameServer) - _xboxIsHdr is set on every Xbox loadedMetadata regardless of
+       whether AI Upscaling is even on, same detection hdrStatusLine already relies on, so this
+       stays reliable even before any "aiUpscaleStatus" event has arrived. */
+    if (controller._xboxIsHdr !== undefined) return xboxAiUpscalingStatusLine(controller, preset);
+    if (controller._shaderChainErrors?.[upgradeKey]) return `${preset.label} failed to compile here`;
+    if (!controller._shaderChains?.[upgradeKey]) return "not supported here";
+    /* A trained network takes no strength, so printing one would be a fabricated number -
+       the pass count and the watchdog's measured frame interval are the numbers that actually
+       matter for a multi-pass chain. */
+    if (controller._shaderActivePreset === upgradeKey) {
+        return `${preset.label} (${activeChainPassCount(controller, upgradeKey) ?? preset.passes.length} passes)${watchdogSuffix(controller)}`;
+    }
+    if (controller._shaderWatchdog?.downgraded) return `${preset.label} off - too slow here`;
+    return `${preset.label} idle - source not upscaled`;
+}
+
+/* Frame-server mode cannot render HDR (see AiUpscaleFrameServer's own header comment), so an
+   HDR title never activates this path at all - reported distinctly from "off" since the toggle
+   IS on, just inapplicable to this title. controller._session?.isHdr mirrors the same isHdr
+   value already sent to native's Play/SwitchTitle (see xbox-bridge.js's playXbox/switchXbox),
+   same field hdrStatusLine above already reads for the equivalent purpose. */
+function xboxAiUpscalingStatusLine(controller, preset) {
+    if (controller._session?.isHdr) return "unsupported (HDR)";
+    const status = controller._xboxAiUpscaleStatus;
+    if (!status) return "starting...";
+    if (status.error) return `error: ${status.error}`;
+    if (!status.receivedFrame) return "no frames received";
+    /* preset is the resolved UPGRADE entry (e.g. SHADER_TYPES.anime4k_cnn, label "Animation (AI
+       CNN)") - status.family is only the bare family key ("anime4k"), whose own label ("Animation")
+       says nothing about the real CNN/FSR chain actually running. Real bug hit and fixed
+       2026-08-20: this used to read SHADER_TYPES[status.family]?.label, which is always the plain
+       family label - so "running" and "off" looked identical here, and toggling AI Upscaling
+       produced no visible change in this line at all. */
+    if (status.upscaled) return preset.label;
+    // Both families (anime4k, live_action) have a real chain now (Stage 2b shipped) - "not
+    // upscaled" here means an error mid-chain fell back to plain pass-through this frame (see
+    // AiUpscalePixelEffect.Render's own null return / AiUpscaleFrameServer's catch fallback).
+    return "pass-through (not upscaling)";
+}
+
+/* A fixed-position load line, always showing whichever native Xbox pipeline is actually doing
+   per-frame GPU/CPU work, rather than a suffix tacked onto the "AI Upscaling:" line above (which
+   shifts/disappears as that line's own text changes, and only ever existed while AI Upscaling
+   itself was on). Two independent native pipelines can report load here:
+     - AiUpscaleFrameServer's windowed fps/avgRenderMs/dropRate ("aiUpscaleStatus") - the CNN/FSR
+       frame-server chain, only running while AI Upscaling is enabled and the title is non-HDR.
+     - ShaderVideoEffect's own windowed fps/avgFrameMs ("effectLoadStatus") - the plain
+       Sharpening/Color Boost/Ambient IBasicVideoEffect pipeline, attached whenever
+       EffectSettings.ShouldAttach is true, independent of AI Upscaling entirely. This is what
+       keeps a load number visible even with AI Upscaling off, as long as Sharpening/Color
+       Boost/Ambient is on.
+   AI Upscale's own number is preferred when both are reporting, since it's the heavier of the
+   two and the one this feature's own perf work cares most about - ShaderVideoEffect's number
+   already shrinks to near-nothing while AI Upscaling is active (see visualOn's own comment), so
+   showing both at once would just be redundant. Neither line has anything to report (and no
+   native pipeline is even attached at all) when Sharpening/Color Boost/Ambient/AI Upscaling are
+   all off - same "both numbers, always" reasoning as watchdogSuffix below still applies once
+   there IS a number: a bare "keeping up" says nothing about how close to the edge it is. Gated
+   on fps alone (not e.g. receivedFrame, which flips true well before a full stats window has
+   elapsed) - doubles as "don't show this line until its pipeline has run a full window". */
+function xboxFrameLoadLine(controller) {
+    const ai = controller._xboxAiUpscaleStatus;
+    if (ai?.fps) {
+        const dropped = ai.dropRate > 0 ? `, ${(ai.dropRate * 100).toFixed(1)}% dropped` : "";
+        return `AI Upscale Load: ${ai.avgRenderMs.toFixed(1)}ms/frame, ${ai.fps.toFixed(1)}fps${dropped}`;
+    }
+    const effect = controller._xboxEffectLoadStatus;
+    if (effect?.fps) {
+        return `Effect Load: ${effect.avgFrameMs.toFixed(1)}ms/frame, ${effect.fps.toFixed(1)}fps`;
+    }
+    return null;
+}
+
+/* The measured shader-loop frame interval, and whether the perf watchdog has already stepped
+   the chain down. Both only exist for multi-pass presets (see perf-watchdog.js on why the
+   single-pass fallback isn't measured), so this contributes nothing on the sharpen path. */
+function watchdogSuffix(controller) {
+    const watchdog = controller._shaderWatchdog;
+    if (!watchdog || !watchdog.meanFrameMs) return "";
+    /* Both numbers, always - the earlier version printed "downgraded (too slow)" *instead of*
+       the measurement, which is exactly the moment the measurement matters most. Diagnosing a
+       downgrade on real hardware meant guessing whether the chain missed by 10% or 10x. The
+       ratio is the interpretable one: 1.0 is real time, and anything under ~1.35 should not
+       have tripped at all. */
+    /* Drop rate is windowed, unlike the cumulative "Dropped frames" line above - a session
+       total can't be A/B'd against toggling the preset, which is the whole point of showing it
+       here. Also note the ratio saturates at 1.00 under frame-driven rendering: rVFC can't
+       deliver frames faster than the source's rate, so 1.00 confirms "keeping up" but says
+       nothing about how much headroom is left. */
+    const dropped = watchdog.dropRate > 0 ? `, ${(watchdog.dropRate * 100).toFixed(1)}% dropped` : "";
+    const measured = `${watchdog.meanFrameMs.toFixed(1)}ms/frame, ${watchdog.keepUpRatio.toFixed(2)}x real time${dropped}`;
+    return watchdog.downgraded ? ` · downgraded (${measured})` : ` · ${measured}`;
+}
+
+/* The live chain's count, so Deband's extra pass is visible here too. */
+function activeChainPassCount(controller, key) {
+    return controller._shaderChains?.[key]?.passCount ?? null;
+}
+
+/* Saturation and Contrast are fully independent controls now (own enabled/auto, own
+   Auto|On|Off mode - see shader-pipeline.js) - each shows "off" on its own if disabled,
+   otherwise its own auto-derived value (avgSaturation-driven for Saturation, lumaStdDev-
+   driven for Contrast) or its own remembered manual position. */
 function colorBoostStatusLine(controller) {
-    if (!controller._colorBoostEnabled) return "off";
-    const strength = controller._colorBoostAuto ? (controller._autoColorBoostStrength ?? 0) : controller._colorBoostStrength;
-    return `${Math.round(strength * 100)}%${controller._colorBoostAuto ? " (auto)" : ""}`;
+    const satOn = controller._colorBoostSaturationEnabled;
+    const conOn = controller._colorBoostContrastEnabled;
+    if (!satOn && !conOn) return "off";
+    const satAuto = controller._colorBoostSaturationAuto;
+    const conAuto = controller._colorBoostContrastAuto;
+    const saturation = satAuto ? (controller._autoColorBoostSaturationStrength ?? 0) : controller._colorBoostSaturationStrength;
+    const contrast = conAuto ? (controller._autoColorBoostContrastStrength ?? 0) : controller._colorBoostContrastStrength;
+    const satPart = satOn ? `sat ${Math.round(saturation * 100)}%${satAuto ? " (auto)" : ""}` : "sat off";
+    const conPart = conOn ? `con ${Math.round(contrast * 100)}%${conAuto ? " (auto)" : ""}` : "con off";
+    return `${satPart}, ${conPart}`;
 }
 
 function qualityCapStatusLine(controller) {
@@ -186,7 +315,9 @@ export function renderStatsOverlayFrame(controller) {
         hdrStatusLine(controller),
         quality ? `Dropped frames: ${quality.droppedVideoFrames}/${quality.totalVideoFrames}` : null,
         audioStatusLine(controller),
-        `Shader Upscaling: ${shaderStatusLine(controller)}`,
+        `Sharpening: ${sharpeningStatusLine(controller)}`,
+        `AI Upscaling: ${aiUpscalingStatusLine(controller)}`,
+        xboxFrameLoadLine(controller),
         `Color Boost: ${colorBoostStatusLine(controller)}`,
         `Quality cap: ${qualityCapStatusLine(controller)}`,
         abrDebugLine(controller),

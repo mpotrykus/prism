@@ -43,13 +43,20 @@ namespace PrismXbox.Player
         /// <summary>Native → JS. Called by <see cref="NativePlayerHost"/> for every event.</summary>
         public void Emit(string eventName, string jsonParams)
         {
+            string message = $"{{\"event\":\"{eventName}\",\"params\":{jsonParams}}}";
             try
             {
-                webView.PostWebMessageAsJson($"{{\"event\":\"{eventName}\",\"params\":{jsonParams}}}");
+                webView.PostWebMessageAsJson(message);
             }
             catch (Exception ex)
             {
-                log($"emit {eventName} failed: 0x{ex.HResult:X8}");
+                // Logging the exact assembled message (not just the HResult) is what actually
+                // found the 2026-08-20 contentAnalysis bug - a mis-lowered interpolation hole
+                // silently leaked its own format specifier ("R") into the JSON as a literal,
+                // unquoted token (see NativePlayerHost.cs's ContentAnalysis handler) - worth
+                // keeping permanently, not just for that one bug: any future "why did this
+                // specific emit fail" question needs the real string, not just the HResult.
+                log($"emit {eventName} failed: 0x{ex.HResult:X8} message={message}");
             }
         }
 
@@ -92,11 +99,11 @@ namespace PrismXbox.Player
             {
                 case "play":
                     host.Play(p.GetNamedString("url", ""), ReadLong(p, "startPositionMs"),
-                        p.GetNamedBoolean("isHdr", false));
+                        p.GetNamedBoolean("isHdr", false), p.GetNamedBoolean("isDirectPlay", false));
                     break;
                 case "switchTitle":
                     host.SwitchTitle(p.GetNamedString("url", ""), ReadLong(p, "startPositionMs"),
-                        p.GetNamedBoolean("isHdr", false));
+                        p.GetNamedBoolean("isHdr", false), p.GetNamedBoolean("isDirectPlay", false));
                     break;
                 case "stop":
                     host.Stop();
@@ -131,12 +138,23 @@ namespace PrismXbox.Player
                     break;
                 case "setColorBoost":
                     host.SetColorBoost(
-                        p.GetNamedBoolean("enabled", false),
-                        p.GetNamedNumber("strength", 0),
-                        p.GetNamedBoolean("auto", false));
+                        p.GetNamedBoolean("saturationEnabled", false),
+                        p.GetNamedBoolean("contrastEnabled", false),
+                        p.GetNamedNumber("saturationStrength", 0),
+                        p.GetNamedNumber("contrastStrength", 0),
+                        p.GetNamedBoolean("saturationAuto", false),
+                        p.GetNamedBoolean("contrastAuto", false));
                     break;
                 case "setAmbientLighting":
                     host.SetAmbientLighting(p.GetNamedBoolean("enabled", false));
+                    break;
+                case "setAiUpscaling":
+                    host.SetAiUpscaling(
+                        p.GetNamedBoolean("enabled", false),
+                        p.GetNamedString("preset", ""));
+                    break;
+                case "switchAudioTrackLocally":
+                    host.SwitchAudioTrackLocally((int)ReadLong(p, "index"));
                     break;
                 default:
                     log($"unhandled bridge method: {method}");

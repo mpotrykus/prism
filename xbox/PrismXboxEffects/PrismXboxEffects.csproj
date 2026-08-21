@@ -68,6 +68,9 @@
     <Compile Include="ContentAnalysisSampler.cs" />
     <Compile Include="AmbientColorSampler.cs" />
     <Compile Include="ShaderVideoEffect.cs" />
+    <Compile Include="D3D11Interop.cs" />
+    <Compile Include="RawD3D11Pass.cs" />
+    <Compile Include="AiUpscalePixelEffect.cs" />
   </ItemGroup>
   <ItemGroup>
     <!--
@@ -83,6 +86,58 @@
     </EmbeddedResource>
     <EmbeddedResource Include="Shaders\live_action.cso">
       <LogicalName>live_action.cso</LogicalName>
+    </EmbeddedResource>
+    <!-- AI Upscaling (Stage 2a, Anime4K CNN) - see AiUpscalePixelEffect.cs. LogicalName is the
+         bare filename regardless of the aiupscale\ subfolder, matching the flat resource-name
+         lookups LoadShaderBytes does everywhere else. -->
+    <EmbeddedResource Include="Shaders\aiupscale\anime4k_restore_conv0.cso">
+      <LogicalName>anime4k_restore_conv0.cso</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Shaders\aiupscale\anime4k_restore_conv1.cso">
+      <LogicalName>anime4k_restore_conv1.cso</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Shaders\aiupscale\anime4k_restore_conv2.cso">
+      <LogicalName>anime4k_restore_conv2.cso</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Shaders\aiupscale\anime4k_restore_conv3.cso">
+      <LogicalName>anime4k_restore_conv3.cso</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Shaders\aiupscale\anime4k_upscale_conv0.cso">
+      <LogicalName>anime4k_upscale_conv0.cso</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Shaders\aiupscale\anime4k_upscale_conv1.cso">
+      <LogicalName>anime4k_upscale_conv1.cso</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Shaders\aiupscale\anime4k_upscale_conv2.cso">
+      <LogicalName>anime4k_upscale_conv2.cso</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Shaders\aiupscale\anime4k_upscale_conv3.cso">
+      <LogicalName>anime4k_upscale_conv3.cso</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Shaders\aiupscale\anime4k_depth_to_space.cso">
+      <LogicalName>anime4k_depth_to_space.cso</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Shaders\aiupscale\fullscreen_quad_vs.cso">
+      <LogicalName>fullscreen_quad_vs.cso</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Shaders\aiupscale\deband.cso">
+      <LogicalName>deband.cso</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Shaders\aiupscale\present.cso">
+      <LogicalName>present.cso</LogicalName>
+    </EmbeddedResource>
+    <!-- AI Upscaling (Stage 2b, FSR1 EASU+RCAS for live_action) - see AiUpscalePixelEffect.cs. -->
+    <EmbeddedResource Include="Shaders\aiupscale\fsr_luma_extract.cso">
+      <LogicalName>fsr_luma_extract.cso</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Shaders\aiupscale\fsr_easu.cso">
+      <LogicalName>fsr_easu.cso</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Shaders\aiupscale\fsr_rcas.cso">
+      <LogicalName>fsr_rcas.cso</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Shaders\aiupscale\fsr_luma_merge.cso">
+      <LogicalName>fsr_luma_merge.cso</LogicalName>
     </EmbeddedResource>
   </ItemGroup>
   <ItemGroup>
@@ -101,6 +156,29 @@
     </PackageReference>
     <PackageReference Include="Microsoft.NETCore.UniversalWindowsPlatform">
       <Version>6.2.15</Version>
+    </PackageReference>
+    <!--
+      Real C# D3D11/DXGI bindings for the AI Upscaling pass graph's raw-draw passes (residual
+      adds and resolution changes - see AiUpscalePixelEffect.cs) - the passes Win2D's own
+      PixelShaderEffect can't cleanly express, since that convenience class assumes one input at
+      its own output's resolution. MIT-licensed, actively maintained; chosen over hand-rolling the
+      full ID3D11Device/DeviceContext COM vtables by hand (real risk: a wrong slot order corrupts
+      memory rather than throwing a catchable .NET exception, much harder to debug on a console
+      with no attached debugger). The one piece still hand-declared is IDirect3DDxgiInterfaceAccess
+      (see D3D11Interop.cs) - a single-method COM interface with a fixed, documented GUID, used to
+      bridge a Win2D CanvasRenderTarget's underlying ID3D11Texture2D into Vortice's types.
+    -->
+    <!-- Pinned to 2.4.2, not the current 3.x: newer Vortice releases dropped netstandard2.0 in
+         favor of net8.0+-only TFMs, which this classic .NET-Native/UAP UWP project can't
+         consume at all (confirmed: MSBuild restore succeeds silently, but the compiler then
+         can't see any Vortice types - no ref assembly actually resolves). 2.4.2 is the newest
+         version that still ships a netstandard2.0 lib, which this project's PackageReference
+         restore does pick up correctly. -->
+    <PackageReference Include="Vortice.Direct3D11">
+      <Version>2.4.2</Version>
+    </PackageReference>
+    <PackageReference Include="Vortice.DXGI">
+      <Version>2.4.2</Version>
     </PackageReference>
   </ItemGroup>
   <PropertyGroup Condition=" '$(VisualStudioVersion)' == '' or '$(VisualStudioVersion)' &lt; '14.0' ">

@@ -48,13 +48,17 @@ namespace PrismXboxEffects
         /// case regardless of which type/strength is active at any given moment.</summary>
         internal const double MaxKernelScale = 2.8;
 
-        internal static ColorTuning ColorBoostAt(double strength)
+        /// <summary>Saturation and contrast are independent sliders (see EffectSettings'
+        /// ColorBoostSaturationStrength/ColorBoostContrastStrength) sharing one Auto/On/Off mode,
+        /// not one combined "strength" - each gets its own strength/range lerped independently.</summary>
+        internal static ColorTuning ColorBoostAt(double saturationStrength, double contrastStrength)
         {
-            double t = Clamp(strength, 0, 1);
+            double satT = Clamp(saturationStrength, 0, 1);
+            double conT = Clamp(contrastStrength, 0, 1);
             return new ColorTuning
             {
-                Saturation = Lerp(1.0, 1.3, t),
-                Contrast = Lerp(1.0, 1.15, t),
+                Saturation = Lerp(1.0, 1.3, satT),
+                Contrast = Lerp(1.0, 1.15, conT),
             };
         }
 

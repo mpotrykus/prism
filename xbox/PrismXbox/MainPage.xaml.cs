@@ -27,7 +27,8 @@ namespace PrismXbox
     /// `npm run xbox:sync`) full-screen inside a WebView2 control.
     ///
     /// Layout is a Grid rather than the WebView2 alone so a video surface can sit behind the
-    /// page: MediaPlayerElement at z=0, WebView2 (transparent) at z=1.
+    /// page: MediaPlayerElement and the AI Upscaling frame-server presenter share z=0 (only one
+    /// visible at a time), WebView2 (transparent) at z=1.
     /// </summary>
     public sealed partial class MainPage : Page
     {
@@ -236,6 +237,11 @@ namespace PrismXbox
                 Background = new SolidColorBrush(Colors.Black),
             };
             grid.Children.Add(playerHost.Element);
+            // The AI Upscaling presenter (Win2D CanvasImageSource) - shares this same cell with
+            // playerHost.Element; only one of the two is ever Visible at a time, toggled by
+            // NativePlayerHost.Play/SwitchTitle based on whether AI Upscaling is active for the
+            // current (non-HDR) title. See NativePlayerHost.SetAiUpscalePathActive.
+            grid.Children.Add(playerHost.AiUpscaleElement);
             grid.Children.Add(webView);
 
             return grid;

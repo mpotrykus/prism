@@ -54,6 +54,7 @@
     <Compile Include="MainPage.xaml.cs">
       <DependentUpon>MainPage.xaml</DependentUpon>
     </Compile>
+    <Compile Include="Player\AiUpscaleFrameServer.cs" />
     <Compile Include="Player\HdrDisplayController.cs" />
     <Compile Include="Player\NativePlayerHost.cs" />
     <Compile Include="Player\PlayerBridge.cs" />
@@ -115,6 +116,13 @@
     <PackageReference Include="Microsoft.Web.WebView2">
       <Version>1.0.4129.50</Version>
     </PackageReference>
+    <!-- Only PrismXboxEffects referenced Win2D before this - AiUpscaleFrameServer uses
+         CanvasImageSource directly in this project's own MainPage.xaml.cs/Player code, which
+         needs its own explicit reference rather than relying on the transitive one through the
+         PrismXboxEffects ProjectReference below. Version matched to PrismXboxEffects.csproj's. -->
+    <PackageReference Include="Win2D.uwp">
+      <Version>1.26.0</Version>
+    </PackageReference>
   </ItemGroup>
   <ItemGroup>
     <!-- Hosts ShaderVideoEffect (Shader Upscaling/Color Boost/Ambient Lighting) - must be a
@@ -143,10 +151,23 @@
     deleting it unconditionally left it permanently missing after an AppxBundle build and
     broke Visual Studio's own Deploy step (DEP0600 null-reference) when it expected to read
     it back.
+    The root cause traces one level further than the obj\ caches above: MSBuild's own
+    "copy content to output" step for bin\<platform>\<config>\AppX\www\assets\ is itself
+    incremental - it copies new hashed files in but never removes an old build's now-gone
+    ones, so both an old and new index-*.js/web-*.js end up sitting there together. The
+    resfiles/PackageLayout caches above can then end up pointing at whichever one MakeAppx
+    decides is stale. Deleting the old hashed files out of that AppX\www\assets\ layout
+    copy directly - the same root fix xbox-sync.mjs already applies to the source www\
+    folder (wipe-then-copy instead of overlay-copy) - removes the mismatch at its source
+    instead of only clearing downstream caches of it. This still reproduced when building
+    from Visual Studio directly (not just `npm run xbox:build`), since it's this csproj's
+    own incremental copy behavior, not the npm script, that leaves the stale files behind.
   -->
   <Target Name="PrismCleanStaleAppxLayout" BeforeTargets="Build;Rebuild">
     <ItemGroup>
       <_PrismStaleLayoutFiles Include="$(IntermediateOutputPath)*.layout.resfiles*" />
+      <_PrismStaleLayoutFiles Include="$(OutDir)AppX\www\assets\index-*.js" />
+      <_PrismStaleLayoutFiles Include="$(OutDir)AppX\www\assets\web-*.js" />
     </ItemGroup>
     <Delete Files="@(_PrismStaleLayoutFiles)" />
     <RemoveDir Directories="$(IntermediateOutputPath)PackageLayout" Condition="Exists('$(IntermediateOutputPath)PackageLayout')" />

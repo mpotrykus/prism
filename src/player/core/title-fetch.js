@@ -1,4 +1,4 @@
-import { extractAudioStreams, extractMediaVersions, bifIndexPath, extractPartId, isHdrVideo } from "../../card/title-info.js";
+import { extractAudioStreams, extractMediaVersions, bifIndexPath, extractPartInfo, isHdrVideo } from "../../card/title-info.js";
 
 /* Fetches full metadata for a selected queued title (episode-list.js's overlay, or an
    Android title-prev/title-next press - see native-bridge.js's "titleNav" listener) so the
@@ -12,6 +12,7 @@ import { extractAudioStreams, extractMediaVersions, bifIndexPath, extractPartId,
 export async function fetchQueuedTitle(plexUrl, plexToken, ratingKey) {
     const url = new URL(`${plexUrl}/library/metadata/${ratingKey}`);
     url.searchParams.set("includeChapters", "1");
+    url.searchParams.set("includeMarkers", "1");
     url.searchParams.set("X-Plex-Token", plexToken);
     const res = await fetch(url, { headers: { Accept: "application/json" } });
     if (!res.ok) throw new Error(`Plex metadata fetch -> HTTP ${res.status}`);
@@ -29,7 +30,7 @@ export async function fetchQueuedTitle(plexUrl, plexToken, ratingKey) {
         audioStreams: extractAudioStreams(meta.Media, 0),
         isHdr: isHdrVideo(meta.Media, 0),
         bifIndexPath: bifIndexPath(meta.Media, 0),
-        partId: extractPartId(meta.Media, 0),
+        ...extractPartInfo(meta.Media, 0),
         title: meta.grandparentTitle || meta.title || "",
         /* Only set for a genuine episode (grandparentTitle present) - same convention
            plex-netflix-card.js's _playItem uses (episodeTitle: item.seasonNumber != null

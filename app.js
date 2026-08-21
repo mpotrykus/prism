@@ -1,10 +1,14 @@
 import { loadFull, isConfigured } from "./settings.js";
+import { primeDecodeCapabilities } from "./src/player/core/platform.js";
 import "./input-mode.js";
 
 (async function () {
   if ("serviceWorker" in navigator) {
     navigator.serviceWorker.register("./sw.js").catch((err) => console.warn("[app] SW registration failed:", err));
   }
+  /* Fire-and-forget: resolves well before the user reaches a title's Play button, but must
+     never block boot - see platform.js's own comment on why a failed probe is safe. */
+  primeDecodeCapabilities();
 
   const modal = document.querySelector("streaming-settings-modal");
   const signinModal = document.querySelector("streaming-plex-signin-modal");

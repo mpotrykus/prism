@@ -575,9 +575,9 @@ export function applyXboxAmbientColors(controller, rawColors) {
     applyZoneColors(right, smoothZones(smoothed.right, toBoostedTriples(rawColors.right)));
 }
 
-/* Called from web-fallback.js's teardownWeb alongside the shader pipeline's own inline
-   cleanup block - same reasoning, this session's GL/canvas/DOM resources don't outlive
-   the <video> they sample from. Doesn't need to restore the video's own background -
+/* Called from web-fallback.js's teardownWeb alongside teardownShaderPipeline and
+   teardownContentAnalysis - same reasoning, this session's GL/canvas/DOM resources don't
+   outlive the <video> they sample from. Doesn't need to restore the video's own background -
    teardownWeb removes the video element entirely right after. */
 export function teardownAmbient(controller) {
     stopAmbientLoop(controller);
