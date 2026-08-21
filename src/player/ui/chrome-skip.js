@@ -1,10 +1,11 @@
-/* Bottom-center skip-intro/credits button and its marker-range helpers. Joins the
-   idle-fade control row in chrome-controls.js (registerControlButton) rather than
-   maintaining its own independent visibility state - see ensureSkipButtonEl/
-   showSkipButton below for how the two directions of that coupling actually work. */
+/* Bottom-center skip-intro/credits button and its marker-range helpers. Deliberately
+   kept out of the idle-fade control row in chrome-controls.js, matching
+   PlayerUiHelper.java's updateSkipButton/hideSkipButtonInternal on Android - it's a
+   contextual action available right now, not ambient chrome that should fade with
+   mouse/remote inactivity, so its visibility tracks the active marker/countdown only,
+   independent of whatever state the rest of the chrome is in. */
 import { media } from "../core/media-facade.js";
 import { PLAYER_FOCUSABLE_CLASS } from "./shared.js";
-import { registerControlButton, showControls } from "./chrome-controls.js";
 
 /* Shared by both playback paths so the marker-range check isn't duplicated even though
    web/native render totally different skip-button UI. Assumes Plex's Marker objects use
@@ -48,23 +49,15 @@ export function upNextSkipAtMs(marker) {
 /* Lazily creates the one tap-to-skip button, shared between the plain "Skip Intro"/"Skip
    Credits" case and the "Playing next in…" auto-skip countdown - same element, same
    click-to-skip-now handler, just different textContent, per this feature's own design
-   (a countdown is still a skip button, just one that also counts down out loud). Joins
-   controller._controlButtons (registerControlButton) so it fades with the rest of the
-   chrome once idle, the same as the close/menu buttons and transport bar, instead of
-   maintaining its own independent visibility. `anchor: false` because it keeps its own
-   fixed bottom-right position instead of the corner-stacking anchor system.
-
-   The coupling runs the other way too, see showSkipButton below: for as long as this
-   button itself is relevant (a marker active, a countdown ticking), it forces the WHOLE
-   row visible rather than just riding along with whatever the idle timer already
-   decided - an intro/credits window is exactly the moment a viewer is most likely to
-   have let go of the mouse, and that's precisely when this button matters most. */
+   (a countdown is still a skip button, just one that also counts down out loud).
+   Appended to document.body directly rather than through registerControlButton - see
+   this file's header comment on why its visibility stays independent of the idle-fade
+   control row. */
 function ensureSkipButtonEl(controller) {
     if (controller._skipBtnEl) return controller._skipBtnEl;
     const btn = document.createElement("button");
     btn.type = "button";
     btn.classList.add(PLAYER_FOCUSABLE_CLASS);
-    const reference = controller._controlButtons?.[0];
     Object.assign(btn.style, {
         position: "fixed",
         bottom: "170px",
@@ -85,9 +78,6 @@ function ensureSkipButtonEl(controller) {
         letterSpacing: "0.03em",
         cursor: "pointer",
         display: "none",
-        opacity: reference?.style.opacity || "1",
-        pointerEvents: reference?.style.pointerEvents || "auto",
-        transition: "opacity 0.25s ease",
     });
     /* Always seeks to the currently active marker's own end, regardless of whether this
        click landed on the plain "Skip Intro"/"Skip Credits" label or mid-countdown on
@@ -98,28 +88,33 @@ function ensureSkipButtonEl(controller) {
             el.currentTime = (controller._activeSkipMarker.endTimeOffset ?? 0) / 1000;
         }
     });
-    registerControlButton(controller, btn, { anchor: false });
+    /* Real DOM focus is how gamepad nav reaches this button (see plex-player.js's
+       _handlePlayerNavCommand "up"/"down" cases) - hiding the element (marker ends,
+       auto-skip fires) blurs it as a side effect of display:none, so this is the one
+       place that has to catch that and drop the controller's own tracking flag with it,
+       not just the explicit "down" press. */
+    btn.addEventListener("blur", () => {
+        controller._skipButtonFocused = false;
+    });
+    document.body.appendChild(btn);
     controller._skipBtnEl = btn;
     return btn;
+}
+
+export function isSkipButtonShowing(controller) {
+    return controller._skipBtnEl?.style.display === "block";
 }
 
 function showSkipButton(controller, label) {
     const btn = ensureSkipButtonEl(controller);
     btn.textContent = label;
     btn.style.display = "block";
-    /* Called every tick this button is showing (matching how often updateSkipButton
-       itself now runs - see its own header comment), which keeps re-triggering
-       chrome-controls.js's idle-hide timer via showControls' own scheduleHideControls
-       call - so the row never actually reaches the end of that timer, and stays visible,
-       for as long as ticks keep arriving with an active marker/countdown. The moment
-       marker becomes null (window ends) this stops being called, and whatever hide timer
-       was already pending catches up and fades everything out again, same as ordinary
-       mouse inactivity. */
-    showControls(controller);
 }
 
 function hideSkipButton(controller) {
-    if (controller._skipBtnEl) controller._skipBtnEl.style.display = "none";
+    if (!controller._skipBtnEl) return;
+    controller._skipBtnEl.style.display = "none";
+    controller._skipButtonFocused = false;
 }
 
 export function updateSkipButton(controller, marker) {

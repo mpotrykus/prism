@@ -45,10 +45,28 @@ public class NativePlayerPlugin extends Plugin implements PlayerActivity.Playbac
         Integer queueIndex;
     }
 
+    /* PluginCall.getLong() only returns a value when the bridge happened to parse the
+       JS number into a java.lang.Long - org.json's tokener (what the bridge actually
+       parses call data with) represents any JSON integer that fits in an int as a
+       plain Integer instead, which is true of every millisecond value this plugin
+       reads (position/offset/generation are all far under Integer.MAX_VALUE). getLong()
+       does a strict `instanceof Long` check with no coercion, so it silently returns
+       null for these - confirmed on a real device via showSkipButton always rejecting
+       with "Missing required parameter" even though JS sent a real seekToMs. optLong()
+       on the raw JSONObject (JSObject extends it) coerces any Number subtype, which is
+       what's actually needed here. */
+    private static Long getLongCompat(PluginCall call, String name) {
+        return call.getData().has(name) ? call.getData().optLong(name) : null;
+    }
+
+    private static long getLongCompat(PluginCall call, String name, long fallback) {
+        return call.getData().optLong(name, fallback);
+    }
+
     private static PlaybackParams parsePlaybackParams(PluginCall call) {
         PlaybackParams p = new PlaybackParams();
         p.url = call.getString("url");
-        p.startPositionMs = call.getLong("startPositionMs", 0L);
+        p.startPositionMs = getLongCompat(call, "startPositionMs", 0L);
         p.chapters = call.getArray("chapters");
         p.audioStreams = call.getArray("audioStreams");
         p.partId = call.getString("partId");
@@ -159,7 +177,7 @@ public class NativePlayerPlugin extends Plugin implements PlayerActivity.Playbac
 
     @PluginMethod
     public void seek(PluginCall call) {
-        Long positionMs = call.getLong("positionMs");
+        Long positionMs = getLongCompat(call, "positionMs");
         if (positionMs == null) {
             call.reject("Missing required parameter: positionMs");
             return;
@@ -188,7 +206,7 @@ public class NativePlayerPlugin extends Plugin implements PlayerActivity.Playbac
     @PluginMethod
     public void showSkipButton(PluginCall call) {
         String label = call.getString("label");
-        Long seekToMs = call.getLong("seekToMs");
+        Long seekToMs = getLongCompat(call, "seekToMs");
         if (label == null || seekToMs == null) {
             call.reject("Missing required parameter: label and/or seekToMs");
             return;
@@ -239,7 +257,7 @@ public class NativePlayerPlugin extends Plugin implements PlayerActivity.Playbac
        value it wants restored. */
     @PluginMethod
     public void setSubtitleOffset(PluginCall call) {
-        Long offsetMs = call.getLong("offsetMs");
+        Long offsetMs = getLongCompat(call, "offsetMs");
         if (offsetMs == null) {
             call.reject("Missing required parameter: offsetMs");
             return;
@@ -444,8 +462,8 @@ public class NativePlayerPlugin extends Plugin implements PlayerActivity.Playbac
     @PluginMethod
     public void applyReloadedUrl(PluginCall call) {
         String url = call.getString("url");
-        Long startPositionMs = call.getLong("startPositionMs", 0L);
-        Long generation = call.getLong("generation");
+        Long startPositionMs = getLongCompat(call, "startPositionMs", 0L);
+        Long generation = getLongCompat(call, "generation");
         if (url == null || generation == null) {
             call.reject("Missing required parameter: url and/or generation");
             return;

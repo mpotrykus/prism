@@ -33,4 +33,4 @@ export { applyFitMode } from "./chrome-menu-extras.js";
 
 export { openAudioSubtitlesOverlay, closeAudioSubtitlesOverlay, applyRememberedSubtitle, stopSubtitleLoop } from "./chrome-subtitles.js";
 
-export { activeMarkerAt, skipLabelFor, updateSkipButton } from "./chrome-skip.js";
+export { activeMarkerAt, skipLabelFor, updateSkipButton, isSkipButtonShowing } from "./chrome-skip.js";

@@ -168,10 +168,13 @@ export function unmountPlayerChrome(controller) {
         controller._volumePopoutEl.remove();
         controller._volumePopoutEl = null;
     }
-    /* Already removed from the DOM by the _controlButtons sweep above (chrome-skip.js's
-       ensureSkipButtonEl registers it there now) - just drop the stale reference so the
-       next session lazily creates a fresh one instead of reusing a detached node. */
-    controller._skipBtnEl = null;
+    /* Appended to document.body directly by chrome-skip.js's ensureSkipButtonEl (kept out
+       of the idle-fade control row on purpose - see that file's header comment), so it
+       isn't swept up by the _controlButtons removal above either. */
+    if (controller._skipBtnEl) {
+        controller._skipBtnEl.remove();
+        controller._skipBtnEl = null;
+    }
     controller._activeSkipMarker = null;
     controller._autoSkippedMarker = null;
     if (controller._spinnerEl) {

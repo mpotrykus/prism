@@ -2847,8 +2847,20 @@ final class PlayerUiHelper {
         return btn;
     }
 
+    /* activity.title is the show name (not the episode title) once an episode is
+       playing - see PlayerActivity's own EXTRA_TITLE/switch handling, same
+       grandparentTitle-as-title convention as title-fetch.js. Appending "S01E01" (the
+       naming convention subtitle releases actually use) narrows a free-text provider
+       search to the one episode, matching chrome-subtitles.js's
+       defaultSubtitleSearchQuery. */
+    private static String defaultSubtitleSearchQuery(PlayerActivity activity) {
+        String title = activity.title != null ? activity.title : "";
+        if (activity.seasonNumber < 0 || activity.episodeNumber < 0) return title;
+        return String.format(java.util.Locale.US, "%s S%02dE%02d", title, activity.seasonNumber, activity.episodeNumber).trim();
+    }
+
     /* Subtitles column content - search box (defaults to this title, matching
-       chrome.js's renderSubtitleSection) plus an "Off" row and whatever
+       chrome-subtitles.js's renderSubtitleSection) plus an "Off" row and whatever
        activity.subtitleResults holds. Fully re-derived from activity's own fields each
        call (see refreshAudioSubtitlesMenu) rather than mutated in place. */
     private static void renderSubtitlesColumn(PlayerActivity activity, float density, LinearLayout body) {
@@ -2858,7 +2870,7 @@ final class PlayerUiHelper {
         input.setTextColor(Color.WHITE);
         input.setTextSize(13);
         input.setSingleLine(true);
-        String defaultQuery = activity.title != null ? activity.title : "";
+        String defaultQuery = defaultSubtitleSearchQuery(activity);
         input.setText(activity.subtitleSearchQueryText != null ? activity.subtitleSearchQueryText : defaultQuery);
         GradientDrawable inputBg = new GradientDrawable();
         inputBg.setColor(Color.argb(15, 255, 255, 255));
@@ -3239,19 +3251,26 @@ final class PlayerUiHelper {
         if (activity.skipButton == null) {
             float density = activity.getResources().getDisplayMetrics().density;
             activity.skipButton = new TextView(activity);
-            activity.skipButton.setTextColor(Color.WHITE);
+            /* Same brand yellow + near-black text pairing chrome-skip.js's web/Xbox
+               button uses (#e5a00d/#161619) - previously a plain dark pill, restyled to
+               match on request. GradientDrawable (not setBackgroundColor) so the same
+               4dp corner radius as web's `borderRadius: "4px"` renders too. */
+            activity.skipButton.setTextColor(Color.parseColor("#161619"));
             activity.skipButton.setTextSize(14);
             activity.skipButton.setTypeface(activity.skipButton.getTypeface(), android.graphics.Typeface.BOLD);
-            activity.skipButton.setBackgroundColor(Color.parseColor("#D9141414"));
-            int hPad = (int) (20 * density);
+            GradientDrawable bg = new GradientDrawable();
+            bg.setColor(Color.parseColor("#e5a00d"));
+            bg.setCornerRadius(4 * density);
+            activity.skipButton.setBackground(bg);
+            int hPad = (int) (22 * density);
             int vPad = (int) (10 * density);
             activity.skipButton.setPadding(hPad, vPad, hPad, vPad);
             FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT);
             params.gravity = Gravity.BOTTOM | Gravity.END;
-            /* Clears the taller transport bar this redesign introduced (title/subtitle
-               header row + seek bar + controls row, vs. the old flat mute-only row). */
-            params.setMargins(0, 0, (int) (40 * density), (int) (200 * density));
+            /* Sits just above the transport bar's controls row (not floating well
+               above the whole bar, header included, like the old 200dp margin did). */
+            params.setMargins(0, 0, (int) (40 * density), (int) (100 * density));
             activity.skipButton.setLayoutParams(params);
             activity.skipButton.setOnClickListener(v -> PlayerActivity.seek(activity.skipButtonSeekToMs));
             activity.root.addView(activity.skipButton);

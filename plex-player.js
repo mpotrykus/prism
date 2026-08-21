@@ -71,6 +71,7 @@ import {
     activeMarkerAt,
     skipLabelFor,
     updateSkipButton,
+    isSkipButtonShowing,
     playQueuedTitle,
     applyRememberedSubtitle,
     seekToAdjacentChapter,
@@ -128,6 +129,7 @@ class StreamingPlayerController {
         this._activeSkipMarker = null;
         this._autoSkippedMarker = null;
         this._skipBtnEl = null;
+        this._skipButtonFocused = false;
         this._controlButtons = [];
         this._controlsHovering = false;
         this._controlsHideTimer = null;
@@ -439,6 +441,7 @@ class StreamingPlayerController {
         };
         this._activeSkipMarker = null;
         this._autoSkippedMarker = null;
+        this._skipButtonFocused = false;
         /* Reset per session, not just left to differ naturally from the new ratingKey -
            replaying the exact same title later would otherwise still equal the value
            left over from that earlier playback, and native-bridge.js's progress-based
@@ -644,10 +647,14 @@ class StreamingPlayerController {
        transport scheme: bumpers skip chapters, triggers rewind/fast-forward, Start opens the
        options menu, A plays/pauses, left stick traverses the scrub bar with a BIF preview (see
        _adjustScrub below) - every action reachable from the bare player screen already has its
-       own dedicated button/stick, so nothing here is left for D-pad to navigate between; that's
-       only meaningful once a menu/overlay is open, where wireLinearNav (focus-nav.js) already
-       handles it independently of this handler (see the constructor's registerNavHandler call,
-       which yields to those overlays entirely before ever reaching here).
+       own dedicated button/stick, so D-pad up/down is otherwise unused here; that's now spent
+       on the one other on-screen control worth reaching, the skip-intro/credits button (see
+       chrome-skip.js) - up moves real DOM focus onto it whenever it's actually showing, down
+       drops back to the scrub bar. Not routed through wireLinearNav (focus-nav.js) like every
+       menu/overlay's list nav - this handler already owns up/down/activate unconditionally
+       whenever no overlay is open (see the constructor's registerNavHandler call, which yields
+       to those overlays' own wireLinearNav lists entirely before ever reaching here), so a
+       second nav system for just one button would only duplicate that.
 
        "back" (B) is handled one level up, in that same constructor call - it cancels an
        in-progress scrub if one is active, otherwise stops playback, but yields first to
@@ -659,6 +666,10 @@ class StreamingPlayerController {
         this._showControls();
         switch (command) {
             case "activate":
+                if (this._skipButtonFocused) {
+                    this._skipBtnEl?.click();
+                    return true;
+                }
                 if (this._scrubActive) {
                     this._commitScrub();
                     return true;
@@ -666,6 +677,20 @@ class StreamingPlayerController {
                 if (el.paused) this.resume();
                 else this.pause();
                 return true;
+            case "up":
+                if (!this._skipButtonFocused && isSkipButtonShowing(this)) {
+                    this._skipButtonFocused = true;
+                    this._skipBtnEl.focus();
+                    return true;
+                }
+                return false;
+            case "down":
+                if (this._skipButtonFocused) {
+                    this._skipButtonFocused = false;
+                    this._skipBtnEl?.blur();
+                    return true;
+                }
+                return false;
             case "left":
                 this._adjustScrub(-NAV_SEEK_STEP_MS);
                 return true;

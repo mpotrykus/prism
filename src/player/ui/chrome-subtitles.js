@@ -233,6 +233,18 @@ function buildAudioSubtitlesColumn(title) {
     return { el, body };
 }
 
+/* session.title is the show name (not the episode title) once an episode is playing -
+   see title-fetch.js's grandparentTitle fallback - so a plain title search returns every
+   episode's subtitles. Appending "S01E01" (the naming convention subtitle releases
+   actually use) narrows a free-text provider search to the one episode. */
+function defaultSubtitleSearchQuery(session) {
+    if (!session) return "";
+    if (session.seasonNumber == null || session.episodeNumber == null) return session.title || "";
+    const season = String(session.seasonNumber).padStart(2, "0");
+    const episode = String(session.episodeNumber).padStart(2, "0");
+    return `${session.title || ""} S${season}E${episode}`.trim();
+}
+
 /* Lives in the player chrome, not the title-info modal - subtitle search is
    realistically a mid-playback action ("I'm already watching, there's no subs, let me
    search") more than a pre-playback picker step. */
@@ -241,7 +253,7 @@ function renderSubtitleSection(controller, content, { collapse }) {
     input.type = "text";
     input.classList.add(PLAYER_FOCUSABLE_CLASS);
     input.placeholder = "Search subtitles…";
-    input.value = controller._session?.title || "";
+    input.value = defaultSubtitleSearchQuery(controller._session);
     Object.assign(input.style, {
         flex: "0 0 auto",
         display: "block",
