@@ -205,13 +205,12 @@ export async function openEpisodeListOverlay(controller) {
     ensureScrollStyle();
     const scroll = document.createElement("div");
     scroll.className = SCROLL_CLASS;
-    /* No scroll-arrow reservation here (unlike openChapterListOverlay's own 54px) - the
-       episode overlay has no arrows to leave room for. This is now the clipping viewport
-       (like rows-poster.css's .row-scroller), not itself a native scroll container - see
-       row-scroll.js's own header comment for why: Xbox WebView2's built-in gamepad-to-
-       scroll handling hijacks any native overflow:auto container the thumbstick happens
-       to be over, fighting this overlay's own D-pad centering. */
-    Object.assign(scroll.style, { overflow: "hidden", padding: "4px 24px" });
+    /* Same 54px scroll-arrow reservation as openChapterListOverlay below. This is the
+       clipping viewport (like rows-poster.css's .row-scroller), not itself a native scroll
+       container - see row-scroll.js's own header comment for why: Xbox WebView2's built-in
+       gamepad-to-scroll handling hijacks any native overflow:auto container the thumbstick
+       happens to be over, fighting this overlay's own D-pad centering. */
+    Object.assign(scroll.style, { overflow: "hidden", padding: "4px 54px" });
     const track = document.createElement("div");
     Object.assign(track.style, { display: "flex", gap: "14px" });
     scroll.appendChild(track);
@@ -250,6 +249,13 @@ export async function openEpisodeListOverlay(controller) {
     controller._episodeListEl = { scrim, panel };
     panel.classList.add(EPISODE_LIST_CLASS);
     const rowScroll = createRowScroll(scroll, track);
+    /* Same fade-edge scroll arrows as openChapterListOverlay below - built now (rowScroll
+       already exists) but only made visible once the real cards load and wireQueueArrowVisibility
+       runs below; harmless to sit at opacity:0 over the loading spinner in the meantime. */
+    const leftArrow = buildQueueScrollArrow("left", scroll, rowScroll);
+    const rightArrow = buildQueueScrollArrow("right", scroll, rowScroll);
+    scrollWrap.insertBefore(leftArrow, scroll);
+    scrollWrap.appendChild(rightArrow);
     /* Centers whatever gains real DOM focus, including wireLinearNav's own focus() calls
        during ordinary Left/Right nav below - that shared helper's own plain scrollIntoView
        has nothing to act on any more now that `scroll` is a transform-driven track instead
@@ -318,6 +324,7 @@ export async function openEpisodeListOverlay(controller) {
        reason there isn't one) rather than epNav.focusFirst()'s always-index-0 behavior, so
        opening the list drops the viewer right where they already are in the queue. */
     focusCardCentered(currentCard || track.querySelector("button"));
+    wireQueueArrowVisibility(rowScroll, leftArrow, rightArrow);
 }
 
 export function closeEpisodeListOverlay(controller) {

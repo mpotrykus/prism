@@ -5,6 +5,11 @@ import { loadBifIndex, findNearestBifFrame, fetchBifFrameUrl } from "../core/bif
 import { plexAssetUrl } from "../core/plex-asset-url.js";
 import { fetchQueuedTitle } from "../core/title-fetch.js";
 import { platformTag } from "../core/platform.js";
+/* Circular with episode-list.js (which imports playQueuedTitle/formatTime from this very
+   file, via chrome.js's re-export) - safe for the same reason chrome-menu.js's own episode-
+   list.js import is: this file's use of openEpisodeListOverlay is confined to a click
+   handler below, never called until long after both modules have finished loading. */
+import { openEpisodeListOverlay } from "./episode-list.js";
 
 /* Bottom transport bar (title/subtitle + remaining time, scrub bar/chapter segments/BIF
    scrub-preview) and, on Xbox only, the floating center play/pause button mirroring the
@@ -766,7 +771,7 @@ export function buildTransportBar(controller, video) {
         const controlsRow = document.createElement("div");
         Object.assign(controlsRow.style, { display: "flex", alignItems: "center" });
         const leftCell = document.createElement("div");
-        Object.assign(leftCell.style, { flex: "1 1 0" });
+        Object.assign(leftCell.style, { flex: "1 1 0", display: "flex", alignItems: "center", gap: "14px" });
         const centerCell = document.createElement("div");
         Object.assign(centerCell.style, { flex: "0 0 auto", display: "flex", alignItems: "center", gap: "22px" });
         const rightCell = document.createElement("div");
@@ -777,6 +782,37 @@ export function buildTransportBar(controller, video) {
         bar.appendChild(controlsRow);
         controller._centerControlsSlot = centerCell;
         buildCenterControls(controller, video);
+
+        /* Text label, not an icon - a glyph here read too close to the opposite corner's "☰"
+           More button to tell apart at a glance. Same seasonNumber-based wording as the More
+           sheet's own (now-removed) Episodes row and this overlay's own heading - see
+           formatEpisodeListItem's neighbouring reasoning. Queue-presence gate matches
+           chrome-menu.js's identical check for the same reason: no dead affordance when
+           there's nowhere to jump to. */
+        const session = controller._session;
+        if (session?.queueRatingKeys?.length > 1) {
+            const episodesBtn = document.createElement("button");
+            episodesBtn.type = "button";
+            episodesBtn.classList.add(PLAYER_FOCUSABLE_CLASS);
+            episodesBtn.textContent = session.seasonNumber != null ? "Episodes" : "Up Next";
+            Object.assign(episodesBtn.style, {
+                flex: "0 0 auto",
+                height: "28px",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                border: "none",
+                background: "transparent",
+                color: "#fff",
+                fontSize: "13px",
+                fontWeight: "600",
+                fontFamily: '"Roboto", sans-serif',
+                cursor: "pointer",
+                padding: "0",
+            });
+            episodesBtn.addEventListener("click", () => openEpisodeListOverlay(controller));
+            leftCell.appendChild(episodesBtn);
+        }
 
         const muteBtn = document.createElement("button");
         muteBtn.type = "button";

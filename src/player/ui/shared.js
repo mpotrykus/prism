@@ -351,25 +351,12 @@ export function fullscreenIconMarkup(isFullscreen) {
 }
 
 /* Same currentColor-SVG reasoning as fullscreenIconMarkup above - a classic closed-
-   captions glyph (rounded outline rect + two text-line bars). Used both by the More
-   menu's Audio & Subtitles row (see chrome-menu.js's renderMainList) and, on web only, by
-   chrome-transport.js's dedicated transport-bar icon (platformTag() !== "xbox") - both open
-   the same openAudioSubtitlesOverlay. Geometry mirrors Android's MenuIconView.Icon.SUBTITLES
+   captions glyph (rounded outline rect + two text-line bars), for chrome-transport.js's
+   dedicated transport-bar icon (web only, platformTag() !== "xbox") that opens
+   openAudioSubtitlesOverlay directly. Geometry mirrors Android's MenuIconView.Icon.SUBTITLES
    exactly (same 24x24 box) so every platform reads as the same icon. */
 export function audioSubtitlesIconMarkup() {
     return '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x="2" y="5" width="20" height="14" rx="2" stroke="currentColor" stroke-width="1.8"/><rect x="5" y="9" width="10" height="2" rx="1" fill="currentColor"/><rect x="5" y="13" width="6" height="2" rx="1" fill="currentColor"/></svg>';
-}
-
-/* Same currentColor-SVG reasoning as every icon above - a stacked-list glyph for the More
-   menu's Episodes/Up Next row (see chrome-menu.js's renderMainList), which used to be a
-   standalone text button in the transport bar's left cell before that row was removed -
-   see chrome-transport.js's header comment. */
-export function episodesIconMarkup() {
-    return `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" xmlns="http://www.w3.org/2000/svg">
-        <rect x="3" y="5" width="18" height="4" rx="1" fill="currentColor"/>
-        <rect x="3" y="11" width="18" height="4" rx="1" fill="currentColor"/>
-        <rect x="3" y="17" width="18" height="4" rx="1" fill="currentColor"/>
-    </svg>`;
 }
 
 /* Icons for each row of the More menu (chrome.js's buildAccordionRow/renderPickerRows

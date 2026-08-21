@@ -8,9 +8,7 @@ import {
     OVERLAY_CLOSE_BTN_CLASS,
     PLAYER_FOCUSABLE_CLASS,
     ensureMenuScrollStyle,
-    episodesIconMarkup,
     chaptersIconMarkup,
-    audioSubtitlesIconMarkup,
     versionIconMarkup,
     qualityCapIconMarkup,
     effectsIconMarkup,
@@ -21,15 +19,10 @@ import {
 } from "./shared.js";
 /* Circular with episode-list.js (which imports playQueuedTitle/formatTime from
    chrome-transport.js) - safe here because both sides only reference the other module's
-   export from inside a function body (openChapterListOverlay/openEpisodeListOverlay are
-   called from a click handler, long after both modules have finished loading), never at
-   top-level module-evaluation time. */
-import { openChapterListOverlay, openEpisodeListOverlay } from "./episode-list.js";
-/* Same circularity reasoning as episode-list.js above - chrome-subtitles.js imports
-   closeInlineMenu/renderPickerList from this file, and this file's own use of
-   openAudioSubtitlesOverlay is confined to a `nav` callback below, never called until long
-   after both modules have finished loading. */
-import { openAudioSubtitlesOverlay } from "./chrome-subtitles.js";
+   export from inside a function body (openChapterListOverlay is called from a click
+   handler, long after both modules have finished loading), never at top-level
+   module-evaluation time. */
+import { openChapterListOverlay } from "./episode-list.js";
 import { renderEffectsList } from "./chrome-menu-effects.js";
 import { renderExtrasList } from "./chrome-menu-extras.js";
 
@@ -412,10 +405,14 @@ export function openHamburgerMenu(controller, anchor) {
     goBack = () => closeInlineMenu(controller);
     const state = { expandedCollapse: null };
     /* Ordered to match the Android native player's own More menu (PlayerUiHelper.java) so the
-       two platforms read as the same app: what-you're-watching controls (Episodes/Chapters/
-       Audio & Subtitles) first, since those get touched per-video; source/quality (Version/
-       Quality Cap) and the Auto-Play toggle next; Effects/Extras/Performance Overlay last, in
-       that order - the three rows here most people set once and never revisit.
+       two platforms read as the same app: source/quality (Version/Quality Cap) and the
+       Auto-Play toggle first; Effects/Extras/Performance Overlay last, in that order - the
+       three rows here most people set once and never revisit.
+
+       Episodes and Audio & Subtitles are deliberately NOT duplicated here on web - each already
+       has its own dedicated transport-bar icon (chrome-transport.js's leftCell/rightCell), unlike
+       Android's native chrome which has no top-level icon for either (see PlayerUiHelper.java).
+       Chapters has no such icon of its own, so it stays here.
 
        Exception: Auto-Skip Intro & Credits (just below Auto-Play) has no Android mirror yet.
        Android's WebView, and this whole chrome.js UI along with it, is paused for as long as
@@ -428,44 +425,19 @@ export function openHamburgerMenu(controller, anchor) {
        Auto-Play row's own onChange (see the "autoplay" section) reach into the "autoskip"
        row it gates and grey it out live, without rebuilding this whole list. */
     const rowHandles = {};
-    /* Used to be a standalone transport-bar button (chrome-transport.js's leftCell) - moved here
-       to match Android, whose chrome has no standalone Episodes icon either. Same "seasonNumber
-       present means a TV episode with siblings to browse" wording that button and episode-list.js's
-       own overlay heading already used - see formatEpisodeListItem's neighbouring reasoning. */
-    if (session?.queueRatingKeys?.length > 1) {
-        sections.push({
-            key: "episodes",
-            label: session.seasonNumber != null ? "Episodes" : "Up Next",
-            icon: episodesIconMarkup(),
-            /* openEpisodeListOverlay already closes this sheet itself (same pattern as Chapters
-               below), so there's nothing else to do here. */
-            nav: () => openEpisodeListOverlay(controller),
-        });
-    }
     if (session?.chapters?.length) {
         sections.push({
             /* Opens the same horizontally-scrolling card overlay episode-list.js uses
                for browsing episodes/queue items, rather than an inline text-row picker
                - chapters read better as thumbnail cards than plain rows, same as
                episodes do. Closes the More sheet on the way there (see
-               openChapterListOverlay), matching how opening the Episodes overlay
-               already closes this sheet too. */
+               openChapterListOverlay). */
             key: "chapters",
             label: "Chapters",
             icon: chaptersIconMarkup(),
             nav: () => openChapterListOverlay(controller),
         });
     }
-    sections.push({
-        /* Used to be its own standalone transport-bar icon (chrome-transport.js's rightCell) -
-           moved here to match Android, whose chrome puts this in its More menu too rather than a
-           top-level icon (see PlayerUiHelper.java). openAudioSubtitlesOverlay already closes this
-           sheet itself, same as Chapters/Episodes above. */
-        key: "audiosubtitles",
-        label: "Audio & Subtitles",
-        icon: audioSubtitlesIconMarkup(),
-        nav: () => openAudioSubtitlesOverlay(controller),
-    });
     /* Version and Quality Cap used to live one level deeper, behind a "Video Quality"
        row - flattened to their own top-level rows (Version only shown when this item
        actually has more than one Media[] entry, same "never an empty/dead affordance"
@@ -482,7 +454,7 @@ export function openHamburgerMenu(controller, anchor) {
     }
     sections.push({
         /* Own dedicated screen (see renderQualityCapList), not an inline expand - same
-           reasoning as Subtitles above. */
+           reasoning as Effects/Extras below. */
         key: "qualitycap",
         label: "Quality Cap",
         icon: qualityCapIconMarkup(),
