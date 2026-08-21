@@ -1,6 +1,7 @@
 import { hideControls, showControls } from "./chrome-controls.js";
 import { wireLinearNav, focusAfterPaint } from "../../../focus-nav.js";
 import { setAutoQualityEnabled, bandwidthSource } from "../core/abr.js";
+import { platformTag } from "../core/platform.js";
 import {
     QUALITY_CAP_PRESETS,
     SHEET_GRADIENT,
@@ -8,7 +9,9 @@ import {
     OVERLAY_CLOSE_BTN_CLASS,
     PLAYER_FOCUSABLE_CLASS,
     ensureMenuScrollStyle,
+    episodesIconMarkup,
     chaptersIconMarkup,
+    audioSubtitlesIconMarkup,
     versionIconMarkup,
     qualityCapIconMarkup,
     effectsIconMarkup,
@@ -19,10 +22,15 @@ import {
 } from "./shared.js";
 /* Circular with episode-list.js (which imports playQueuedTitle/formatTime from
    chrome-transport.js) - safe here because both sides only reference the other module's
-   export from inside a function body (openChapterListOverlay is called from a click
-   handler, long after both modules have finished loading), never at top-level
-   module-evaluation time. */
-import { openChapterListOverlay } from "./episode-list.js";
+   export from inside a function body (openChapterListOverlay/openEpisodeListOverlay are
+   called from a click handler, long after both modules have finished loading), never at
+   top-level module-evaluation time. */
+import { openChapterListOverlay, openEpisodeListOverlay } from "./episode-list.js";
+/* Same circularity reasoning as episode-list.js above - chrome-subtitles.js imports
+   closeInlineMenu/renderPickerList from this file, and this file's own use of
+   openAudioSubtitlesOverlay is confined to a `nav` callback below, never called until long
+   after both modules have finished loading. */
+import { openAudioSubtitlesOverlay } from "./chrome-subtitles.js";
 import { renderEffectsList } from "./chrome-menu-effects.js";
 import { renderExtrasList } from "./chrome-menu-extras.js";
 
@@ -410,21 +418,40 @@ export function openHamburgerMenu(controller, anchor) {
        three rows here most people set once and never revisit.
 
        Episodes and Audio & Subtitles are deliberately NOT duplicated here on web - each already
-       has its own dedicated transport-bar icon (chrome-transport.js's leftCell/rightCell), unlike
-       Android's native chrome which has no top-level icon for either (see PlayerUiHelper.java).
-       Chapters has no such icon of its own, so it stays here.
+       has its own dedicated transport-bar icon (chrome-transport.js's leftCell/rightCell, both
+       gated to platformTag() !== "xbox"). This file is shared between web AND Xbox (see this
+       module's own header, and xbox-bridge.js's "the chrome stays in JS" comment) but Xbox's
+       transport bar never gets those two icons - it has no mouse/hover row at all, just the
+       floating play button (chrome-transport.js's buildFloatingPlayButton) - so the two rows
+       below are the ONLY way Xbox reaches either overlay, gated the opposite way from the web
+       icons rather than dropped for every platform. (A previous pass here removed both rows
+       unconditionally to match Android's menu, which has no top-level icon for either either -
+       fine for Android, since this whole file never renders there, but it silently orphaned
+       Xbox's only path to both overlays until this comment's own fix.) Chapters has no icon on
+       any platform, so it always stays here regardless.
 
-       Exception: Auto-Skip Intro & Credits (just below Auto-Play) has no Android mirror yet.
-       Android's WebView, and this whole chrome.js UI along with it, is paused for as long as
-       its native PlayerActivity is foregrounded (see native-bridge.js's own "progress" listener
-       comment for why that native-to-JS bridge call still works regardless) - a matching toggle
-       there needs its own PlayerActivity.java/PlayerUiHelper.java row plus the marker data wired
-       into the native side, neither of which exist yet. Web+Xbox only for now. */
+       Exception: Auto-Skip Intro & Credits (just below Auto-Play) has its own native mirror
+       instead of appearing here. Android's WebView, and this whole chrome.js UI along with it,
+       is paused for as long as its native PlayerActivity is foregrounded, so the toggle itself
+       lives in PlayerUiHelper.java's own More menu (PlayerActivity's autoSkipIntroCreditsEnabled
+       pref) - native-bridge.js's "progress" listener still makes the actual skip/countdown
+       decision in JS (it already has controller._session.markers, which never existed natively),
+       it just mirrors the native pref locally instead of reading controller._autoSkipIntroCreditsEnabled. */
     const sections = [];
     /* Keyed by section.key, populated by the buildAccordionRow calls below - lets the
        Auto-Play row's own onChange (see the "autoplay" section) reach into the "autoskip"
        row it gates and grey it out live, without rebuilding this whole list. */
     const rowHandles = {};
+    if (platformTag() === "xbox" && session?.queueRatingKeys?.length > 1) {
+        sections.push({
+            key: "episodes",
+            label: session.seasonNumber != null ? "Episodes" : "Up Next",
+            icon: episodesIconMarkup(),
+            /* openEpisodeListOverlay already closes this sheet itself (same pattern as Chapters
+               below), so there's nothing else to do here. */
+            nav: () => openEpisodeListOverlay(controller),
+        });
+    }
     if (session?.chapters?.length) {
         sections.push({
             /* Opens the same horizontally-scrolling card overlay episode-list.js uses
@@ -436,6 +463,16 @@ export function openHamburgerMenu(controller, anchor) {
             label: "Chapters",
             icon: chaptersIconMarkup(),
             nav: () => openChapterListOverlay(controller),
+        });
+    }
+    if (platformTag() === "xbox") {
+        sections.push({
+            /* openAudioSubtitlesOverlay already closes this sheet itself, same as
+               Chapters/Episodes above. */
+            key: "audiosubtitles",
+            label: "Audio & Subtitles",
+            icon: audioSubtitlesIconMarkup(),
+            nav: () => openAudioSubtitlesOverlay(controller),
         });
     }
     /* Version and Quality Cap used to live one level deeper, behind a "Video Quality"

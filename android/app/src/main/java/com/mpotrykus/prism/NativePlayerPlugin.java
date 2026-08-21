@@ -281,9 +281,21 @@ public class NativePlayerPlugin extends Plugin implements PlayerActivity.Playbac
         call.resolve();
     }
 
-    /* First request/response bridge method in this file - everything else here is
-       fire-and-forget or event-based (notifyListeners). Backs core/platform.js's
-       primeDecodeCapabilities(), called once at app boot to widen what's honestly
+    /* Queried once by native-bridge.js's playNative, before PlayerActivity even exists
+       yet (the play() call that launches it hasn't been made) - reads straight from
+       SharedPreferences via PlayerActivity's static accessors rather than an
+       activeInstance field for exactly that reason. Later changes (the More menu's
+       Auto-Play/Auto-Skip Intro & Credits rows) reach JS live instead, via
+       onAutoSkipSettingsChanged below - this is only the cold-start read. */
+    @PluginMethod
+    public void getAutoSkipSettings(PluginCall call) {
+        JSObject result = new JSObject();
+        result.put("autoPlayEnabled", PlayerActivity.getAutoPlayEnabledPref(getContext()));
+        result.put("autoSkipIntroCreditsEnabled", PlayerActivity.getAutoSkipIntroCreditsEnabledPref(getContext()));
+        call.resolve(result);
+    }
+
+    /* Backs core/platform.js's primeDecodeCapabilities(), called once at app boot to widen what's honestly
        advertised to Plex (see stream-url.js's clientCapabilities) beyond the
        conservative h264-1080p floor. A pure device query - doesn't touch
        PlayerActivity/playback state at all. */
@@ -414,6 +426,18 @@ public class NativePlayerPlugin extends Plugin implements PlayerActivity.Playbac
         data.put("resumeMs", resumeMs);
         data.put("generation", generation);
         notifyListeners("directPlayReloadRequested", data);
+    }
+
+    /* Live counterpart to getAutoSkipSettings above - fired from PlayerActivity's
+       setAutoPlayEnabled/setAutoSkipIntroCreditsEnabled whenever the More menu's rows
+       change either flag mid-session, so native-bridge.js's local mirror of both never
+       goes stale for the rest of that playback. */
+    @Override
+    public void onAutoSkipSettingsChanged(boolean autoPlayEnabled, boolean autoSkipIntroCreditsEnabled) {
+        JSObject data = new JSObject();
+        data.put("autoPlayEnabled", autoPlayEnabled);
+        data.put("autoSkipIntroCreditsEnabled", autoSkipIntroCreditsEnabled);
+        notifyListeners("autoSkipSettingsChanged", data);
     }
 
     /* Reply leg of onDirectPlayReloadRequested above. */

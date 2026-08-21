@@ -38,8 +38,10 @@ const UP_NEXT_COUNTDOWN_MS = 10000;
    ensureSkipButtonEl's click handler - and intro auto-skip both already use), so "skip"
    still means "skip the rest of the credits", not "stop counting down where the
    countdown happened to land". Clamped to the marker's own end for the rare case a
-   credits window is shorter than the countdown itself. */
-function upNextSkipAtMs(marker) {
+   credits window is shorter than the countdown itself. Exported - native-bridge.js's
+   own Android countdown (no DOM, so it can't just call updateSkipButton below) needs
+   the identical clamp math, not a second copy of it. */
+export function upNextSkipAtMs(marker) {
     return Math.min((marker.startTimeOffset ?? 0) + UP_NEXT_COUNTDOWN_MS, marker.endTimeOffset ?? 0);
 }
 

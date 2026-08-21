@@ -903,6 +903,14 @@ final class PlayerUiHelper {
            still gets a chevron hinting at the drill-down, unlike Lock/Picture-in-
            Picture's onTap. */
         boolean showChevron;
+        /* Auto-Skip Intro & Credits only so far - greys the row out (dimmed header,
+           disabled switch) without touching its own toggleChecked value, same "stays
+           whatever it was, just inert" reasoning as chrome-menu.js's own disabled row on
+           web/Xbox. Since renderMainList fully rebuilds `list` from scratch on every
+           toggle (unlike the web sheet's live rowHandles.setDisabled), the Auto-Play
+           row's own onToggle just re-renders the whole list to pick this up - no handle-
+           tracking needed here. */
+        boolean disabled;
 
         MenuSection(String label) {
             this.label = label;
@@ -1123,9 +1131,30 @@ final class PlayerUiHelper {
         autoPlaySection.toggleChecked = activity.autoPlayEnabled;
         autoPlaySection.onToggle = (checked) -> {
             activity.setAutoPlayEnabled(checked);
+            /* Greys the row below live - renderMainList rebuilds `list` from scratch,
+               so the fresh autoSkipSection it creates just picks up the new
+               activity.autoPlayEnabled value, unlike the web sheet's live
+               rowHandles.setDisabled (see MenuSection.disabled's own comment). */
+            renderMainList(activity, list);
             return null;
         };
         sections.add(autoPlaySection);
+
+        /* Mirrors chrome-menu.js's "autoskip" row (web+Xbox) - the one native-side gap
+           that plan left open. Decision logic still lives in JS (native-bridge.js's
+           progress listener already has controller._session.markers, which never
+           existed natively and isn't worth plumbing over the bridge just for this) -
+           this row and its pref only exist to get a toggle in front of the user and
+           notify JS when it changes (see setAutoSkipIntroCreditsEnabled). */
+        MenuSection autoSkipSection = new MenuSection("Auto-Skip Intro & Credits");
+        autoSkipSection.icon = MenuIconView.Icon.AUTO_SKIP;
+        autoSkipSection.disabled = !activity.autoPlayEnabled;
+        autoSkipSection.toggleChecked = activity.autoSkipIntroCreditsEnabled;
+        autoSkipSection.onToggle = (checked) -> {
+            activity.setAutoSkipIntroCreditsEnabled(checked);
+            return checked ? "On" : null;
+        };
+        sections.add(autoSkipSection);
 
         /* Navigates to a dedicated Shader Upscaling/Color Boost/Ambient Lighting list
            (see renderEffectsList) rather than expanding in place - three sub-controls
@@ -1740,6 +1769,7 @@ final class PlayerUiHelper {
             toggle.setChecked(section.toggleChecked);
             toggle.setTrackTintList(toggleTrackTint());
             toggle.setThumbTintList(toggleThumbTint());
+            toggle.setEnabled(!section.disabled);
             toggle.setOnCheckedChangeListener((buttonView, checked) ->
                 setValue.accept(section.onToggle != null ? section.onToggle.apply(checked) : null));
             LinearLayout.LayoutParams toggleParams =
@@ -1747,6 +1777,9 @@ final class PlayerUiHelper {
             toggleParams.setMarginEnd(section.render != null ? Math.round(8 * density) : 0);
             toggle.setLayoutParams(toggleParams);
             header.addView(toggle);
+        }
+        if (section.disabled) {
+            header.setAlpha(0.4f);
         }
 
         TextView chevron = null;

@@ -359,6 +359,20 @@ export function audioSubtitlesIconMarkup() {
     return '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x="2" y="5" width="20" height="14" rx="2" stroke="currentColor" stroke-width="1.8"/><rect x="5" y="9" width="10" height="2" rx="1" fill="currentColor"/><rect x="5" y="13" width="6" height="2" rx="1" fill="currentColor"/></svg>';
 }
 
+/* Same currentColor-SVG reasoning as every icon above - three list lines plus a trailing
+   play triangle, for chrome-menu.js's Xbox-only "Episodes"/"Up Next" More-menu row (Xbox
+   has no transport-bar icon to put this on instead - see that file's own comment on why
+   the row exists there at all). Geometry mirrors Android's MenuIconView.Icon.EPISODES
+   exactly so every platform reads as the same icon. */
+export function episodesIconMarkup() {
+    return `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <rect x="1" y="4" width="12" height="2" rx="1" fill="currentColor"/>
+        <rect x="1" y="10" width="12" height="2" rx="1" fill="currentColor"/>
+        <rect x="1" y="16" width="12" height="2" rx="1" fill="currentColor"/>
+        <path d="M17 8 L17 16 L23 12 Z" fill="currentColor"/>
+    </svg>`;
+}
+
 /* Icons for each row of the More menu (chrome.js's buildAccordionRow/renderPickerRows
    callers) - one markup function per row, same currentColor-SVG-not-emoji reasoning as
    every icon above. A handful of rows deliberately reuse an existing markup above

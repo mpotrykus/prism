@@ -1,6 +1,7 @@
 package com.mpotrykus.prism;
 
 import android.app.PictureInPictureParams;
+import android.content.Context;
 import android.content.pm.PackageManager;
 import android.content.res.Configuration;
 import android.graphics.Color;
@@ -143,6 +144,7 @@ public class PlayerActivity extends AppCompatActivity {
     private static final String PREF_STATS_OVERLAY_ENABLED = "stats_overlay_enabled";
     private static final String PREF_AUTO_PLAY_ENABLED = "auto_play_enabled";
     private static final String PREF_AUTO_QUALITY_ENABLED = "auto_quality_enabled";
+    private static final String PREF_AUTO_SKIP_INTRO_CREDITS = "auto_skip_intro_credits_enabled";
 
     public interface PlaybackListener {
         void onProgress(long positionMs, long durationMs);
@@ -164,6 +166,13 @@ public class PlayerActivity extends AppCompatActivity {
            NativePlayer.applyReloadedUrl. See native-bridge.js's own listener for this
            event and NativePlayerPlugin.applyReloadedUrl for the reply leg. */
         void onDirectPlayReloadRequested(String kind, String value, long resumeMs, long generation);
+        /* Fired whenever either flag changes via the More menu's Auto-Play/Auto-Skip
+           Intro & Credits rows (setAutoPlayEnabled/setAutoSkipIntroCreditsEnabled below) -
+           native-bridge.js's own progress listener keeps a local mirror of both so its
+           marker/countdown decision (there's no JS chrome for a menu toggle to reach
+           into on this platform - see that file's own comment) stays correct without
+           re-querying getAutoSkipSettings on every tick. */
+        void onAutoSkipSettingsChanged(boolean autoPlayEnabled, boolean autoSkipIntroCreditsEnabled);
     }
 
     private static PlaybackListener listener;
@@ -308,6 +317,14 @@ public class PlayerActivity extends AppCompatActivity {
        Auto Quality only ever reacts to real degradation (see QualityAbrMonitor), so
        there's no downside to it running from a user's very first session. */
     boolean autoQualityEnabled = true;
+    /* Same immediate-persistence model as autoPlayEnabled above, but defaults OFF - the
+       JS chrome's own storedAutoSkipIntroCreditsEnabled (shared.js) defaults off for the
+       same reason: this changes existing tap-driven skip-button behavior the first time
+       it's touched, unlike Auto-Play/Auto Quality which don't change anything a user
+       already relies on. Gated on autoPlayEnabled (see PlayerUiHelper's menu row) since
+       an auto-skipped credits marker only makes sense as part of "keep watching
+       automatically" - same reasoning chrome-skip.js's shouldAutoSkip uses on web/Xbox. */
+    boolean autoSkipIntroCreditsEnabled = false;
     QualityAbrMonitor abrMonitor;
     /* A fresh player's own initial buffering (before the first STATE_READY) isn't a real
        stall - reset to false at the top of createPlayer() so the ABR monitor's
@@ -550,6 +567,8 @@ public class PlayerActivity extends AppCompatActivity {
         /* Same "defaults on" reasoning as autoPlayEnabled above - see shared.js's
            storedAutoQualityEnabled for why. */
         autoQualityEnabled = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(PREF_AUTO_QUALITY_ENABLED, true);
+        /* Defaults off - see the autoSkipIntroCreditsEnabled field's own comment above. */
+        autoSkipIntroCreditsEnabled = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(PREF_AUTO_SKIP_INTRO_CREDITS, false);
         title = getIntent().getStringExtra(EXTRA_TITLE);
         if (title == null) title = "";
         episodeTitle = getIntent().getStringExtra(EXTRA_EPISODE_TITLE);
@@ -1527,6 +1546,37 @@ public class PlayerActivity extends AppCompatActivity {
     void setAutoPlayEnabled(boolean enabled) {
         autoPlayEnabled = enabled;
         getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().putBoolean(PREF_AUTO_PLAY_ENABLED, enabled).apply();
+        notifyAutoSkipSettingsChanged();
+    }
+
+    /* Same immediate-persistence model as setAutoPlayEnabled above - see
+       PlayerUiHelper's "Auto-Skip Intro & Credits" row, greyed out (but not force-
+       cleared, same "stays whatever it was" reasoning as the JS chrome's own row) while
+       autoPlayEnabled is off. */
+    void setAutoSkipIntroCreditsEnabled(boolean enabled) {
+        autoSkipIntroCreditsEnabled = enabled;
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().putBoolean(PREF_AUTO_SKIP_INTRO_CREDITS, enabled).apply();
+        notifyAutoSkipSettingsChanged();
+    }
+
+    /* Both toggles above feed one JS-side decision (native-bridge.js's progress
+       listener - see that file's own comment for why markers/auto-skip stay JS-decided
+       even on this native-chrome platform), so either one changing needs to reach JS
+       live, not just at the next getAutoSkipSettings query. */
+    private void notifyAutoSkipSettingsChanged() {
+        if (listener != null) listener.onAutoSkipSettingsChanged(autoPlayEnabled, autoSkipIntroCreditsEnabled);
+    }
+
+    /* Read once by native-bridge.js's getAutoSkipSettings call at the start of a native
+       session (before an Activity - and so before autoPlayEnabled/autoSkipIntroCreditsEnabled
+       instance fields - even exists), so it goes straight to SharedPreferences rather
+       than through activeInstance. */
+    static boolean getAutoPlayEnabledPref(Context context) {
+        return context.getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(PREF_AUTO_PLAY_ENABLED, true);
+    }
+
+    static boolean getAutoSkipIntroCreditsEnabledPref(Context context) {
+        return context.getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(PREF_AUTO_SKIP_INTRO_CREDITS, false);
     }
 
     /* Same "toggle IS the persisted setting" immediate-persistence model as

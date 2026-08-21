@@ -5,6 +5,7 @@ import { getQueueItems, formatEpisodeListItem } from "./ui/episode-list.js";
 import * as StreamingSubtitles from "./core/subtitle-provider.js";
 import * as subtitleStore from "./core/subtitle-store.js";
 import { reloadTranscodeSession } from "./core/session-reload.js";
+import { upNextSkipAtMs } from "./ui/chrome-skip.js";
 
 const NativePlayer = registerPlugin("NativePlayer");
 /* Deliberately a local copy of plex-player.js's own TIMELINE_PING_MS, not a shared
@@ -24,6 +25,31 @@ const NATIVE_TIMELINE_PING_MS = 10000;
    read/write the controller's session state directly rather than through a narrower
    interface. */
 export async function playNative(controller, streamUrl, startOffsetMs) {
+    /* Local, not controller fields - controller._autoPlayEnabled/_autoSkipIntroCreditsEnabled
+       are the web/Xbox chrome's own localStorage-backed copies (see plex-player.js's
+       _prepareSession) and are never touched by Android's real, separately-stored
+       SharedPreferences flags (PlayerActivity's own autoPlayEnabled/
+       autoSkipIntroCreditsEnabled, changed only through PlayerUiHelper's native More
+       menu - there's no JS chrome to show on this platform, see this function's own
+       "progress" listener below). Read once here - before NativePlayer.play() below
+       even launches the Activity these prefs live on - and kept live via the
+       "autoSkipSettingsChanged" listener for the rest of this native session
+       (switchNative reuses these same listeners, see that function's own comment). */
+    let nativeAutoPlayEnabled = true;
+    let nativeAutoSkipIntroCreditsEnabled = false;
+    try {
+        const settings = await NativePlayer.getAutoSkipSettings();
+        nativeAutoPlayEnabled = !!settings.autoPlayEnabled;
+        nativeAutoSkipIntroCreditsEnabled = !!settings.autoSkipIntroCreditsEnabled;
+    } catch (e) {
+        // Falls back to the same defaults PlayerActivity itself defaults to - see its own fields.
+    }
+    controller._nativeListenerHandles.push(
+        await NativePlayer.addListener("autoSkipSettingsChanged", ({ autoPlayEnabled, autoSkipIntroCreditsEnabled }) => {
+            nativeAutoPlayEnabled = !!autoPlayEnabled;
+            nativeAutoSkipIntroCreditsEnabled = !!autoSkipIntroCreditsEnabled;
+        })
+    );
     controller._nativeListenerHandles.push(
         await NativePlayer.addListener("progress", ({ positionMs, durationMs }) => {
             if (!controller._session) return;
@@ -71,7 +97,35 @@ export async function playNative(controller, streamUrl, startOffsetMs) {
                 controller._subtitleAutoApplyRatingKey = controller._session.ratingKey;
                 applyRememberedSubtitle(controller);
             }
+            /* Android-specific counterpart to chrome-skip.js's updateSkipButton (web/
+               Xbox) - can't just call that function here: it seeks via media(controller)
+               (a real <video>/NativeMediaFacade, neither of which Android registers -
+               see media-facade.js's own header) and renders a DOM button that doesn't
+               exist on this platform's native chrome. Reuses that file's exported pure
+               marker/countdown math (activeMarkerAt, upNextSkipAtMs) instead of
+               duplicating it, and gates on nativeAutoPlayEnabled/
+               nativeAutoSkipIntroCreditsEnabled above rather than
+               controller._autoPlayEnabled/_autoSkipIntroCreditsEnabled - see this
+               function's own header comment for why those wouldn't reflect Android's
+               real toggle state here. */
             const marker = controller._activeMarkerAt(positionMs);
+            if (marker && marker === controller._autoSkippedMarker) return;
+            if (marker && nativeAutoPlayEnabled && nativeAutoSkipIntroCreditsEnabled) {
+                controller._activeSkipMarker = marker;
+                let secondsLeft = 0;
+                if (marker.type === "credits") {
+                    secondsLeft = Math.ceil((upNextSkipAtMs(marker) - positionMs) / 1000);
+                }
+                if (secondsLeft > 0) {
+                    NativePlayer.showSkipButton({ label: `Playing next in ${secondsLeft}s…`, seekToMs: marker.endTimeOffset ?? 0 });
+                } else {
+                    controller._autoSkippedMarker = marker;
+                    NativePlayer.hideSkipButton();
+                    NativePlayer.seek({ positionMs: marker.endTimeOffset ?? 0 });
+                }
+                return;
+            }
+            if (!marker) controller._autoSkippedMarker = null;
             if (marker !== controller._activeSkipMarker) {
                 controller._activeSkipMarker = marker;
                 if (marker) {
