@@ -72,6 +72,7 @@ import {
     skipLabelFor,
     updateSkipButton,
     isSkipButtonShowing,
+    shouldAutoSkip,
     playQueuedTitle,
     applyRememberedSubtitle,
     seekToAdjacentChapter,
@@ -360,7 +361,22 @@ class StreamingPlayerController {
         const { ratingKey, plexUrl, plexToken } = item;
         const key = item.key || `/library/metadata/${ratingKey}`;
         const sessionId = crypto.randomUUID();
-        const startOffsetMs = item.startOffsetMs || 0;
+        const rawStartOffsetMs = item.startOffsetMs || 0;
+        /* Real Marker[] (Plex Pass-gated intro/credits detection) wins when present;
+           otherwise fall back to chapter-derived regions - see chapter-markers.js for
+           why that fallback only ever produces "intro" from a tagged chapter and never
+           guesses one from an untagged show's first chapter. Computed here, before the
+           playback URL is even resolved, so an auto-skipped intro can move the *starting*
+           offset instead of playing from 0 and seeking past it a moment later - the
+           transcode URL below (and native's own start position) both need the corrected
+           offset up front, not a post-hoc currentTime seek once playback has begun. */
+        const markers = item.markers?.length ? item.markers : deriveChapterMarkers(item.chapters || [], item.durationMs || 0, item.type);
+        const introMarker =
+            shouldAutoSkip(this) &&
+            markers.find(
+                (m) => m.type !== "credits" && rawStartOffsetMs >= (m.startTimeOffset ?? 0) && rawStartOffsetMs <= (m.endTimeOffset ?? 0)
+            );
+        const startOffsetMs = introMarker ? (introMarker.endTimeOffset ?? rawStartOffsetMs) : rawStartOffsetMs;
         /* First play never overrides the audio track - it always starts on whichever
            stream Plex's own metadata already marked "selected" - so isDefaultAudioTrack
            is unconditionally true here; only a reload (session-reload.js) can request a
@@ -400,11 +416,7 @@ class StreamingPlayerController {
             durationMs: item.durationMs || 0,
             lastTimeMs: startOffsetMs,
             state: "playing",
-            /* Real Marker[] (Plex Pass-gated intro/credits detection) wins when present;
-               otherwise fall back to chapter-derived regions - see chapter-markers.js for
-               why that fallback only ever produces "intro" from a tagged chapter and never
-               guesses one from an untagged show's first chapter. */
-            markers: item.markers?.length ? item.markers : deriveChapterMarkers(item.chapters || [], item.durationMs || 0, item.type),
+            markers,
             chapters: item.chapters || [],
             bifIndexPath: item.bifIndexPath || null,
             title: item.title || "",
@@ -440,7 +452,12 @@ class StreamingPlayerController {
             queueIndex: item.queueIndex ?? null,
         };
         this._activeSkipMarker = null;
-        this._autoSkippedMarker = null;
+        /* Already-consumed if the start offset above got moved past an intro marker -
+           without this, the first timeupdate tick's updateSkipButton call would find
+           playback already sitting past the marker's own end and, seeing a marker it
+           hasn't marked skipped yet, briefly flash the skip button/countdown for a
+           marker whose window is already behind the playhead. */
+        this._autoSkippedMarker = introMarker || null;
         this._skipButtonFocused = false;
         /* Reset per session, not just left to differ naturally from the new ratingKey -
            replaying the exact same title later would otherwise still equal the value
