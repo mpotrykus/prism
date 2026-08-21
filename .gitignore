@@ -4,6 +4,8 @@
 node_modules/
 dist/
 
+.claude/
+
 # Capacitor / Android
 android/app/build/
 android/build/
