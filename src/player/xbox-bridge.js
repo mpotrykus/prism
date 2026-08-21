@@ -66,7 +66,7 @@ export function playXbox(controller, streamUrl, startOffsetMs, payload, payloadF
        the whole transparent-WebView2 architecture is for. gpuPipelines:false because shader-pipeline.js's
        WebGL canvas and content-analysis.js's 2D canvas both read pixels out of a real <video> via
        texImage2D/drawImage, which a native surface cannot provide - ShaderVideoEffect
-       (xbox/PrismXboxEffects) does that work natively instead (see the three calls below). */
+       (uwp/PrismUwpEffects) does that work natively instead (see the three calls below). */
     mountPlayerChrome(controller, facade, { gpuPipelines: false });
     /* Mirrors mountPlayerChrome's own gpuPipelines-gated startup calls (web) - applies whatever
        shader/Color-Boost/ambient/auto settings were already resolved from storage in play(), so a
@@ -202,7 +202,7 @@ export function resumeXbox() {
 
 /* --- JS -> native, Effects (shader-pipeline.js/ambient-pipeline.js call these; see each file's
    own postXboxShaderSettings/postXboxColorBoostSettings/updateAmbientPipeline). Native's
-   ShaderVideoEffect keeps its own copy of these values (EffectSettings, xbox/PrismXboxEffects) -
+   ShaderVideoEffect keeps its own copy of these values (EffectSettings, uwp/PrismUwpEffects) -
    see that class's own header comment for why settings flow this way rather than through
    MediaPlayer.AddVideoEffect's IPropertySet. --- */
 

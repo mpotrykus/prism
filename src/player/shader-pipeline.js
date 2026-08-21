@@ -27,7 +27,7 @@ function isXbox() {
 }
 
 /* Xbox has no real <video> element for ensureShaderPipeline's canvas/WebGL pass to read from -
-   ShaderVideoEffect (xbox/PrismXboxEffects) bakes Shader Upscaling/Color Boost directly into the
+   ShaderVideoEffect (uwp/PrismUwpEffects) bakes Shader Upscaling/Color Boost directly into the
    decoded frame instead, so this side only ever has to relay settings across the bridge. Exported
    so content-analysis.js's own Xbox branch can reuse the exact same payload-building logic rather
    than re-deriving it - native's "auto" flags live in this same message, and content-analysis.js's

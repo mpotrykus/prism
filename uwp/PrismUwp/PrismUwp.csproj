@@ -1,0 +1,182 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="15.0" DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <Import Project="$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props" Condition="Exists('$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props')" />
+  <PropertyGroup>
+    <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
+    <Platform Condition=" '$(Platform)' == '' ">x64</Platform>
+    <ProjectGuid>{E045F49B-6026-4505-B1D1-DEF0D63E4638}</ProjectGuid>
+    <OutputType>AppContainerExe</OutputType>
+    <AppDesignerFolder>Properties</AppDesignerFolder>
+    <RootNamespace>PrismUwp</RootNamespace>
+    <AssemblyName>PrismUwp</AssemblyName>
+    <DefaultLanguage>en-US</DefaultLanguage>
+    <TargetPlatformIdentifier>UAP</TargetPlatformIdentifier>
+    <TargetPlatformVersion Condition=" '$(TargetPlatformVersion)' == '' ">10.0.26100.0</TargetPlatformVersion>
+    <TargetPlatformMinVersion>10.0.19041.0</TargetPlatformMinVersion>
+    <MinimumVisualStudioVersion>14</MinimumVisualStudioVersion>
+    <FileAlignment>512</FileAlignment>
+    <ProjectTypeGuids>{A5A43C5B-DE2A-4C0C-9213-0A381AF9435A};{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}</ProjectTypeGuids>
+    <WindowsXamlEnableOverview>true</WindowsXamlEnableOverview>
+    <AppxPackageSigningEnabled>true</AppxPackageSigningEnabled>
+    <PackageCertificateKeyFile>PrismUwp_TemporaryKey.pfx</PackageCertificateKeyFile>
+    <PackageCertificateThumbprint>974AA96552DCFBB5A5C5FC459A0F6E3FE8061570</PackageCertificateThumbprint>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Debug|x64'">
+    <DebugSymbols>true</DebugSymbols>
+    <OutputPath>bin\x64\Debug\</OutputPath>
+    <DefineConstants>DEBUG;TRACE;NETFX_CORE;WINDOWS_UWP</DefineConstants>
+    <NoWarn>;2008</NoWarn>
+    <DebugType>full</DebugType>
+    <PlatformTarget>x64</PlatformTarget>
+    <UseVSHostingProcess>false</UseVSHostingProcess>
+    <ErrorReport>prompt</ErrorReport>
+    <Prefer32Bit>true</Prefer32Bit>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Release|x64'">
+    <OutputPath>bin\x64\Release\</OutputPath>
+    <DefineConstants>TRACE;NETFX_CORE;WINDOWS_UWP</DefineConstants>
+    <Optimize>true</Optimize>
+    <NoWarn>;2008</NoWarn>
+    <DebugType>pdbonly</DebugType>
+    <PlatformTarget>x64</PlatformTarget>
+    <UseVSHostingProcess>false</UseVSHostingProcess>
+    <ErrorReport>prompt</ErrorReport>
+    <Prefer32Bit>true</Prefer32Bit>
+    <UseDotNetNativeToolchain>true</UseDotNetNativeToolchain>
+  </PropertyGroup>
+  <PropertyGroup>
+    <RestoreProjectStyle>PackageReference</RestoreProjectStyle>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="App.xaml.cs">
+      <DependentUpon>App.xaml</DependentUpon>
+    </Compile>
+    <Compile Include="MainPage.xaml.cs">
+      <DependentUpon>MainPage.xaml</DependentUpon>
+    </Compile>
+    <Compile Include="Player\AiUpscaleFrameServer.cs" />
+    <Compile Include="Player\HdrDisplayController.cs" />
+    <Compile Include="Player\NativePlayerHost.cs" />
+    <Compile Include="Player\PlayerBridge.cs" />
+    <Compile Include="Properties\AssemblyInfo.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <AppxManifest Include="Package.appxmanifest">
+      <SubType>Designer</SubType>
+    </AppxManifest>
+  </ItemGroup>
+  <ItemGroup>
+    <Content Include="Properties\Default.rd.xml" />
+    <Content Include="Assets\LockScreenLogo.scale-200.png" />
+    <Content Include="Assets\SplashScreen.scale-200.png" />
+    <Content Include="Assets\SplashScreen.scale-400.png" />
+    <Content Include="Assets\PrismLogo.svg" />
+    <Content Include="Assets\Square150x150Logo.scale-200.png" />
+    <Content Include="Assets\Square44x44Logo.scale-200.png" />
+    <Content Include="Assets\Square44x44Logo.targetsize-24_altform-unplated.png" />
+    <Content Include="Assets\StoreLogo.png" />
+    <Content Include="Assets\Wide310x150Logo.scale-200.png" />
+    <!--
+      Wildcard include: the "www" folder is regenerated wholesale by the root repo's
+      `npm run uwp:sync` script (vite build -> copy dist/* here), so its file list changes
+      shape often. A per-file Content list here would go stale on every sync. Verify in
+      Visual Studio that new files added under www/ after a sync are picked up automatically
+      (Solution Explorer's "Show All Files" may be needed the first time) - classic UWP csproj
+      Content globs build correctly via MSBuild either way, but VS's project-system display of
+      glob-added items can lag until the project is reloaded.
+    -->
+    <Content Include="www\**\*.*" />
+  </ItemGroup>
+  <ItemGroup>
+    <ApplicationDefinition Include="App.xaml">
+      <Generator>MSBuild:Compile</Generator>
+      <SubType>Designer</SubType>
+    </ApplicationDefinition>
+    <Page Include="MainPage.xaml">
+      <Generator>MSBuild:Compile</Generator>
+      <SubType>Designer</SubType>
+    </Page>
+  </ItemGroup>
+  <ItemGroup>
+    <!--
+      No Xbox-specific "extension SDK" is referenced here. Verified against Microsoft's own
+      current WebView2-on-Xbox reference sample (microsoft/Media-App-Samples-for-Xbox,
+      WebView2/cs/JavaScriptVideoSample) - it has zero SDKReference entries. UWP's documented
+      extension SDK list (Windows Desktop/Mobile/Team Extensions) has no Xbox entry at all;
+      Xbox targeting is expressed purely via Package.appxmanifest's TargetDeviceFamily, not a
+      csproj SDK reference. If a future phase needs Xbox-only WinRT APIs, re-check this - but
+      for this WebView2 shell, nothing beyond the packages below is required.
+    -->
+    <PackageReference Include="Microsoft.NETCore.UniversalWindowsPlatform">
+      <Version>6.2.15</Version>
+    </PackageReference>
+    <PackageReference Include="Microsoft.UI.Xaml">
+      <Version>2.8.7</Version>
+    </PackageReference>
+    <PackageReference Include="Microsoft.Web.WebView2">
+      <Version>1.0.4129.50</Version>
+    </PackageReference>
+    <!-- Only PrismUwpEffects referenced Win2D before this - AiUpscaleFrameServer uses
+         CanvasImageSource directly in this project's own MainPage.xaml.cs/Player code, which
+         needs its own explicit reference rather than relying on the transitive one through the
+         PrismUwpEffects ProjectReference below. Version matched to PrismUwpEffects.csproj's. -->
+    <PackageReference Include="Win2D.uwp">
+      <Version>1.26.0</Version>
+    </PackageReference>
+  </ItemGroup>
+  <ItemGroup>
+    <!-- Hosts ShaderVideoEffect (Shader Upscaling/Color Boost/Ambient Lighting) - must be a
+         separate Windows Runtime Component project, not a class in this one; see that
+         project's own csproj header comment for why. -->
+    <ProjectReference Include="..\PrismUwpEffects\PrismUwpEffects.csproj">
+      <Project>{9E6F7E1E-9E6E-4E3F-8B7B-5F6D9B7F6E1E}</Project>
+      <Name>PrismUwpEffects</Name>
+    </ProjectReference>
+  </ItemGroup>
+  <PropertyGroup Condition=" '$(VisualStudioVersion)' == '' or '$(VisualStudioVersion)' &lt; '14.0' ">
+    <VisualStudioVersion>14.0</VisualStudioVersion>
+  </PropertyGroup>
+  <Import Project="$(MSBuildExtensionsPath)\Microsoft\WindowsXaml\v$(VisualStudioVersion)\Microsoft.Windows.UI.Xaml.CSharp.targets" />
+  <!--
+    www\**\*.* is Vite-hashed (filenames change every build), but the AppX packaging
+    layout is cached incrementally in obj\<platform>\<config>\*.layout.resfiles* and
+    the PackageLayout folder. MSBuild's incremental check doesn't reliably notice that old
+    hashed files were deleted and new ones added, so a stale cache entry survives and
+    MakeAppx later fails with "Payload file '...' does not exist" - previously required a
+    manual Clean before every Build to clear it. Deleting these layout-only caches (not
+    obj/bin wholesale) forces them to regenerate from the current www\ contents every
+    build, without discarding compiled output for a full clean/rebuild.
+    Deliberately does NOT also delete bin\...\PrismUwp.build.appxrecipe here - that file is
+    only regenerated by certain deploy/packaging target chains (not a plain Build), so
+    deleting it unconditionally left it permanently missing after an AppxBundle build and
+    broke Visual Studio's own Deploy step (DEP0600 null-reference) when it expected to read
+    it back.
+    The root cause traces one level further than the obj\ caches above: MSBuild's own
+    "copy content to output" step for bin\<platform>\<config>\AppX\www\assets\ is itself
+    incremental - it copies new hashed files in but never removes an old build's now-gone
+    ones, so both an old and new index-*.js/web-*.js end up sitting there together. The
+    resfiles/PackageLayout caches above can then end up pointing at whichever one MakeAppx
+    decides is stale. Deleting the old hashed files out of that AppX\www\assets\ layout
+    copy directly - the same root fix uwp-sync.mjs already applies to the source www\
+    folder (wipe-then-copy instead of overlay-copy) - removes the mismatch at its source
+    instead of only clearing downstream caches of it. This still reproduced when building
+    from Visual Studio directly (not just `npm run xbox:build`), since it's this csproj's
+    own incremental copy behavior, not the npm script, that leaves the stale files behind.
+  -->
+  <Target Name="PrismCleanStaleAppxLayout" BeforeTargets="Build;Rebuild">
+    <ItemGroup>
+      <_PrismStaleLayoutFiles Include="$(IntermediateOutputPath)*.layout.resfiles*" />
+      <_PrismStaleLayoutFiles Include="$(OutDir)AppX\www\assets\index-*.js" />
+      <_PrismStaleLayoutFiles Include="$(OutDir)AppX\www\assets\web-*.js" />
+    </ItemGroup>
+    <Delete Files="@(_PrismStaleLayoutFiles)" />
+    <RemoveDir Directories="$(IntermediateOutputPath)PackageLayout" Condition="Exists('$(IntermediateOutputPath)PackageLayout')" />
+  </Target>
+  <!-- To modify your build process, add your task inside one of the targets below and uncomment it.
+       Other similar extension points exist, see Microsoft.Common.targets.
+  <Target Name="BeforeBuild">
+  </Target>
+  <Target Name="AfterBuild">
+  </Target>
+  -->
+</Project>

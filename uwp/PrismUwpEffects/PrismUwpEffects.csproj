@@ -1,0 +1,188 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="15.0" DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <Import Project="$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props" Condition="Exists('$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props')" />
+  <!--
+    A Windows Runtime Component, not a second app. MediaPlayer.AddVideoEffect resolves its
+    activatable-class-id string via WinRT activation, and a plain class living in PrismUwp's
+    own AppContainerExe project cannot be activated that way - confirmed against Microsoft's
+    "Custom video effects - UWP applications" doc: IBasicVideoEffect implementations "can't be
+    included directly in your app's project. Instead, you must use a Windows Runtime component
+    to host your video effect class." PrismUwp.csproj carries a <ProjectReference> to this
+    project; nothing here references PrismUwp back.
+  -->
+  <PropertyGroup>
+    <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
+    <Platform Condition=" '$(Platform)' == '' ">x64</Platform>
+    <ProjectGuid>{9E6F7E1E-9E6E-4E3F-8B7B-5F6D9B7F6E1E}</ProjectGuid>
+    <OutputType>winmdobj</OutputType>
+    <AppDesignerFolder>Properties</AppDesignerFolder>
+    <RootNamespace>PrismUwpEffects</RootNamespace>
+    <AssemblyName>PrismUwpEffects</AssemblyName>
+    <DefaultLanguage>en-US</DefaultLanguage>
+    <TargetPlatformIdentifier>UAP</TargetPlatformIdentifier>
+    <TargetPlatformVersion Condition=" '$(TargetPlatformVersion)' == '' ">10.0.26100.0</TargetPlatformVersion>
+    <TargetPlatformMinVersion>10.0.19041.0</TargetPlatformMinVersion>
+    <MinimumVisualStudioVersion>14</MinimumVisualStudioVersion>
+    <FileAlignment>512</FileAlignment>
+    <!-- Same ProjectTypeGuids pair as a plain UWP app (PrismUwp.csproj uses the identical value) -
+         confirmed against several real Windows Runtime Component projects (e.g. monaco-editor-uwp's
+         MonacoEditorComponent.csproj) that OutputType=winmdobj below is what actually makes this a
+         WinRT component rather than an app, not a distinct ProjectTypeGuids value. An earlier
+         version of this file used {BC8A1FFA-BEE3-4634-8014-F334798102B3} (a GUID for an older,
+         unrelated "Windows Runtime Component" project subtype) here, which Visual Studio reported
+         as an unsupported/not-installed project type - not a build error, an outright load failure. -->
+    <ProjectTypeGuids>{A5A43C5B-DE2A-4C0C-9213-0A381AF9435A};{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}</ProjectTypeGuids>
+    <!-- No signing/appx properties: a WRC produces a .winmd + .dll consumed by PrismUwp's own
+         package, not a package of its own. -->
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Debug|x64'">
+    <DebugSymbols>true</DebugSymbols>
+    <OutputPath>bin\x64\Debug\</OutputPath>
+    <DefineConstants>DEBUG;TRACE;NETFX_CORE;WINDOWS_UWP</DefineConstants>
+    <NoWarn>;2008</NoWarn>
+    <DebugType>full</DebugType>
+    <PlatformTarget>x64</PlatformTarget>
+    <UseVSHostingProcess>false</UseVSHostingProcess>
+    <ErrorReport>prompt</ErrorReport>
+    <Prefer32Bit>true</Prefer32Bit>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Release|x64'">
+    <OutputPath>bin\x64\Release\</OutputPath>
+    <DefineConstants>TRACE;NETFX_CORE;WINDOWS_UWP</DefineConstants>
+    <Optimize>true</Optimize>
+    <NoWarn>;2008</NoWarn>
+    <DebugType>pdbonly</DebugType>
+    <PlatformTarget>x64</PlatformTarget>
+    <UseVSHostingProcess>false</UseVSHostingProcess>
+    <ErrorReport>prompt</ErrorReport>
+    <Prefer32Bit>true</Prefer32Bit>
+    <UseDotNetNativeToolchain>true</UseDotNetNativeToolchain>
+  </PropertyGroup>
+  <PropertyGroup>
+    <RestoreProjectStyle>PackageReference</RestoreProjectStyle>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="Properties\AssemblyInfo.cs" />
+    <Compile Include="EffectSettings.cs" />
+    <Compile Include="ShaderTuning.cs" />
+    <Compile Include="ContentAnalysisSampler.cs" />
+    <Compile Include="AmbientColorSampler.cs" />
+    <Compile Include="ShaderVideoEffect.cs" />
+    <Compile Include="D3D11Interop.cs" />
+    <Compile Include="RawD3D11Pass.cs" />
+    <Compile Include="AiUpscalePixelEffect.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <!--
+      Shader bytecode, precompiled offline by Shaders\compile-shaders.ps1 (fxc.exe) - see that
+      script's own comment for why this isn't an MSBuild-time compile. Embedded rather than
+      shipped as loose Content so ShaderVideoEffect.cs can load them via
+      GetType().Assembly.GetManifestResourceStream without any Package.Current.InstalledLocation
+      path plumbing. LogicalName pins the exact resource name that code looks up by, independent
+      of RootNamespace.
+    -->
+    <EmbeddedResource Include="Shaders\anime4k.cso">
+      <LogicalName>anime4k.cso</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Shaders\live_action.cso">
+      <LogicalName>live_action.cso</LogicalName>
+    </EmbeddedResource>
+    <!-- AI Upscaling (Stage 2a, Anime4K CNN) - see AiUpscalePixelEffect.cs. LogicalName is the
+         bare filename regardless of the aiupscale\ subfolder, matching the flat resource-name
+         lookups LoadShaderBytes does everywhere else. -->
+    <EmbeddedResource Include="Shaders\aiupscale\anime4k_restore_conv0.cso">
+      <LogicalName>anime4k_restore_conv0.cso</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Shaders\aiupscale\anime4k_restore_conv1.cso">
+      <LogicalName>anime4k_restore_conv1.cso</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Shaders\aiupscale\anime4k_restore_conv2.cso">
+      <LogicalName>anime4k_restore_conv2.cso</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Shaders\aiupscale\anime4k_restore_conv3.cso">
+      <LogicalName>anime4k_restore_conv3.cso</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Shaders\aiupscale\anime4k_upscale_conv0.cso">
+      <LogicalName>anime4k_upscale_conv0.cso</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Shaders\aiupscale\anime4k_upscale_conv1.cso">
+      <LogicalName>anime4k_upscale_conv1.cso</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Shaders\aiupscale\anime4k_upscale_conv2.cso">
+      <LogicalName>anime4k_upscale_conv2.cso</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Shaders\aiupscale\anime4k_upscale_conv3.cso">
+      <LogicalName>anime4k_upscale_conv3.cso</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Shaders\aiupscale\anime4k_depth_to_space.cso">
+      <LogicalName>anime4k_depth_to_space.cso</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Shaders\aiupscale\fullscreen_quad_vs.cso">
+      <LogicalName>fullscreen_quad_vs.cso</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Shaders\aiupscale\deband.cso">
+      <LogicalName>deband.cso</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Shaders\aiupscale\present.cso">
+      <LogicalName>present.cso</LogicalName>
+    </EmbeddedResource>
+    <!-- AI Upscaling (Stage 2b, FSR1 EASU+RCAS for live_action) - see AiUpscalePixelEffect.cs. -->
+    <EmbeddedResource Include="Shaders\aiupscale\fsr_luma_extract.cso">
+      <LogicalName>fsr_luma_extract.cso</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Shaders\aiupscale\fsr_easu.cso">
+      <LogicalName>fsr_easu.cso</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Shaders\aiupscale\fsr_rcas.cso">
+      <LogicalName>fsr_rcas.cso</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Shaders\aiupscale\fsr_luma_merge.cso">
+      <LogicalName>fsr_luma_merge.cso</LogicalName>
+    </EmbeddedResource>
+  </ItemGroup>
+  <ItemGroup>
+    <!--
+      Win2D.uwp: CanvasDevice/CanvasBitmap/CanvasRenderTarget/CanvasDrawingSession for the frame
+      marshalling ProcessFrame needs, plus the raw Microsoft.Graphics.Canvas.Effects.
+      PixelShaderEffect(byte[]) class the compiled .cso above loads into - chosen over
+      ComputeSharp.D2D1's PixelShaderEffect<T> after finding an open, unresolved crash report
+      (Sergio0694/ComputeSharp#917, 0x88990027) specifically on complex/offset-sampling shaders,
+      which is exactly what Anime4K/CAS's 3x3 neighbor taps need. Win2D's own PixelShaderEffect +
+      Source1Mapping/MaxSamplerOffset is the older, documented-since-Windows-10-1903 mechanism
+      for the same thing.
+    -->
+    <PackageReference Include="Win2D.uwp">
+      <Version>1.26.0</Version>
+    </PackageReference>
+    <PackageReference Include="Microsoft.NETCore.UniversalWindowsPlatform">
+      <Version>6.2.15</Version>
+    </PackageReference>
+    <!--
+      Real C# D3D11/DXGI bindings for the AI Upscaling pass graph's raw-draw passes (residual
+      adds and resolution changes - see AiUpscalePixelEffect.cs) - the passes Win2D's own
+      PixelShaderEffect can't cleanly express, since that convenience class assumes one input at
+      its own output's resolution. MIT-licensed, actively maintained; chosen over hand-rolling the
+      full ID3D11Device/DeviceContext COM vtables by hand (real risk: a wrong slot order corrupts
+      memory rather than throwing a catchable .NET exception, much harder to debug on a console
+      with no attached debugger). The one piece still hand-declared is IDirect3DDxgiInterfaceAccess
+      (see D3D11Interop.cs) - a single-method COM interface with a fixed, documented GUID, used to
+      bridge a Win2D CanvasRenderTarget's underlying ID3D11Texture2D into Vortice's types.
+    -->
+    <!-- Pinned to 2.4.2, not the current 3.x: newer Vortice releases dropped netstandard2.0 in
+         favor of net8.0+-only TFMs, which this classic .NET-Native/UAP UWP project can't
+         consume at all (confirmed: MSBuild restore succeeds silently, but the compiler then
+         can't see any Vortice types - no ref assembly actually resolves). 2.4.2 is the newest
+         version that still ships a netstandard2.0 lib, which this project's PackageReference
+         restore does pick up correctly. -->
+    <PackageReference Include="Vortice.Direct3D11">
+      <Version>2.4.2</Version>
+    </PackageReference>
+    <PackageReference Include="Vortice.DXGI">
+      <Version>2.4.2</Version>
+    </PackageReference>
+  </ItemGroup>
+  <PropertyGroup Condition=" '$(VisualStudioVersion)' == '' or '$(VisualStudioVersion)' &lt; '14.0' ">
+    <VisualStudioVersion>14.0</VisualStudioVersion>
+  </PropertyGroup>
+  <Import Project="$(MSBuildExtensionsPath)\Microsoft\WindowsXaml\v$(VisualStudioVersion)\Microsoft.Windows.UI.Xaml.CSharp.targets" />
+</Project>

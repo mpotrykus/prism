@@ -11,8 +11,8 @@
     "test:watch": "vitest",
     "android": "node scripts/android-sync-shaders.mjs && npx cap sync android && cd android && .\\gradlew.bat assembleDebug",
     "android:deploy": "node scripts/android-deploy.mjs",
-    "xbox:sync": "vite build && node scripts/xbox-sync.mjs",
-    "xbox:build": "npm run xbox:sync && node scripts/xbox-build.mjs",
+    "uwp:sync": "vite build && node scripts/uwp-sync.mjs",
+    "xbox:build": "npm run uwp:sync && node scripts/xbox-build.mjs",
     "xbox:deploy": "node scripts/xbox-deploy.mjs",
     "xbox:deploy:debug": "node scripts/xbox-deploy.mjs --logs"
   },

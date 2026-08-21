@@ -1,9 +1,9 @@
-// Restores and builds the Xbox UWP shell into a sideloadable .msix, after `xbox:sync` has
+// Restores and builds the Xbox UWP shell into a sideloadable .msix, after `uwp:sync` has
 // already refreshed www/ with the latest web build. Run via `npm run xbox:build` (which
-// chains xbox:sync first) rather than directly.
+// chains uwp:sync first) rather than directly.
 //
 // Locates MSBuild via vswhere instead of a hardcoded Visual Studio path/edition/version,
-// since that varies per machine. A plain `msbuild PrismXbox.csproj` build resolves
+// since that varies per machine. A plain `msbuild PrismUwp.csproj` build resolves
 // System.Runtime/WinMD references but fails XAML compilation with a cryptic
 // "Type universe cannot resolve assembly" error unless NuGet packages are restored first
 // (classic UWP + PackageReference quirk - MSBuild doesn't auto-restore like `dotnet build`
@@ -18,7 +18,7 @@
 // set in the csproj) depends only on the standard retail Microsoft.NET.Native.*/
 // Microsoft.VCLibs.*.14.00 framework packages instead, which sideload cleanly.
 import { execFileSync } from "node:child_process";
-import { findMsBuild, projectDir, solutionPath } from "./xbox-msbuild.mjs";
+import { findMsBuild, projectDir, solutionPath } from "./uwp-msbuild.mjs";
 
 const msbuild = findMsBuild();
 console.log(`xbox-build: using ${msbuild}`);
@@ -42,7 +42,7 @@ run([
 ]);
 
 console.log(
-  "xbox-build: done - in xbox/PrismXbox/AppPackages/.../, sideload the .msixbundle together with every " +
+  "xbox-build: done - in uwp/PrismUwp/AppPackages/.../, sideload the .msixbundle together with every " +
     ".appx under Dependencies/x64/ (Device Portal's app-install page accepts multiple files in one upload) " +
     "- a sideload install does not auto-provision framework dependencies the way Visual Studio's Remote " +
     "Machine deploy does."

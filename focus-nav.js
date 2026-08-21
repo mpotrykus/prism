@@ -517,7 +517,7 @@ const buttonState = Object.create(null);
 const stickButtonState = { up: false, down: false, left: false, right: false };
 const GAMEPAD_BUTTONS = { 0: "activate", 1: "back", 3: "search", 4: "chapterPrev", 5: "chapterNext", 8: "profile", 9: "menu" }; // standard mapping: A, B, Y, LB, RB, Back/Select, Start
 
-/* PrismXbox's MainPage.xaml.cs also forwards d-pad/thumbstick/A/B natively via
+/* PrismUwp's MainPage.xaml.cs also forwards d-pad/thumbstick/A/B natively via
    CoreWindow.KeyDown, in principle covering the same input this poller does - but with
    WebView2 hosted as its own visual island, CoreWindow input delivery while the control
    holds focus is one of this project's two flagged-unverified Xbox risks (see CLAUDE.md's

@@ -21,7 +21,7 @@
 // Devices & connections > Remote device pairing screen in Dev Mode.
 import { execFileSync } from "node:child_process";
 import { existsSync, readdirSync, statSync } from "node:fs";
-import { findMsBuild, projectDir, solutionPath, appPackagesDir } from "./xbox-msbuild.mjs";
+import { findMsBuild, projectDir, solutionPath, appPackagesDir } from "./uwp-msbuild.mjs";
 
 const positional = process.argv.slice(2).filter((a) => !a.startsWith("-"));
 const [ip, pin] = positional;
@@ -37,8 +37,8 @@ const run = (cmd, cmdArgs, opts = {}) => execFileSync(cmd, cmdArgs, { stdio: "in
 console.log("xbox-deploy: building web app...");
 run("npx", ["vite", "build"], { shell: true });
 
-console.log("xbox-deploy: syncing dist/ -> xbox/PrismXbox/www/...");
-run("node", ["scripts/xbox-sync.mjs"]);
+console.log("xbox-deploy: syncing dist/ -> uwp/PrismUwp/www/...");
+run("node", ["scripts/uwp-sync.mjs"]);
 
 const msbuild = findMsBuild();
 console.log(`xbox-deploy: using ${msbuild}`);
@@ -136,7 +136,7 @@ function runCapture(cmd, cmdArgs) {
 
 // The app's own package identity (Package.appxmanifest's <Identity Name>), not the project
 // name - WinAppDeployCmd's `list`/`uninstall` deal in package identities, not project names.
-const packageIdentityName = "com.mpotrykus.prismxbox";
+const packageIdentityName = "com.mpotrykus.prismuwp";
 
 console.log(`xbox-deploy: installing to ${ip}...`);
 try {

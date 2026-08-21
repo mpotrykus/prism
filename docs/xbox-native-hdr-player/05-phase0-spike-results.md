@@ -182,7 +182,7 @@ GUID for the native request instead of reusing the one the web player is still s
 ### The heartbeat's `fetchOk` was measuring CORS, not reachability
 
 Every tick reported `fetchOk=false`. The probe fetched Plex's `/identity` cross-origin from
-`https://prismxbox.local`, and Plex sends no CORS headers for a tokenless endpoint, so a perfectly
+`https://prismuwp.local`, and Plex sends no CORS headers for a tokenless endpoint, so a perfectly
 healthy request rejected. Left as-is this would have been misread as the Android
 network-suspension failure. Now a `mode: "no-cors"` request where *resolving at all* is the success
 signal, since an opaque response has `ok === false` and `status === 0` even when it worked.
@@ -317,9 +317,9 @@ Re-test once `spike-5` gets playback running again.
 
 | File | Role |
 | --- | --- |
-| `xbox/PrismXbox/Player/NativePlayerSpike.cs` | `MediaPlayer` + `MediaPlayerElement`, and the `AdaptiveMediaSource` probe that answers S2 |
-| `xbox/PrismXbox/MainPage.xaml.cs` | Grid layout (video behind, WebView2 on top), the WebView2 message bridge, the on-screen diagnostic log, gamepad hooks |
-| `xbox/PrismXbox/App.xaml.cs` | `WEBVIEW2_DEFAULT_BACKGROUND_COLOR` changed `FF0A0A0C` → `00000000` |
+| `uwp/PrismUwp/Player/NativePlayerSpike.cs` | `MediaPlayer` + `MediaPlayerElement`, and the `AdaptiveMediaSource` probe that answers S2 |
+| `uwp/PrismUwp/MainPage.xaml.cs` | Grid layout (video behind, WebView2 on top), the WebView2 message bridge, the on-screen diagnostic log, gamepad hooks |
+| `uwp/PrismUwp/App.xaml.cs` | `WEBVIEW2_DEFAULT_BACKGROUND_COLOR` changed `FF0A0A0C` → `00000000` |
 | `src/player/xbox-spike.js` | Hands native a real tokened stream URL; draws the S1 test overlay; runs the S3 heartbeat |
 | `app.js`, `plex-player.js` | One call each into the above; both no-op off the Xbox shell |
 
@@ -335,7 +335,7 @@ SDR-parity path. HEVC-in-MPEG-TS ingestion is a separate Phase 3 question that n
 
 ## Procedure
 
-1. `npm run xbox:sync`, then deploy `PrismXbox.sln` to the paired console via Visual Studio's
+1. `npm run uwp:sync`, then deploy `PrismUwp.sln` to the paired console via Visual Studio's
    **Remote Machine** target (Debug|x64). Not a Device Portal sideload — see `CLAUDE.md`.
 2. **Check the build actually deployed:** a green-on-black log panel must be visible at
    top-left immediately at launch, reading `spike-2 loaded`. If it isn't there, the console is
