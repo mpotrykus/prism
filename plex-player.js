@@ -27,6 +27,7 @@ import { detectShaderType } from "./src/player/shader/shaders.js";
 import { hasNativePlayer, platformTag, plexPlatformTag, usesProgressiveStream, supportsHdr, getDecodeCapabilities } from "./src/player/core/platform.js";
 import { media } from "./src/player/core/media-facade.js";
 import { buildStreamUrl, buildDecisionUrl, resolvePlaybackUrl } from "./src/player/core/stream-url.js";
+import { deriveChapterMarkers } from "./src/player/core/chapter-markers.js";
 import { playNative, switchNative, stopNative, pauseNative, resumeNative, buildPlaybackPayload } from "./src/player/native-bridge.js";
 import { playXbox, switchXbox, stopXbox, pauseXbox, resumeXbox, reloadXboxSource } from "./src/player/xbox-bridge.js";
 import { playWeb, attachSource, reloadWebSource, teardownWeb } from "./src/player/web-fallback.js";
@@ -49,7 +50,9 @@ import {
     storedStatsOverlayEnabled,
     storedAutoPlayEnabled,
     storedAutoQualityEnabled,
+    storedAutoSkipIntroCreditsEnabled,
     AUTO_PLAY_STORAGE_KEY,
+    AUTO_SKIP_INTRO_CREDITS_STORAGE_KEY,
 } from "./src/player/ui/shared.js";
 import {
     makeControlButton,
@@ -121,6 +124,7 @@ class StreamingPlayerController {
         this._pushedHistoryState = false;
         this._fitMode = "fit";
         this._activeSkipMarker = null;
+        this._autoSkippedMarker = null;
         this._skipBtnEl = null;
         this._controlButtons = [];
         this._controlsHovering = false;
@@ -182,6 +186,7 @@ class StreamingPlayerController {
         this._statsOverlayEl = null;
         this._statsOverlayIntervalId = null;
         this._autoPlayEnabled = false;
+        this._autoSkipIntroCreditsEnabled = false;
         this._autoQualityEnabled = false;
         this._abrIntervalId = null;
         this._abrLastSwitchAt = 0;
@@ -390,7 +395,11 @@ class StreamingPlayerController {
             durationMs: item.durationMs || 0,
             lastTimeMs: startOffsetMs,
             state: "playing",
-            markers: item.markers || [],
+            /* Real Marker[] (Plex Pass-gated intro/credits detection) wins when present;
+               otherwise fall back to chapter-derived regions - see chapter-markers.js for
+               why that fallback only ever produces "intro" from a tagged chapter and never
+               guesses one from an untagged show's first chapter. */
+            markers: item.markers?.length ? item.markers : deriveChapterMarkers(item.chapters || [], item.durationMs || 0, item.type),
             chapters: item.chapters || [],
             bifIndexPath: item.bifIndexPath || null,
             title: item.title || "",
@@ -426,6 +435,7 @@ class StreamingPlayerController {
             queueIndex: item.queueIndex ?? null,
         };
         this._activeSkipMarker = null;
+        this._autoSkippedMarker = null;
         /* Reset per session, not just left to differ naturally from the new ratingKey -
            replaying the exact same title later would otherwise still equal the value
            left over from that earlier playback, and native-bridge.js's progress-based
@@ -473,6 +483,7 @@ class StreamingPlayerController {
         this._autoColorBoostContrastStrength = null;
         this._statsOverlayEnabled = storedStatsOverlayEnabled();
         this._autoPlayEnabled = storedAutoPlayEnabled();
+        this._autoSkipIntroCreditsEnabled = storedAutoSkipIntroCreditsEnabled();
         /* No per-video/genre concern to resolve either - see core/abr.js. Reset every
            session's own bookkeeping (not just the flag) since a brand-new transcode
            session has no relationship to whatever streak/cooldown state the previous
@@ -834,6 +845,17 @@ class StreamingPlayerController {
     _setAutoPlayEnabled(enabled) {
         this._autoPlayEnabled = enabled;
         localStorage.setItem(AUTO_PLAY_STORAGE_KEY, enabled ? "1" : "0");
+    }
+
+    /* Same "toggle IS the persisted setting" immediate-persistence model as
+       _setAutoPlayEnabled above - read by chrome-skip.js's updateSkipButton (via
+       shouldAutoSkip) to decide whether an active intro/credits marker gets an
+       automatic seek instead of the plain tap button. Left checked-but-inert (never
+       force-cleared) if Auto-Play gets turned off afterward - see chrome-menu.js's
+       Auto-Skip row for the disabled-but-not-reset UI this mirrors. */
+    _setAutoSkipIntroCreditsEnabled(enabled) {
+        this._autoSkipIntroCreditsEnabled = enabled;
+        localStorage.setItem(AUTO_SKIP_INTRO_CREDITS_STORAGE_KEY, enabled ? "1" : "0");
     }
 
     /* Used by web-fallback.js's <video> "ended" listener - advances to the next queued

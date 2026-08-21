@@ -19,11 +19,19 @@
 .hero-media.hero-media-active { opacity: 1; z-index: 2; }
 /* Slow Ken-Burns-style drift for a static backdrop (no trailer available) so it
    doesn't feel totally frozen for its ~10s dwell. Not applied when a video/iframe
-   layer is showing - that already has real motion of its own. */
-.hero-media.hero-pan { animation: hero-pan 9s ease-in-out infinite alternate; }
-@keyframes hero-pan {
+   layer is showing - that already has real motion of its own. Orientation (vertical
+   vs horizontal) is picked at runtime in hero.js by comparing the loaded image's
+   aspect ratio against the hero box's - whichever axis background-size:cover is
+   actually cropping is the one with room to drift. */
+.hero-media.hero-pan-vertical { animation: hero-pan-vertical 9s ease-in-out infinite alternate; }
+.hero-media.hero-pan-horizontal { animation: hero-pan-horizontal 9s ease-in-out infinite alternate; }
+@keyframes hero-pan-vertical {
   0% { background-position: center 5%; }
   100% { background-position: center 45%; }
+}
+@keyframes hero-pan-horizontal {
+  0% { background-position: 30% 20%; }
+  100% { background-position: 70% 20%; }
 }
 .hero-media.hero-media-notransition { transition: none; }
 .hero-media video { width: 100%; height: 100%; object-fit: cover; display: block; }

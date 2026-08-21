@@ -153,6 +153,7 @@ export const AI_UPSCALING_STORAGE_KEY = "prism_player_ai_upscaling_enabled";
 export const STATS_OVERLAY_STORAGE_KEY = "prism_player_stats_overlay_enabled";
 export const AUTO_PLAY_STORAGE_KEY = "prism_player_auto_play_enabled";
 export const AUTO_QUALITY_STORAGE_KEY = "prism_player_auto_quality_enabled";
+export const AUTO_SKIP_INTRO_CREDITS_STORAGE_KEY = "prism_player_auto_skip_intro_credits_enabled";
 
 export function storedVolume() {
     const raw = Number(localStorage.getItem(VOLUME_STORAGE_KEY));
@@ -285,6 +286,14 @@ export function storedAutoPlayEnabled() {
    shouldn't have Plex silently re-transcoding their stream. */
 export function storedAutoQualityEnabled() {
     return localStorage.getItem(AUTO_QUALITY_STORAGE_KEY) === "1";
+}
+
+/* Same immediate-persistence model as storedAutoQualityEnabled - defaults off, unlike
+   storedAutoPlayEnabled, since this turns the existing tap-to-skip button (chrome-skip.js)
+   into an automatic seek the moment it's first touched; a never-touched user keeps
+   today's tap-driven behavior. */
+export function storedAutoSkipIntroCreditsEnabled() {
+    return localStorage.getItem(AUTO_SKIP_INTRO_CREDITS_STORAGE_KEY) === "1";
 }
 
 export function volumeIconMarkup(level) {

@@ -52,8 +52,12 @@ function createVideoElement(controller) {
         if (controller._videoEl !== video || !controller._session) return;
         controller._session.lastTimeMs = Math.round(video.currentTime * 1000);
         if (video.duration) controller._session.durationMs = Math.round(video.duration * 1000);
-        const marker = controller._activeMarkerAt(controller._session.lastTimeMs);
-        if (marker !== controller._activeSkipMarker) controller._updateSkipButton(marker);
+        /* Unconditional, matching xbox-bridge.js's own progress handler - a credits
+           countdown (chrome-skip.js's updateSkipButton, "Playing next in…") needs a
+           fresh position read every tick to count down live, not just on the
+           marker-changed edge this used to gate on. updateSkipButton is idempotent for a
+           same-marker repeat call either way. */
+        controller._updateSkipButton(controller._activeMarkerAt(controller._session.lastTimeMs));
     });
     video.addEventListener("ended", () => {
         if (controller._videoEl !== video) return;

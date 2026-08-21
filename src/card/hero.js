@@ -252,7 +252,8 @@ export class HeroController {
 
     const incoming = this._mediaLayers[1 - this._activeLayer];
     const outgoing = this._mediaLayers[this._activeLayer];
-    incoming.style.backgroundImage = `url('${heroArtUrl(this._item, this._ctx.plexImageUrl)}')`;
+    const artUrl = heroArtUrl(this._item, this._ctx.plexImageUrl);
+    incoming.style.backgroundImage = `url('${artUrl}')`;
     incoming.innerHTML = "";
     this._muteBtn.style.display = this._video ? "" : "none";
     this._playBtn.style.display = this._video ? "" : "none";
@@ -310,10 +311,9 @@ export class HeroController {
        hero-media-a/b are long-lived elements reused across every hero advance, not fresh
        per item, so the class needs an explicit remove+reflow+re-add (same trick as the
        crossfade-notransition toggle below). */
-    incoming.classList.remove("hero-pan");
+    incoming.classList.remove("hero-pan-vertical", "hero-pan-horizontal");
     if (!this._video) {
-      void incoming.offsetWidth;
-      incoming.classList.add("hero-pan");
+      this._applyHeroPan(incoming, artUrl);
     }
 
     /* Cross-fade art/video between the two stacked .hero-media layers: `incoming` sits
@@ -341,6 +341,31 @@ export class HeroController {
       outgoing.innerHTML = "";
       outgoing.style.backgroundImage = "";
     }, 650);
+  }
+
+  /* background-size:cover only leaves slack on the axis where the image's aspect
+     ratio disagrees with the hero box's - a wider-than-box image overflows (and can
+     drift) horizontally, a taller-than-box one overflows vertically. Rather than
+     assume, load the art into a throwaway Image() to read its real naturalWidth/
+     naturalHeight and compare against the hero element's current box. Async: bail if
+     `incoming` has since been reused for a different item (hero-media-a/b are
+     long-lived and get recycled on every advance) by checking its backgroundImage is
+     still the one we started this load for. Snapshot the CURRENT (already-normalized)
+     value rather than rebuilding the url(...) string ourselves - browsers rewrite
+     single quotes to double quotes when the property is read back, so comparing
+     against a freshly-built string never matches and this check silently always fails. */
+  _applyHeroPan(mediaEl, url) {
+    const expected = mediaEl.style.backgroundImage;
+    const probe = new Image();
+    probe.onload = () => {
+      if (mediaEl.style.backgroundImage !== expected) return;
+      const heroAspect = this._heroEl.clientWidth / this._heroEl.clientHeight;
+      const imgAspect = probe.naturalWidth / probe.naturalHeight;
+      const horizontal = imgAspect > heroAspect;
+      void mediaEl.offsetWidth;
+      mediaEl.classList.add(horizontal ? "hero-pan-horizontal" : "hero-pan-vertical");
+    };
+    probe.src = url;
   }
 
   _wire() {

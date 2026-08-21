@@ -110,9 +110,13 @@ export function renderPickerList(content, items, { rowGap = 0 } = {}) {
    different screen (see renderEffectsList/renderExtrasList) rather than expanding in
    place - used for "Effects"/"Extras", whose sub-controls read better as their own
    dedicated list than squeezed inline under a fourth row. Sections with only `toggle`
-   (Auto-Play, Performance Overlay) are plain on/off rows with nothing to expand or
-   navigate to. `toggle` and `render` are independent - Ambient Lighting has both,
-   flipping on/off without affecting whether its opacity section is open. */
+   (Auto-Play, Auto-Skip Intro & Credits, Performance Overlay) are plain on/off rows with
+   nothing to expand or navigate to. `toggle` and `render` are independent - Ambient
+   Lighting has both, flipping on/off without affecting whether its opacity section is
+   open. `disabled: true` greys a toggle-only row out (see setDisabled below) without
+   touching its underlying persisted value - Auto-Skip Intro & Credits stays whatever it
+   was last set to while Auto-Play is off, it just can't do anything until Auto-Play is
+   back on. */
 export function buildAccordionRow(list, state, section) {
     const wrap = document.createElement("div");
     wrap.style.borderBottom = "1px solid rgba(255,255,255,0.07)";
@@ -242,7 +246,24 @@ export function buildAccordionRow(list, state, section) {
         header.addEventListener("click", () => toggleEl.click());
     }
 
+    /* Lets a sibling row's own onChange (e.g. Auto-Play, see the "autoskip" row below)
+       grey this one out live without rebuilding the whole list - header.disabled (a real
+       <button>) already blocks both the click and D-pad/keyboard activation for free;
+       toggleEl needs its own pointer-events/opacity treatment since it's a plain div (see
+       makeToggleSwitch), same split chrome-menu-effects.js's noUpscaleNeeded case uses. */
+    const setDisabled = (disabled) => {
+        header.disabled = disabled;
+        header.style.opacity = disabled ? "0.5" : "1";
+        header.style.cursor = disabled ? "default" : (section.render || section.nav || section.toggle ? "pointer" : "default");
+        if (toggleEl) {
+            toggleEl.style.opacity = disabled ? "0.5" : "1";
+            toggleEl.style.pointerEvents = disabled ? "none" : "";
+        }
+    };
+    if (section.disabled) setDisabled(true);
+
     list.appendChild(wrap);
+    return { setDisabled };
 }
 
 /* Every navigated-to sub-list (Effects', Extras', Quality Cap's) gets the same dimmed,
@@ -394,8 +415,19 @@ export function openHamburgerMenu(controller, anchor) {
        two platforms read as the same app: what-you're-watching controls (Episodes/Chapters/
        Audio & Subtitles) first, since those get touched per-video; source/quality (Version/
        Quality Cap) and the Auto-Play toggle next; Effects/Extras/Performance Overlay last, in
-       that order - the three rows here most people set once and never revisit. */
+       that order - the three rows here most people set once and never revisit.
+
+       Exception: Auto-Skip Intro & Credits (just below Auto-Play) has no Android mirror yet.
+       Android's WebView, and this whole chrome.js UI along with it, is paused for as long as
+       its native PlayerActivity is foregrounded (see native-bridge.js's own "progress" listener
+       comment for why that native-to-JS bridge call still works regardless) - a matching toggle
+       there needs its own PlayerActivity.java/PlayerUiHelper.java row plus the marker data wired
+       into the native side, neither of which exist yet. Web+Xbox only for now. */
     const sections = [];
+    /* Keyed by section.key, populated by the buildAccordionRow calls below - lets the
+       Auto-Play row's own onChange (see the "autoplay" section) reach into the "autoskip"
+       row it gates and grey it out live, without rebuilding this whole list. */
+    const rowHandles = {};
     /* Used to be a standalone transport-bar button (chrome-transport.js's leftCell) - moved here
        to match Android, whose chrome has no standalone Episodes icon either. Same "seasonNumber
        present means a TV episode with siblings to browse" wording that button and episode-list.js's
@@ -474,6 +506,28 @@ export function openHamburgerMenu(controller, anchor) {
             checked: controller._autoPlayEnabled,
             onChange: (checked) => {
                 controller._setAutoPlayEnabled(checked);
+                /* Greys the row below live rather than waiting for the sheet to be
+                   reopened - see buildAccordionRow's setDisabled. */
+                rowHandles.autoskip?.setDisabled(!checked);
+                return checked ? "On" : null;
+            },
+        },
+    });
+    sections.push({
+        key: "autoskip",
+        label: "Auto-Skip Intro & Credits",
+        /* Only meaningful as part of "keep watching automatically" - an auto-skipped
+           credits marker with Auto-Play off would just auto-seek to the end of a title
+           with nothing queued to advance to, same reasoning chrome-skip.js's
+           shouldAutoSkip requires both flags. Double-triangle skip glyph (vs. Auto-Play's
+           single triangle just above) to read as a distinct row at a glance. */
+        icon: skipIconMarkup("next", { double: true }),
+        disabled: !controller._autoPlayEnabled,
+        getValue: () => (controller._autoSkipIntroCreditsEnabled ? "On" : null),
+        toggle: {
+            checked: controller._autoSkipIntroCreditsEnabled,
+            onChange: (checked) => {
+                controller._setAutoSkipIntroCreditsEnabled(checked);
                 return checked ? "On" : null;
             },
         },
@@ -529,7 +583,9 @@ export function openHamburgerMenu(controller, anchor) {
         },
     });
 
-    sections.forEach((section) => buildAccordionRow(list, state, section));
+    sections.forEach((section) => {
+        rowHandles[section.key] = buildAccordionRow(list, state, section);
+    });
     refocusList(list);
     }
 
