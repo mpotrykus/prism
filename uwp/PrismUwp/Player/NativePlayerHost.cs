@@ -46,6 +46,28 @@ namespace PrismUwp.Player
         // always read near the beginning - this is added back on every position reported to JS.
         private long baseOffsetMs;
         private readonly HdrDisplayController hdr;
+        // "HDR - Stay On During Playback" (settings.js, Xbox-only) - set via SetAlwaysOnHdr, only
+        // ever called from the Settings screen, never mid-playback (see that method's own comment).
+        //
+        // Scoped to Play/SwitchTitle only, NOT Stop/RestoreDisplayAsync - real hardware testing
+        // (2026-08-21) confirmed leaving the display in HDR10 for the whole APP session (dashboard
+        // included) blows out the WebView2 app chrome's contrast, which Microsoft's own Xbox HDR doc
+        // actually warns is expected ("the application UI may not be accurately color-converted when
+        // in HDR/Dolby Vision display modes" - learn.microsoft.com/windows/uwp/audio-video-camera/
+        // hevc-xbox). Scoped instead to the whole PLAYBACK session: Play/SwitchTitle both switch to
+        // (or stay in) HDR10 for every title regardless of that title's own isHdr flag - so genuinely
+        // SDR video gets Microsoft's documented SDR-in-HDR-mode auto-boost too, and a binge session's
+        // TV never renegotiates between an HDR and SDR episode - while Stop/RestoreDisplayAsync
+        // (always a return to the dashboard) keep their original unconditional restore-to-SDR
+        // behavior, so the blown-out chrome is never exposed outside of active playback.
+        private bool alwaysOnHdr;
+        // The raw per-title request last passed to Play/SwitchTitle - distinct from hdr.IsHdrActive
+        // (the real, re-read *display* state). Needed because alwaysOnHdr decouples the two: once the
+        // display is pinned in HDR10 for the whole playback session regardless of content,
+        // hdr.IsHdrActive reads true even for a genuinely SDR title, and would otherwise wrongly tell
+        // EffectSettings to skip the SDR-tuned Sharpening/Color Boost shader on it. See Play's and
+        // SwitchTitle's own SetHdrActive calls.
+        private bool currentContentIsHdr;
         // Tracks whether ShaderVideoEffect is currently attached to `player`, so
         // SetShaderEffect/SetColorBoost/SetAmbientLighting only call AddVideoEffect/
         // RemoveAllEffects on an actual on/off transition rather than on every settings tweak -
@@ -230,6 +252,18 @@ namespace PrismUwp.Player
             aiUpscale.SetFamily(aiUpscalingEnabled ? aiUpscalingPreset : "");
         }
 
+        /// <summary>
+        /// Just records the setting - see the field's own comment for what it actually gates
+        /// (SwitchTitle only). Deliberately does not touch the display itself: this is only ever
+        /// called from the Settings screen (PlayerBridge's "setAlwaysOnHdr" case) while sitting at
+        /// the dashboard, and switching the display to HDR10 there is exactly the blown-out-chrome
+        /// case this setting is scoped to avoid.
+        /// </summary>
+        public void SetAlwaysOnHdr(bool enabled)
+        {
+            alwaysOnHdr = enabled;
+        }
+
         private void SyncEffectAttachment()
         {
             // Deliberately NOT gated on hdr.IsHdrActive here - ShouldAttach also covers Ambient
@@ -297,16 +331,26 @@ namespace PrismUwp.Player
             everPlayed = false;
             currentUrl = url;
             baseOffsetMs = startPositionMs;
-            // Before Source is set, so the output mode is already correct when the first frame arrives -
-            // switching afterwards makes the TV resync mid-playback.
-            if (isHdr) await hdr.EnableAsync();
+            currentContentIsHdr = isHdr;
+            // Play is always a fresh session started from the dashboard, where the display is
+            // already SDR (Stop/RestoreDisplayAsync always restore it there - see their own
+            // comments). Under alwaysOnHdr the display switches to HDR10 for THIS title regardless
+            // of its own isHdr flag - not just when it's genuinely HDR - so SDR video gets
+            // Microsoft's documented SDR-in-HDR-mode auto-boost too; that was the original point of
+            // this setting (see its field's own comment). Before Source is set, so the output mode
+            // is already correct when the first frame arrives - switching afterwards makes the TV
+            // resync mid-playback.
+            if (isHdr || alwaysOnHdr) await hdr.EnableAsync();
             else await hdr.RestoreAsync();
             SetAiUpscalePathActive(isHdr);
-            // hdr.IsHdrActive (the real, re-read state - not the raw isHdr request, in case
-            // EnableAsync silently didn't take) just changed above - hand it to ShaderVideoEffect
-            // via EffectSettings so its next ProcessFrame skips the SDR-tuned Sharpening/Color
-            // Boost draw on this title if it's HDR, without affecting Ambient's own sampling.
-            EffectSettings.SetHdrActive(hdr.IsHdrActive);
+            // Normally hdr.IsHdrActive (the real, re-read state - not the raw isHdr request, in case
+            // EnableAsync silently didn't take) is what tells ShaderVideoEffect via EffectSettings to
+            // skip the SDR-tuned Sharpening/Color Boost draw on this title, without affecting
+            // Ambient's own sampling. Under alwaysOnHdr, hdr.IsHdrActive reads true even for a
+            // genuinely SDR title (the display was just switched above regardless of content), so it
+            // can no longer stand in for "this title is genuinely HDR" - the raw content flag is used
+            // instead in that case, same as SwitchTitle below.
+            EffectSettings.SetHdrActive(alwaysOnHdr ? isHdr : hdr.IsHdrActive);
             // Plex encodes the start position in the URL itself (offset=), so there is no seek to
             // perform here - the stream begins where it should. startPositionMs is still recorded above
             // (see baseOffsetMs) since session.Position reports 0-based from this point, not from the
@@ -374,16 +418,18 @@ namespace PrismUwp.Player
             everPlayed = false;
             currentUrl = url;
             baseOffsetMs = startPositionMs;
+            currentContentIsHdr = isHdr;
             // An in-place title swap can cross the SDR/HDR boundary, so the mode is re-evaluated here
-            // too, not only on a cold start.
-            if (isHdr) await hdr.EnableAsync();
+            // too, not only on a cold start. Same alwaysOnHdr behavior as Play: the display switches
+            // to (or stays in) HDR10 regardless of this title's own isHdr flag, so a binge session's
+            // TV never renegotiates between an HDR and SDR episode; Stop/RestoreDisplayAsync still
+            // restore unconditionally once the session actually ends.
+            if (isHdr || alwaysOnHdr) await hdr.EnableAsync();
             else await hdr.RestoreAsync();
             SetAiUpscalePathActive(isHdr);
-            // hdr.IsHdrActive (the real, re-read state - not the raw isHdr request, in case
-            // EnableAsync silently didn't take) just changed above - hand it to ShaderVideoEffect
-            // via EffectSettings so its next ProcessFrame skips the SDR-tuned Sharpening/Color
-            // Boost draw on this title if it's HDR, without affecting Ambient's own sampling.
-            EffectSettings.SetHdrActive(hdr.IsHdrActive);
+            // See Play's own comment on why alwaysOnHdr picks the raw content flag here instead of
+            // hdr.IsHdrActive.
+            EffectSettings.SetHdrActive(alwaysOnHdr ? isHdr : hdr.IsHdrActive);
             log($"switchTitle @{startPositionMs}ms isDirectPlay={isDirectPlay}");
             SetSource(url, isDirectPlay);
             player.Play();
@@ -458,12 +504,17 @@ namespace PrismUwp.Player
             emit("stopped", "{}");
             // Fire-and-forget, but it has to happen: leaving the console in HDR after playback ends makes
             // the dashboard and this app's own UI render with inaccurate colour, text especially.
+            // Unconditional even under alwaysOnHdr - stopping playback always means returning to the
+            // dashboard, which is exactly where that setting must NOT leave the display in HDR10 (see
+            // its field's own comment - it only ever applies inside SwitchTitle).
             _ = hdr.RestoreAsync();
         }
 
         /// <summary>
         /// For app suspend and close. moonlight-xbox omits this and leaves the console stuck in HDR when
-        /// killed mid-stream - a bug worth not inheriting.
+        /// killed mid-stream - a bug worth not inheriting. Unconditional even under alwaysOnHdr, same
+        /// reasoning as Stop above: suspending/backgrounding always means leaving the active playback
+        /// view, which must always land back in SDR.
         /// </summary>
         public Task RestoreDisplayAsync() => hdr.RestoreAsync();
 
@@ -516,7 +567,11 @@ namespace PrismUwp.Player
                 $"\"durationMs\":{(long)session.NaturalDuration.TotalMilliseconds}," +
                 // What the output is ACTUALLY doing, not what JS predicted from Plex metadata - so the
                 // stats overlay can report real HDR state rather than the web leg's "n/a (browser)".
-                $"\"isHdr\":{(hdr.IsHdrActive ? "true" : "false")}}}");
+                // Under alwaysOnHdr, a SwitchTitle to an SDR title can leave hdr.IsHdrActive true from
+                // a still-active prior HDR title's display switch (see that method's own comment), so
+                // the content's own flag is reported instead in that case - otherwise the overlay
+                // would claim that SDR title is HDR too.
+                $"\"isHdr\":{((alwaysOnHdr ? currentContentIsHdr : hdr.IsHdrActive) ? "true" : "false")}}}");
         }
 
         // Minimal JSON string escaping, enough for the error text and log-ish values that cross here.

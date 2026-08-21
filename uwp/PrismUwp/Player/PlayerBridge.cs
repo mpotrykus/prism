@@ -156,6 +156,9 @@ namespace PrismUwp.Player
                         p.GetNamedBoolean("enabled", false),
                         p.GetNamedString("preset", ""));
                     break;
+                case "setAlwaysOnHdr":
+                    host.SetAlwaysOnHdr(p.GetNamedBoolean("enabled", false));
+                    break;
                 case "switchAudioTrackLocally":
                     host.SwitchAudioTrackLocally((int)ReadLong(p, "index"));
                     break;

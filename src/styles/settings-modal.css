@@ -100,6 +100,7 @@ input:focus, select:focus { border-color: #e5a00d; }
 input.nav-text-highlight {
   outline: 2px solid #e5a00d; outline-offset: 2px; border-color: #e5a00d;
 }
+.hint { font-size: 11.5px; line-height: 1.4; color: rgba(255,255,255,0.5); margin-top: 6px; }
 .status { font-size: 12px; font-weight: 600; margin-top: 6px; min-height: 15px; }
 .status.ok { color: #4caf7d; }
 .status.err { color: #ff6b6b; }

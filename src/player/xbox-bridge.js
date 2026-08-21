@@ -221,6 +221,21 @@ export function postAmbientLighting(enabled) {
     post("setAmbientLighting", { enabled });
 }
 
+/* "HDR - Stay On During Playback" (settings.js, Xbox-only) - makes NativePlayerHost.Play and
+   SwitchTitle switch the display to (or keep it in) HDR10 for every title in a playback session,
+   not just genuinely HDR ones, so SDR video also gets Microsoft's documented SDR-in-HDR-mode
+   auto-boost and a binge session's TV never renegotiates between an HDR and SDR episode.
+   Deliberately does NOT touch Stop (always a return to the dashboard) or app suspend/background -
+   real hardware testing found the WebView2 app chrome's contrast blows out while the display sits
+   in HDR10, which Microsoft's own Xbox HDR doc actually documents as expected for app UI, so the
+   display always restores to SDR the moment playback ends, keeping that exposure scoped to active
+   playback only. Sent from app.js at boot and again on every settings save - never from inside a
+   playback session, since the Settings modal lives in the card DOM, which is hidden for the whole
+   duration of native Xbox playback (see mountBackdrop above). */
+export function postAlwaysOnHdr(enabled) {
+    post("setAlwaysOnHdr", { enabled });
+}
+
 /* Loudness normalization (see audio-leveling.js's updateAudioLevelingPipeline, which posts this
    instead of building a Web Audio graph on this leg - there is no <video> element here to hook
    one onto). Native counterpart: AudioLevelingEffect (PrismUwpEffects), attached to the

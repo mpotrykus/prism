@@ -1,5 +1,6 @@
 import { loadFull, isConfigured } from "./settings.js";
-import { primeDecodeCapabilities } from "./src/player/core/platform.js";
+import { primeDecodeCapabilities, platformTag } from "./src/player/core/platform.js";
+import { postAlwaysOnHdr } from "./src/player/xbox-bridge.js";
 import "./input-mode.js";
 
 (async function () {
@@ -20,7 +21,10 @@ import "./input-mode.js";
      always drove this same class. */
   const card = document.createElement("plex-netflix-card");
   card.addEventListener("open-settings", () => modal.open());
-  modal.addEventListener("settings-saved", (e) => card.refreshConfig(e.detail));
+  modal.addEventListener("settings-saved", (e) => {
+    card.refreshConfig(e.detail);
+    if (platformTag() === "xbox") postAlwaysOnHdr(e.detail.xbox_hdr_always_on === true);
+  });
   modal.addEventListener("request-plex-reauth", () => signinModal.open({ blocking: false }));
   /* Reopening Settings after a reauth (but not after the first-run gate, which had no
      Settings open to return to) lets the user see the freshly-discovered libraries
@@ -34,6 +38,11 @@ import "./input-mode.js";
     card.setConfig(fullConfig);
     document.body.appendChild(card);
     if (!isConfigured(fullConfig)) signinModal.open({ blocking: true });
+    /* Applied at every launch, not just read once and left to NativePlayerHost's own default -
+       it doesn't persist this natively across app restarts on its own. Only affects in-session
+       title switches (see postAlwaysOnHdr's own comment), so it's safe to send here at boot,
+       well before any playback session exists. */
+    if (platformTag() === "xbox") postAlwaysOnHdr(fullConfig.xbox_hdr_always_on === true);
   }
 
   boot(await loadFull());

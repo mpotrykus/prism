@@ -1,5 +1,6 @@
 import { wireLinearNav, focusAfterPaint, isControllerActive, registerNavHandler } from "./focus-nav.js";
 import { hasSecrets, loadSecrets, saveSecrets } from "./vault.js";
+import { platformTag } from "./src/player/core/platform.js";
 import MODAL_STYLE from "./src/styles/settings-modal.css?inline";
 
 /* Only non-sensitive fields live here in plain localStorage. plex_token,
@@ -21,6 +22,7 @@ const DEFAULT_PLAIN_CONFIG = {
   subtitle_provider: "plex",
   trailers_enabled: true,
   ai_rows_enabled: true,
+  xbox_hdr_always_on: false,
 };
 
 const SECTION_TYPE_MAP = { movie: 1, show: 2 };
@@ -176,6 +178,17 @@ class StreamingSettingsModal extends HTMLElement {
                   </div>
                 </div>
               </section>
+
+              <section class="group xbox-only-group">
+                <div class="group-title-row">
+                  <div class="group-title">HDR - Stay On During Playback</div>
+                  <label class="switch">
+                    <input type="checkbox" class="f-xbox-hdr-always-on" />
+                    <span class="switch-track"></span>
+                  </label>
+                </div>
+                <div class="hint">Plays everything in HDR10 mode, including SDR titles, instead of switching per-title - avoids the TV renegotiating between back-to-back titles (e.g. auto-playing the next episode). The display still returns to SDR whenever playback stops - this does not affect the dashboard.</div>
+              </section>
             </div>
           </div>
           <div class="status save-status"></div>
@@ -228,7 +241,7 @@ class StreamingSettingsModal extends HTMLElement {
       ".modal-close, .tab-btn, .btn-reauth, .btn-fetch-libraries, .section-row .s-enabled, .section-row .s-label, " +
         ".f-trailers-enabled, .f-youtube-key, .f-ai-enabled, .f-openrouter-key, .f-subtitle-provider, " +
         ".f-opensubtitles-username, .f-opensubtitles-password, .f-opensubtitles-key, " +
-        ".f-ai-cadence, .f-max-genre-rows, .f-row-size, " +
+        ".f-ai-cadence, .f-max-genre-rows, .f-row-size, .f-xbox-hdr-always-on, " +
         ".btn-cancel, .btn-save",
       { orientation: "vertical", onBack: () => this.close() }
     );
@@ -295,6 +308,14 @@ class StreamingSettingsModal extends HTMLElement {
     this._sections = config.sections || [];
     this._el(".f-trailers-enabled").checked = config.trailers_enabled !== false;
     this._el(".f-ai-enabled").checked = config.ai_rows_enabled !== false;
+    this._el(".f-xbox-hdr-always-on").checked = config.xbox_hdr_always_on === true;
+    /* Xbox/UWP-only (see HdrDisplayController.cs) - hidden rather than removed, so
+       wireLinearNav's own offsetParent!==null filtering excludes it from the nav list
+       on every other platform for free, same as the OpenSubtitles fields above. */
+    const showXboxHdr = platformTag() === "xbox";
+    this.shadowRoot.querySelectorAll(".xbox-only-group").forEach((el) => {
+      el.style.display = showXboxHdr ? "" : "none";
+    });
     /* Reset per-open so a stale in-memory copy from a previous session never lingers -
        fields re-read from the vault rather than silently reusing whatever was decrypted
        last time this modal was open. */
@@ -435,6 +456,7 @@ class StreamingSettingsModal extends HTMLElement {
       subtitle_provider: this._el(".f-subtitle-provider").value || "plex",
       trailers_enabled: this._el(".f-trailers-enabled").checked,
       ai_rows_enabled: this._el(".f-ai-enabled").checked,
+      xbox_hdr_always_on: this._el(".f-xbox-hdr-always-on").checked,
     };
   }
 

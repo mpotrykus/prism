@@ -172,7 +172,7 @@ export function wireSearchToggle(card) {
      by hand (search-page.js's onSearchInput already exits search once the box is empty). */
   registerNavHandler((command, e, active) => {
     if (command !== "back") return false;
-    if (!inMainApp() || card._currentView !== "search") return false;
+    if (!inMainApp(card) || card._currentView !== "search") return false;
     if (active === card._searchInput) {
       /* Backspace and Escape both map to "back" (focus-nav.js's KEY_TO_COMMAND) - on real
          Xbox hardware, selecting the on-screen keyboard's Backspace glyph and pressing A
