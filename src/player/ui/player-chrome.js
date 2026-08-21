@@ -2,7 +2,7 @@ import { updateContentAnalysis } from "../content-analysis.js";
 import { closeEpisodeListOverlay, closeChapterListOverlay } from "./episode-list.js";
 import { closeAudioSubtitlesOverlay, stopSubtitleLoop } from "./chrome-subtitles.js";
 import { ensurePlayerFocusStyle } from "./shared.js";
-import { platformTag } from "../core/platform.js";
+import { usesGamepadChrome } from "../core/platform.js";
 
 /* Circular with web-fallback.js (which imports mountPlayerChrome/unmountPlayerChrome from here, while
    chrome-subtitles.js above imports trySwitchAudioTrackLocal from it) - safe for the same reason the
@@ -64,17 +64,17 @@ export function mountPlayerChrome(controller, mediaEl, { gpuPipelines }) {
     controller._fitMode = "fit";
     controller._sleepMinutes = 0;
     controller._buildTransportBar(mediaEl);
-    /* Xbox only - web builds its own in-row play/pause instead (see chrome-transport.js's
-       buildCenterControls, called from within buildTransportBar), so there's never two
-       play/pause buttons on screen at once. */
-    if (platformTag() === "xbox") controller._buildFloatingPlayButton(mediaEl);
+    /* Gamepad-chrome only (real Xbox, not PC - see usesGamepadChrome()) - web builds its own
+       in-row play/pause instead (see chrome-transport.js's buildCenterControls, called from
+       within buildTransportBar), so there's never two play/pause buttons on screen at once. */
+    if (usesGamepadChrome()) controller._buildFloatingPlayButton(mediaEl);
 
-    /* Spacebar play/pause - web/Android only, same "web means keyboard, Xbox means gamepad"
-       split as the floating-vs-in-row play button above. Excludes BUTTON so this doesn't
+    /* Spacebar play/pause - web/Android/PC only, same "mouse+keyboard vs. gamepad-only" split
+       as the floating-vs-in-row play button above. Excludes BUTTON so this doesn't
        double-toggle when a play/pause button itself has focus (space already activates a
        focused button's own click on keyup), and INPUT/TEXTAREA/SELECT so it doesn't hijack
        the seek bar, volume slider, or the subtitle search box. */
-    if (platformTag() !== "xbox") {
+    if (!usesGamepadChrome()) {
         controller._spacebarHandler = (e) => {
             if (e.code !== "Space" && e.key !== " ") return;
             const tag = e.target?.tagName;
@@ -98,6 +98,12 @@ export function mountPlayerChrome(controller, mediaEl, { gpuPipelines }) {
            _colorBoostContrastAuto were set from storedUpscaleAuto()/
            storedColorBoostSaturationAuto()/storedColorBoostContrastAuto() in play(). */
         updateContentAnalysis(controller);
+        /* Same reasoning - controller._audioLevelingEnabled was set from
+           storedAudioLevelingEnabled() in play(). Needs a real <video> element
+           (AudioContext.createMediaElementSource), same as shader/ambient above, so it
+           belongs behind this same gpuPipelines gate rather than the stats overlay's
+           unconditional call below. */
+        controller._updateAudioLevelingPipeline();
     }
     /* Same reasoning - controller._statsOverlayEnabled was set from storedStatsOverlayEnabled() in
        play(). Reads the facade, so it works on either backend. */
@@ -141,8 +147,8 @@ export function unmountPlayerChrome(controller) {
     controller._controlsHovering = false;
     controller._controlButtons.forEach((b) => b.remove());
     controller._controlButtons = [];
-    /* Web-only (platformTag() !== "xbox" - see chrome-transport.js's buildTransportBar):
-       the fullscreen button requests fullscreen on document.documentElement, not a
+    /* Mouse/hover chrome only (!usesGamepadChrome() - see chrome-transport.js's
+       buildTransportBar): the fullscreen button requests fullscreen on document.documentElement, not a
        player-scoped container - leaving the player without exiting fullscreen first would
        strand the whole app fullscreen behind the now-gone player chrome. The listener lives
        on `document` too, outside the transport bar's own DOM subtree, so removing the bar

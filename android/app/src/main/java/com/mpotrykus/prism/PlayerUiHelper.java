@@ -1043,9 +1043,9 @@ final class PlayerUiHelper {
            shipped in: Episodes first (jumping to a different title is the single most
            common reason to open this menu at all, when there's a queue to jump within),
            then what-you're-watching controls (Chapters/Audio Track), since those get
-           touched per-video; source/quality (Version/Quality Cap) and the Auto-Play
-           toggle next; Effects/Extras/Performance Overlay last, in that order - the
-           three rows here most people set once and never revisit. Lock/Picture-in-
+           touched per-video; source/quality (Version/Quality Cap) next; Options/Effects/
+           Extras/Performance Overlay last, in that order - the four rows here most
+           people set once and never revisit. Lock/Picture-in-
            Picture aren't in this list at all any more, being actions rather than
            settings (see PlayerActivity.onCreate/buildLockButton/buildPipButton). */
 
@@ -1122,39 +1122,15 @@ final class PlayerUiHelper {
         qualityCapSection.onTap = () -> renderQualityCapList(activity, list);
         sections.add(qualityCapSection);
 
-        MenuSection autoPlaySection = new MenuSection("Auto-Play");
-        /* No render - same plain on/off row as Performance Overlay below, nothing to
-           drill into. Icon reuses the same "skip forward" shape ChapterSkipIconView
-           draws for title/chapter nav - advancing to the next queued item is exactly
-           what this toggle does. */
-        autoPlaySection.icon = MenuIconView.Icon.AUTO_PLAY;
-        autoPlaySection.toggleChecked = activity.autoPlayEnabled;
-        autoPlaySection.onToggle = (checked) -> {
-            activity.setAutoPlayEnabled(checked);
-            /* Greys the row below live - renderMainList rebuilds `list` from scratch,
-               so the fresh autoSkipSection it creates just picks up the new
-               activity.autoPlayEnabled value, unlike the web sheet's live
-               rowHandles.setDisabled (see MenuSection.disabled's own comment). */
-            renderMainList(activity, list);
-            return null;
-        };
-        sections.add(autoPlaySection);
-
-        /* Mirrors chrome-menu.js's "autoskip" row (web+Xbox) - the one native-side gap
-           that plan left open. Decision logic still lives in JS (native-bridge.js's
-           progress listener already has controller._session.markers, which never
-           existed natively and isn't worth plumbing over the bridge just for this) -
-           this row and its pref only exist to get a toggle in front of the user and
-           notify JS when it changes (see setAutoSkipIntroCreditsEnabled). */
-        MenuSection autoSkipSection = new MenuSection("Auto-Skip Intro & Credits");
-        autoSkipSection.icon = MenuIconView.Icon.AUTO_SKIP;
-        autoSkipSection.disabled = !activity.autoPlayEnabled;
-        autoSkipSection.toggleChecked = activity.autoSkipIntroCreditsEnabled;
-        autoSkipSection.onToggle = (checked) -> {
-            activity.setAutoSkipIntroCreditsEnabled(checked);
-            return checked ? "On" : null;
-        };
-        sections.add(autoSkipSection);
+        /* Navigates to a dedicated Normalize Audio/Auto-Play/Auto-Skip Intro & Credits list
+           (see renderOptionsList) - moved out of this top level into their own screen,
+           same "three sub-controls read better as their own screen" reasoning Effects/
+           Extras below already follow. */
+        MenuSection optionsSection = new MenuSection("Options");
+        optionsSection.icon = MenuIconView.Icon.OPTIONS;
+        optionsSection.showChevron = true;
+        optionsSection.onTap = () -> renderOptionsList(activity, list);
+        sections.add(optionsSection);
 
         /* Navigates to a dedicated Shader Upscaling/Color Boost/Ambient Lighting list
            (see renderEffectsList) rather than expanding in place - three sub-controls
@@ -1547,6 +1523,68 @@ final class PlayerUiHelper {
             opacitySeekBar.setEnabled(checked);
             opacitySeekBar.setAlpha(checked ? 1f : 0.5f);
         });
+    }
+
+    /* The "Options" sub-screen (Normalize Audio/Auto-Play/Auto-Skip Intro & Credits) -
+       moved out of the main list's own top level (Auto-Play/Auto-Skip) and out of the
+       Effects screen (Normalize Audio, formerly "Audio Leveling") into one dedicated
+       screen instead. Plain accordion toggle rows (see MenuSection.toggleChecked/
+       onToggle), same shape all three already had - just relocated, not restyled. */
+    private static void renderOptionsList(PlayerActivity activity, LinearLayout list) {
+        float density = activity.getResources().getDisplayMetrics().density;
+        list.removeAllViews();
+        list.addView(makeBackRow(activity, density, () -> renderMainList(activity, list)));
+
+        AccordionState state = new AccordionState();
+        List<MenuSection> sections = new ArrayList<>();
+
+        MenuSection normalizeAudioSection = new MenuSection("Normalize Audio");
+        normalizeAudioSection.icon = MenuIconView.Icon.AUDIO_LEVELING;
+        normalizeAudioSection.toggleChecked = activity.audioLevelingEnabled;
+        normalizeAudioSection.onToggle = (checked) -> {
+            activity.setAudioLevelingEnabled(checked);
+            return checked ? "On" : null;
+        };
+        sections.add(normalizeAudioSection);
+
+        MenuSection autoPlaySection = new MenuSection("Auto-Play");
+        /* No render - same plain on/off row as Normalize Audio above, nothing to drill
+           into. Icon reuses the same "skip forward" shape ChapterSkipIconView draws for
+           title/chapter nav - advancing to the next queued item is exactly what this
+           toggle does. */
+        autoPlaySection.icon = MenuIconView.Icon.AUTO_PLAY;
+        autoPlaySection.toggleChecked = activity.autoPlayEnabled;
+        autoPlaySection.onToggle = (checked) -> {
+            activity.setAutoPlayEnabled(checked);
+            /* Greys the row below live - renderOptionsList rebuilds `list` from
+               scratch, so the fresh autoSkipSection it creates just picks up the new
+               activity.autoPlayEnabled value, unlike the web sheet's live
+               rowHandles.setDisabled (see MenuSection.disabled's own comment). */
+            renderOptionsList(activity, list);
+            return null;
+        };
+        sections.add(autoPlaySection);
+
+        /* Mirrors chrome-menu-options.js's "autoskip" row (web+Xbox) - the one native-side
+           gap that plan left open. Decision logic still lives in JS (native-bridge.js's
+           progress listener already has controller._session.markers, which never
+           existed natively and isn't worth plumbing over the bridge just for this) -
+           this row and its pref only exist to get a toggle in front of the user and
+           notify JS when it changes (see setAutoSkipIntroCreditsEnabled). */
+        MenuSection autoSkipSection = new MenuSection("Auto-Skip Intro & Credits");
+        autoSkipSection.icon = MenuIconView.Icon.AUTO_SKIP;
+        autoSkipSection.disabled = !activity.autoPlayEnabled;
+        autoSkipSection.toggleChecked = activity.autoSkipIntroCreditsEnabled;
+        autoSkipSection.onToggle = (checked) -> {
+            activity.setAutoSkipIntroCreditsEnabled(checked);
+            return checked ? "On" : null;
+        };
+        sections.add(autoSkipSection);
+
+        for (MenuSection section : sections) {
+            list.addView(buildAccordionSection(activity, density, section, state));
+        }
+        clampMenuCardHeight(activity, list);
     }
 
     /* "Extras" - same dedicated-screen pattern as renderEffectsList above, for

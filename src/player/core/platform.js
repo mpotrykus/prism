@@ -31,6 +31,24 @@ export function platformTag() {
     return Capacitor.getPlatform();
 }
 
+/* Set by the UWP shell alongside XBOX_MARKER above, but only on the PC target - MainPage.xaml.cs's
+   DeviceFamily check. PC still reports platformTag() === "xbox" (same native player bridge,
+   progressive-stream routing, and HDR/decode-capability story - the whole reason this app runs
+   inside the UWP shell on PC instead of a plain browser), so this is deliberately a second,
+   narrower signal rather than a change to platformTag() itself. */
+const PC_SHELL_MARKER = "__prismPcShell";
+
+/* Whether the player chrome should use Xbox's gamepad-only layout (floating center play button,
+   no spacebar handler, no mouse-hover row) instead of web's mouse/hover one. NOT the same
+   question as platformTag() === "xbox": PC is also tagged "xbox" for every streaming/native-
+   player purpose above, but has a real mouse and wants the ordinary web layout - see
+   PC_SHELL_MARKER. Scope this to UI-layout gates only (player-chrome.js, chrome-transport.js,
+   chrome-menu.js); anything about streaming, native playback, or HDR should keep testing
+   platformTag() === "xbox" directly. */
+export function usesGamepadChrome() {
+    return platformTag() === "xbox" && !(typeof window !== "undefined" && window[PC_SHELL_MARKER]);
+}
+
 /* Mirrored onto documentElement (same self-registering-on-import pattern as input-mode.js's
    own [data-input-mode]) so CSS elsewhere can key off [data-platform="xbox"] directly rather
    than every consumer needing its own JS-side platformTag() check. Exists specifically

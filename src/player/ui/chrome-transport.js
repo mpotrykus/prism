@@ -4,7 +4,7 @@ import { PLAYER_FOCUSABLE_CLASS, VOLUME_STORAGE_KEY, volumeIconMarkup, seekIconM
 import { loadBifIndex, findNearestBifFrame, fetchBifFrameUrl } from "../core/bif.js";
 import { plexAssetUrl } from "../core/plex-asset-url.js";
 import { fetchQueuedTitle } from "../core/title-fetch.js";
-import { platformTag } from "../core/platform.js";
+import { usesGamepadChrome } from "../core/platform.js";
 /* Circular with episode-list.js (which imports playQueuedTitle/formatTime from this very
    file, via chrome.js's re-export) - safe for the same reason chrome-menu.js's own episode-
    list.js import is: this file's use of openEpisodeListOverlay is confined to a click
@@ -12,23 +12,24 @@ import { platformTag } from "../core/platform.js";
 import { openEpisodeListOverlay } from "./episode-list.js";
 
 /* Bottom transport bar (title/subtitle + remaining time, scrub bar/chapter segments/BIF
-   scrub-preview) and, on Xbox only, the floating center play/pause button mirroring the
+   scrub-preview) and, on real Xbox only, the floating center play/pause button mirroring the
    Android native player's layout (see PlayerUiHelper.java) - a single large play/pause
    control floating over the video, nothing else, since there's no mouse/hover there to use
-   a fuller transport row with. Web keeps its full mouse-driven row instead (play/pause
+   a fuller transport row with. Web and PC keep the full mouse-driven row instead (play/pause
    flanked by 5s-seek and chapter/title nav, plus volume/Audio & Subtitles/fullscreen on the
-   right - see buildCenterControls/buildTransportBar's platformTag() !== "xbox" branches).
+   right - see buildCenterControls/buildTransportBar's !usesGamepadChrome() branches; PC
+   still reports platformTag() === "xbox" for streaming/native-player purposes, so this file
+   deliberately doesn't test that directly - see usesGamepadChrome()'s own comment).
    Android never renders any of this file at all - it has its own native chrome (see
-   PlayerUiHelper.java) - so "web" here really means "not Xbox". Takes the
-   StreamingPlayerController instance as an explicit first argument (see native-bridge.js/
-   shader-pipeline.js for why) rather than owning independent state - the idle-fade timer
-   and session state are shared with the rest of the player chrome, not cleanly separable
-   per element. */
+   PlayerUiHelper.java). Takes the StreamingPlayerController instance as an explicit first
+   argument (see native-bridge.js/shader-pipeline.js for why) rather than owning independent
+   state - the idle-fade timer and session state are shared with the rest of the player
+   chrome, not cleanly separable per element. */
 
-/* Xbox's only on-screen playback control, centered over the video rather than living in a
-   transport row it doesn't have - matches Android's buildFloatingPlaybackControls (a 60dp
-   play/pause). Only mounted for platformTag() === "xbox" (see player-chrome.js's
-   mountPlayerChrome) - web uses buildCenterControls' in-row play/pause instead so there's
+/* Real Xbox's only on-screen playback control, centered over the video rather than living in
+   a transport row it doesn't have - matches Android's buildFloatingPlaybackControls (a 60dp
+   play/pause). Only mounted when usesGamepadChrome() (see player-chrome.js's
+   mountPlayerChrome) - web/PC use buildCenterControls' in-row play/pause instead so there's
    never two play/pause buttons on screen at once. */
 export function buildFloatingPlayButton(controller, video) {
     const btn = document.createElement("button");
@@ -232,7 +233,7 @@ async function seekToAdjacentTitle(controller, direction, video) {
     video.currentTime = 0;
 }
 
-/* Web-only (platformTag() !== "xbox") play/pause flanked by back-5s/forward-5s seek
+/* Mouse/hover chrome only (!usesGamepadChrome()) play/pause flanked by back-5s/forward-5s seek
    buttons, with chapter nav further out when the session has chapters, and title nav
    (prev/next episode, playlist/collection item, or restart) further out still - matches a
    premium-streaming-app transport row instead of Xbox/Android's single floating button.
@@ -763,11 +764,12 @@ export function buildTransportBar(controller, video) {
 
     /* The fuller mouse-driven control row (play/pause + chapter/title nav, mute/volume,
        Audio & Subtitles, fullscreen) only makes sense where there's a mouse/hover to use it
-       with - Xbox instead gets just the floating play button (buildFloatingPlayButton,
-       mounted separately, see player-chrome.js's platformTag() gate) and reaches
+       with - real Xbox instead gets just the floating play button (buildFloatingPlayButton,
+       mounted separately, see player-chrome.js's usesGamepadChrome() gate) and reaches
        chapter/title nav via its bumpers/triggers and the More menu. Android never renders
-       this file at all, so this is really just "is this Xbox". */
-    if (platformTag() !== "xbox") {
+       this file at all. PC deliberately gets this row too, despite reporting
+       platformTag() === "xbox" - see usesGamepadChrome()'s own comment. */
+    if (!usesGamepadChrome()) {
         const controlsRow = document.createElement("div");
         Object.assign(controlsRow.style, { display: "flex", alignItems: "center" });
         const leftCell = document.createElement("div");

@@ -24,6 +24,10 @@
     <TargetPlatformMinVersion>10.0.19041.0</TargetPlatformMinVersion>
     <MinimumVisualStudioVersion>14</MinimumVisualStudioVersion>
     <FileAlignment>512</FileAlignment>
+    <!-- AudioLevelingEffect.cs needs pointer access to a locked AudioBuffer's raw bytes via
+         IMemoryBufferByteAccess - the same COM-interop-pointer pattern every UWP raw-PCM/pixel
+         access goes through (there is no managed-array accessor for this). -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <!-- Same ProjectTypeGuids pair as a plain UWP app (PrismUwp.csproj uses the identical value) -
          confirmed against several real Windows Runtime Component projects (e.g. monaco-editor-uwp's
          MonacoEditorComponent.csproj) that OutputType=winmdobj below is what actually makes this a
@@ -68,6 +72,8 @@
     <Compile Include="ContentAnalysisSampler.cs" />
     <Compile Include="AmbientColorSampler.cs" />
     <Compile Include="ShaderVideoEffect.cs" />
+    <Compile Include="AudioLevelingSettings.cs" />
+    <Compile Include="AudioLevelingEffect.cs" />
     <Compile Include="D3D11Interop.cs" />
     <Compile Include="RawD3D11Pass.cs" />
     <Compile Include="AiUpscalePixelEffect.cs" />

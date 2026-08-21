@@ -148,6 +148,9 @@ namespace PrismUwp.Player
                 case "setAmbientLighting":
                     host.SetAmbientLighting(p.GetNamedBoolean("enabled", false));
                     break;
+                case "setAudioLeveling":
+                    host.SetAudioLeveling(p.GetNamedBoolean("enabled", false));
+                    break;
                 case "setAiUpscaling":
                     host.SetAiUpscaling(
                         p.GetNamedBoolean("enabled", false),

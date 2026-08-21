@@ -52,6 +52,12 @@ namespace PrismUwp.Player
         // mirrors shader-pipeline.js's own "only spin the pipeline up/down at the 0%/on-off
         // boundary" reasoning.
         private bool effectAttached;
+        // Tracks whether AudioLevelingEffect is attached to `player` - independent of
+        // effectAttached above (a different MediaPlayer effect slot, toggled by its own JS
+        // setting), but see SyncEffectAttachment's own comment for why the two still interact:
+        // MediaPlayer.RemoveAllEffects() removes audio AND video effects together, so this flag
+        // has to be re-synced there too, not just from SetAudioLeveling.
+        private bool audioEffectAttached;
         private readonly AiUpscaleFrameServer aiUpscale;
         // Read at the start of Play/SwitchTitle only (see those methods' own comments) - a
         // mid-playback toggle takes effect on the next play/switch, same as isHdr re-evaluation
@@ -92,6 +98,14 @@ namespace PrismUwp.Player
             };
             Element.SetMediaPlayer(player);
             aiUpscale = new AiUpscaleFrameServer(player, this.emit, this.log);
+            // Unlike ShaderVideoEffect (attached/detached as its own JS toggles turn on/off - see
+            // SyncEffectAttachment), AudioLevelingEffect is attached once, unconditionally, for the
+            // whole session: whether it actually does anything is gated entirely by
+            // AudioLevelingSettings.Enabled inside its own ProcessFrame, the same "always attached,
+            // just no-ops when off" shape ShaderVideoEffect itself uses for a single disabled visual
+            // pass. effectOptional:true so a device where this genuinely can't activate still plays
+            // back normally instead of failing.
+            EnsureAudioEffectAttached();
 
             MediaPlaybackSession session = player.PlaybackSession;
             session.PositionChanged += (s, e) => EmitProgress(s);
@@ -184,6 +198,21 @@ namespace PrismUwp.Player
         }
 
         /// <summary>
+        /// Unlike every SetXEffect method above, this never touches effectAttached/
+        /// SyncEffectAttachment's own video-effect on/off dance - AudioLevelingEffect stays
+        /// attached for the whole session regardless of this flag (see the constructor's own
+        /// comment); only AudioLevelingSettings.Enabled changes, read inside its ProcessFrame.
+        /// EnsureAudioEffectAttached is still called here, defensively: if a video toggle already
+        /// stripped it via RemoveAllEffects and hasn't run SyncEffectAttachment since, this is the
+        /// only other call site that would notice.
+        /// </summary>
+        public void SetAudioLeveling(bool enabled)
+        {
+            AudioLevelingSettings.SetEnabled(enabled);
+            EnsureAudioEffectAttached();
+        }
+
+        /// <summary>
         /// Stage 1: enable/disable only, no preset selection yet (Stage 2 adds the real FSR1/
         /// Anime4K shader chain; Stage 3 threads a preset string through from the bridge). Takes
         /// effect at the next <see cref="Play"/>/<see cref="SwitchTitle"/>, not mid-playback -
@@ -211,20 +240,43 @@ namespace PrismUwp.Player
             // "sampling keeps running, only the draw is skipped" split already used for the AI
             // Upscaling frame-server case.
             bool shouldAttach = EffectSettings.ShouldAttach;
-            if (shouldAttach == effectAttached) return;
-            if (shouldAttach)
+            if (shouldAttach != effectAttached)
             {
-                // effectOptional:true - if activation genuinely fails on this device (see
-                // ShaderVideoEffect's own header comment for the two things this project has not
-                // yet verified on real hardware), playback should keep working without effects
-                // rather than refuse to play at all.
-                player.AddVideoEffect(typeof(ShaderVideoEffect).FullName, true, new PropertySet());
+                if (shouldAttach)
+                {
+                    // effectOptional:true - if activation genuinely fails on this device (see
+                    // ShaderVideoEffect's own header comment for the two things this project has not
+                    // yet verified on real hardware), playback should keep working without effects
+                    // rather than refuse to play at all.
+                    player.AddVideoEffect(typeof(ShaderVideoEffect).FullName, true, new PropertySet());
+                }
+                else
+                {
+                    // Documented to remove every audio AND video effect added via AddVideoEffect/
+                    // AddAudioEffect, not just the video one this branch is reacting to - there is no
+                    // "RemoveVideoEffectsOnly" alternative. AudioLevelingEffect is collateral damage
+                    // here regardless of its own on/off state, which is exactly why
+                    // EnsureAudioEffectAttached runs unconditionally below rather than only when
+                    // shouldAttach is true.
+                    player.RemoveAllEffects();
+                    audioEffectAttached = false;
+                }
+                effectAttached = shouldAttach;
             }
-            else
-            {
-                player.RemoveAllEffects();
-            }
-            effectAttached = shouldAttach;
+            EnsureAudioEffectAttached();
+        }
+
+        /// <summary>
+        /// AudioLevelingEffect has no on/off attachment state of its own (see SetAudioLeveling's own
+        /// comment) - this only ever needs to run after something else (RemoveAllEffects, above, or
+        /// the constructor) has actually detached it. effectOptional:true, same reasoning as the
+        /// video effect's own AddVideoEffect call.
+        /// </summary>
+        private void EnsureAudioEffectAttached()
+        {
+            if (audioEffectAttached) return;
+            player.AddAudioEffect(typeof(AudioLevelingEffect).FullName, true, new PropertySet());
+            audioEffectAttached = true;
         }
 
         private static string JsonNumberArray(double[] values)

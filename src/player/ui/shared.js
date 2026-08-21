@@ -154,6 +154,7 @@ export const STATS_OVERLAY_STORAGE_KEY = "prism_player_stats_overlay_enabled";
 export const AUTO_PLAY_STORAGE_KEY = "prism_player_auto_play_enabled";
 export const AUTO_QUALITY_STORAGE_KEY = "prism_player_auto_quality_enabled";
 export const AUTO_SKIP_INTRO_CREDITS_STORAGE_KEY = "prism_player_auto_skip_intro_credits_enabled";
+export const AUDIO_LEVELING_STORAGE_KEY = "prism_player_audio_leveling_enabled";
 
 export function storedVolume() {
     const raw = Number(localStorage.getItem(VOLUME_STORAGE_KEY));
@@ -252,17 +253,10 @@ export function storedColorBoostContrastAuto() {
     return localStorage.getItem(COLOR_BOOST_CONTRAST_AUTO_STORAGE_KEY) === "1";
 }
 
-/* AI Upscaling (the real Anime4K CNN / FSR 1 chains) used to run automatically whenever
-   Shader Upscaling (now "Sharpening") was on and the source needed it - splitting it into
-   its own independent toggle means a never-touched user needs to keep getting that
-   automatic behavior rather than losing AI Upscaling silently until they find a new switch.
-   Same `stored === null` default-on reasoning as storedAutoPlayEnabled above, not the
-   default-off every other toggle here uses - this one already had an equivalent behavior
-   shipping, unlike Deband (which had never been enabled for anyone before its own toggle
-   existed) or Stats Overlay (self-evidently opt-in). */
+/* Defaults off like every other quality-toggle here (Ambient/Color Boost/Sharpening's own
+   default-off siblings) - AI Upscaling is opt-in for a never-touched user. */
 export function storedAiUpscalingEnabled() {
-    const stored = localStorage.getItem(AI_UPSCALING_STORAGE_KEY);
-    return stored === null ? true : stored === "1";
+    return localStorage.getItem(AI_UPSCALING_STORAGE_KEY) === "1";
 }
 
 /* Same immediate-persistence model as storedAmbientEnabled - a debug readout has no
@@ -273,8 +267,9 @@ export function storedStatsOverlayEnabled() {
 
 /* Same immediate-persistence model as storedStatsOverlayEnabled - no per-video/genre
    concern, whatever this was last toggled to is what every subsequent session starts
-   from. Defaults to on (unlike every other toggle here, which defaults off) for a user
-   who's never touched this setting at all - a bare-missing key, not an explicit "0". */
+   from. Defaults to on (like storedAutoSkipIntroCreditsEnabled/storedAudioLevelingEnabled
+   below, unlike the quality/effect toggles) for a user who's never touched this setting
+   at all - a bare-missing key, not an explicit "0". */
 export function storedAutoPlayEnabled() {
     const stored = localStorage.getItem(AUTO_PLAY_STORAGE_KEY);
     return stored === null ? true : stored === "1";
@@ -288,12 +283,18 @@ export function storedAutoQualityEnabled() {
     return localStorage.getItem(AUTO_QUALITY_STORAGE_KEY) === "1";
 }
 
-/* Same immediate-persistence model as storedAutoQualityEnabled - defaults off, unlike
-   storedAutoPlayEnabled, since this turns the existing tap-to-skip button (chrome-skip.js)
-   into an automatic seek the moment it's first touched; a never-touched user keeps
-   today's tap-driven behavior. */
+/* Same `stored === null` default-on reasoning as storedAutoPlayEnabled above - a
+   never-touched user gets automatic intro/credits skipping from their first session. */
 export function storedAutoSkipIntroCreditsEnabled() {
-    return localStorage.getItem(AUTO_SKIP_INTRO_CREDITS_STORAGE_KEY) === "1";
+    const stored = localStorage.getItem(AUTO_SKIP_INTRO_CREDITS_STORAGE_KEY);
+    return stored === null ? true : stored === "1";
+}
+
+/* Same `stored === null` default-on reasoning as storedAutoPlayEnabled above - a
+   never-touched user gets normalized volume from their first session. */
+export function storedAudioLevelingEnabled() {
+    const stored = localStorage.getItem(AUDIO_LEVELING_STORAGE_KEY);
+    return stored === null ? true : stored === "1";
 }
 
 export function volumeIconMarkup(level) {
@@ -327,8 +328,9 @@ export function seekIconMarkup(direction) {
 /* Same currentColor-SVG reasoning as audioSubtitlesIconMarkup below - drawn from scratch
    rather than an "⏮"/"⏭" glyph, which has the same fixed-color emoji-presentation problem.
    Shared by chrome-menu.js's Auto-Play row (single triangle) and chrome-transport.js's
-   web-only chapter/title-nav transport buttons (double triangle, see platformTag() !== "xbox"
-   gating in buildCenterControls) - the `double` option tells the two uses apart. */
+   mouse/hover-chrome chapter/title-nav transport buttons (double triangle, see
+   !usesGamepadChrome() gating in buildCenterControls) - the `double` option tells the two
+   uses apart. */
 export function skipIconMarkup(direction, { double = false } = {}) {
     const bar = '<rect x="16.6" y="5" width="2.2" height="14" rx="0.6" fill="currentColor"/>';
     const nearTriangle = '<polygon points="8,5 8,19 16.2,12" fill="currentColor"/>';
@@ -339,10 +341,10 @@ export function skipIconMarkup(direction, { double = false } = {}) {
 
 /* Same currentColor-SVG-not-emoji reasoning as every icon in this file - the standard
    four-corner-bracket "expand"/"contract" glyph pair. Used by chrome-transport.js's
-   web-only fullscreen toggle (Xbox/Android have no equivalent - the Xbox shell already
-   runs fullscreen with no chrome to hide, and Android's chrome is native, not this file)
-   and reused by chrome-menu-effects.js's Shader Upscaling row for its own icon, hence
-   `isFullscreen` staying a parameter rather than a fixed glyph. */
+   fullscreen toggle, rendered wherever there's real window chrome to hide - web and PC
+   (real Xbox already runs fullscreen with none to hide, and Android's chrome is native,
+   not this file) - and reused by chrome-menu-effects.js's Shader Upscaling row for its own
+   icon, hence `isFullscreen` staying a parameter rather than a fixed glyph. */
 export function fullscreenIconMarkup(isFullscreen) {
     const path = isFullscreen ?
         "M5 16h3v3h2v-5H5v2zm3-8H5v2h5V5H8v3zm6 11h2v-3h3v-2h-5v5zm2-11V5h-2v5h5V8h-3z" :
@@ -352,7 +354,7 @@ export function fullscreenIconMarkup(isFullscreen) {
 
 /* Same currentColor-SVG reasoning as fullscreenIconMarkup above - a classic closed-
    captions glyph (rounded outline rect + two text-line bars), for chrome-transport.js's
-   dedicated transport-bar icon (web only, platformTag() !== "xbox") that opens
+   dedicated transport-bar icon (mouse/hover chrome only, !usesGamepadChrome()) that opens
    openAudioSubtitlesOverlay directly. Geometry mirrors Android's MenuIconView.Icon.SUBTITLES
    exactly (same 24x24 box) so every platform reads as the same icon. */
 export function audioSubtitlesIconMarkup() {
@@ -398,6 +400,24 @@ export function qualityCapIconMarkup() {
         <rect x="3" y="14" width="4" height="7" rx="1"/>
         <rect x="10" y="9" width="4" height="12" rx="1"/>
         <rect x="17" y="4" width="4" height="17" rx="1"/>
+    </svg>`;
+}
+
+/* A plain 6-tooth gear - the standard "settings/options" glyph, for chrome-menu.js's "Options"
+   row (Normalize Audio/Auto-Play/Auto-Skip Intro & Credits - see chrome-menu-options.js).
+   Teeth are hand-placed at 60-degree increments around a radius-8.5 ring rather than computed
+   at load time, matching every other icon in this file's plain-literal-coordinates style.
+   Geometry mirrors Android's MenuIconView.Icon.OPTIONS exactly. */
+export function optionsIconMarkup() {
+    return `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <circle cx="12" cy="12" r="6" stroke="currentColor" stroke-width="1.8"/>
+        <circle cx="12" cy="12" r="2.2" fill="currentColor"/>
+        <rect x="19" y="10.5" width="3" height="3" rx="0.6" fill="currentColor"/>
+        <rect x="14.75" y="17.86" width="3" height="3" rx="0.6" fill="currentColor"/>
+        <rect x="6.25" y="17.86" width="3" height="3" rx="0.6" fill="currentColor"/>
+        <rect x="2" y="10.5" width="3" height="3" rx="0.6" fill="currentColor"/>
+        <rect x="6.25" y="3.14" width="3" height="3" rx="0.6" fill="currentColor"/>
+        <rect x="14.75" y="3.14" width="3" height="3" rx="0.6" fill="currentColor"/>
     </svg>`;
 }
 
@@ -465,6 +485,17 @@ export function aspectIconMarkup() {
     return `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" xmlns="http://www.w3.org/2000/svg">
         <rect x="3" y="5" width="18" height="14" rx="2" stroke="currentColor" stroke-width="1.8"/>
         <rect x="7" y="9" width="10" height="6" rx="1" stroke="currentColor" stroke-width="1.4"/>
+    </svg>`;
+}
+
+/* Same currentColor-SVG reasoning as every icon above - a speaker glyph with two evened-out
+   bars instead of volumeIconMarkup's growing sound waves, to read as "leveling" rather than
+   "loud"/"quiet" at a glance. */
+export function audioLevelingIconMarkup() {
+    return `<svg viewBox="0 0 24 24" width="18" height="18" xmlns="http://www.w3.org/2000/svg">
+        <path d="M3 9v6h4l5 5V4L7 9H3z" fill="currentColor"/>
+        <rect x="15" y="8" width="7" height="2.4" rx="1.2" fill="currentColor"/>
+        <rect x="15" y="13.6" width="7" height="2.4" rx="1.2" fill="currentColor"/>
     </svg>`;
 }
 

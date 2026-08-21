@@ -24,8 +24,8 @@ import android.view.View;
 class MenuIconView extends View {
 
     enum Icon {
-        CHAPTERS, AUDIO_TRACK, SUBTITLES, VERSION, QUALITY_CAP, AUTO_PLAY, AUTO_SKIP, EFFECTS, EXTRAS,
-        PERFORMANCE, SHADER, COLOR_BOOST, AMBIENT, SPEED, ASPECT, SLEEP, LOCK, PICTURE_IN_PICTURE,
+        CHAPTERS, AUDIO_TRACK, SUBTITLES, VERSION, QUALITY_CAP, OPTIONS, AUTO_PLAY, AUTO_SKIP, EFFECTS, EXTRAS,
+        PERFORMANCE, SHADER, COLOR_BOOST, AMBIENT, AUDIO_LEVELING, SPEED, ASPECT, SLEEP, LOCK, PICTURE_IN_PICTURE,
         EPISODES,
     }
 
@@ -79,6 +79,7 @@ class MenuIconView extends View {
             case SUBTITLES: drawSubtitles(canvas); break;
             case VERSION: drawVersion(canvas); break;
             case QUALITY_CAP: drawQualityCap(canvas); break;
+            case OPTIONS: drawOptions(canvas); break;
             case AUTO_PLAY: drawAutoPlay(canvas); break;
             case AUTO_SKIP: drawAutoSkip(canvas); break;
             case EFFECTS: drawEffects(canvas); break;
@@ -87,6 +88,7 @@ class MenuIconView extends View {
             case SHADER: drawShader(canvas); break;
             case COLOR_BOOST: drawColorBoost(canvas); break;
             case AMBIENT: drawAmbient(canvas); break;
+            case AUDIO_LEVELING: drawAudioLeveling(canvas); break;
             case SPEED: drawSpeed(canvas); break;
             case ASPECT: drawAspect(canvas); break;
             case SLEEP: drawSleep(canvas); break;
@@ -166,6 +168,22 @@ class MenuIconView extends View {
         canvas.drawRoundRect(3, 14, 7, 21, 1, 1, fillPaint);
         canvas.drawRoundRect(10, 9, 14, 21, 1, 1, fillPaint);
         canvas.drawRoundRect(17, 4, 21, 21, 1, 1, fillPaint);
+    }
+
+    /* A plain 6-tooth gear - the standard "settings/options" glyph, grouping Normalize
+       Audio/Auto-Play/Auto-Skip Intro & Credits (see PlayerUiHelper.renderOptionsList).
+       Teeth are hand-placed at 60-degree increments around a radius-8.5 ring rather than
+       computed at draw time, matching every other icon in this file's plain-literal-
+       coordinates style. */
+    private void drawOptions(Canvas canvas) {
+        canvas.drawCircle(12, 12, 6, strokePaint);
+        canvas.drawCircle(12, 12, 2.2f, fillPaint);
+        canvas.drawRoundRect(19, 10.5f, 22, 13.5f, 0.6f, 0.6f, fillPaint);
+        canvas.drawRoundRect(14.75f, 17.86f, 17.75f, 20.86f, 0.6f, 0.6f, fillPaint);
+        canvas.drawRoundRect(6.25f, 17.86f, 9.25f, 20.86f, 0.6f, 0.6f, fillPaint);
+        canvas.drawRoundRect(2, 10.5f, 5, 13.5f, 0.6f, 0.6f, fillPaint);
+        canvas.drawRoundRect(6.25f, 3.14f, 9.25f, 6.14f, 0.6f, 0.6f, fillPaint);
+        canvas.drawRoundRect(14.75f, 3.14f, 17.75f, 6.14f, 0.6f, 0.6f, fillPaint);
     }
 
     /* Reuses ChapterSkipIconView's own single-triangle-plus-bar "next" shape (see that
@@ -273,6 +291,25 @@ class MenuIconView extends View {
         canvas.drawLine(17.7f, 17.7f, 19.8f, 19.8f, strokePaint);
         canvas.drawLine(4.2f, 19.8f, 6.3f, 17.7f, strokePaint);
         canvas.drawLine(17.7f, 6.3f, 19.8f, 4.2f, strokePaint);
+    }
+
+    /* Mirrors audioLevelingIconMarkup's speaker-plus-evened-bars glyph - same speaker
+       cone as drawAudioTrack, but two flat, equal-height bars instead of the growing
+       sound-wave arcs, to read as "leveling" rather than "loud"/"quiet" at a glance. */
+    private void drawAudioLeveling(Canvas canvas) {
+        path.reset();
+        path.moveTo(3, 9);
+        path.lineTo(3, 15);
+        path.lineTo(7, 15);
+        path.lineTo(12, 20);
+        path.lineTo(12, 4);
+        path.lineTo(7, 9);
+        path.close();
+        canvas.drawPath(path, fillPaint);
+        rect.set(15, 8, 22, 10.4f);
+        canvas.drawRoundRect(rect, 1.2f, 1.2f, fillPaint);
+        rect.set(15, 13.6f, 22, 16);
+        canvas.drawRoundRect(rect, 1.2f, 1.2f, fillPaint);
     }
 
     /* Mirrors speedIconMarkup's gauge-with-needle glyph. */

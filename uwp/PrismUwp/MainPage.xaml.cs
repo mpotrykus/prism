@@ -37,6 +37,30 @@ namespace PrismUwp
         private NativePlayerHost playerHost;
         private PlayerBridge playerBridge;
 
+        // PC only (see the DeviceFamily check in the constructor) - the effective-pixel height
+        // of the extended title bar's caption-button area, pushed into the web app as
+        // --safe-area-inset-top so it reuses the same padding Android's SystemBars plugin
+        // already drives (see host-reset.css's --safe-top). Stays 0 on Xbox, which has no
+        // title bar.
+        private double _titleBarInsetPx;
+
+        // Set once in the constructor from the same DeviceFamily check that gates the title
+        // bar work below - Xbox has no window chrome/taskbar for any of that, or for the
+        // Fullscreen API wiring in InitializeWebViewAsync, to apply to.
+        private bool _isPc;
+
+        // Kept as a field (not just a constructor-local var) so InitializeWebViewAsync can
+        // re-read .Height later, once it's actually accurate - see the comment there.
+        private Windows.ApplicationModel.Core.CoreApplicationViewTitleBar _coreTitleBar;
+
+        // Floor applied to every _titleBarInsetPx read (see ResolveTitleBarInsetPx) - standard
+        // Windows 10/11 caption height at 100% scaling. Diagnostic purpose as much as a real
+        // fallback right now: if a real gap appears with this floor in place, .Height itself is
+        // reading 0/wrong; if no gap appears even with the floor, the push mechanism itself
+        // (script injection / CSS var) isn't reaching the page at all. Remove once the real
+        // .Height value is confirmed correct on a real rebuild+relaunch.
+        private const double MinTitleBarInsetPx = 32;
+
         // "prismuwp.local" is an arbitrary virtual hostname mapped below to the bundled "www"
         // folder via SetVirtualHostNameToFolderMapping. This is WebView2's recommended mechanism
         // for local content and is what Microsoft's own current Xbox WebView2 reference sample
@@ -52,6 +76,39 @@ namespace PrismUwp
             // On Xbox, this disables the automatic TV-safe-area border so the app can use the
             // full frame. See https://learn.microsoft.com/windows/apps/design/devices/designing-for-tv#tv-safe-area
             ApplicationView.GetForCurrentView().SetDesiredBoundsMode(ApplicationViewBoundsMode.UseCoreWindow);
+
+            // On PC, extend the app into the title bar area and make that bar itself transparent
+            // so the web app's own background shows through instead of a system-colored strip.
+            // No-op on Xbox, which has no title bar to extend into.
+            var coreTitleBar = Windows.ApplicationModel.Core.CoreApplication.GetCurrentView().TitleBar;
+            coreTitleBar.ExtendViewIntoTitleBar = true;
+
+            var viewTitleBar = ApplicationView.GetForCurrentView().TitleBar;
+            viewTitleBar.BackgroundColor = Colors.Transparent;
+            viewTitleBar.ButtonBackgroundColor = Colors.Transparent;
+            viewTitleBar.InactiveBackgroundColor = Colors.Transparent;
+            viewTitleBar.ButtonInactiveBackgroundColor = Colors.Transparent;
+
+            // App background (#0a0a0c / web app content) is dark, so the caption glyphs need to
+            // be light to stay visible against it instead of the OS-theme-dependent default.
+            viewTitleBar.ButtonForegroundColor = Colors.White;
+            viewTitleBar.ButtonInactiveForegroundColor = Colors.LightGray;
+
+            // The transparent title bar above still overlays the caption buttons on top of
+            // whatever the web app renders at the very top of the window - on PC that's the
+            // header's search bar and the sidenav's profile icon. Xbox has no title bar (it's
+            // fullscreen, no DeviceFamily check needed for that fact alone), so only reserve
+            // the space on PC.
+            bool isXbox = Windows.System.Profile.AnalyticsInfo.VersionInfo.DeviceFamily == "Windows.Xbox";
+            _isPc = !isXbox;
+            if (_isPc)
+            {
+                // NOT coreTitleBar.Height here - this early (before Window.Current.Activate()
+                // has even run), it reliably reads 0, since the title bar hasn't been laid out
+                // yet. InitializeWebViewAsync re-reads it later, once that's no longer true.
+                _coreTitleBar = coreTitleBar;
+                coreTitleBar.LayoutMetricsChanged += OnTitleBarLayoutMetricsChanged;
+            }
 
             // CoreWindow.KeyDown fires window-wide regardless of which XAML control holds
             // logical focus, which sidesteps the open "WebView2 gamepad focus trap" risk
@@ -196,6 +253,36 @@ namespace PrismUwp
                 })();
             ");
 
+            // PC only (_isPc false on Xbox). By this point Window.Current.Activate() and the
+            // window's first real layout pass have long since happened (EnsureCoreWebView2Async
+            // above took long enough on its own), so _coreTitleBar.Height now reports the real
+            // caption-button-area height instead of the 0 it reads as at construction time.
+            // Registered before navigation, same as the marker script above, so the header/
+            // sidenav's first layout already accounts for it instead of jumping after the fact.
+            if (_isPc)
+            {
+                _titleBarInsetPx = Math.Max(_coreTitleBar.Height, MinTitleBarInsetPx);
+                Log($"title bar inset: pushing {_titleBarInsetPx}px (raw CoreApplicationViewTitleBar.Height was {_coreTitleBar.Height}px)");
+                await coreWebView.AddScriptToExecuteOnDocumentCreatedAsync(
+                    $"document.documentElement.style.setProperty('--safe-area-inset-top', '{_titleBarInsetPx}px'); console.log('[prism] --safe-area-inset-top set to {_titleBarInsetPx}px');");
+
+                // Tells src/player/core/platform.js's usesGamepadChrome() this is the PC shell,
+                // not real Xbox - platformTag() still reports "xbox" here (the marker script
+                // above sets window.__prismXboxNativePlayer unconditionally, since PC shares
+                // Xbox's native-player/streaming/HDR routing), but the player chrome should use
+                // web's mouse/hover layout on PC, not Xbox's gamepad-only one.
+                await coreWebView.AddScriptToExecuteOnDocumentCreatedAsync("window.__prismPcShell = true;");
+
+                // The documented way a WebView2 host honors the page's own Fullscreen API
+                // (chrome-transport.js's fullscreen button calls
+                // document.documentElement.requestFullscreen()/document.exitFullscreen()) -
+                // WebView2 does not resize its own host window by itself, it only raises this
+                // event; making the real OS window follow is on the host. Explicit and
+                // event-driven, unlike the window-size heuristics an earlier pass here tried
+                // and abandoned - this only ever fires in direct response to the button.
+                coreWebView.ContainsFullScreenElementChanged += OnContainsFullScreenElementChanged;
+            }
+
             // The WebView2 profile persists across deployments, and the app registers a service
             // worker (sw.js) - clearing these avoids a stale cached bundle looking identical to a
             // real regression. CacheStorage and DiskCache ONLY. Not AllDomStorage/IndexedDb/
@@ -322,6 +409,18 @@ namespace PrismUwp
             {
                 Debug.WriteLine($"Initial WebView2 navigation failed: {args.WebErrorStatus}");
             }
+
+            // Belt-and-suspenders re-push, on the live document rather than a document-created
+            // script: by now the page has fully loaded, so any race between window layout and
+            // the earlier pushes (constructor / AddScriptToExecuteOnDocumentCreatedAsync) is long
+            // since resolved either way.
+            if (_isPc)
+            {
+                _titleBarInsetPx = Math.Max(_coreTitleBar.Height, MinTitleBarInsetPx);
+                Log($"title bar inset on NavigationCompleted: pushing {_titleBarInsetPx}px (raw {_coreTitleBar.Height}px)");
+                _ = webView?.CoreWebView2?.ExecuteScriptAsync(
+                    $"document.documentElement.style.setProperty('--safe-area-inset-top', '{_titleBarInsetPx}px');");
+            }
         }
 
         private void OnWebViewProcessFailed(CoreWebView2 sender, CoreWebView2ProcessFailedEventArgs args)
@@ -371,6 +470,29 @@ namespace PrismUwp
             _ = webView?.CoreWebView2?.ExecuteScriptAsync(
                 $"window.__prismXboxInputActive = {activeLiteral}; " +
                 $"document.dispatchEvent(new CustomEvent('xbox-input-active-change', {{ detail: {{ active: {activeLiteral} }} }}));");
+        }
+
+        // PC only (see the ContainsFullScreenElementChanged subscription in
+        // InitializeWebViewAsync) - the page's own Fullscreen API request/exit
+        // (chrome-transport.js's fullscreen button) surfaces here, and this is what actually
+        // makes the OS window follow it in or out, real taskbar-covering full screen included.
+        private void OnContainsFullScreenElementChanged(CoreWebView2 sender, object args)
+        {
+            var view = ApplicationView.GetForCurrentView();
+            if (sender.ContainsFullScreenElement) view.TryEnterFullScreenMode();
+            else if (view.IsFullScreenMode) view.ExitFullScreenMode();
+        }
+
+        // Fires when the title bar's caption-button area is resized (e.g. a DPI/monitor
+        // change) - pushes the new inset straight into the live document, since the
+        // AddScriptToExecuteOnDocumentCreatedAsync script above only reruns on the next
+        // navigation, which this app essentially never does mid-session.
+        private void OnTitleBarLayoutMetricsChanged(Windows.ApplicationModel.Core.CoreApplicationViewTitleBar sender, object args)
+        {
+            _titleBarInsetPx = Math.Max(sender.Height, MinTitleBarInsetPx);
+            Log($"title bar LayoutMetricsChanged: pushing {_titleBarInsetPx}px (raw {sender.Height}px)");
+            _ = webView?.CoreWebView2?.ExecuteScriptAsync(
+                $"document.documentElement.style.setProperty('--safe-area-inset-top', '{_titleBarInsetPx}px');");
         }
 
         // Dispatched as a plain document-level CustomEvent rather than through the

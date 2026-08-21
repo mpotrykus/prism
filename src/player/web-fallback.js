@@ -9,6 +9,7 @@ import { mountPlayerChrome, unmountPlayerChrome } from "./ui/player-chrome.js";
 import { teardownShaderPipeline } from "./shader-pipeline.js";
 import { teardownAmbient } from "./ambient-pipeline.js";
 import { teardownContentAnalysis } from "./content-analysis.js";
+import { teardownAudioLeveling } from "./audio-leveling.js";
 /* Circular with chrome.js (which already imports reloadWebSource from this file) - safe
    here for the same reason that one is: closeAudioSubtitlesOverlay is only ever called
    from inside teardownWeb's own function body below, never at module-top-level
@@ -260,6 +261,7 @@ export function teardownWeb(controller) {
     teardownShaderPipeline(controller);
     teardownAmbient(controller);
     teardownContentAnalysis(controller);
+    teardownAudioLeveling(controller);
     /* The chrome half of teardown lives in ui/player-chrome.js, so the Xbox leg tears down exactly
        the same things it mounted - a missing unmount there left the transport bar, center controls and
        options sheet on screen after backing out of native playback. */

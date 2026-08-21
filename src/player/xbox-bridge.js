@@ -221,6 +221,17 @@ export function postAmbientLighting(enabled) {
     post("setAmbientLighting", { enabled });
 }
 
+/* Loudness normalization (see audio-leveling.js's updateAudioLevelingPipeline, which posts this
+   instead of building a Web Audio graph on this leg - there is no <video> element here to hook
+   one onto). Native counterpart: AudioLevelingEffect (PrismUwpEffects), attached to the
+   MediaPlayer unconditionally for the whole session by NativePlayerHost's constructor - this
+   message only flips whether it actually adjusts gain, same "always attached, just no-ops when
+   off" shape as the video effect pipeline. UNVERIFIED ON REAL HARDWARE - see that C# class's own
+   header comment for the two specific things to check when testing this on a console/PC. */
+export function postAudioLeveling(enabled) {
+    post("setAudioLeveling", { enabled });
+}
+
 /* preset is the family key ("anime4k"/"live_action", i.e. controller._shaderAutoType) - native
    maps it to its own anime4k_cnn/live_action_fsr chain, mirroring how upgradeTo resolves the same
    family key on the web leg. See shader-pipeline.js's postXboxAiUpscalingSettings. */

@@ -34,6 +34,7 @@ import { playWeb, attachSource, reloadWebSource, teardownWeb } from "./src/playe
 import { setShaderStrength, setColorBoostSaturationStrength, setColorBoostContrastStrength, setAiUpscalingEnabled, updateShaderPipeline, ensureShaderPipeline, stopShaderLoop } from "./src/player/shader-pipeline.js";
 import { setAmbientEnabled, setAmbientOpacity, updateAmbientPipeline, stopAmbientLoop } from "./src/player/ambient-pipeline.js";
 import { setStatsOverlayEnabled, updateStatsOverlayPipeline } from "./src/player/stats-overlay.js";
+import { setAudioLevelingEnabled, updateAudioLevelingPipeline } from "./src/player/audio-leveling.js";
 import {
     storedAmbientEnabled,
     storedAmbientOpacity,
@@ -51,6 +52,7 @@ import {
     storedAutoPlayEnabled,
     storedAutoQualityEnabled,
     storedAutoSkipIntroCreditsEnabled,
+    storedAudioLevelingEnabled,
     AUTO_PLAY_STORAGE_KEY,
     AUTO_SKIP_INTRO_CREDITS_STORAGE_KEY,
 } from "./src/player/ui/shared.js";
@@ -185,6 +187,7 @@ class StreamingPlayerController {
         this._statsOverlayEnabled = false;
         this._statsOverlayEl = null;
         this._statsOverlayIntervalId = null;
+        this._audioLevelingEnabled = false;
         this._autoPlayEnabled = false;
         this._autoSkipIntroCreditsEnabled = false;
         this._autoQualityEnabled = false;
@@ -482,6 +485,9 @@ class StreamingPlayerController {
         this._autoColorBoostSaturationStrength = null;
         this._autoColorBoostContrastStrength = null;
         this._statsOverlayEnabled = storedStatsOverlayEnabled();
+        /* No per-video/genre concern to resolve either - same immediate-persistence model
+           as ambient/color boost/stats overlay above (see audio-leveling.js). */
+        this._audioLevelingEnabled = storedAudioLevelingEnabled();
         this._autoPlayEnabled = storedAutoPlayEnabled();
         this._autoSkipIntroCreditsEnabled = storedAutoSkipIntroCreditsEnabled();
         /* No per-video/genre concern to resolve either - see core/abr.js. Reset every
@@ -837,6 +843,14 @@ class StreamingPlayerController {
 
     _updateAmbientPipeline() {
         return updateAmbientPipeline(this);
+    }
+
+    _setAudioLevelingEnabled(enabled) {
+        return setAudioLevelingEnabled(this, enabled);
+    }
+
+    _updateAudioLevelingPipeline() {
+        return updateAudioLevelingPipeline(this);
     }
 
     /* Same "toggle IS the persisted setting" immediate-persistence model as

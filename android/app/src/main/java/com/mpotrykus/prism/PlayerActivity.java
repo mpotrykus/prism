@@ -144,6 +144,7 @@ public class PlayerActivity extends AppCompatActivity {
     private static final String PREF_STATS_OVERLAY_ENABLED = "stats_overlay_enabled";
     private static final String PREF_AUTO_PLAY_ENABLED = "auto_play_enabled";
     private static final String PREF_AUTO_QUALITY_ENABLED = "auto_quality_enabled";
+    private static final String PREF_AUDIO_LEVELING_ENABLED = "audio_leveling_enabled";
     private static final String PREF_AUTO_SKIP_INTRO_CREDITS = "auto_skip_intro_credits_enabled";
 
     public interface PlaybackListener {
@@ -263,11 +264,9 @@ public class PlayerActivity extends AppCompatActivity {
     float autoUpscaleStrength = 0f;
     /* The real Anime4K CNN / FSR 1 chain (see AiUpscalingPresets/AiUpscaleEffect) - independent
        of shaderEnabled/shaderType (Sharpening) and colorBoost*Enabled, matching the web leg's
-       split (see shaders.js's "AI Upscaling split from Sharpening" note). Defaults ON for a
-       never-touched user, unlike every other toggle here - it silently had this behavior
-       already on the web leg before the split, and defaulting off here would be a regression
-       relative to that. */
-    boolean aiUpscalingEnabled = true;
+       split (see shaders.js's "AI Upscaling split from Sharpening" note). Defaults off like
+       every other quality-toggle here - opt-in for a never-touched user. */
+    boolean aiUpscalingEnabled = false;
     /* Set by AiUpscaleEffect.toGlShaderProgram right after construction, read by
        PlayerUiHelper's stats overlay for the "AI Upscaling" status line - see
        AiUpscaleShaderProgram.statusLabel(). Not cleared on release(); a briefly-stale read on a
@@ -305,6 +304,14 @@ public class PlayerActivity extends AppCompatActivity {
        a debug readout has no per-video/genre concern to reconcile either. Read view, not
        player state - see PlayerUiHelper.buildStatsOverlay/updateStatsOverlay. */
     boolean statsOverlayEnabled = false;
+    /* No per-video/genre concern to resolve (see AudioLevelingProcessor). Unlike every
+       other toggle here, the actual install target is a native AudioProcessor rebuilt
+       fresh every createPlayer() call (see that method) rather than a View/GL pipeline
+       this Activity owns directly - audioLevelingProcessor below is that instance,
+       re-created and re-applied to this flag each time. Defaults to true - see
+       shared.js's storedAudioLevelingEnabled for why. */
+    boolean audioLevelingEnabled = true;
+    AudioLevelingProcessor audioLevelingProcessor;
     /* Same immediate-persistence model as statsOverlayEnabled above - see
        setAutoPlayEnabled. Read by the STATE_ENDED handler below to decide whether to
        advance to the next queued title instead of finish()ing, same queueIndex/
@@ -317,14 +324,12 @@ public class PlayerActivity extends AppCompatActivity {
        Auto Quality only ever reacts to real degradation (see QualityAbrMonitor), so
        there's no downside to it running from a user's very first session. */
     boolean autoQualityEnabled = true;
-    /* Same immediate-persistence model as autoPlayEnabled above, but defaults OFF - the
-       JS chrome's own storedAutoSkipIntroCreditsEnabled (shared.js) defaults off for the
-       same reason: this changes existing tap-driven skip-button behavior the first time
-       it's touched, unlike Auto-Play/Auto Quality which don't change anything a user
-       already relies on. Gated on autoPlayEnabled (see PlayerUiHelper's menu row) since
-       an auto-skipped credits marker only makes sense as part of "keep watching
-       automatically" - same reasoning chrome-skip.js's shouldAutoSkip uses on web/Xbox. */
-    boolean autoSkipIntroCreditsEnabled = false;
+    /* Same "defaults on for a never-touched user" reasoning as autoPlayEnabled above - see
+       shared.js's storedAutoSkipIntroCreditsEnabled. Gated on autoPlayEnabled (see
+       PlayerUiHelper's menu row) since an auto-skipped credits marker only makes sense as
+       part of "keep watching automatically" - same reasoning chrome-skip.js's
+       shouldAutoSkip uses on web/Xbox. */
+    boolean autoSkipIntroCreditsEnabled = true;
     QualityAbrMonitor abrMonitor;
     /* A fresh player's own initial buffering (before the first STATE_READY) isn't a real
        stall - reset to false at the top of createPlayer() so the ABR monitor's
@@ -551,7 +556,7 @@ public class PlayerActivity extends AppCompatActivity {
            resolveShaderType), so this order matters, not just the values themselves. */
         upscaleAuto = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(PREF_UPSCALE_AUTO, false);
         shaderType = resolveShaderType();
-        aiUpscalingEnabled = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(PREF_AI_UPSCALING_ENABLED, true);
+        aiUpscalingEnabled = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(PREF_AI_UPSCALING_ENABLED, false);
         ambientEnabled = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(PREF_AMBIENT_ENABLED, false);
         ambientOpacity = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getFloat(PREF_AMBIENT_OPACITY, 0.5f);
         colorBoostSaturationEnabled = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(PREF_COLOR_BOOST_SATURATION_ENABLED, false);
@@ -561,14 +566,16 @@ public class PlayerActivity extends AppCompatActivity {
         colorBoostSaturationAuto = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(PREF_COLOR_BOOST_SATURATION_AUTO, false);
         colorBoostContrastAuto = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(PREF_COLOR_BOOST_CONTRAST_AUTO, false);
         statsOverlayEnabled = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(PREF_STATS_OVERLAY_ENABLED, false);
+        /* Defaults to on - see shared.js's storedAudioLevelingEnabled for why. */
+        audioLevelingEnabled = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(PREF_AUDIO_LEVELING_ENABLED, true);
         /* Defaults to on (unlike every other toggle here, which defaults off) - see
            shared.js's storedAutoPlayEnabled for why. */
         autoPlayEnabled = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(PREF_AUTO_PLAY_ENABLED, true);
         /* Same "defaults on" reasoning as autoPlayEnabled above - see shared.js's
            storedAutoQualityEnabled for why. */
         autoQualityEnabled = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(PREF_AUTO_QUALITY_ENABLED, true);
-        /* Defaults off - see the autoSkipIntroCreditsEnabled field's own comment above. */
-        autoSkipIntroCreditsEnabled = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(PREF_AUTO_SKIP_INTRO_CREDITS, false);
+        /* Defaults to on - see shared.js's storedAutoSkipIntroCreditsEnabled for why. */
+        autoSkipIntroCreditsEnabled = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(PREF_AUTO_SKIP_INTRO_CREDITS, true);
         title = getIntent().getStringExtra(EXTRA_TITLE);
         if (title == null) title = "";
         episodeTitle = getIntent().getStringExtra(EXTRA_EPISODE_TITLE);
@@ -847,7 +854,17 @@ public class PlayerActivity extends AppCompatActivity {
            http(s) requests is exactly the same either way. */
         DefaultMediaSourceFactory mediaSourceFactory = new DefaultMediaSourceFactory(this)
             .setDataSourceFactory(new DefaultDataSource.Factory(this, httpDataSourceFactory));
-        player = new ExoPlayer.Builder(this).setMediaSourceFactory(mediaSourceFactory).build();
+        /* A fresh processor per player instance, same "fresh state per title" reasoning as
+           everStartedPlaying/effectsInstalled above - its own running loudness estimate has
+           no reason to carry over into a new title. Always installed regardless of
+           audioLevelingEnabled (see AudioLevelingRenderersFactory) - only its own isActive()
+           gate, flipped by setAudioLevelingEnabled below, decides whether it does anything. */
+        audioLevelingProcessor = new AudioLevelingProcessor();
+        audioLevelingProcessor.setEnabled(audioLevelingEnabled);
+        player = new ExoPlayer.Builder(this)
+            .setRenderersFactory(new AudioLevelingRenderersFactory(this, audioLevelingProcessor))
+            .setMediaSourceFactory(mediaSourceFactory)
+            .build();
         playerView.setPlayer(player);
         /* setVideoEffects() must be called at least once before prepare() even to apply an
            empty (no-op) list - see ExoPlayer's javadoc on the method. */
@@ -1541,6 +1558,19 @@ public class PlayerActivity extends AppCompatActivity {
     }
 
     /* Same "toggle IS the persisted setting" immediate-persistence model as
+       setStatsOverlayEnabled above, but the thing being re-applied is a native
+       AudioProcessor's own isActive() gate (see AudioLevelingProcessor) rather than a
+       View/GL pipeline this Activity owns directly - already-installed, so toggling never
+       needs to touch the player/RenderersFactory at all, just this one flag. */
+    void setAudioLevelingEnabled(boolean enabled) {
+        audioLevelingEnabled = enabled;
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().putBoolean(PREF_AUDIO_LEVELING_ENABLED, enabled).apply();
+        if (audioLevelingProcessor != null) {
+            audioLevelingProcessor.setEnabled(enabled);
+        }
+    }
+
+    /* Same "toggle IS the persisted setting" immediate-persistence model as
        setStatsOverlayEnabled above - no view to update, just the flag itself, read back
        by the STATE_ENDED handler whenever a title actually finishes. */
     void setAutoPlayEnabled(boolean enabled) {
@@ -1576,7 +1606,7 @@ public class PlayerActivity extends AppCompatActivity {
     }
 
     static boolean getAutoSkipIntroCreditsEnabledPref(Context context) {
-        return context.getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(PREF_AUTO_SKIP_INTRO_CREDITS, false);
+        return context.getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(PREF_AUTO_SKIP_INTRO_CREDITS, true);
     }
 
     /* Same "toggle IS the persisted setting" immediate-persistence model as

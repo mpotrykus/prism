@@ -36,7 +36,7 @@ export async function playNative(controller, streamUrl, startOffsetMs) {
        "autoSkipSettingsChanged" listener for the rest of this native session
        (switchNative reuses these same listeners, see that function's own comment). */
     let nativeAutoPlayEnabled = true;
-    let nativeAutoSkipIntroCreditsEnabled = false;
+    let nativeAutoSkipIntroCreditsEnabled = true;
     try {
         const settings = await NativePlayer.getAutoSkipSettings();
         nativeAutoPlayEnabled = !!settings.autoPlayEnabled;
