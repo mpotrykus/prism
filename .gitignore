@@ -4,6 +4,9 @@
 node_modules/
 dist/
 
+# Claude Code local state (worktrees, settings, task locks) - not project config
+.claude/
+
 # Capacitor / Android
 android/app/build/
 android/build/
