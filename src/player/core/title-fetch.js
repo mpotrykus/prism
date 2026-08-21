@@ -12,6 +12,7 @@ import { extractAudioStreams, extractMediaVersions, bifIndexPath, extractPartInf
 export async function fetchQueuedTitle(plexUrl, plexToken, ratingKey) {
     const url = new URL(`${plexUrl}/library/metadata/${ratingKey}`);
     url.searchParams.set("includeChapters", "1");
+    url.searchParams.set("includeMarkers", "1");
     url.searchParams.set("X-Plex-Token", plexToken);
     const res = await fetch(url, { headers: { Accept: "application/json" } });
     if (!res.ok) throw new Error(`Plex metadata fetch -> HTTP ${res.status}`);

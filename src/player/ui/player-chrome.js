@@ -69,6 +69,23 @@ export function mountPlayerChrome(controller, mediaEl, { gpuPipelines }) {
        play/pause buttons on screen at once. */
     if (platformTag() === "xbox") controller._buildFloatingPlayButton(mediaEl);
 
+    /* Spacebar play/pause - web/Android only, same "web means keyboard, Xbox means gamepad"
+       split as the floating-vs-in-row play button above. Excludes BUTTON so this doesn't
+       double-toggle when a play/pause button itself has focus (space already activates a
+       focused button's own click on keyup), and INPUT/TEXTAREA/SELECT so it doesn't hijack
+       the seek bar, volume slider, or the subtitle search box. */
+    if (platformTag() !== "xbox") {
+        controller._spacebarHandler = (e) => {
+            if (e.code !== "Space" && e.key !== " ") return;
+            const tag = e.target?.tagName;
+            if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || tag === "BUTTON") return;
+            e.preventDefault();
+            if (mediaEl.paused) mediaEl.play();
+            else mediaEl.pause();
+        };
+        document.addEventListener("keydown", controller._spacebarHandler);
+    }
+
     if (gpuPipelines) {
         /* _shaderType/_shaderStrength were already resolved in play() (global setting + this title's
            auto-detected type) before this ran - this just spins up the WebGL pipeline for that starting
@@ -98,6 +115,13 @@ export function mountPlayerChrome(controller, mediaEl, { gpuPipelines }) {
    Everything <video>- or GPU-specific (hls.js, the shader canvas, ambient panels, the content-analysis
    sampler) stays in teardownWeb: this leg never mounted those. */
 export function unmountPlayerChrome(controller) {
+    /* Lives on `document`, outside this chrome's own DOM subtree, so removing the buttons
+       below wouldn't clean it up on its own - same reasoning as the fullscreenchange
+       listener further down. */
+    if (controller._spacebarHandler) {
+        document.removeEventListener("keydown", controller._spacebarHandler);
+        controller._spacebarHandler = null;
+    }
     /* Mounted by mountPlayerChrome on both legs, so it has to come down here rather than in
        teardownWeb - the stats overlay reads the media facade, not a <video>. */
     if (controller._statsOverlayIntervalId) {

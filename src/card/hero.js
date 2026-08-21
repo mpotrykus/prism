@@ -226,6 +226,7 @@ export class HeroController {
     incoming.innerHTML = "";
     this._muteBtn.style.display = this._video ? "" : "none";
     this._playBtn.style.display = this._video ? "" : "none";
+    this._heroEl.style.cursor = this._video ? "pointer" : "";
     if (this._video?.type === "plex") {
       incoming.innerHTML = `<video src="${this._video.url}" autoplay muted playsinline></video>`;
       const heroVideoEl = incoming.querySelector("video");
@@ -345,6 +346,18 @@ export class HeroController {
       }
     });
     this._playBtn.addEventListener("click", () => {
+      this._userPaused = !this._userPaused;
+      this.updatePlayback();
+    });
+    /* Clicking anywhere else in the hero (over the video/iframe/backdrop) toggles
+       play/pause too - but not over .hero-info (title/subtitle/summary/info-btn/
+       watchlist-btn) or the dedicated play/mute buttons, which have their own
+       click behavior. Guarding via closest() here (rather than requiring every
+       excluded control to stopPropagation) also covers whitespace inside
+       .hero-info that isn't itself a button. */
+    this._heroEl.addEventListener("click", (e) => {
+      if (!this._video) return;
+      if (e.target.closest(".hero-info, .hero-play-btn, .hero-mute-btn")) return;
       this._userPaused = !this._userPaused;
       this.updatePlayback();
     });

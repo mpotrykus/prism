@@ -1273,12 +1273,18 @@ final class PlayerUiHelper {
        enough "GPU upscale effect" concepts that a dedicated icon isn't worth the extra draw
        code for this pass. */
     private static void buildAiUpscaleEffectRow(PlayerActivity activity, LinearLayout list, float density) {
-        EffectRowParts row = buildEffectRow(activity, list, density, MenuIconView.Icon.SHADER, "AI Upscaling", "Anime4K CNN / FSR 1");
+        /* See PlayerActivity.wouldAiUpscaleSource's own comment - greys the toggle out when the
+           source already fills playerView (nothing for the CNN/FSR chain to actually do), rather
+           than leaving it interactive for no visible effect. */
+        boolean wouldUpscale = activity.wouldAiUpscaleSource();
+        String caption = wouldUpscale ? "Anime4K CNN / FSR 1" : "Anime4K CNN / FSR 1 - source already matches display";
+        EffectRowParts row = buildEffectRow(activity, list, density, MenuIconView.Icon.SHADER, "AI Upscaling", caption);
         SwitchCompat toggle = new SwitchCompat(activity);
         toggle.setChecked(activity.aiUpscalingEnabled);
         toggle.setTrackTintList(toggleTrackTint());
         toggle.setThumbTintList(toggleThumbTint());
         toggle.setOnCheckedChangeListener((buttonView, checked) -> activity.setAiUpscalingEnabled(checked));
+        toggle.setEnabled(wouldUpscale);
         row.rightSide.addView(toggle);
     }
 

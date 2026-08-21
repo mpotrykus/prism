@@ -276,8 +276,23 @@ class StreamingPlayerController {
             await this._switchTitleNative(item);
             return;
         }
-        await this._teardownMedia();
-        await this._beginSession(item);
+        /* Web's teardown-then-rebegin has a real gap in it: _teardownMedia removes the
+           <video> element outright, and _beginSession doesn't put a new one back until
+           _prepareSession's network round trip (resolving the next title's playback URL)
+           resolves. With nothing covering the screen for that gap, the card underneath -
+           still mounted behind the player overlay the whole session - becomes visible,
+           which is exactly what reads as "the player closed" on a slow connection. This
+           overlay just plugs that gap; it's unrelated to the spinner buildLoadingSpinner
+           mounts per-video for actual buffering. */
+        const overlay = document.createElement("div");
+        Object.assign(overlay.style, { position: "fixed", inset: "0", background: "#000", zIndex: "10000" });
+        document.body.appendChild(overlay);
+        try {
+            await this._teardownMedia();
+            await this._beginSession(item);
+        } finally {
+            overlay.remove();
+        }
     }
 
     async _switchTitleNative(item) {

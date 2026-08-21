@@ -389,7 +389,7 @@ export class TitleInfoController {
        like every other item type here. */
     const metaPath = item.type === "playlist" ? `/playlists/${ratingKey}` : `/library/metadata/${ratingKey}`;
     try {
-      const data = await this._ctx.plexFetch(metaPath, { includeChapters: 1 });
+      const data = await this._ctx.plexFetch(metaPath, { includeChapters: 1, includeMarkers: 1 });
       const meta = data?.MediaContainer?.Metadata?.[0];
       if (meta && this._item === item) this._renderDetail(meta);
     } catch (e) {
@@ -789,7 +789,7 @@ export class TitleInfoController {
     const showRatingKey = this._item?.ratingKey;
     try {
       const [data, queueRatingKeys] = await Promise.all([
-        this._ctx.plexFetch(`/library/metadata/${ratingKey}`, { includeChapters: 1 }),
+        this._ctx.plexFetch(`/library/metadata/${ratingKey}`, { includeChapters: 1, includeMarkers: 1 }),
         showRatingKey ? this._getShowEpisodeQueue(showRatingKey) : Promise.resolve([]),
       ]);
       const meta = data?.MediaContainer?.Metadata?.[0];
@@ -829,7 +829,7 @@ export class TitleInfoController {
     });
     if (index < 0) return;
     try {
-      const data = await this._ctx.plexFetch(`/library/metadata/${rawItems[index].ratingKey}`, { includeChapters: 1 });
+      const data = await this._ctx.plexFetch(`/library/metadata/${rawItems[index].ratingKey}`, { includeChapters: 1, includeMarkers: 1 });
       const meta = data?.MediaContainer?.Metadata?.[0];
       if (!meta || this._item?.ratingKey !== ratingKey) return;
       await this._ctx.onPlayItem(this._ctx.mapItem(meta, true), {

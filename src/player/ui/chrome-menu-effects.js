@@ -10,6 +10,7 @@ import {
     colorBoostContrastModeOf,
     setColorBoostContrastMode,
     idleUpgradeLabel,
+    sourceWillUpscale,
 } from "../shader-pipeline.js";
 import { setAmbientOpacity } from "../ambient-pipeline.js";
 import { fullscreenIconMarkup, colorBoostIconMarkup, ambientIconMarkup, aiUpscalingIconMarkup, PLAYER_FOCUSABLE_CLASS } from "./shared.js";
@@ -337,6 +338,10 @@ function buildAiUpscalingEffectRow(controller, list) {
     const upgradeKey = SHADER_TYPES[familyKey]?.upgradeTo;
     const preset = upgradeKey ? SHADER_TYPES[upgradeKey] : null;
     const isXbox = controller._xboxIsHdr !== undefined;
+    /* Xbox's native CNN/FSR chain always applies its own fixed 2x upscale once enabled - there's
+       no geometry gate on that leg at all (see AiUpscalePixelEffect.Render), so a toggle there is
+       never a no-op the way it can be here. Only the web leg's `when` gate can make this true. */
+    const noUpscaleNeeded = !isXbox && !!preset && !!controller._shaderChains?.[upgradeKey] && !sourceWillUpscale(controller, familyKey);
 
     let caption;
     if (!preset) {
@@ -353,6 +358,11 @@ function buildAiUpscalingEffectRow(controller, list) {
         caption = `${preset.label} failed to compile here`;
     } else if (!controller._shaderChains?.[upgradeKey]) {
         caption = "Not supported on this device";
+    } else if (noUpscaleNeeded) {
+        /* Same underlying gate idleUpgradeLabel's own "idle - source not upscaled" wording
+           reports for an already-enabled toggle, checked here before the toggle is even flipped
+           on so the row can grey it out instead of leaving it interactive for no effect. */
+        caption = `${preset.label} - source already matches display`;
     } else if (!controller._aiUpscalingEnabled) {
         caption = preset.label;
     } else {
@@ -371,6 +381,19 @@ function buildAiUpscalingEffectRow(controller, list) {
     const toggleEl = makeToggleSwitch(!!controller._aiUpscalingEnabled, (checked) => controller._setAiUpscalingEnabled(checked));
     rightSide.appendChild(toggleEl);
     header.addEventListener("click", () => toggleEl.click());
+
+    if (noUpscaleNeeded) {
+        /* header.disabled (a real <button>, see buildEffectRow) is what focus-nav.js's own
+           items() filter already skips - same pattern as the strength/opacity sliders' own
+           .disabled toggling elsewhere in this file, not a bespoke disabled state. toggleEl
+           itself is a plain div (see makeToggleSwitch), so it needs its own pointer-events/
+           opacity treatment rather than inheriting header's disabled semantics automatically. */
+        header.disabled = true;
+        header.style.opacity = "0.5";
+        header.style.cursor = "default";
+        toggleEl.style.opacity = "0.5";
+        toggleEl.style.pointerEvents = "none";
+    }
 }
 
 /* One sub-control (its own title, its own Auto/On/Off mode row, its own slider) - shared by

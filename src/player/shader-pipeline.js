@@ -474,6 +474,28 @@ export function activePresetKey(controller, familyKey) {
     return upgradedPresetKey(controller, familyKey);
 }
 
+/* Whether AI Upscaling's own upgrade preset would actually run right now, purely from current
+   geometry - the same `when` gate chooseRenderPreset checks every frame (e.g. Anime4K CNN's own
+   "display must be at least 1.2x the video in both axes"), evaluated up front so the Effects row
+   can grey out a toggle that would otherwise be a no-op (source resolution already fills the
+   display, so there's nothing to upscale). Optimistic (true) whenever it can't yet be answered -
+   no video loaded, no `when` gate at all - so a still-loading title never flashes "disabled"
+   incorrectly; buildAiUpscalingEffectRow only calls this once the chain is already confirmed
+   built. */
+export function sourceWillUpscale(controller, familyKey) {
+    const upgradeKey = SHADER_TYPES[familyKey]?.upgradeTo;
+    const preset = upgradeKey ? SHADER_TYPES[upgradeKey] : null;
+    if (!preset?.when) return true;
+    const video = controller._videoEl;
+    if (!video || !video.videoWidth || !video.videoHeight) return true;
+    const dpr = window.devicePixelRatio || 1;
+    const displayW = Math.round((window.innerWidth || document.documentElement.clientWidth) * dpr);
+    const displayH = Math.round((window.innerHeight || document.documentElement.clientHeight) * dpr);
+    const tuning = shaderTuningAt(upgradeKey, 1);
+    const [outW, outH] = outputSizeFor(video, displayW, displayH, tuning.scale);
+    return preset.when({ sourceW: video.videoWidth, sourceH: video.videoHeight, outW, outH });
+}
+
 /* Explains, for the AI Upscaling row, why it's enabled but isn't the one actually rendering -
    the question that otherwise costs a round trip to answer. Three distinct reasons, and they
    call for different wording: the upscale gate declined (nothing to upscale, which is correct

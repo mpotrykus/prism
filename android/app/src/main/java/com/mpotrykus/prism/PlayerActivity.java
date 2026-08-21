@@ -1270,6 +1270,28 @@ public class PlayerActivity extends AppCompatActivity {
         return Math.max(1f, Math.min(scaleW, scaleH));
     }
 
+    /* Whether AI Upscaling's own preset would actually run right now, purely from current
+       geometry - the same gate AiUpscaleShaderProgram.configure() folds into its own
+       upgradeGateOk every time the input format changes (see that method's own comment),
+       computed here too so PlayerUiHelper's Effects panel can grey out a toggle that would
+       otherwise be a no-op (source already fills playerView, nothing to upscale). Optimistic
+       (true) whenever it can't yet be answered - no track selected yet, or no preset registered
+       for this family/device (Sharpening alone still applies then, so there's nothing to
+       disable) - so a still-loading title never flashes "disabled" incorrectly. */
+    boolean wouldAiUpscaleSource() {
+        Format format = selectedVideoFormat();
+        if (format == null || format.width <= 0 || format.height <= 0 || playerView.getWidth() <= 0 || playerView.getHeight() <= 0) {
+            return true;
+        }
+        AiUpscalingPresets.Preset preset = AiUpscalingPresets.forFamily(getAssets(), detectedShaderType);
+        if (preset == null || preset.when == null) return true;
+        float scale = Math.max(1f, Math.min(preset.scale,
+            Math.min(playerView.getWidth() / (float) format.width, playerView.getHeight() / (float) format.height)));
+        int outW = Math.round(format.width * scale);
+        int outH = Math.round(format.height * scale);
+        return preset.when.test(format.width, format.height, outW, outH);
+    }
+
     boolean isHdrContent() {
         Format format = selectedVideoFormat();
         ColorInfo colorInfo = format != null ? format.colorInfo : null;
