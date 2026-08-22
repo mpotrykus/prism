@@ -255,9 +255,8 @@ class PlexNetflixCard extends HTMLElement {
       <div class="title-info-overlay" tabindex="-1">
         <div class="title-info-modal">
           <button type="button" class="title-info-close" aria-label="Close">✕</button>
-          <div class="title-info-art">
-            <div class="title-info-progress" hidden><div class="bar"></div></div>
-          </div>
+          <div class="title-info-art"></div>
+          <div class="title-info-progress" hidden><div class="bar"></div></div>
           <div class="title-info-body">
             <div class="title-info-header">
               <div class="title-info-title"></div>

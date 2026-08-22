@@ -1,9 +1,8 @@
 @media (max-width: 700px) {
   .title-info-overlay { padding: 0; }
-  .title-info-modal { width: 100%; max-width: 100%; min-height: 100dvh; border-radius: 0; border: none; }
+  .title-info-modal { width: 100%; max-width: 100%; min-height: 100dvh; border-radius: 0; border: none; --title-info-art-h: 200px; }
   .title-info-close { display: none; }
-  .title-info-art { height: 200px; }
-  .title-info-body { padding: 20px 20px calc(32px + var(--safe-bottom)); }
+  .title-info-body { padding: 20px 20px calc(32px + var(--safe-bottom)); max-width: none; margin: 0; }
   .title-info-header { left: 20px; right: 20px; padding-bottom: 16px; }
   .title-info-title { font-size: 22px; }
   .title-info-meta { display: flex; flex-wrap: wrap; row-gap: 6px; }

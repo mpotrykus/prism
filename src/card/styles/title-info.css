@@ -1,43 +1,53 @@
 .title-info-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(var(--color-shadow-rgb), 0.8);
-  backdrop-filter: blur(6px);
+  background: var(--color-bg);
   display: none;
-  align-items: flex-start;
-  justify-content: center;
   z-index: 200;
   outline: none;
   overflow-y: auto;
-  padding: 72px 20px;
+  padding: 0;
   scrollbar-width: none;
 }
 .title-info-overlay::-webkit-scrollbar { display: none; width: 0; height: 0; }
-.title-info-overlay.open { display: flex; }
+.title-info-overlay.open { display: block; }
 .title-info-modal {
-  width: 780px;
+  /* Shared by .title-info-art's own height and .title-info-progress's top offset below -
+     letting the progress bar live outside .title-info-art (so it isn't masked away along with
+     the image, see that comment below) while still tracking art's actual (responsive) height
+     requires both to read the same value rather than .title-info-art hardcoding its own. */
+  --title-info-art-h: clamp(440px, 64vh, 780px);
+  width: 100%;
   max-width: 100%;
-  background: var(--color-surface);
-  border: 1px solid rgba(var(--color-fg-rgb), 0.08);
-  border-radius: 16px;
-  box-shadow: 0 24px 70px rgba(var(--color-shadow-rgb), 0.6);
-  overflow: hidden;
+  min-height: 100%;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
   position: relative;
 }
+/* Ambient backdrop (same idea the old centered-card modal had via this same ::before, just
+   fixed to the viewport now instead of scrolling with the (now full-page) modal) - a blurred/
+   darkened wash of the same art image, showing through wherever content below (the body's
+   cast/episodes/similar sections) doesn't paint its own opaque background. --title-info-bg is
+   set from JS in title-info.js's open() as an inline style on this same element, which is why
+   this reads it on .title-info-modal rather than a level higher on .title-info-overlay - a
+   custom property set inline on an element isn't visible to that same element's own ancestors,
+   only to itself and its descendants. position:fixed still pins it to the viewport rather than
+   this element's own (possibly taller-than-viewport) box, since neither this element nor any
+   ancestor sets a transform/filter/perspective that would trap it to a different containing
+   block. */
 .title-info-modal::before {
-  content: "";
-  position: absolute;
-  inset: -30px;
+  content: ""; position: fixed; inset: 0; z-index: 0;
   background-image: var(--title-info-bg, none);
-  background-size: cover;
-  background-position: center;
-  filter: blur(50px) brightness(0.35) saturate(1.1);
-  z-index: 0;
+  background-size: cover; background-position: center;
+  filter: blur(60px) brightness(0.22) saturate(1.05);
+  transform: scale(1.1);
 }
 .title-info-close {
-  position: absolute; top: 14px; right: 14px; z-index: 2;
-  width: 34px; height: 34px; border-radius: 50%; border: none;
-  background: rgba(var(--color-panel-rgb), 0.7); color: var(--color-fg); font-size: 15px; cursor: pointer;
+  position: fixed; top: 24px; right: 32px; z-index: 10;
+  width: 40px; height: 40px; border-radius: 50%; border: none;
+  background: rgba(var(--color-panel-rgb), 0.7); color: var(--color-fg); font-size: 16px; cursor: pointer;
   display: flex; align-items: center; justify-content: center;
 }
 .title-info-close:hover { background: rgba(var(--color-panel-rgb), 0.9); }
@@ -46,34 +56,62 @@
    dead end for them. Keyed off the card's own host attribute (set in
    plex-netflix-card.js's _build), same reasoning as rows-poster.css's watchlist-btn rule. */
 :host([controller-active]) .title-info-close { display: none; }
+/* Full-bleed hero-style treatment (same idea as .hero/.hero-fade on the home page), with one
+   difference from the hero: the bottom edge doesn't fade to a flat color anymore. This element
+   sits directly above the fixed, blurred ambient wash of this same art (.title-info-modal::before,
+   z-index 0 vs. this element's 1) - fading via opacity (a mask) instead of painting an
+   increasingly-opaque color over the image lets the sharp image dissolve straight into its own
+   blurred backdrop, which stays seamless regardless of the art's actual colors. A flat-color fade
+   (the previous approach) only matched when what sat behind it was that same flat color - it broke
+   the moment the ambient wash became the actual background there instead. */
 .title-info-art {
-  width: 100%; height: 280px; background-size: cover; background-position: center;
+  width: 100%; height: var(--title-info-art-h);
+  background-size: cover; background-position: center;
   position: relative; z-index: 1; background-color: var(--color-bg);
+  -webkit-mask-image: linear-gradient(180deg, #000 0%, #000 55%, transparent 100%);
+  mask-image: linear-gradient(180deg, #000 0%, #000 55%, transparent 100%);
 }
+/* Darkening scrim only now - the fade-to-transparent job moved to the mask above. Left-side
+   scrim for text legibility over whatever the image looks like there, plus a gentler bottom
+   darkening (capped well short of fully opaque) so the title/meta text overlaid lower down still
+   reads clearly before the mask above takes over and dissolves the image away entirely. */
 .title-info-art::after {
   content: ""; position: absolute; inset: 0;
-  background: linear-gradient(180deg, rgba(22,22,25,0) 40%, var(--color-surface) 100%);
+  background:
+    linear-gradient(90deg, rgba(var(--color-bg-rgb), 0.75) 0%, rgba(var(--color-bg-rgb), 0.2) 42%, rgba(var(--color-bg-rgb), 0) 68%),
+    linear-gradient(180deg, rgba(var(--color-bg-rgb), 0) 35%, rgba(var(--color-bg-rgb), 0.55) 75%, rgba(var(--color-bg-rgb), 0.55) 100%);
 }
+/* A sibling of .title-info-art (both direct children of .title-info-modal) rather than living
+   inside .title-info-art itself - .title-info-art now has a mask fading it to transparent near
+   its own bottom edge (see above), and mask applies to an element's entire rendered subtree,
+   children included. A progress bar living inside that masked box would fade away right along
+   with the image instead of staying a solid, legible indicator. Living outside .title-info-body
+   too (rather than anchored off its top edge the way .title-info-header is) is what lets this
+   span the full window width like .title-info-art does, instead of being capped to body's own
+   (narrower, centered) max-width - positioned off .title-info-modal's shared --title-info-art-h
+   variable instead, since .title-info-modal (unlike .title-info-body) has no width cap of its
+   own to fight. */
 .title-info-progress {
-  position: absolute; left: 0; right: 0; bottom: 0; height: 4px; z-index: 2;
+  position: absolute; left: 0; right: 0; height: 4px; z-index: 2;
+  top: calc(var(--title-info-art-h) - 24px);
   background: rgba(var(--color-fg-rgb), 0.25);
 }
 .title-info-progress[hidden] { display: none; }
 .title-info-progress .bar { height: 100%; background: var(--color-accent); }
-.title-info-body { padding: 28px 32px 32px; position: relative; z-index: 1; }
+.title-info-body { padding: 0 60px 80px; position: relative; z-index: 1; max-width: 1200px; margin: 0 auto; }
 /* Anchored to the bottom of its own starting line (title-info-body's own top edge,
    which lines up with title-info-art's bottom edge/the progress bar) via top:0 +
    translateY(-100%) rather than a fixed negative margin - a long/wrapped title or
    genre list then grows upward into the art image instead of pushing this text down
    into the divider or the actions row below it. */
-.title-info-header { position: absolute; left: 32px; right: 32px; top: 0; transform: translateY(-100%); padding-bottom: 24px; }
-.title-info-title { font-size: 26px; font-weight: 800; margin-bottom: 8px; }
-.title-info-meta { font-size: 13px; color: rgba(var(--color-fg-rgb), 0.65); margin-bottom: 18px; }
+.title-info-header { position: absolute; left: 60px; right: 60px; top: 0; transform: translateY(-100%); padding-bottom: 52px; }
+.title-info-title { font-size: 48px; font-weight: 800; margin-bottom: 14px; text-shadow: 0 2px 20px rgba(var(--color-shadow-rgb), 0.8); max-width: 900px; }
+.title-info-meta { font-size: 15px; color: rgba(var(--color-fg-rgb), 0.8); margin-bottom: 20px; text-shadow: 0 1px 10px rgba(var(--color-shadow-rgb), 0.8); }
 .title-info-meta span:not(:last-child)::after { content: "•"; margin: 0 8px; color: rgba(var(--color-fg-rgb), 0.3); }
-.title-info-actions { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; }
+.title-info-actions { display: flex; align-items: center; gap: 12px; margin: 8px 0 24px; }
 .title-info-actions[hidden] { display: none; }
 .title-info-play {
-  border: none; border-radius: 8px; padding: 11px 26px; font-size: 14px; font-weight: 700;
+  border: none; border-radius: 8px; padding: 14px 34px; font-size: 15px; font-weight: 700;
   cursor: pointer; background: var(--color-fg); color: var(--color-surface);
 }
 .title-info-play:hover { background: rgba(var(--color-fg-rgb), 0.85); }
@@ -109,7 +147,7 @@
   animation: title-info-spin 0.7s linear infinite;
 }
 @keyframes title-info-spin { to { transform: rotate(360deg); } }
-.title-info-summary { font-size: 14px; line-height: 1.6; color: rgba(var(--color-fg-rgb), 0.85); margin-bottom: 28px; max-width: 640px; }
+.title-info-summary { font-size: 14px; line-height: 1.6; color: rgba(var(--color-fg-rgb), 0.85); margin-bottom: 28px; }
 .title-info-section-title { font-size: 14px; font-weight: 700; margin: 40px 0 16px; }
 .title-info-cast-wrap[hidden], .title-info-similar-wrap[hidden] { display: none; }
 /* Nav stop with no click action of its own - only exists so D-pad/gamepad Down doesn't
