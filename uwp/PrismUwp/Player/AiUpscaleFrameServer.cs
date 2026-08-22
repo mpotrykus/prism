@@ -98,6 +98,12 @@ namespace PrismUwp.Player
                 IsHitTestVisible = false,
                 Stretch = Windows.UI.Xaml.Media.Stretch.Uniform,
                 Visibility = Windows.UI.Xaml.Visibility.Collapsed,
+                // Same "pin the element itself to center, not just trust Stretch's internal
+                // crop" reasoning as NativePlayerHost.Element - this is the presenter actually
+                // on screen for every non-HDR title (see this class's own header comment), so
+                // it's the one that matters most for Cover ever visibly anchoring to an edge.
+                HorizontalAlignment = Windows.UI.Xaml.HorizontalAlignment.Center,
+                VerticalAlignment = Windows.UI.Xaml.VerticalAlignment.Center,
             };
 
             pixelEffect = new AiUpscalePixelEffect(canvasDevice);

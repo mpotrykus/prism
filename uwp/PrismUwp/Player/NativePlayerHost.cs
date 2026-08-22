@@ -117,6 +117,13 @@ namespace PrismUwp.Player
                 // The page draws the entire player UI.
                 AreTransportControlsEnabled = false,
                 Stretch = Windows.UI.Xaml.Media.Stretch.Uniform,
+                // Grid gives this element the whole cell either way (it has no intrinsic
+                // desired size to shrink to), but Center pins the element itself - not just
+                // Stretch's internal crop - to the middle. Belt-and-suspenders against Cover
+                // (UniformToFill) ever anchoring its overflow to a corner instead of centering
+                // it - see AiUpscaleFrameServer.Element for the same fix on the other presenter.
+                HorizontalAlignment = Windows.UI.Xaml.HorizontalAlignment.Center,
+                VerticalAlignment = Windows.UI.Xaml.VerticalAlignment.Center,
             };
             Element.SetMediaPlayer(player);
             aiUpscale = new AiUpscaleFrameServer(player, this.emit, this.log);

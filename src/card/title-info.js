@@ -1,9 +1,10 @@
 import { wireLinearNav, registerNavHandler, focusAfterPaint, isControllerActive } from "../../focus-nav.js";
 import { lockScroll, unlockScroll } from "../../scroll-lock.js";
 import { paintWatchlistButton } from "./watchlist.js";
-import { WATCHED_ICON_SVG } from "./rows.js";
+import { WATCHED_ICON_SVG, wireArrowVisibility } from "./rows.js";
 import { PROFILE_ICON_SVG } from "./profile.js";
 import { pickNextEpisode } from "./logic/catalog.js";
+import { createRowScroll } from "./row-scroll.js";
 
 /* Plex's Media[].Part[].Stream[] carries every stream on a version (video/audio/
    subtitle, distinguished by streamType - 2 is audio). Only surfaced for the player's
@@ -141,6 +142,88 @@ function hasAnyHistory(meta) {
 function hasProgress(meta) {
   if (meta.type === "show" || meta.type === "season") return false;
   return (meta.viewOffset || 0) > 0;
+}
+
+/* Same shape as rows.js's own buildScrollArrow (also used by the player's
+   openEpisodeListOverlay for its own card row), but a distinct class name rather than
+   that one's hardcoded ".scroll-arrow" - rows-poster.css's own geometry for that class
+   (44px arrow inset at a fixed 45px top/bottom, tuned for the main page's poster-glow
+   bleed padding) doesn't match this row's differently-sized episode cards. Reuses
+   wireArrowVisibility as-is though, since that helper only ever toggles a "hidden"
+   class rather than assuming ".scroll-arrow" itself. */
+function buildEpisodeRowArrow(dir, scroller, rowScroll) {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = `title-info-row-arrow ${dir} hidden`;
+  btn.setAttribute("aria-label", dir === "left" ? "Scroll left" : "Scroll right");
+  btn.innerHTML =
+    dir === "left"
+      ? '<svg viewBox="0 0 24 24" width="24" height="24"><path fill="currentColor" d="M15.4 7.4 14 6l-6 6 6 6 1.4-1.4L10.8 12z"/></svg>'
+      : '<svg viewBox="0 0 24 24" width="24" height="24"><path fill="currentColor" d="M8.6 7.4 10 6l6 6-6 6-1.4-1.4L13.2 12z"/></svg>';
+  btn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const amount = scroller.clientWidth * 0.9 * (dir === "left" ? -1 : 1);
+    rowScroll.scrollBy(amount, { animate: true });
+  });
+  return btn;
+}
+
+/* One episode card - same visual shape as the in-player episode list's own
+   buildEpisodeCard (src/player/ui/episode-list.js), just built as an HTML string here
+   since this modal already renders its lists that way rather than via DOM-factory calls.
+   "current" (the resumed/on-deck episode landed on via openForEpisode) is applied by the
+   caller afterward via a data-rating-key lookup, same as before this became a row.
+   title+summary are grouped under .title-info-episode-text (rather than sitting directly
+   in .title-info-episode, as they did before this became a card row) so mobile's own CSS
+   (see responsive.css) can revert this card to the old thumb-beside-text row layout by
+   just flipping .title-info-episode back to flex-row with that wrapper as its second
+   item - the same markup then serves both layouts, no separate mobile template needed. */
+function episodeCardHtml(ctx, ep) {
+  const progress = ep.duration ? Math.max(0, Math.min(1, (ep.viewOffset || 0) / ep.duration)) : 0;
+  const watched = !!ep.viewCount && progress <= 0;
+  return `
+    <div class="title-info-episode" data-rating-key="${ep.ratingKey}" tabindex="0">
+      <div class="title-info-episode-thumb">
+        <img loading="lazy" src="${ctx.escape(ctx.plexThumbUrl(ep.thumb, 320, 180))}" alt="" />
+        ${watched ? `<div class="title-info-episode-watched">${WATCHED_ICON_SVG}</div>` : ""}
+        ${
+          progress > 0
+            ? `<div class="title-info-episode-progress"><div class="bar" style="width:${Math.round(progress * 100)}%"></div></div>`
+            : ""
+        }
+        <div class="title-info-episode-play"><div class="title-info-episode-play-icon">▶</div></div>
+      </div>
+      <div class="title-info-episode-text">
+        <div class="title-info-episode-title">${ep.index}. ${ctx.escape(ep.title)}</div>
+        <div class="title-info-episode-summary">${ctx.escape(ep.summary || "")}</div>
+      </div>
+    </div>`;
+}
+
+/* Collection/playlist row equivalent of episodeCardHtml above - kept as a separate
+   function (rather than branching inside one) since its source shape (an already-mapped
+   card/logic/catalog.js item, no per-episode index prefix, no hover play icon - see
+   _renderFlatItems's own comment on why these aren't directly playable the way episodes
+   are) differs enough from a raw Plex episode child to make one shared function more
+   confusing than two small ones. */
+function flatItemCardHtml(ctx, mapped, rawSummary) {
+  const watched = mapped.watched && !(mapped.progress > 0);
+  return `
+    <div class="title-info-episode" data-rating-key="${mapped.ratingKey}" tabindex="0">
+      <div class="title-info-episode-thumb">
+        <img loading="lazy" src="${ctx.escape(mapped.art || mapped.image)}" alt="" />
+        ${watched ? `<div class="title-info-episode-watched">${WATCHED_ICON_SVG}</div>` : ""}
+        ${
+          mapped.progress > 0
+            ? `<div class="title-info-episode-progress"><div class="bar" style="width:${Math.round(mapped.progress * 100)}%"></div></div>`
+            : ""
+        }
+      </div>
+      <div class="title-info-episode-text">
+        <div class="title-info-episode-title">${ctx.escape(mapped.title)}</div>
+        <div class="title-info-episode-summary">${ctx.escape(rawSummary || "")}</div>
+      </div>
+    </div>`;
 }
 
 /* The title-info detail overlay: cast/seasons-episodes/collection-playlist items/
@@ -327,6 +410,7 @@ export class TitleInfoController {
     this._metaEl.innerHTML = item.subtitle ? `<span>${this._ctx.escape(item.subtitle)}</span>` : "";
     this._summaryEl.textContent = "";
     this._episodesEl.innerHTML = "";
+    this._episodesEl.classList.remove("title-info-row-wrap");
     this._castWrap.hidden = true;
     this._castEl.innerHTML = "";
     this._similarWrap.hidden = true;
@@ -489,30 +573,11 @@ export class TitleInfoController {
         const epData = await this._ctx.plexFetch(`/library/metadata/${seasonRatingKey}/children`, { includeChapters: 1 });
         if (this._item?.ratingKey !== showRatingKey) return;
         const episodes = epData?.MediaContainer?.Metadata || [];
-        list.innerHTML = episodes
-          .map((ep) => {
-            const progress = ep.duration ? Math.max(0, Math.min(1, (ep.viewOffset || 0) / ep.duration)) : 0;
-            const watched = !!ep.viewCount && progress <= 0;
-            return `
-          <div class="title-info-episode" data-rating-key="${ep.ratingKey}" tabindex="0">
-            <div class="title-info-episode-thumb">
-              <img loading="lazy" src="${this._ctx.escape(this._ctx.plexThumbUrl(ep.thumb, 320, 180))}" alt="" />
-              ${watched ? `<div class="title-info-episode-watched">${WATCHED_ICON_SVG}</div>` : ""}
-              ${
-                progress > 0
-                  ? `<div class="title-info-episode-progress"><div class="bar" style="width:${Math.round(progress * 100)}%"></div></div>`
-                  : ""
-              }
-              <div class="title-info-episode-play"><div class="title-info-episode-play-icon">▶</div></div>
-            </div>
-            <div>
-              <div class="title-info-episode-title">${ep.index}. ${this._ctx.escape(ep.title)}</div>
-              <div class="title-info-episode-summary">${this._ctx.escape(ep.summary || "")}</div>
-            </div>
-          </div>`;
-          })
-          .join("");
-        list.querySelectorAll(".title-info-episode").forEach((row) => {
+        const track = this._buildCardRow(
+          list,
+          episodes.map((ep) => episodeCardHtml(this._ctx, ep)).join("")
+        );
+        track.querySelectorAll(".title-info-episode").forEach((row) => {
           /* Delegates to _playEpisodeByRatingKey (same as the show-level Play button
              resuming into an episode) instead of building the play payload straight off
              `ep` - `ep` is this row's entry from the season's /children listing, and
@@ -528,7 +593,7 @@ export class TitleInfoController {
           });
         });
         if (focusEpisodeRatingKey) {
-          const row = list.querySelector(`[data-rating-key="${focusEpisodeRatingKey}"]`);
+          const row = track.querySelector(`[data-rating-key="${focusEpisodeRatingKey}"]`);
           if (row) {
             row.classList.add("current");
           }
@@ -570,29 +635,11 @@ export class TitleInfoController {
   _renderFlatItems(rawItems, ratingKey) {
     if (!rawItems.length || this._item?.ratingKey !== ratingKey) return;
     this._flatItems = rawItems;
-    this._episodesEl.innerHTML = rawItems
-      .map((m) => {
-        const mapped = this._ctx.mapItem(m, true);
-        const watched = mapped.watched && !(mapped.progress > 0);
-        return `
-      <div class="title-info-episode" data-rating-key="${mapped.ratingKey}" tabindex="0">
-        <div class="title-info-episode-thumb">
-          <img loading="lazy" src="${this._ctx.escape(mapped.art || mapped.image)}" alt="" />
-          ${watched ? `<div class="title-info-episode-watched">${WATCHED_ICON_SVG}</div>` : ""}
-          ${
-            mapped.progress > 0
-              ? `<div class="title-info-episode-progress"><div class="bar" style="width:${Math.round(mapped.progress * 100)}%"></div></div>`
-              : ""
-          }
-        </div>
-        <div>
-          <div class="title-info-episode-title">${this._ctx.escape(mapped.title)}</div>
-          <div class="title-info-episode-summary">${this._ctx.escape(m.summary || "")}</div>
-        </div>
-      </div>`;
-      })
-      .join("");
-    this._episodesEl.querySelectorAll(".title-info-episode").forEach((row, i) => {
+    const track = this._buildCardRow(
+      this._episodesEl,
+      rawItems.map((m) => flatItemCardHtml(this._ctx, this._ctx.mapItem(m, true), m.summary)).join("")
+    );
+    track.querySelectorAll(".title-info-episode").forEach((row, i) => {
       row.addEventListener("click", () => {
         const mapped = this._ctx.mapItem(rawItems[i], false);
         /* Only movies/episodes are ever directly playable from this flat list (a show or
@@ -990,6 +1037,47 @@ export class TitleInfoController {
     });
   }
 
+  /* Shared by both _loadSeasons' showSeason (one season's episodes) and _renderFlatItems
+     (a collection/playlist's flat item list) - both want the same horizontally-scrolling
+     card row the in-player episode list uses (src/player/ui/episode-list.js), just built
+     as an innerHTML string here rather than that file's DOM-factory calls, matching how
+     every other list in this modal already renders. `wrapEl` becomes the row's own
+     position:relative anchor for the fade-edge scroll arrows - the season case passes
+     `list` (a dedicated child of .title-info-episodes, sitting below the season picker);
+     the collection/playlist case, with no picker to sit below, passes .title-info-episodes
+     itself. One shared data-nav-group ("title-info-episodes") is safe for both since only
+     one of these two callers is ever active for a given item - a show has seasons, a
+     collection/playlist has a flat list, never both at once. */
+  _buildCardRow(wrapEl, itemsHtml) {
+    wrapEl.classList.add("title-info-row-wrap");
+    wrapEl.innerHTML = `<div class="title-info-row-scroller"><div class="title-info-row-track">${itemsHtml}</div></div>`;
+    const scroller = wrapEl.querySelector(".title-info-row-scroller");
+    const track = wrapEl.querySelector(".title-info-row-track");
+    const rowScroll = createRowScroll(scroller, track);
+    const leftArrow = buildEpisodeRowArrow("left", scroller, rowScroll);
+    const rightArrow = buildEpisodeRowArrow("right", scroller, rowScroll);
+    wrapEl.insertBefore(leftArrow, scroller);
+    wrapEl.appendChild(rightArrow);
+    wireArrowVisibility(rowScroll, leftArrow, rightArrow);
+    /* Desktop-only grouping (mobile reflows these same cards into a stacked vertical list
+       instead, where Up/Down should step through them one at a time) - see
+       syncEpisodesNavGroup's own comment in _wire for why this is a shared, persistent
+       function rather than a one-off assignment here. */
+    this._syncEpisodesNavGroup();
+    /* wireLinearNav's own focusItem centers the newly-focused card along the page's real
+       (vertical) scroll axis via a native scrollIntoView - it can't also bring the card
+       into view along this row's own horizontal axis, since `scroller` clips via
+       overflow:hidden rather than a real overflow:auto (see row-scroll.js's own header
+       comment for why: Xbox WebView2's gamepad-to-scroll handling would otherwise hijack a
+       real scroll container out from under this row's D-pad centering). Same pattern the
+       player's own openEpisodeListOverlay uses for its identical card row. */
+    track.addEventListener("focusin", (e) => {
+      const card = e.target.closest(".title-info-episode");
+      if (card) rowScroll.scrollIntoView(card, { inline: "center", animate: true });
+    });
+    return track;
+  }
+
   _wire() {
     /* Recomputes which items land in which visual row whenever the grid's own width
        changes (window resize, or the responsive layout swapping breakpoints) - the
@@ -1030,6 +1118,26 @@ export class TitleInfoController {
     };
     syncActionsNavGroup();
     desktopActionsQuery.addEventListener("change", syncActionsNavGroup);
+    /* Same reasoning as syncActionsNavGroup just above, for the episode/collection card row
+       instead of the actions row - desktop's cards sit in one actual horizontal row
+       (title-info.css), so grouping them makes Left/Right cycle across it and Up/Down treat
+       it as a single stop; mobile's own CSS (responsive.css) reflows the exact same cards
+       into a stacked vertical list instead, where a shared group would wrongly make Up/Down
+       skip over all of them at once rather than stepping through one at a time - the bug this
+       fixes. Reuses desktopActionsQuery rather than a second matchMedia for the same 701px
+       cutoff. Queried fresh from the shadow root (not a fixed element list, unlike
+       syncActionsNavGroup's four static buttons) since _buildCardRow replaces these cards
+       outright on every season switch/reopen - stored on `this` so _buildCardRow can re-run
+       it right after building a fresh batch without this file needing a second matchMedia
+       listener alongside this one. */
+    const syncEpisodesNavGroup = () => {
+      this._shadowRoot.querySelectorAll(".title-info-episode").forEach((el) => {
+        if (desktopActionsQuery.matches) el.dataset.navGroup = "title-info-episodes";
+        else delete el.dataset.navGroup;
+      });
+    };
+    this._syncEpisodesNavGroup = syncEpisodesNavGroup;
+    desktopActionsQuery.addEventListener("change", syncEpisodesNavGroup);
     this._watchlistBtn.addEventListener("click", (e) => {
       e.stopPropagation();
       const item = this._item;

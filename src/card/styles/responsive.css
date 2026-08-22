@@ -2,7 +2,35 @@
   .title-info-overlay { padding: 0; }
   .title-info-modal { width: 100%; max-width: 100%; min-height: 100dvh; border-radius: 0; border: none; --title-info-art-h: 200px; }
   .title-info-close { display: none; }
-  .title-info-body { padding: 20px 20px calc(32px + var(--safe-bottom)); max-width: none; margin: 0; }
+  .title-info-body { padding: 20px 20px calc(32px + var(--safe-bottom)); }
+  /* Mobile keeps the old stacked vertical list instead of the desktop card row (see
+     title-info.css's own .title-info-episode/-row-* rules) - a horizontally-scrolling row
+     of 240px cards doesn't fit a phone-width screen nearly as well as it does a desktop
+     window, and the original design already worked fine here. Same markup as desktop
+     (episodeCardHtml/flatItemCardHtml in title-info.js) throughout, just re-flowed by CSS -
+     see .title-info-episode-text's own comment in that file for why the markup was shaped
+     to allow this. */
+  .title-info-row-wrap { margin: 0; }
+  .title-info-row-scroller { overflow: visible; padding: 0; touch-action: auto; }
+  .title-info-row-track { display: block; }
+  .title-info-row-arrow { display: none; }
+  .title-info-episode {
+    flex-direction: row; width: 100%; gap: 12px;
+    padding: 10px 0; border-bottom: 1px solid rgba(var(--color-fg-rgb), 0.06);
+  }
+  .title-info-episode.current {
+    background: rgba(var(--color-accent-rgb), 0.08); border-radius: 8px;
+    padding-left: 8px; margin-left: -8px; padding-right: 8px; margin-right: -8px;
+  }
+  .title-info-episode:hover:not(.current), .title-info-episode:focus-visible:not(.current) {
+    background: rgba(var(--color-fg-rgb), 0.05); border-radius: 8px;
+    padding-left: 8px; margin-left: -8px; padding-right: 8px; margin-right: -8px;
+  }
+  .title-info-episode-thumb { width: 140px; height: 79px; border-radius: 6px; border: none; }
+  .title-info-episode.current .title-info-episode-thumb { border: none; }
+  .title-info-episode-text { flex: 1; min-width: 0; }
+  .title-info-episode-title { margin-bottom: 4px; white-space: normal; overflow: visible; text-overflow: clip; }
+  .title-info-episode-summary { display: block; -webkit-line-clamp: unset; overflow: visible; }
   .title-info-header { left: 20px; right: 20px; padding-bottom: 16px; }
   .title-info-title { font-size: 22px; }
   .title-info-meta { display: flex; flex-wrap: wrap; row-gap: 6px; }

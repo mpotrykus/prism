@@ -16,7 +16,7 @@
      letting the progress bar live outside .title-info-art (so it isn't masked away along with
      the image, see that comment below) while still tracking art's actual (responsive) height
      requires both to read the same value rather than .title-info-art hardcoding its own. */
-  --title-info-art-h: clamp(440px, 64vh, 780px);
+  --title-info-art-h: clamp(480px, 72vh, 860px);
   width: 100%;
   max-width: 100%;
   min-height: 100%;
@@ -98,7 +98,7 @@
 }
 .title-info-progress[hidden] { display: none; }
 .title-info-progress .bar { height: 100%; background: var(--color-accent); }
-.title-info-body { padding: 0 60px 80px; position: relative; z-index: 1; max-width: 1200px; margin: 0 auto; }
+.title-info-body { padding: 0 60px 80px; position: relative; z-index: 1; }
 /* Anchored to the bottom of its own starting line (title-info-body's own top edge,
    which lines up with title-info-art's bottom edge/the progress bar) via top:0 +
    translateY(-100%) rather than a fixed negative margin - a long/wrapped title or
@@ -147,7 +147,7 @@
   animation: title-info-spin 0.7s linear infinite;
 }
 @keyframes title-info-spin { to { transform: rotate(360deg); } }
-.title-info-summary { font-size: 14px; line-height: 1.6; color: rgba(var(--color-fg-rgb), 0.85); margin-bottom: 28px; }
+.title-info-summary { font-size: 14px; line-height: 1.6; color: rgba(var(--color-fg-rgb), 0.85); margin-bottom: 28px; max-width: 900px; }
 .title-info-section-title { font-size: 14px; font-weight: 700; margin: 40px 0 16px; }
 .title-info-cast-wrap[hidden], .title-info-similar-wrap[hidden] { display: none; }
 /* Nav stop with no click action of its own - only exists so D-pad/gamepad Down doesn't
@@ -181,16 +181,21 @@
 .title-info-season-option { padding: 8px 10px; border-radius: 6px; font-size: 13px; color: var(--color-fg); cursor: pointer; }
 .title-info-season-option:hover, .title-info-season-option:focus-visible { background: rgba(var(--color-fg-rgb), 0.08); }
 .title-info-season-option.selected { background: var(--color-surface-selected); }
-.title-info-episode { display: flex; gap: 12px; padding: 10px 0; border-bottom: 1px solid rgba(var(--color-fg-rgb), 0.06); cursor: pointer; }
-.title-info-episode.current { background: rgba(var(--color-accent-rgb), 0.08); border-radius: 8px; padding-left: 8px; margin-left: -8px; padding-right: 8px; margin-right: -8px; }
-.title-info-episode:hover:not(.current), .title-info-episode:focus-visible:not(.current) {
-  background: rgba(var(--color-fg-rgb), 0.05); border-radius: 8px;
-  padding-left: 8px; margin-left: -8px; padding-right: 8px; margin-right: -8px;
-}
+/* Row/card layout (same shape as the in-player episode list's own cards - see
+   src/player/ui/episode-list.js's buildEpisodeCard) rather than a stacked list of full-
+   width rows - see .title-info-row-wrap/-scroller/-track below for the horizontally-
+   scrolling row these cards sit in. Used for both a season's episodes and (via
+   _renderFlatItems) a collection/playlist's flat item list. */
+.title-info-episode { display: flex; flex-direction: column; gap: 8px; width: 240px; flex: none; cursor: pointer; }
 .title-info-episode-thumb {
-  position: relative; width: 140px; height: 79px; border-radius: 6px; flex: none;
+  position: relative; width: 100%; height: 135px; border-radius: 8px; box-sizing: border-box;
   background: rgba(var(--color-fg-rgb), 0.05); overflow: hidden;
+  border: 2px solid transparent;
 }
+/* The "on-deck"/currently-resumed episode (see openForEpisode) - an accent border on the
+   thumb rather than the old whole-row background tint, which only made sense for a
+   full-width row. */
+.title-info-episode.current .title-info-episode-thumb { border-color: var(--color-accent); }
 .title-info-episode-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .title-info-episode-progress {
   position: absolute; left: 0; right: 0; bottom: 0; height: 3px; background: rgba(var(--color-fg-rgb), 0.3);
@@ -215,9 +220,47 @@
   display: flex; align-items: center; justify-content: center;
   font-size: 13px;
 }
-.title-info-episode-title { font-size: 13.5px; font-weight: 700; margin-bottom: 4px; }
-.title-info-episode-summary { font-size: 12.5px; color: rgba(var(--color-fg-rgb), 0.6); line-height: 1.4; }
+.title-info-episode-title {
+  font-size: 13.5px; font-weight: 700;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.title-info-episode-summary {
+  font-size: 12.5px; color: rgba(var(--color-fg-rgb), 0.6); line-height: 1.4;
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+}
 .title-info-loading { padding: 20px 0; color: rgba(var(--color-fg-rgb), 0.5); font-size: 13px; }
+/* The horizontally-scrolling row itself (episodes for the season .title-info-episode-title
+   picker selects, or a collection/playlist's flat item list) - same idea as the main page's
+   own .row-scroll-wrap/-scroller/-track (rows-poster.css) and the in-player episode list's
+   overlay (src/player/ui/episode-list.js), just sized for this card's own dimensions rather
+   than reusing either of those directly (see buildEpisodeRowArrow's own comment in
+   title-info.js for why the arrows specifically aren't shared). */
+/* Negates .title-info-body's own 60px side padding (rather than a 100vw/negative-viewport-
+   margin trick) so the row reaches the true edges of the window - body itself is full-width
+   now (no centered max-width to fight, see that rule's own history), so escaping just its
+   padding is all that's needed. The scroller below then reintroduces that same 60px as
+   internal padding, so the first/current card still lines up with the title/summary text
+   above rather than starting flush at the very edge - only the row's own scrollable/clipped
+   area (and the cards once scrolled) actually reaches edge-to-edge. */
+.title-info-row-wrap { position: relative; margin: 0 -60px; }
+.title-info-row-scroller { overflow: hidden; padding: 4px 60px; touch-action: pan-y; }
+.title-info-row-scroller.dragging { cursor: grabbing; }
+.title-info-row-track { display: flex; gap: 16px; will-change: transform; }
+.title-info-row-arrow {
+  position: absolute; top: 0; bottom: 0; width: 40px; border: none; padding: 0;
+  display: flex; align-items: center; justify-content: center;
+  color: var(--color-fg); cursor: pointer; z-index: 5; opacity: 0;
+  transition: opacity 0.15s ease, background-color 0.15s ease;
+  background: linear-gradient(90deg, rgba(var(--color-bg-rgb), 0.9), rgba(var(--color-bg-rgb), 0));
+}
+.title-info-row-arrow.right { left: auto; right: 0; background: linear-gradient(270deg, rgba(var(--color-bg-rgb), 0.9), rgba(var(--color-bg-rgb), 0)); }
+.title-info-row-arrow.left { left: 0; }
+.title-info-row-arrow:focus-visible { background-color: rgba(var(--color-shadow-rgb), 0.35); opacity: 1; }
+.title-info-row-arrow.hidden { opacity: 0 !important; pointer-events: none; }
+@media (hover: hover) {
+  .title-info-row-arrow:hover { background-color: rgba(var(--color-shadow-rgb), 0.35); }
+  .title-info-row-wrap:hover .title-info-row-arrow:not(.hidden) { opacity: 1; }
+}
 .title-info-similar { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 12px; }
 .title-info-similar-item { cursor: pointer; border-radius: 6px; }
 .title-info-similar-item img { width: 100%; aspect-ratio: 2/3; object-fit: cover; border-radius: 6px; background: rgba(var(--color-fg-rgb), 0.05); display: block; transition: transform 0.18s ease; }
