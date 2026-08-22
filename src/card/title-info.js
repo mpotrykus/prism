@@ -122,6 +122,18 @@ export function formatRuntime(ms) {
   return h ? `${h}h ${m}m` : `${m}m`;
 }
 
+/* Plex's videoResolution is a bare number-as-string ("1080", "720") for anything
+   sub-4K, but "4k"/"8k" below that. Normalized the same way for both rather than
+   just String()-ing it like extractMediaVersions above, since this one is user-facing
+   in the info modal's meta line, not an internal version-menu label. */
+export function formatResolution(res) {
+  const r = String(res || "").toLowerCase();
+  if (!r) return "";
+  if (r === "sd") return "SD";
+  if (r.endsWith("k")) return r.toUpperCase();
+  return `${r}p`;
+}
+
 /* Raw-meta equivalents of logic/catalog.js's mapItem watched/hasHistory fields, for the
    detail fetches here that hand this a raw Plex response object rather than an
    already-mapped item - a show/season has no viewOffset/viewCount of its own the way a
@@ -508,6 +520,8 @@ export class TitleInfoController {
     if (meta.contentRating) metaParts.push(meta.contentRating);
     if (meta.year) metaParts.push(String(meta.year));
     if (meta.duration) metaParts.push(formatRuntime(meta.duration));
+    const resolution = meta.Media?.[0]?.videoResolution;
+    if (resolution) metaParts.push(formatResolution(resolution));
     const rating = meta.audienceRating || meta.rating;
     if (rating) metaParts.push(`★ ${Number(rating).toFixed(1)}`);
     if (meta.Genre?.length) metaParts.push(meta.Genre.slice(0, 3).map((g) => g.tag).join(", "));
