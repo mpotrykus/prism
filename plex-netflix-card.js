@@ -34,12 +34,14 @@ import { onSearchInput, exitSearch, renderSearchPage, openRowSeeMore } from "./s
 import {
   wireNavItem,
   renderNavSections,
+  wireHeaderNav,
   wireHomeNav,
   wireSearchNav,
   wireSearchToggle,
   wireVirtualKeyboardDismiss,
   wireStartButton,
   wireProfileButton,
+  wireProfileMenu,
   restoreFocusAfterSearch,
   dismissSearchKeyboard,
 } from "./src/card/nav.js";
@@ -48,6 +50,7 @@ import hostResetCss from "./src/card/styles/host-reset.css?inline";
 import sidenavCss from "./src/card/styles/sidenav.css?inline";
 import heroCss from "./src/card/styles/hero.css?inline";
 import headerSearchCss from "./src/card/styles/header-search.css?inline";
+import headerNavCss from "./src/card/styles/header-nav.css?inline";
 import rowsPosterCss from "./src/card/styles/rows-poster.css?inline";
 import pinModalCss from "./src/card/styles/pin-modal.css?inline";
 import profileCss from "./src/card/styles/profile.css?inline";
@@ -61,6 +64,7 @@ const STYLE = [
   sidenavCss,
   heroCss,
   headerSearchCss,
+  headerNavCss,
   rowsPosterCss,
   pinModalCss,
   profileCss,
@@ -189,14 +193,36 @@ class PlexNetflixCard extends HTMLElement {
         </div>
         <div class="content">
           <div class="header">
-            <img class="prism-logo" src="./assets/prism-logo.svg" alt="Prism" />
-            <div class="search-wrap">
-              <button type="button" class="search-toggle"></button>
-              <input class="search" type="text" placeholder="Search movies, shows, actors…" autocomplete="off" />
+            <div class="header-side header-side-left">
+              <img class="prism-logo" src="./assets/prism-logo.svg" alt="Prism" />
             </div>
-            <div class="nav-item nav-profile" title="Switch Profile" hidden tabindex="0">
-              <span class="nav-icon nav-profile-icon"></span>
-              <span class="nav-label nav-profile-label">Profile</span>
+            <div class="header-nav">
+              <button type="button" class="header-nav-arrow left hidden" aria-label="Scroll left">
+                <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M15.4 7.4 14 6l-6 6 6 6 1.4-1.4L10.8 12z"/></svg>
+              </button>
+              <div class="header-nav-scroller">
+                <div class="header-nav-track">
+                  <div class="nav-item header-nav-item active" data-view="home" tabindex="0">
+                    <span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M4 11 12 4l8 7" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M6 10v9h12v-9" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><rect x="10" y="14" width="4" height="5" fill="currentColor"/></svg></span>
+                    <span class="nav-label">Home</span>
+                  </div>
+                </div>
+              </div>
+              <button type="button" class="header-nav-arrow right hidden" aria-label="Scroll right">
+                <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M8.6 7.4 10 6l6 6-6 6-1.4-1.4L13.2 12z"/></svg>
+              </button>
+            </div>
+            <div class="header-side header-side-right">
+              <div class="search-wrap">
+                <button type="button" class="search-toggle"></button>
+                <input class="search" type="text" placeholder="Search movies, shows, actors…" autocomplete="off" />
+              </div>
+              <div class="profile-menu-wrap">
+                <div class="nav-item nav-profile" title="Account" tabindex="0">
+                  <span class="nav-icon nav-profile-icon"></span>
+                  <span class="nav-label nav-profile-label">Profile</span>
+                </div>
+              </div>
             </div>
           </div>
           <div class="main">
@@ -252,6 +278,16 @@ class PlexNetflixCard extends HTMLElement {
           <button type="button" class="profile-cancel">Cancel</button>
         </div>
       </div>
+      <div class="profile-dropdown" hidden>
+        <button type="button" class="profile-dropdown-item profile-dropdown-profile">
+          <span class="profile-dropdown-icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="8.4" r="3.6" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M5 20c1.2-4 4-6 7-6s5.8 2 7 6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></span>
+          Profile
+        </button>
+        <button type="button" class="profile-dropdown-item profile-dropdown-settings">
+          <span class="profile-dropdown-icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M12 3.5v2.4M12 18.1v2.4M4.5 12H6.9M17.1 12h2.4M6.3 6.3l1.7 1.7M16 16l1.7 1.7M17.7 6.3 16 8M8 16l-1.7 1.7" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></span>
+          Settings
+        </button>
+      </div>
       <div class="title-info-overlay" tabindex="-1">
         <div class="title-info-modal">
           <button type="button" class="title-info-close" aria-label="Close">✕</button>
@@ -287,11 +323,58 @@ class PlexNetflixCard extends HTMLElement {
     this._searchWrap = this.shadowRoot.querySelector(".search-wrap");
     this._searchToggle = this.shadowRoot.querySelector(".search-toggle");
     this._searchInput = this.shadowRoot.querySelector(".search");
+    this._contentEl = this.shadowRoot.querySelector(".content");
+    this._headerEl = this.shadowRoot.querySelector(".header");
+    /* header-search.css fades the header's own blurred backdrop out while this reads
+       true - at the very top of the page there's nothing scrolled "under" the sticky
+       header yet, so the backdrop can blend straight into the hero instead of showing a
+       blur/gradient over nothing. Checked on scroll rather than derived from
+       _currentView: every view (home, a library section, search) shares the same
+       scrollable .content and can independently be scrolled away from its own top. */
+    const updateHeaderAtTop = () => this._headerEl.classList.toggle("header-at-top", this._contentEl.scrollTop <= 0);
+    /* Netflix-style "get out of the way while browsing" behavior for the desktop header-nav
+       library strip (header-nav.css) - fades out while the user is actively scrolling down
+       through a row-heavy view, and comes right back the moment they scroll back up, rather
+       than staying pinned in place the whole time. Direction is compared against the
+       previous scroll position, not just distance from the top, so it reacts to which way
+       the user is scrolling right now.
+
+       Controller nav gets a stricter rule than mouse/touch: wireHomeNav's only path onto the
+       nav strip is hero "up" (sidenav/header-nav "down" only ever lands on the hero or a
+       poster row, never straight onto the strip), and focusHero always scrolls .content back
+       to the top first - so a D-pad/gamepad user can only ever actually reach these items
+       once they're already scrolled to the top. Fading them out on direction like the mouse
+       case would leave them tabbable-but-invisible (scroll up a little, stop - strip stays
+       hidden under the direction rule but is still the "up" target from the hero) instead of
+       matching what's really reachable. */
+    let lastScrollTop = this._contentEl.scrollTop;
+    const updateHeaderNavScroll = () => {
+      const top = this._contentEl.scrollTop;
+      if (this.hasAttribute("controller-active")) {
+        this._headerEl.classList.toggle("header-nav-hidden", top > 0);
+      } else if (top > lastScrollTop && top > 40) {
+        this._headerEl.classList.add("header-nav-hidden");
+      } else if (top < lastScrollTop) {
+        this._headerEl.classList.remove("header-nav-hidden");
+      }
+      lastScrollTop = top;
+    };
+    this._contentEl.addEventListener("scroll", updateHeaderAtTop, { passive: true });
+    this._contentEl.addEventListener("scroll", updateHeaderNavScroll, { passive: true });
+    document.addEventListener("controller-active-change", updateHeaderNavScroll);
+    updateHeaderAtTop();
+    updateHeaderNavScroll();
+    this._headerNavScroller = this.shadowRoot.querySelector(".header-nav-scroller");
+    this._headerNavTrack = this.shadowRoot.querySelector(".header-nav-track");
     this._renderNavSections();
     this._settingsBtn = this.shadowRoot.querySelector(".nav-settings");
+    this._profileMenuWrap = this.shadowRoot.querySelector(".profile-menu-wrap");
     this._profileNavItem = this.shadowRoot.querySelector(".nav-profile");
     this._profileNavIcon = this.shadowRoot.querySelector(".nav-profile-icon");
     this._profileNavLabel = this.shadowRoot.querySelector(".nav-profile-label");
+    this._profileDropdown = this.shadowRoot.querySelector(".profile-dropdown");
+    this._profileDropdownProfileBtn = this.shadowRoot.querySelector(".profile-dropdown-profile");
+    this._profileDropdownSettingsBtn = this.shadowRoot.querySelector(".profile-dropdown-settings");
     this._profileOverlay = this.shadowRoot.querySelector(".profile-overlay");
     this._profileListEl = this.shadowRoot.querySelector(".profile-list");
     this._profileCancelBtn = this.shadowRoot.querySelector(".profile-cancel");
@@ -335,14 +418,32 @@ class PlexNetflixCard extends HTMLElement {
     window.addEventListener("streaming-player-close", () => this._onPlayHistoryMutated());
 
     /* Dynamic (per-library) nav items are already wired inside _renderNavSections,
-       called above - only Home is static and needs wiring here. */
-    this._wireNavItem(this.shadowRoot.querySelector('.nav-item[data-view="home"]'));
+       called above - only the two static Home items (sidenav + header-nav) need wiring
+       here. */
+    this.shadowRoot.querySelectorAll('.nav-item[data-view="home"]').forEach((el) => this._wireNavItem(el));
+    this._wireHeaderNav();
 
     this._settingsBtn.addEventListener("click", () => {
       this.dispatchEvent(new CustomEvent("open-settings", { bubbles: true, composed: true }));
     });
 
-    this._profileNavItem.addEventListener("click", () => this._openProfileOverlay());
+    this._profileNavItem.addEventListener("click", (e) => {
+      e.stopPropagation();
+      this._toggleProfileDropdown();
+    });
+    this._profileDropdownProfileBtn.addEventListener("click", () => {
+      this._closeProfileDropdown();
+      this._openProfileOverlay();
+    });
+    this._profileDropdownSettingsBtn.addEventListener("click", () => {
+      this._closeProfileDropdown();
+      this._settingsBtn.click();
+    });
+    this.shadowRoot.addEventListener("click", (e) => {
+      if (!this._profileDropdown.hidden && !this._profileMenuWrap.contains(e.target) && !this._profileDropdown.contains(e.target)) {
+        this._closeProfileDropdown();
+      }
+    });
     this._profileCancelBtn.addEventListener("click", () => this._closeProfileOverlay());
     this._profileOverlay.addEventListener("click", (e) => {
       if (e.target === this._profileOverlay) this._closeProfileOverlay();
@@ -396,11 +497,12 @@ class PlexNetflixCard extends HTMLElement {
        sidesteps that regardless of which entry path fires. */
     this.shadowRoot.addEventListener("focusin", (e) => {
       if (!this._searchWrap.contains(e.target)) this._searchReturnFocusEl = e.target;
-      /* Same continuous-tracking idea, scoped to the sidenav instead of the search box -
-         lets wireHomeNav's/wireSearchNav's sidenav "right" handler return to whatever hero
-         button/poster/result had focus before the user moved into the sidenav, instead of
+      /* Same continuous-tracking idea, scoped to the nav (sidenav on mobile, the header's
+         horizontal strip on desktop - see nav.js) instead of the search box - lets
+         wireHomeNav's/wireSearchNav's "enter main content" handler return to whatever hero
+         button/poster/result had focus before the user moved into the nav, instead of
          always restarting from the hero's first button. */
-      if (!this._searchWrap.contains(e.target) && !e.target.closest(".sidenav")) this._lastContentFocusEl = e.target;
+      if (!this._searchWrap.contains(e.target) && !e.target.closest(".sidenav") && !e.target.closest(".header-nav")) this._lastContentFocusEl = e.target;
     });
 
     this._updateSearchToggleIcon();
@@ -432,6 +534,7 @@ class PlexNetflixCard extends HTMLElement {
     wireVirtualKeyboardDismiss(this);
     wireStartButton(this);
     wireProfileButton(this);
+    wireProfileMenu(this);
   }
 
   _wireNavItem(el) {
@@ -440,6 +543,34 @@ class PlexNetflixCard extends HTMLElement {
 
   _renderNavSections() {
     renderNavSections(this);
+  }
+
+  _wireHeaderNav() {
+    wireHeaderNav(this);
+  }
+
+  _toggleProfileDropdown() {
+    if (this._profileDropdown.hidden) this._openProfileDropdown();
+    else this._closeProfileDropdown();
+  }
+
+  _openProfileDropdown() {
+    this._profileDropdownProfileBtn.hidden = !this._hasMultipleProfiles;
+    /* The dropdown lives outside .header/.content now (see the template) rather than
+       anchored via position:absolute inside .profile-menu-wrap - .header's own
+       mask-image (its scroll-fade) clips any descendant content that extends past its
+       own box, which silently ate the dropdown's items (only its top border edge
+       survived the mask, rendering as a bare line with nothing inside). Position it as
+       position:fixed instead, computed fresh from the icon's real screen position each
+       time it opens. */
+    const rect = this._profileNavItem.getBoundingClientRect();
+    this._profileDropdown.style.top = `${rect.bottom + 10}px`;
+    this._profileDropdown.style.right = `${document.documentElement.clientWidth - rect.right}px`;
+    this._profileDropdown.hidden = false;
+  }
+
+  _closeProfileDropdown() {
+    this._profileDropdown.hidden = true;
   }
 
   _clearSearchInput() {
@@ -739,7 +870,7 @@ class PlexNetflixCard extends HTMLElement {
   }
 
   _renderProfileNav() {
-    renderProfileNav(this._profileNavItem, this._profileNavLabel, this._profileNavIcon, this._homeUsers || [], this._activeUserId, (s) => this._escape(s));
+    this._hasMultipleProfiles = renderProfileNav(this._profileNavItem, this._profileNavLabel, this._profileNavIcon, this._homeUsers || [], this._activeUserId, (s) => this._escape(s));
   }
 
   _openProfileOverlay() {
@@ -752,7 +883,7 @@ class PlexNetflixCard extends HTMLElement {
      way the sidenav item itself is (hidden when there's nothing to switch to) since this
      can be invoked with no prior check that a switcher is even applicable. */
   openProfileSwitcher() {
-    if (this._profileNavItem.hidden) return;
+    if (!this._hasMultipleProfiles) return;
     this._openProfileOverlay();
   }
 
@@ -771,8 +902,13 @@ class PlexNetflixCard extends HTMLElement {
     this.shadowRoot.querySelectorAll(".nav-item-overflow").forEach((el) => {
       addRow(el.querySelector(".nav-label").textContent, el.querySelector(".nav-icon").innerHTML, el.classList.contains("active"), el);
     });
-    if (!this._profileNavItem.hidden) {
-      addRow(this._profileNavLabel.textContent, this._profileNavIcon.innerHTML, false, this._profileNavItem);
+    if (this._hasMultipleProfiles) {
+      rows.push({
+        label: this._profileNavLabel.textContent,
+        iconHTML: this._profileNavIcon.innerHTML,
+        active: false,
+        onSelect: () => { this._closeMoreSheet(); this._openProfileOverlay(); },
+      });
     }
     addRow("Settings", this._settingsBtn.querySelector(".nav-icon").innerHTML, false, this._settingsBtn);
     renderMoreSheet(this._moreListEl, rows, (s) => this._escape(s));

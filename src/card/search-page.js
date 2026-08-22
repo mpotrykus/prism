@@ -38,6 +38,7 @@ export function exitSearch(card) {
   card._navItems.forEach((n) => n.classList.toggle("active", n.dataset.view === card._currentView));
   card._renderCurrentView();
   card._advanceHero();
+  card._centerActiveHeaderNav?.(false);
 }
 
 async function runSearch(card, q) {

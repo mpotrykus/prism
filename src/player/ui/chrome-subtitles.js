@@ -505,12 +505,22 @@ async function attachDownloadedSubtitle(controller, text, languageCode, result) 
    console.error-only handling - a swallowed error here looked indistinguishable from
    "the click didn't register" since nothing on screen ever changed. Plex's own download
    is asynchronous (see plex-subtitles.js) so this can take up to ~20s, not the near-
-   instant round-trip the direct-OpenSubtitles path (opensubtitles.js) makes. */
+   instant round-trip the direct-OpenSubtitles path (opensubtitles.js) makes.
+
+   Guards re-entry via a dataset flag rather than rowEl.disabled - this row holds real
+   D-pad focus (it was just "activated" to get here), and disabling a focused element
+   makes the browser blur it to <body> immediately. <body> isn't in this overlay's
+   wireLinearNav list, so every command - including Back - silently stops working for
+   the rest of the overlay. Confirmed on real Xbox hardware: with no rebuild/re-render on
+   failure to trigger some other refocus, that left the controller with no way out short
+   of closing the app. Never disabling rowEl means it never loses focus in the first
+   place, so there's nothing to restore. */
 async function applySubtitleResult(controller, result, rowEl, collapse) {
+    if (rowEl?.dataset.busy === "1") return;
     const originalLabel = rowEl?.textContent;
     if (rowEl) {
+        rowEl.dataset.busy = "1";
         rowEl.textContent = result.provider === "opensubtitles" ? "Downloading…" : "Downloading via Plex…";
-        rowEl.disabled = true;
     }
     try {
         const { text, languageCode } = await StreamingSubtitles.download(controller._session, result);
@@ -525,7 +535,7 @@ async function applySubtitleResult(controller, result, rowEl, collapse) {
     } catch (e) {
         console.error("StreamingPlayer: subtitle download failed -", e);
         if (rowEl) {
-            rowEl.disabled = false;
+            rowEl.dataset.busy = "0";
             rowEl.textContent = `${originalLabel} — failed: ${e.message}`;
         }
     }

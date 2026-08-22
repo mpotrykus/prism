@@ -41,7 +41,7 @@
   content: ""; position: fixed; inset: 0; z-index: 0;
   background-image: var(--title-info-bg, none);
   background-size: cover; background-position: center;
-  filter: blur(60px) brightness(0.22) saturate(1.05);
+  filter: blur(60px) brightness(0.14) saturate(1.05);
   transform: scale(1.1);
 }
 .title-info-close {

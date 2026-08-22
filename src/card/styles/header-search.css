@@ -1,102 +1,240 @@
 .header {
-  position: sticky;
-  top: 0;
-  z-index: 20;
-  height: var(--header-h);
-  margin-bottom: calc(-1 * var(--header-h));
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding: calc(28px + var(--safe-top)) 18px 50px;
-  background: linear-gradient(180deg, rgba(var(--color-bg-rgb), 0.95) 0%, rgba(var(--color-bg-rgb), 0.7) 70%, rgba(var(--color-bg-rgb), 0) 100%);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
-  mask-image: linear-gradient(180deg, #000 0%, #000 70%, transparent 100%);
-  -webkit-mask-image: linear-gradient(180deg, #000 0%, #000 70%, transparent 100%);
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    height: var(--header-h);
+    margin-bottom: calc(-1 * var(--header-h));
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    /* Bottom padding used to be 50px - not for centering the row, but purely to give
+     ::before's fade (below) room to run out gracefully before it reached the row's own
+     bottom edge. Baked into .header's own padding, that 50px counted against
+     align-items:center's centering math too: with the row's tallest control at 40px, a
+     16/50 top/bottom split left only a sliver of true "content" height, so centering
+     landed the row barely below padding-top instead of centered in the header - exactly
+     what was reported. Decoupled now: this padding is sized only for the row itself
+     (16px flat, top overridden per platform below for system-nav clearance), and
+     ::before extends its own box past .header's bottom edge instead to keep the same
+     fade reach. */
+    padding: calc(28px + var(--safe-top)) 18px 16px;
 }
-.prism-logo { height: 28px; width: auto; flex: 0 0 auto; }
+
+
+/* .header-nav needs to be truly centered on .header's full width, independent of
+   .header-side-left/-right's own (unequal) content widths - position:absolute with
+   left:50% looked centered horizontally but no longer shared .header's own flex cross-axis
+   alignment, so it landed at a different vertical position than the logo/search/profile
+   the moment .header's top/bottom padding stopped matching each other (see
+   header-search.css's own history - previously flat 28px on all platforms, now 16px on
+   web only). Giving the two flanking wrappers equal flex-grow (flex-basis 0) instead makes
+   the leftover space split evenly around .header-nav regardless of each side's own content
+   width, while keeping all three as ordinary flex children of the exact same row - so
+   vertical centering comes from the one shared align-items:center, immune to any future
+   padding change. */
+
+.header-side {
+    display: flex;
+    align-items: center;
+    flex: 1 1 0;
+    min-width: 0;
+}
+
+.header-side-left {
+    justify-content: flex-start;
+}
+
+.header-side-right {
+    justify-content: flex-end;
+    gap: 16px;
+}
+
+
+/* The blur/gradient/mask live on a pseudo-element behind the header's real content (logo,
+   nav, search, profile) rather than directly on .header itself, so only the backdrop can
+   fade - opacity on .header itself would fade the logo/buttons along with it. .header's
+   own position:sticky already makes it a containing block for this absolutely-positioned
+   pseudo, same as any other positioned ancestor would. Faded out entirely while
+   card._contentEl reads scrollTop <= 0 (see plex-netflix-card.js's scroll listener) - at
+   the very top there's nothing scrolled "under" the header yet, so it can blend straight
+   into the hero instead of showing a backdrop with nothing behind it to separate from. */
+
+.header::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    /* Extends 50px past .header's own (now much shorter, symmetrically-padded) bottom edge
+     - the fade needs real vertical distance to run its gradient/mask over, independent of
+     wherever the row itself happens to end. inset:0 (matching .header's own box exactly)
+     would put the row's centering math and the fade's reach back in conflict, the bug
+     just fixed above. */
+    bottom: -20px;
+    z-index: -1;
+    background: linear-gradient(180deg, rgba(var(--color-bg-rgb), 0.95) 0%, rgba(var(--color-bg-rgb), 0.7) 70%, rgba(var(--color-bg-rgb), 0) 100%);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    mask-image: linear-gradient(180deg, #000 0%, #000 70%, transparent 100%);
+    -webkit-mask-image: linear-gradient(180deg, #000 0%, #000 70%, transparent 100%);
+    opacity: 1;
+    transition: opacity 0.3s ease;
+}
+
+.header.header-at-top::before {
+    opacity: 0;
+}
+
+
+/* The backdrop above can fade to nothing over a bright/light hero (see .header-at-top),
+   leaving no contrast for the header's own logo/nav/icons to sit on. A permanent subtle
+   drop-shadow (not conditional on scroll position - Netflix-style apps keep this on
+   always) keeps them legible either way rather than only once scrolled. filter, not
+   text-shadow, since .prism-logo/.search-toggle's SVG icon aren't text. */
+
+.prism-logo,
+.header-nav-item,
+.search-toggle,
+.nav-profile {
+    filter: drop-shadow(0 1px 4px rgba(0, 0, 0, 0.85));
+}
+
+.prism-logo {
+    height: 28px;
+    width: auto;
+    flex: 0 0 auto;
+}
+
 .search-wrap {
-  position: relative;
-  flex: none;
-  width: 40px;
-  height: 40px;
-  margin-left: auto;
-  border-radius: 20px;
-  border: 1px solid rgba(var(--color-fg-rgb), 0.15);
-  background: rgba(var(--color-fg-rgb), 0.08);
-  overflow: hidden;
-  transition: width 0.25s ease, border-color 0.15s ease, background-color 0.15s ease;
+    position: relative;
+    flex: none;
+    width: 40px;
+    height: 40px;
+    border-radius: 20px;
+    border: 1px solid rgba(var(--color-fg-rgb), 0.15);
+    background: rgba(var(--color-fg-rgb), 0.08);
+    overflow: hidden;
+    transition: width 0.25s ease, border-color 0.15s ease, background-color 0.15s ease;
 }
+
 .search-wrap.expanded {
-  width: min(360px, 60vw);
-  border-color: var(--color-accent);
-  background: rgba(var(--color-fg-rgb), 0.12);
+    width: min(360px, 60vw);
+    border-color: var(--color-accent);
+    background: rgba(var(--color-fg-rgb), 0.12);
 }
+
 .search-toggle {
-  position: absolute;
-  top: 0;
-  right: 0;
-  width: 40px;
-  height: 40px;
-  border: none;
-  background: transparent;
-  color: rgba(var(--color-fg-rgb), 0.85);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  z-index: 2;
+    position: absolute;
+    top: 0;
+    right: 0;
+    width: 40px;
+    height: 40px;
+    border: none;
+    background: transparent;
+    color: rgba(var(--color-fg-rgb), 0.85);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    z-index: 2;
 }
-.search-toggle:hover { color: var(--color-fg); }
-.search-toggle svg { 
-  width: 18px; 
-  height: 18px; 
-  flex: none; 
-  position: relative;
-  top: -2px;
-  right: -1px;
+
+.search-toggle:hover {
+    color: var(--color-fg);
 }
+
+.search-toggle svg {
+    width: 18px;
+    height: 18px;
+    flex: none;
+    position: relative;
+    top: -2px;
+    right: -1px;
+}
+
 .search {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  padding: 0 44px 0 16px;
-  border: none;
-  background: transparent;
-  color: var(--color-fg);
-  font-size: 14px;
-  outline: none;
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    padding: 0 44px 0 16px;
+    border: none;
+    background: transparent;
+    color: var(--color-fg);
+    font-size: 14px;
+    outline: none;
 }
-.search-page { padding: calc(var(--header-h) + 24px) 0 20px; }
-.search-page-group { padding: 0 45px; margin-bottom: 32px; }
-.search-page-group-header { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; margin-bottom: 16px; }
-.search-page-group-title { font-size: 18px; font-weight: 600; }
-.search-page-group-title-wrap { display: flex; align-items: center; gap: 10px; }
-.search-page-group-image { width: 32px; height: 32px; border-radius: 6px; object-fit: cover; flex: none; }
+
+.search-page {
+    padding: calc(var(--header-h) + 24px) 0 20px;
+}
+
+.search-page-group {
+    padding: 0 45px;
+    margin-bottom: 32px;
+}
+
+.search-page-group-header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 16px;
+}
+
+.search-page-group-title {
+    font-size: 18px;
+    font-weight: 600;
+}
+
+.search-page-group-title-wrap {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.search-page-group-image {
+    width: 32px;
+    height: 32px;
+    border-radius: 6px;
+    object-fit: cover;
+    flex: none;
+}
+
 .search-page-see-all {
-  flex: none;
-  border: none;
-  background: transparent;
-  color: rgba(var(--color-fg-rgb), 0.6);
-  font-size: 13px;
-  font-weight: 600;
-  cursor: pointer;
-  padding: 4px 0;
+    flex: none;
+    border: none;
+    background: transparent;
+    color: rgba(var(--color-fg-rgb), 0.6);
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    padding: 4px 0;
 }
-.search-page-see-all:hover { color: var(--color-accent); }
+
+.search-page-see-all:hover {
+    color: var(--color-accent);
+}
+
 .search-page-back {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  border: none;
-  background: transparent;
-  color: rgba(var(--color-fg-rgb), 0.85);
-  font-size: 14px;
-  font-weight: 600;
-  cursor: pointer;
-  padding: 0 45px 20px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    border: none;
+    background: transparent;
+    color: rgba(var(--color-fg-rgb), 0.85);
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    padding: 0 45px 20px;
 }
-.search-page-back:hover { color: var(--color-accent); }
-.search-page-grid { display: flex; flex-wrap: wrap; gap: 24px; }
+
+.search-page-back:hover {
+    color: var(--color-accent);
+}
+
+.search-page-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 24px;
+}

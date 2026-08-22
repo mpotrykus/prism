@@ -1,13 +1,67 @@
-.nav-profile[hidden] {
-    display: none;
-}
-
-
 /* Lives in the header now, not the sidenav - the sidenav's hover-to-reveal .nav-label
    and horizontal padding don't apply here, it's just an icon button next to search. */
 
 .nav-profile {
     padding: 0;
+}
+
+.profile-menu-wrap {
+    flex: none;
+}
+
+/* Rendered outside .header/.content (see plex-netflix-card.js's template) rather than
+   anchored via position:absolute inside .profile-menu-wrap - .header has a mask-image
+   (its own scroll-fade gradient) that clips any descendant box extending past .header's
+   own edges, which silently ate this dropdown's contents when it lived there (only its
+   top border survived the mask, rendering as a bare line with nothing inside). position:
+   fixed here, with top/right set from the icon's real screen position each time it opens
+   (plex-netflix-card.js's _openProfileDropdown) - it can't rely on a positioned ancestor
+   for placement anymore. */
+.profile-dropdown {
+    position: fixed;
+    z-index: 40;
+    display: flex;
+    flex-direction: column;
+    min-width: 180px;
+    /* Frosted-glass look - translucent dark fill plus a strong blur of whatever's behind
+       it (hero art, posters), rather than the profile-modal's own solid --color-surface -
+       this is a small anchored menu floating over page content, not a full-screen modal
+       with its own dedicated backdrop to darken first. */
+    background: rgba(var(--color-bg-rgb), 0.6);
+    backdrop-filter: blur(20px) saturate(1.6);
+    -webkit-backdrop-filter: blur(20px) saturate(1.6);
+    border: 1px solid rgba(var(--color-fg-rgb), 0.12);
+    border-radius: 12px;
+    padding: 6px;
+    box-shadow: 0 20px 50px rgba(var(--color-shadow-rgb), 0.55);
+}
+.profile-dropdown[hidden] { display: none; }
+
+.profile-dropdown-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    border: none;
+    background: transparent;
+    text-align: left;
+    padding: 10px 12px;
+    border-radius: 8px;
+    font-size: 13.5px;
+    font-weight: 600;
+    color: var(--color-fg);
+    cursor: pointer;
+}
+.profile-dropdown-item[hidden] { display: none; }
+.profile-dropdown-icon {
+    width: 18px;
+    height: 18px;
+    flex: none;
+    display: flex;
+    color: rgba(var(--color-fg-rgb), 0.75);
+}
+.profile-dropdown-icon svg { width: 100%; height: 100%; }
+.profile-dropdown-item:hover, .profile-dropdown-item:focus-visible {
+    background: rgba(var(--color-fg-rgb), 0.08);
 }
 
 .nav-profile .nav-label {

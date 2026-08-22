@@ -7,8 +7,10 @@ import * as StreamingVault from "../../vault.js";
 export const PROFILE_ICON_SVG =
   '<svg viewBox="0 0 24 24"><circle cx="12" cy="8.4" r="3.6" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M5 20c1.2-4 4-6 7-6s5.8 2 7 6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>';
 
-/* Only worth surfacing the switcher UI at all when there's more than one profile (a
-   solo account has nothing to switch to). Failures (no account token yet, no Plex Home
+/* Only worth surfacing the switcher UI itself when there's more than one profile (a
+   solo account has nothing to switch to) - the icon/dropdown trigger stays visible either
+   way now, since on desktop it's also the only entry point to Settings (see
+   plex-netflix-card.js's profile-dropdown). Failures (no account token yet, no Plex Home
    set up, network error) all collapse to "no switcher", same as an empty list - none of
    them should ever block the rest of the dashboard from loading. */
 export async function fetchHomeProfiles(accountToken) {
@@ -25,13 +27,14 @@ export async function fetchHomeProfiles(accountToken) {
   }
 }
 
+/* Returns whether there's an actual switcher (users.length > 1) - the caller uses this to
+   show/hide the dropdown's "Profile" row without hiding the icon itself. */
 export function renderProfileNav(profileNavItem, profileNavLabel, profileNavIcon, users, activeUserId, escape) {
   const showSwitcher = users.length > 1;
-  profileNavItem.hidden = !showSwitcher;
-  if (!showSwitcher) return;
   const active = users.find((u) => u.id === activeUserId);
   profileNavLabel.textContent = active ? active.title : "Profile";
   profileNavIcon.innerHTML = active?.thumb ? `<span class="nav-profile-avatar"><img loading="lazy" src="${escape(active.thumb)}" alt="" /></span>` : PROFILE_ICON_SVG;
+  return showSwitcher;
 }
 
 /* onSwitch(user, rowEl) is called when a non-active row's Switch button is clicked -

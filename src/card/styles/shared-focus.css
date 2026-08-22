@@ -49,6 +49,8 @@
 .title-info-season-select:focus-visible,
 .title-info-season-option:focus-visible,
 .more-sheet-item:focus-visible,
-.more-sheet-cancel:focus-visible {
+.more-sheet-cancel:focus-visible,
+.profile-dropdown-item:focus-visible,
+.header-nav-arrow:focus-visible {
     outline: none;
 }

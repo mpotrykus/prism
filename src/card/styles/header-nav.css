@@ -1,0 +1,135 @@
+/* Desktop-only replacement for the sidenav (see responsive.css's mobile bottom-bar
+   version of the same nav items) - a horizontally-scrolling strip centered in the header
+   instead of a vertical rail down the left edge. Kept in its own file/media query rather
+   than editing sidenav.css so mobile's layout is untouched by anything here: the sidenav
+   DOM/CSS/JS stay exactly as they were, just hidden below. Home + library tabs are
+   rendered twice (once into .nav-top for mobile, once into .header-nav-track for desktop -
+   see nav.js's renderNavSections) rather than reparented, since a single set of elements
+   can't be positioned as both a fixed bottom bar and a header-centered strip at once (the
+   header's own backdrop-filter would make position:fixed descendants fixed relative to
+   the header, not the viewport, ruling out reparenting-via-CSS-alone for the mobile case). */
+
+.header-nav {
+    display: none;
+}
+
+@media (min-width: 701px) {
+    .sidenav {
+        display: none;
+    }
+    .header {
+        /* header-search.css's calc(28px + var(--safe-top)) top padding exists to clear a
+       real system status bar/nav on native shells - on plain web that reserves nothing
+       (--safe-top is 0 there) and the flat 28px alone just reads as unwanted empty space
+       above the row, especially now that the sidenav (which used to visually anchor the
+       page's top-left a full 15px higher, at its own 13px+safe-top) is gone on desktop.
+       Tightened for web only; platform.js's data-platform marker (mirrored from
+       documentElement) keeps android/xbox/uwp at the original, larger value where they
+       actually need the clearance. */
+        padding-top: 12px;
+    }
+     :host-context([data-platform="android"]) .header,
+     :host-context([data-platform="xbox"]) .header {
+        padding-top: calc(28px + var(--safe-top));
+    }
+    /* An ordinary flex child of .header now, not position:absolute - see header-search.css's
+     .header-side comment for why: .header-side-left/-right flank it with equal flex-grow,
+     which centers it on .header's full width independent of the two sides' own (unequal)
+     content widths, while still sharing .header's one align-items:center for the vertical
+     axis. A position:absolute version of this centered horizontally but (once the two
+     sides' padding stopped matching) no longer vertically, since percentage top/left on an
+     absolutely-positioned box measures against .header's full padding box, not the same
+     content-box center the flex siblings align to. */
+    .header-nav {
+        flex: 0 1 auto;
+        display: flex;
+        align-items: center;
+        gap: 2px;
+        max-width: 420px;
+        min-width: 0;
+        transition: opacity 0.25s ease;
+    }
+    /* Toggled by plex-netflix-card.js's scroll-direction check - scrolling down fades the
+     library strip out of the way, scrolling back up brings it right back. Focus escapes
+     the fade rather than trapping a keyboard/gamepad user on an invisible target if focus
+     ever lands here while scrolled (e.g. wireHomeNav's sidenav "up" hand-off). */
+    .header.header-nav-hidden .header-nav {
+        opacity: 0;
+        pointer-events: none;
+    }
+    .header.header-nav-hidden .header-nav:focus-within {
+        opacity: 1;
+        pointer-events: auto;
+    }
+    .header-nav-scroller {
+        overflow: hidden;
+        min-width: 0;
+    }
+    .header-nav-track {
+        display: flex;
+        gap: 4px;
+        will-change: transform;
+    }
+    .header-nav-item {
+        flex: none;
+        height: 36px;
+        padding: 0 14px;
+        border-radius: 18px;
+        gap: 8px;
+        opacity: 0.5;
+        transition: opacity 0.15s ease, background-color 0.15s ease;
+    }
+    .header-nav-item .nav-icon {
+        width: 20px;
+        height: 20px;
+        background: none !important;
+    }
+    .header-nav-item .nav-label {
+        opacity: 1;
+        font-size: 13.5px;
+    }
+    /* sidenav.css's ::before highlight bar is sized for the vertical rail's own 130px
+     expanded width - left alone it would overhang a much narrower pill here. The pill's
+     own background (below) replaces it as this element's focus/hover/active indicator. */
+    .header-nav-item::before {
+        content: none;
+    }
+    .header-nav-item:hover,
+    .header-nav-item:focus-visible {
+        opacity: 0.8;
+        background: rgba(var(--color-fg-rgb), 0.08);
+    }
+    .header-nav-item.active {
+        opacity: 1;
+        color: var(--color-accent);
+        background: rgba(var(--color-accent-rgb), 0.14);
+    }
+    .header-nav-arrow {
+        flex: none;
+        width: 28px;
+        height: 28px;
+        border: none;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: transparent;
+        color: rgba(var(--color-fg-rgb), 0.75);
+        cursor: pointer;
+    }
+    .header-nav-arrow:hover,
+    .header-nav-arrow:focus-visible {
+        background: rgba(var(--color-fg-rgb), 0.1);
+        color: var(--color-fg);
+    }
+    .header-nav-arrow.hidden {
+        opacity: 0;
+        pointer-events: none;
+    }
+    /* Controller/D-pad users move between nav items directly (nav.js's wireHomeNav) - the
+     click-only scroll arrows have nothing to do there, same reasoning as row arrows never
+     needing to appear for gamepad browsing. */
+     :host([controller-active]) .header-nav-arrow {
+        display: none;
+    }
+}

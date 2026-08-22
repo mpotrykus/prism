@@ -1,5 +1,7 @@
 import { focusAfterPaint, registerNavHandler } from "../../focus-nav.js";
 import { player } from "../../plex-player.js";
+import { createRowScroll } from "./row-scroll.js";
+import { wireArrowVisibility } from "./rows.js";
 
 /* Sidenav: rendering one tab per fetched library, wiring each tab's click, and the
    2D D-pad/gamepad navigation across sidenav + hero + poster rows (there's no single
@@ -34,10 +36,14 @@ export function wireNavItem(card, el) {
     card._searchWrap.classList.remove("expanded");
     if (view === card._currentView) return;
     card._currentView = view;
-    card._navItems.forEach((n) => n.classList.toggle("active", n === el));
+    /* Matched by view, not by `el` itself - the same view has two nav elements now (one
+       in the mobile sidenav, one in the desktop header-nav strip, see renderNavSections
+       below), and only one of them is ever the one actually clicked. */
+    card._navItems.forEach((n) => n.classList.toggle("active", n.dataset.view === view));
     card.shadowRoot.querySelector(".content")?.scrollTo({ top: 0, behavior: "instant" });
     card._renderCurrentView();
     card._advanceHero();
+    card._centerActiveHeaderNav?.(true);
   });
 }
 
@@ -49,8 +55,9 @@ export function wireNavItem(card, el) {
    static item since it's the fixed "everything combined" view, not tied to any one
    section. */
 export function renderNavSections(card) {
-  const homeItem = card.shadowRoot.querySelector('.nav-item[data-view="home"]');
-  card.shadowRoot.querySelectorAll(".nav-item-dynamic").forEach((el) => el.remove());
+  const homeItem = card.shadowRoot.querySelector('.nav-top .nav-item[data-view="home"]');
+  const headerHomeItem = card.shadowRoot.querySelector('.header-nav-item[data-view="home"]');
+  card.shadowRoot.querySelectorAll(".nav-item-dynamic, .header-nav-item-dynamic").forEach((el) => el.remove());
   const sections = card._config.sections || [];
   const html = sections
     .map(
@@ -61,13 +68,60 @@ export function renderNavSections(card) {
           </div>`
     )
     .join("");
+  /* No overflow cap here - the desktop strip has no "more" sheet to spill into, every
+     section stays reachable by scrolling the strip (see wireHeaderNav's arrows). */
+  const headerHtml = sections
+    .map(
+      (s) => `
+          <div class="nav-item header-nav-item header-nav-item-dynamic" data-view="section-${s.key}" tabindex="0">
+            <span class="nav-icon">${iconForLibraryLabel(s.label)}</span>
+            <span class="nav-label">${card._escape(s.label)}</span>
+          </div>`
+    )
+    .join("");
   if (html) homeItem.insertAdjacentHTML("afterend", html);
+  if (headerHtml) headerHomeItem.insertAdjacentHTML("afterend", headerHtml);
   card._navItems = [...card.shadowRoot.querySelectorAll(".nav-item[data-view]")];
-  card.shadowRoot.querySelectorAll(".nav-item-dynamic").forEach((el) => wireNavItem(card, el));
+  card.shadowRoot.querySelectorAll(".nav-item-dynamic, .header-nav-item-dynamic").forEach((el) => wireNavItem(card, el));
   if (card._currentView !== "home" && card._currentView !== "search" && !sections.some((s) => `section-${s.key}` === card._currentView)) {
     card._currentView = "home";
   }
   card._navItems.forEach((n) => n.classList.toggle("active", n.dataset.view === card._currentView));
+  card._centerActiveHeaderNav?.(false);
+  card._headerNavScroll?.refresh();
+}
+
+/* The desktop header-nav strip's own scroll/arrow wiring (see header-nav.css) - a
+   createRowScroll instance over the same scroller/track element pair the poster rows use
+   (row-scroll.js), so "center the selected library" and "hide an arrow with nothing
+   further that way" both come from the exact machinery already proven there instead of a
+   second implementation. Wired once against the template's stable scroller/track/arrow
+   elements; renderNavSections above only ever adds/removes children of the track, so a
+   single long-lived instance plus refresh()/scrollIntoView() calls is enough - no need to
+   recreate it per render. */
+export function wireHeaderNav(card) {
+  const scroller = card._headerNavScroller;
+  const track = card._headerNavTrack;
+  const leftArrow = card.shadowRoot.querySelector(".header-nav-arrow.left");
+  const rightArrow = card.shadowRoot.querySelector(".header-nav-arrow.right");
+  const rowScroll = createRowScroll(scroller, track);
+  card._headerNavScroll = rowScroll;
+
+  leftArrow.addEventListener("click", (e) => {
+    e.stopPropagation();
+    rowScroll.scrollBy(-scroller.clientWidth * 0.9, { animate: true });
+  });
+  rightArrow.addEventListener("click", (e) => {
+    e.stopPropagation();
+    rowScroll.scrollBy(scroller.clientWidth * 0.9, { animate: true });
+  });
+  wireArrowVisibility(rowScroll, leftArrow, rightArrow);
+
+  card._centerActiveHeaderNav = (animate = true) => {
+    const el = track.querySelector(".header-nav-item.active");
+    if (el) rowScroll.scrollIntoView(el, { inline: "center", animate });
+  };
+  requestAnimationFrame(() => card._centerActiveHeaderNav(false));
 }
 
 /* Shared "no better target" fallback for every place that drops focus out of the search
@@ -75,14 +129,22 @@ export function renderNavSections(card) {
    fallback everywhere, but it's a poor landing spot - it's not "the first thing on
    screen," it's a tab you weren't navigating to. Home's actual first item is the hero's
    More Info button; the search results page has real posters to land on instead. */
+/* card._navItems holds both the mobile-sidenav and desktop-header-nav copy of every view
+   (see renderNavSections) - only one of the two is ever actually visible/focusable at a
+   given breakpoint, so callers need the visible one, not just [0] (which is always the
+   sidenav copy, in DOM order). */
+function firstVisibleNavItem(card) {
+  return card._navItems.find((n) => n.offsetParent !== null) || card._navItems[0];
+}
+
 export function focusFirstAvailable(card) {
   if (card._currentView === "search") {
-    return card.shadowRoot.querySelector(".search-page-grid .poster") || card._navItems[0];
+    return card.shadowRoot.querySelector(".search-page-grid .poster") || firstVisibleNavItem(card);
   }
   if (card._currentView === "home") {
-    return card.shadowRoot.querySelector(".hero-info-btn") || card._navItems[0];
+    return card.shadowRoot.querySelector(".hero-info-btn") || firstVisibleNavItem(card);
   }
-  return card._navItems[0];
+  return firstVisibleNavItem(card);
 }
 
 /* Shared restore-on-exit for every place that drops focus out of the search input and wants
@@ -127,6 +189,7 @@ function inMainApp(card) {
     !card._pin.isOpen() &&
     !card._profileOverlay.classList.contains("open") &&
     !card._moreOverlay.classList.contains("open") &&
+    card._profileDropdown.hidden &&
     !document.querySelector("streaming-settings-modal")?.isOpen() &&
     !document.querySelector("streaming-plex-signin-modal")?.isOpen() &&
     !player.isOpen()
@@ -207,6 +270,19 @@ export function wireSearchToggle(card) {
     focusAfterPaint(focusFirstAvailable(card));
     return true;
   });
+
+  /* Mirrors wireHomeNav's sidenav "right" hand-off (last nav item -> search, which sits
+     immediately to its right in the header): Left out of the search box goes back to the
+     nav strip/sidenav, which sits immediately to its left. Only once the caret is already
+     at the very start of the field - otherwise Left is real caret movement through typed
+     text and must fall through to the input's own native handling untouched. */
+  registerNavHandler((command, e, active) => {
+    if (active !== card._searchInput || command !== "left") return false;
+    if (card._searchInput.selectionStart !== 0 || card._searchInput.selectionEnd !== 0) return false;
+    const list = card._navItems.filter((n) => n.offsetParent !== null && !n.classList.contains("nav-profile"));
+    list[list.length - 1]?.focus();
+    return true;
+  });
 }
 
 /* WebView2's on-screen keyboard (Xbox) is a platform-level overlay, not page content -
@@ -270,20 +346,35 @@ export function wireStartButton(card) {
 /* Gamepad Back/Select ("profile" command) opens the Plex Home profile switcher directly,
    replacing the old Settings > Profiles tab - a controller user no longer has to drill
    into Settings just to switch profiles. Only meaningful when there's actually more than
-   one Home profile to switch between (card._profileNavItem is hidden otherwise - see
+   one Home profile to switch between (card._hasMultipleProfiles - see
    plex-netflix-card.js's _renderProfileNav), and scoped the same way wireStartButton is,
    so it doesn't fight the player's own handler or reopen the switcher on top of another
    overlay. */
 export function wireProfileButton(card) {
   registerNavHandler((command) => {
     if (command !== "profile") return false;
-    if (card._profileNavItem.hidden) return false;
+    if (!card._hasMultipleProfiles) return false;
     if (player.isOpen()) return false;
     if (document.querySelector("streaming-settings-modal")?.isOpen()) return false;
     if (document.querySelector("streaming-plex-signin-modal")?.isOpen()) return false;
 
     if (card._titleInfo.isOpen()) card._titleInfo.close();
     card.openProfileSwitcher();
+    return true;
+  });
+}
+
+/* Escape/Backspace ("back") closes the header's Settings/Profile dropdown (see
+   plex-netflix-card.js's profile-menu-wrap) the same way it closes every other overlay in
+   this app - the dropdown itself is a plain click target with no gamepad path of its own
+   (see wireHomeNav's own note on why .nav-profile is excluded from D-pad nav), so this only
+   ever fires for a real keyboard Escape/Backspace. */
+export function wireProfileMenu(card) {
+  registerNavHandler((command) => {
+    if (command !== "back") return false;
+    if (card._profileDropdown.hidden) return false;
+    card._closeProfileDropdown();
+    focusAfterPaint(card._profileNavItem);
     return true;
   });
 }
@@ -404,17 +495,29 @@ export function wireHomeNav(card) {
     }
 
     if (inSidenav) {
+      /* Horizontal on both breakpoints now - the mobile bottom bar was already a row, and
+         the desktop nav moved from a vertical sidenav into a horizontal header strip (see
+         header-nav.css) - so Left/Right move within the list and Down enters the main
+         content below it, on both. (D-pad/gamepad nav realistically only ever happens at
+         the desktop breakpoint - Fire TV/Xbox, not a phone - so there's no real mobile
+         case to keep this list's old vertical Up/Down semantics working for.) */
       const list = sidenavItems();
       const idx = list.indexOf(active);
-      if (command === "down") {
-        list[Math.min(idx + 1, list.length - 1)].focus();
-        return true;
-      }
-      if (command === "up") {
-        list[Math.max(idx - 1, 0)].focus();
-        return true;
-      }
       if (command === "right") {
+        if (idx < list.length - 1) {
+          list[idx + 1].focus();
+          return true;
+        }
+        // last nav item - hand off to search, which sits immediately to its right in the header.
+        card._searchWrap.classList.add("expanded");
+        focusAfterPaint(card._searchInput);
+        return true;
+      }
+      if (command === "left") {
+        if (idx > 0) list[idx - 1].focus();
+        return true; // first item - nothing further left, swallow
+      }
+      if (command === "down") {
         const remembered = card._lastContentFocusEl;
         const rememberedUsable = remembered?.isConnected && remembered.tabIndex >= 0 && remembered.offsetParent !== null;
         if (rememberedUsable && heroItems().includes(remembered)) {
@@ -439,20 +542,19 @@ export function wireHomeNav(card) {
         return true;
       }
       if (command === "left") {
-        if (idx <= 0) sidenavItems()[0]?.focus();
-        else focusHero(list[idx - 1]);
-        return true;
+        if (idx > 0) focusHero(list[idx - 1]);
+        return true; // first hero button - nothing further left, swallow
       }
       if (command === "down") {
         focusPoster(postersIn(rowSections()[0])[0]);
         return true;
       }
       if (command === "up") {
-        // same hand-off wireSearchToggle's "search" command does - up from the hero has
-        // nowhere else to go, and the search box sits directly above it in the header.
-        // (card._searchReturnFocusEl is already `active` via the focusin tracker.)
-        card._searchWrap.classList.add("expanded");
-        focusAfterPaint(card._searchInput);
+        // The nav strip sits directly above the hero on both breakpoints now (see
+        // header-nav.css) - land on whichever of its items is currently active, not
+        // search (search sits beside the nav strip, not above the hero).
+        const list = sidenavItems();
+        (list.find((n) => n.classList.contains("active")) || list[0])?.focus();
         return true;
       }
       return false;
@@ -466,14 +568,13 @@ export function wireHomeNav(card) {
       return true;
     }
     if (command === "left") {
-      if (idx <= 0) sidenavItems()[0]?.focus();
-      else focusPoster(posters[idx - 1]);
-      return true;
+      if (idx > 0) focusPoster(posters[idx - 1]);
+      return true; // start of the row - nothing further left, swallow
     }
     /* LB/RB (see focus-nav.js's chapterPrev/chapterNext - named for their other use in the
        player's chapter skip, not row-specific) jump 4 posters at once instead of 1, clamped
-       to the row's own ends rather than handing off to the sidenav the way a plain Left off
-       the row's start does - a fast-scroll gesture landing on "nothing further this way" reads
+       to the row's own ends rather than leaving the row the way a plain Left off the row's
+       start does - a fast-scroll gesture landing on "nothing further this way" reads
        as reaching the end of the row, not as a request to leave it. */
     if (command === "chapterPrev" || command === "chapterNext") {
       const delta = command === "chapterNext" ? 4 : -4;
@@ -556,12 +657,12 @@ export function wireSearchNav(card) {
 
     /* hero.js's show() forces display:none for the whole hero banner whenever
        getCurrentView() === "search", so there's no hero to hand off to here the way
-       wireHomeNav's sidenav "right" does on the home screen - its fallback
+       wireHomeNav's sidenav "down" does on the home screen - its fallback
        (postersIn(rowSections()[0])) also comes up empty since .row-section never
        exists on this page, so without this the event was swallowed with nowhere to
        go. Enter the grid directly instead. */
     if (sidenavItems().includes(active)) {
-      if (command !== "right") return false;
+      if (command !== "down") return false;
       const remembered = card._lastContentFocusEl;
       const rememberedUsable =
         remembered?.isConnected && remembered.tabIndex >= 0 && remembered.offsetParent !== null && allPosters().includes(remembered);
@@ -585,17 +686,17 @@ export function wireSearchNav(card) {
       return true; // last poster on the page - nowhere further right, swallow
     }
     if (command === "left") {
-      if (idx === 0) sidenavItems()[0]?.focus();
-      else focusPoster(posters[idx - 1]);
-      return true;
+      if (idx > 0) focusPoster(posters[idx - 1]);
+      return true; // first poster on the page - nothing further left, swallow
     }
     if (command === "up" || command === "down") {
       const rows = rowsOf(posters);
       const rowIdx = rows.findIndex((r) => r.items.includes(active));
       const targetRowIdx = rowIdx + (command === "down" ? 1 : -1);
       if (targetRowIdx < 0) {
-        // no hero to hand off to during search (see the sidenav branch above) - sidenav is it
-        sidenavItems()[0]?.focus();
+        // no hero to hand off to during search (see the sidenav branch above) - the nav
+        // strip, directly above the grid, is it
+        (sidenavItems().find((n) => n.classList.contains("active")) || sidenavItems()[0])?.focus();
         return true;
       }
       if (targetRowIdx >= rows.length) return true; // last row on the page - swallow

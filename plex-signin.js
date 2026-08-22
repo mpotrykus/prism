@@ -149,6 +149,14 @@ class StreamingPlexSigninModal extends HTMLElement {
       statusEl.className = "status signin-status err";
     } finally {
       btn.disabled = false;
+      /* btn.disabled = true above blurred the button the instant it ran, since it held
+         real D-pad focus from being "activated" - browsers unfocus a focused element the
+         moment it's disabled. On the success path something else takes over the nav list
+         (a server picker, or this modal closing), but on failure nothing else moves focus,
+         so without this the modal is left with no focused element and every D-pad command
+         (including Back, on a blocking modal with no close button) silently does nothing -
+         same bug/fix as chrome-subtitles.js's applySubtitleResult. */
+      focusAfterPaint(btn);
     }
   }
 
@@ -162,6 +170,11 @@ class StreamingPlexSigninModal extends HTMLElement {
     pickerEl.querySelectorAll(".server-choice").forEach((choiceBtn) => {
       choiceBtn.addEventListener("click", () => this._chooseServer(servers[Number(choiceBtn.dataset.index)]));
     });
+    /* innerHTML= above just destroyed whatever the viewer had focus on (the sign-in button,
+       still disabled at this point in the flow) to build these buttons fresh - same
+       destroyed-focus gap as the disabled-button case above, left alone this would strand
+       the D-pad on a modal with no close button. */
+    focusAfterPaint(pickerEl.querySelector(".server-choice"));
   }
 
   async _chooseServer(server) {
