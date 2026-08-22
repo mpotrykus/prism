@@ -189,7 +189,7 @@ class PlexNetflixCard extends HTMLElement {
         </div>
         <div class="content">
           <div class="header">
-            <img class="plex-logo" src="./assets/plex-logo.png" alt="Plex" />
+            <img class="prism-logo" src="./assets/prism-logo.svg" alt="Prism" />
             <div class="search-wrap">
               <button type="button" class="search-toggle"></button>
               <input class="search" type="text" placeholder="Search movies, shows, actors…" autocomplete="off" />

@@ -1,0 +1,28 @@
+/* Shared design-token palette. Loaded at document level (index.html) rather than
+   inside any component's shadow-scoped CSS, since custom properties inherit across
+   shadow boundaries but plex-netflix-card/streaming-settings-modal/streaming-plex-signin-modal
+   are three separate shadow roots with no other common style ancestor. */
+:root {
+  --color-accent-rgb: 229, 160, 13;
+  --color-accent: rgb(var(--color-accent-rgb));
+  --color-accent-hover: #f0ad1a;
+
+  --color-fg-rgb: 255, 255, 255;
+  --color-fg: rgb(var(--color-fg-rgb));
+
+  --color-bg-rgb: 10, 10, 12;
+  --color-bg: rgb(var(--color-bg-rgb));
+
+  --color-shadow-rgb: 0, 0, 0;
+
+  --color-panel-rgb: 20, 20, 24;
+
+  --color-surface: #161619;
+  --color-surface-raised: #1c1c20;
+  --color-surface-selected: #3a3a40;
+
+  --color-danger-rgb: 255, 107, 107;
+  --color-danger: rgb(var(--color-danger-rgb));
+  --color-success-rgb: 76, 175, 125;
+  --color-success: rgb(var(--color-success-rgb));
+}

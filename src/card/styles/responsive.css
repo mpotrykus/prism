@@ -38,8 +38,8 @@
     padding-bottom: var(--safe-bottom);
     gap: 0;
     border-right: none;
-    border-top: 1px solid rgba(255,255,255,0.08);
-    background: rgba(10,10,12,0.97);
+    border-top: 1px solid rgba(var(--color-fg-rgb), 0.08);
+    background: rgba(var(--color-bg-rgb), 0.97);
     backdrop-filter: blur(10px);
     z-index: 25;
   }

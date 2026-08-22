@@ -13,8 +13,9 @@
                              accordion-row/picker-list primitives shared with:
      chrome-menu-effects.js - its Effects sub-screen (Shader Upscaling/Color Boost/
                                Ambient Lighting)
-     chrome-menu-extras.js  - its Extras sub-screen (Playback Speed/Zoom/Sleep Timer),
-                               plus zoom pan/transform
+     chrome-menu-options.js - its Options sub-screen (Normalize Audio/Auto-Play/
+                               Auto-Skip Intro & Credits/Playback Speed/Aspect/Sleep
+                               Timer)
      chrome-subtitles.js  - the Audio & Subtitles overlay and subtitle track/offset
                              handling
      chrome-skip.js       - the skip-intro/credits button and marker helpers
@@ -29,7 +30,7 @@ export { buildFloatingPlayButton, buildTransportBar, playQueuedTitle, updateTran
 
 export { openHamburgerMenu, closeInlineMenu } from "./chrome-menu.js";
 
-export { applyFitMode } from "./chrome-menu-extras.js";
+export { applyFitMode } from "./chrome-menu-options.js";
 
 export { openAudioSubtitlesOverlay, closeAudioSubtitlesOverlay, applyRememberedSubtitle, stopSubtitleLoop } from "./chrome-subtitles.js";
 

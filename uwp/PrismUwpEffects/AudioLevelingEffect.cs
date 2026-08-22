@@ -62,10 +62,23 @@ namespace PrismUwpEffects
         private const double GainRampTimeConstantSeconds = 2;
         private const double SilenceFloorDbfs = -60;
 
+        // The EMA-driven gain above tracks long-run average loudness, not peaks - a quiet-
+        // average scene with a loud transient still gets the full boost, which can push that
+        // transient past full scale with nothing to stop it but a hard clamp (audible as
+        // clipping/crackling). This peak envelope is a fast-attack/slow-release limiter on
+        // top of the leveling gain, mirroring AudioLevelingProcessor's Android leg: since
+        // ProcessFrame already sees the whole frame before writing output, this frame's own
+        // peak is known ahead of applying gain to it, so attack can be instantaneous while
+        // release decays like a normal limiter.
+        private const double LimiterCeilingDbfs = -1.0;
+        private static readonly double LimiterCeilingLinear = Math.Pow(10, LimiterCeilingDbfs / 20);
+        private const double LimiterReleaseTimeConstantSeconds = 0.2;
+
         private uint _sampleRate;
         private uint _channelCount;
         private double? _emaDb;
         private float _currentGain = 1f;
+        private double _peakEnvelope;
 
         // In-place modification of InputFrame's own buffer - no separate OutputFrame to fill, same
         // "simple in-place effect" shape Microsoft's own custom-audio-effect sample uses.
@@ -105,6 +118,7 @@ namespace PrismUwpEffects
             // documents on the Android leg.
             _emaDb = null;
             _currentGain = 1f;
+            _peakEnvelope = 0;
         }
 
         public void Close(MediaEffectClosedReason reason)
@@ -132,10 +146,13 @@ namespace PrismUwpEffects
                 if (sampleCount == 0) return;
 
                 double sumSquares = 0;
+                float rawPeak = 0;
                 for (int i = 0; i < sampleCount; i++)
                 {
                     double s = samples[i];
                     sumSquares += s * s;
+                    float abs = Math.Abs(samples[i]);
+                    if (abs > rawPeak) rawPeak = abs;
                 }
                 double rms = Math.Sqrt(sumSquares / sampleCount);
                 double instantDb = Math.Max(SilenceFloorDbfs, rms > 0 ? 20 * Math.Log10(rms) : SilenceFloorDbfs);
@@ -153,9 +170,17 @@ namespace PrismUwpEffects
                 double gainAlpha = Clamp01(bufferDurationSeconds / GainRampTimeConstantSeconds);
                 _currentGain += (float)((targetLinearGain - _currentGain) * gainAlpha);
 
+                double bufferPeakScaled = rawPeak * _currentGain;
+                double releaseAlpha = Clamp01(bufferDurationSeconds / LimiterReleaseTimeConstantSeconds);
+                _peakEnvelope = bufferPeakScaled > _peakEnvelope
+                    ? bufferPeakScaled
+                    : _peakEnvelope + (bufferPeakScaled - _peakEnvelope) * releaseAlpha;
+                double limiterGain = _peakEnvelope > LimiterCeilingLinear ? LimiterCeilingLinear / _peakEnvelope : 1.0;
+                float appliedGain = (float)(_currentGain * limiterGain);
+
                 for (int i = 0; i < sampleCount; i++)
                 {
-                    float scaled = samples[i] * _currentGain;
+                    float scaled = samples[i] * appliedGain;
                     samples[i] = Math.Max(-1f, Math.Min(1f, scaled));
                 }
             }

@@ -1,7 +1,7 @@
 .pin-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0,0,0,0.72);
+  background: rgba(var(--color-shadow-rgb), 0.72);
   backdrop-filter: blur(6px);
   display: none;
   align-items: center;
@@ -15,12 +15,12 @@
 .pin-modal {
   width: 300px;
   max-width: 88vw;
-  background: #161619;
-  border: 1px solid rgba(255,255,255,0.08);
+  background: var(--color-surface);
+  border: 1px solid rgba(var(--color-fg-rgb), 0.08);
   border-radius: 16px;
   padding: 28px 28px 20px;
   text-align: center;
-  box-shadow: 0 24px 70px rgba(0,0,0,0.6);
+  box-shadow: 0 24px 70px rgba(var(--color-shadow-rgb), 0.6);
 }
 .pin-modal.shake { animation: pinShake 0.4s ease; }
 @keyframes pinShake {
@@ -34,8 +34,8 @@
   height: 44px;
   margin: 0 auto 12px;
   border-radius: 50%;
-  background: rgba(229,160,13,0.15);
-  color: #e5a00d;
+  background: rgba(var(--color-accent-rgb), 0.15);
+  color: var(--color-accent);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -47,13 +47,13 @@
   width: 13px;
   height: 13px;
   border-radius: 50%;
-  border: 1.5px solid rgba(255,255,255,0.4);
+  border: 1.5px solid rgba(var(--color-fg-rgb), 0.4);
   background: transparent;
   transition: background-color 0.15s ease, border-color 0.15s ease;
 }
-.pin-dot.filled { background: #e5a00d; border-color: #e5a00d; }
+.pin-dot.filled { background: var(--color-accent); border-color: var(--color-accent); }
 .pin-error {
-  color: #ff6b6b;
+  color: var(--color-danger);
   font-size: 12px;
   font-weight: 600;
   height: 16px;
@@ -70,15 +70,15 @@
 .pin-key {
   height: 50px;
   border-radius: 10px;
-  border: 1px solid rgba(255,255,255,0.1);
-  background: rgba(255,255,255,0.05);
-  color: #fff;
+  border: 1px solid rgba(var(--color-fg-rgb), 0.1);
+  background: rgba(var(--color-fg-rgb), 0.05);
+  color: var(--color-fg);
   font-size: 17px;
   font-weight: 600;
   cursor: pointer;
 }
-.pin-key:hover, .pin-key:focus-visible { background: rgba(255,255,255,0.12); }
-.pin-key:active { background: rgba(229,160,13,0.25); }
+.pin-key:hover, .pin-key:focus-visible { background: rgba(var(--color-fg-rgb), 0.12); }
+.pin-key:active { background: rgba(var(--color-accent-rgb), 0.25); }
 .pin-key-empty { visibility: hidden; cursor: default; }
 .pin-cancel {
   width: 100%;
@@ -86,9 +86,9 @@
   border-radius: 8px;
   border: none;
   background: transparent;
-  color: rgba(255,255,255,0.55);
+  color: rgba(var(--color-fg-rgb), 0.55);
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;
 }
-.pin-cancel:hover, .pin-cancel:focus-visible { color: #fff; }
+.pin-cancel:hover, .pin-cancel:focus-visible { color: var(--color-fg); }

@@ -254,7 +254,7 @@ export function postAiUpscaling({ enabled, preset }) {
     post("setAiUpscaling", { enabled, preset });
 }
 
-/* "fit"/"cover"/"stretch" - see chrome-menu-extras.js's applyFitMode. There is no
+/* "fit"/"cover"/"stretch" - see chrome-menu-options.js's applyFitMode. There is no
    controller._videoEl on this leg to set a CSS object-fit on, so the equivalent
    (MediaPlayerElement.Stretch) is applied natively instead - see
    NativePlayerHost.SetStretch. */

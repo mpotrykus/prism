@@ -1,7 +1,7 @@
 .title-info-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0,0,0,0.8);
+  background: rgba(var(--color-shadow-rgb), 0.8);
   backdrop-filter: blur(6px);
   display: none;
   align-items: flex-start;
@@ -17,10 +17,10 @@
 .title-info-modal {
   width: 780px;
   max-width: 100%;
-  background: #161619;
-  border: 1px solid rgba(255,255,255,0.08);
+  background: var(--color-surface);
+  border: 1px solid rgba(var(--color-fg-rgb), 0.08);
   border-radius: 16px;
-  box-shadow: 0 24px 70px rgba(0,0,0,0.6);
+  box-shadow: 0 24px 70px rgba(var(--color-shadow-rgb), 0.6);
   overflow: hidden;
   position: relative;
 }
@@ -37,10 +37,10 @@
 .title-info-close {
   position: absolute; top: 14px; right: 14px; z-index: 2;
   width: 34px; height: 34px; border-radius: 50%; border: none;
-  background: rgba(20,20,20,0.7); color: #fff; font-size: 15px; cursor: pointer;
+  background: rgba(var(--color-panel-rgb), 0.7); color: var(--color-fg); font-size: 15px; cursor: pointer;
   display: flex; align-items: center; justify-content: center;
 }
-.title-info-close:hover { background: rgba(20,20,20,0.9); }
+.title-info-close:hover { background: rgba(var(--color-panel-rgb), 0.9); }
 /* B/Escape already backs this overlay out for a controller user - see focus-nav.js's
    controller-active-change comment - so the "X" is a redundant, unreachable-by-D-pad
    dead end for them. Keyed off the card's own host attribute (set in
@@ -48,18 +48,18 @@
 :host([controller-active]) .title-info-close { display: none; }
 .title-info-art {
   width: 100%; height: 280px; background-size: cover; background-position: center;
-  position: relative; z-index: 1; background-color: #0d0d0f;
+  position: relative; z-index: 1; background-color: var(--color-bg);
 }
 .title-info-art::after {
   content: ""; position: absolute; inset: 0;
-  background: linear-gradient(180deg, rgba(22,22,25,0) 40%, #161619 100%);
+  background: linear-gradient(180deg, rgba(22,22,25,0) 40%, var(--color-surface) 100%);
 }
 .title-info-progress {
   position: absolute; left: 0; right: 0; bottom: 0; height: 4px; z-index: 2;
-  background: rgba(255,255,255,0.25);
+  background: rgba(var(--color-fg-rgb), 0.25);
 }
 .title-info-progress[hidden] { display: none; }
-.title-info-progress .bar { height: 100%; background: #e5a00d; }
+.title-info-progress .bar { height: 100%; background: var(--color-accent); }
 .title-info-body { padding: 28px 32px 32px; position: relative; z-index: 1; }
 /* Anchored to the bottom of its own starting line (title-info-body's own top edge,
    which lines up with title-info-art's bottom edge/the progress bar) via top:0 +
@@ -68,48 +68,48 @@
    into the divider or the actions row below it. */
 .title-info-header { position: absolute; left: 32px; right: 32px; top: 0; transform: translateY(-100%); padding-bottom: 24px; }
 .title-info-title { font-size: 26px; font-weight: 800; margin-bottom: 8px; }
-.title-info-meta { font-size: 13px; color: rgba(255,255,255,0.65); margin-bottom: 18px; }
-.title-info-meta span:not(:last-child)::after { content: "•"; margin: 0 8px; color: rgba(255,255,255,0.3); }
+.title-info-meta { font-size: 13px; color: rgba(var(--color-fg-rgb), 0.65); margin-bottom: 18px; }
+.title-info-meta span:not(:last-child)::after { content: "•"; margin: 0 8px; color: rgba(var(--color-fg-rgb), 0.3); }
 .title-info-actions { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; }
 .title-info-actions[hidden] { display: none; }
 .title-info-play {
   border: none; border-radius: 8px; padding: 11px 26px; font-size: 14px; font-weight: 700;
-  cursor: pointer; background: #fff; color: #161619;
+  cursor: pointer; background: var(--color-fg); color: var(--color-surface);
 }
-.title-info-play:hover { background: rgba(255,255,255,0.85); }
+.title-info-play:hover { background: rgba(var(--color-fg-rgb), 0.85); }
 .title-info-restart-btn {
-  border: 1px solid rgba(255,255,255,0.3); border-radius: 8px; padding: 10px 20px; font-size: 14px; font-weight: 700;
-  cursor: pointer; background: transparent; color: #fff;
+  border: 1px solid rgba(var(--color-fg-rgb), 0.3); border-radius: 8px; padding: 10px 20px; font-size: 14px; font-weight: 700;
+  cursor: pointer; background: transparent; color: var(--color-fg);
 }
-.title-info-restart-btn:hover { background: rgba(255,255,255,0.1); }
+.title-info-restart-btn:hover { background: rgba(var(--color-fg-rgb), 0.1); }
 .title-info-restart-btn[hidden] { display: none; }
 .title-info-watched-btn {
   width: 40px; height: 40px; border-radius: 50%; flex: none;
-  border: 1px solid rgba(255,255,255,0.3); background: transparent; color: #fff;
+  border: 1px solid rgba(var(--color-fg-rgb), 0.3); background: transparent; color: var(--color-fg);
   cursor: pointer; display: flex; align-items: center; justify-content: center;
 }
 .title-info-watched-btn svg { width: 16px; height: 16px; }
-.title-info-watched-btn:hover { background: rgba(255,255,255,0.1); }
-.title-info-watched-btn.watched { color: #e5a00d; border-color: rgba(229,160,13,0.7); }
+.title-info-watched-btn:hover { background: rgba(var(--color-fg-rgb), 0.1); }
+.title-info-watched-btn.watched { color: var(--color-accent); border-color: rgba(var(--color-accent-rgb), 0.7); }
 .title-info-watched-btn.busy { opacity: 0.5; pointer-events: none; }
-.title-info-watched-btn.error { border-color: #e05252; color: #e05252; }
+.title-info-watched-btn.error { border-color: var(--color-danger); color: var(--color-danger); }
 .title-info-watched-btn[hidden] { display: none; }
 .title-info-watchlist-btn {
   width: 40px; height: 40px; border-radius: 50%; flex: none;
-  border: 1px solid rgba(255,255,255,0.3); background: transparent; color: #fff;
+  border: 1px solid rgba(var(--color-fg-rgb), 0.3); background: transparent; color: var(--color-fg);
   font-size: 17px; cursor: pointer;
 }
-.title-info-watchlist-btn:hover { background: rgba(255,255,255,0.1); }
+.title-info-watchlist-btn:hover { background: rgba(var(--color-fg-rgb), 0.1); }
 .title-info-watchlist-btn[hidden] { display: none; }
 .title-info-actions-loading { display: flex; align-items: center; justify-content: center; height: 40px; margin-bottom: 20px; }
 .title-info-actions-loading[hidden] { display: none; }
 .title-info-actions-loading .spinner {
   width: 32px; height: 32px; border-radius: 50%;
-  border: 3px solid rgba(255,255,255,0.25); border-top-color: #fff;
+  border: 3px solid rgba(var(--color-fg-rgb), 0.25); border-top-color: var(--color-fg);
   animation: title-info-spin 0.7s linear infinite;
 }
 @keyframes title-info-spin { to { transform: rotate(360deg); } }
-.title-info-summary { font-size: 14px; line-height: 1.6; color: rgba(255,255,255,0.85); margin-bottom: 28px; max-width: 640px; }
+.title-info-summary { font-size: 14px; line-height: 1.6; color: rgba(var(--color-fg-rgb), 0.85); margin-bottom: 28px; max-width: 640px; }
 .title-info-section-title { font-size: 14px; font-weight: 700; margin: 40px 0 16px; }
 .title-info-cast-wrap[hidden], .title-info-similar-wrap[hidden] { display: none; }
 /* Nav stop with no click action of its own - only exists so D-pad/gamepad Down doesn't
@@ -120,52 +120,52 @@
 .title-info-cast-chip { display: flex; flex-direction: column; align-items: center; text-align: center; }
 .title-info-cast-avatar {
   position: relative; width: 56px; height: 56px; border-radius: 50%; overflow: hidden; margin-bottom: 6px;
-  background: rgba(255,255,255,0.08); display: flex; align-items: center; justify-content: center;
+  background: rgba(var(--color-fg-rgb), 0.08); display: flex; align-items: center; justify-content: center;
 }
 .title-info-cast-avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
-.title-info-cast-avatar-fallback { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; color: rgba(255,255,255,0.45); }
+.title-info-cast-avatar-fallback { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; color: rgba(var(--color-fg-rgb), 0.45); }
 .title-info-cast-avatar-fallback svg { width: 28px; height: 28px; }
-.title-info-cast-name { font-size: 12px; color: rgba(255,255,255,0.85); line-height: 1.3; margin-bottom: 2px; }
-.title-info-cast-role { font-size: 11px; color: rgba(255,255,255,0.5); line-height: 1.3; }
+.title-info-cast-name { font-size: 12px; color: rgba(var(--color-fg-rgb), 0.85); line-height: 1.3; margin-bottom: 2px; }
+.title-info-cast-role { font-size: 11px; color: rgba(var(--color-fg-rgb), 0.5); line-height: 1.3; }
 .title-info-season-picker { position: relative; margin-bottom: 12px; }
 .title-info-season-select {
-  background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.12); color: #fff;
+  background: rgba(var(--color-fg-rgb), 0.08); border: 1px solid rgba(var(--color-fg-rgb), 0.12); color: var(--color-fg);
   border-radius: 8px; padding: 8px 12px; font-size: 13px; font: inherit; cursor: pointer;
 }
-.title-info-season-select:hover, .title-info-season-select:focus-visible { background: rgba(255,255,255,0.16); }
+.title-info-season-select:hover, .title-info-season-select:focus-visible { background: rgba(var(--color-fg-rgb), 0.16); }
 .title-info-season-options {
   display: none; position: absolute; top: calc(100% + 4px); left: 0; z-index: 5;
   min-width: 180px; max-height: 260px; overflow-y: auto;
-  background: #1c1c20; border: 1px solid rgba(255,255,255,0.12); border-radius: 8px;
-  padding: 4px; box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+  background: var(--color-surface-raised); border: 1px solid rgba(var(--color-fg-rgb), 0.12); border-radius: 8px;
+  padding: 4px; box-shadow: 0 8px 24px rgba(var(--color-shadow-rgb), 0.4);
 }
 .title-info-season-options.open { display: block; }
-.title-info-season-option { padding: 8px 10px; border-radius: 6px; font-size: 13px; color: #fff; cursor: pointer; }
-.title-info-season-option:hover, .title-info-season-option:focus-visible { background: rgba(255,255,255,0.08); }
-.title-info-season-option.selected { background: #3a3a40; }
-.title-info-episode { display: flex; gap: 12px; padding: 10px 0; border-bottom: 1px solid rgba(255,255,255,0.06); cursor: pointer; }
-.title-info-episode.current { background: rgba(229,160,13,0.08); border-radius: 8px; padding-left: 8px; margin-left: -8px; padding-right: 8px; margin-right: -8px; }
+.title-info-season-option { padding: 8px 10px; border-radius: 6px; font-size: 13px; color: var(--color-fg); cursor: pointer; }
+.title-info-season-option:hover, .title-info-season-option:focus-visible { background: rgba(var(--color-fg-rgb), 0.08); }
+.title-info-season-option.selected { background: var(--color-surface-selected); }
+.title-info-episode { display: flex; gap: 12px; padding: 10px 0; border-bottom: 1px solid rgba(var(--color-fg-rgb), 0.06); cursor: pointer; }
+.title-info-episode.current { background: rgba(var(--color-accent-rgb), 0.08); border-radius: 8px; padding-left: 8px; margin-left: -8px; padding-right: 8px; margin-right: -8px; }
 .title-info-episode:hover:not(.current), .title-info-episode:focus-visible:not(.current) {
-  background: rgba(255,255,255,0.05); border-radius: 8px;
+  background: rgba(var(--color-fg-rgb), 0.05); border-radius: 8px;
   padding-left: 8px; margin-left: -8px; padding-right: 8px; margin-right: -8px;
 }
 .title-info-episode-thumb {
   position: relative; width: 140px; height: 79px; border-radius: 6px; flex: none;
-  background: rgba(255,255,255,0.05); overflow: hidden;
+  background: rgba(var(--color-fg-rgb), 0.05); overflow: hidden;
 }
 .title-info-episode-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .title-info-episode-progress {
-  position: absolute; left: 0; right: 0; bottom: 0; height: 3px; background: rgba(255,255,255,0.3);
+  position: absolute; left: 0; right: 0; bottom: 0; height: 3px; background: rgba(var(--color-fg-rgb), 0.3);
 }
-.title-info-episode-progress .bar { height: 100%; background: #e5a00d; }
+.title-info-episode-progress .bar { height: 100%; background: var(--color-accent); }
 .title-info-episode-watched {
   position: absolute; top: 4px; left: 4px; width: 18px; height: 18px; border-radius: 50%;
-  background: rgba(20,20,24,0.7); color: #e5a00d; display: flex; align-items: center; justify-content: center;
+  background: rgba(var(--color-panel-rgb), 0.7); color: var(--color-accent); display: flex; align-items: center; justify-content: center;
 }
 .title-info-episode-watched svg { width: 11px; height: 11px; }
 .title-info-episode-play {
   position: absolute; inset: 0; z-index: 2;
-  background: rgba(0,0,0,0.5);
+  background: rgba(var(--color-shadow-rgb), 0.5);
   display: flex; align-items: center; justify-content: center;
   opacity: 0; transition: opacity 0.15s ease;
 }
@@ -173,15 +173,15 @@
 .title-info-episode:focus-visible .title-info-episode-play { opacity: 1; }
 .title-info-episode-play-icon {
   width: 34px; height: 34px; border-radius: 50%;
-  background: rgba(255,255,255,0.9); color: #161619;
+  background: rgba(var(--color-fg-rgb), 0.9); color: var(--color-surface);
   display: flex; align-items: center; justify-content: center;
   font-size: 13px;
 }
 .title-info-episode-title { font-size: 13.5px; font-weight: 700; margin-bottom: 4px; }
-.title-info-episode-summary { font-size: 12.5px; color: rgba(255,255,255,0.6); line-height: 1.4; }
-.title-info-loading { padding: 20px 0; color: rgba(255,255,255,0.5); font-size: 13px; }
+.title-info-episode-summary { font-size: 12.5px; color: rgba(var(--color-fg-rgb), 0.6); line-height: 1.4; }
+.title-info-loading { padding: 20px 0; color: rgba(var(--color-fg-rgb), 0.5); font-size: 13px; }
 .title-info-similar { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 12px; }
 .title-info-similar-item { cursor: pointer; border-radius: 6px; }
-.title-info-similar-item img { width: 100%; aspect-ratio: 2/3; object-fit: cover; border-radius: 6px; background: rgba(255,255,255,0.05); display: block; transition: transform 0.18s ease; }
+.title-info-similar-item img { width: 100%; aspect-ratio: 2/3; object-fit: cover; border-radius: 6px; background: rgba(var(--color-fg-rgb), 0.05); display: block; transition: transform 0.18s ease; }
 .title-info-similar-item:hover img { transform: scale(1.06); }
-.title-info-similar-item .t { font-size: 11.5px; margin-top: 6px; color: rgba(255,255,255,0.75); }
+.title-info-similar-item .t { font-size: 11.5px; margin-top: 6px; color: rgba(var(--color-fg-rgb), 0.75); }

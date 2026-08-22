@@ -35,6 +35,18 @@ final class AudioLevelingProcessor extends BaseAudioProcessor {
     private static final double GAIN_RAMP_TIME_CONSTANT_S = 2;
     private static final double SILENCE_FLOOR_DBFS = -60;
 
+    /* The EMA-driven gain above tracks long-run average loudness, not peaks - a quiet-
+       average scene with a loud transient still gets the full boost, which can push that
+       transient past full scale with nothing to stop it but a hard clamp (audible as
+       clipping/crackling). This peak envelope is a fast-attack/slow-release limiter on top
+       of the leveling gain: since queueInput already sees the whole buffer before writing
+       output, the peak of *this* buffer is known ahead of applying gain to it, so attack
+       can be instantaneous (no lookahead buffering needed) while release decays like a
+       normal limiter so the reduction doesn't snap back audibly. */
+    private static final double LIMITER_CEILING_DBFS = -1.0;
+    private static final double LIMITER_CEILING_LINEAR = Math.pow(10, LIMITER_CEILING_DBFS / 20);
+    private static final double LIMITER_RELEASE_TIME_CONSTANT_S = 0.2;
+
     /* Read/written only from the audio-processing thread (queueInput/onReset) except for
        this flag, which PlayerActivity's UI-thread toggle sets directly - volatile rather
        than synchronized since it's a single boolean read once per queueInput call, no
@@ -42,6 +54,7 @@ final class AudioLevelingProcessor extends BaseAudioProcessor {
     private volatile boolean enabled;
     private Double emaDb;
     private float currentGain = 1f;
+    private double peakEnvelope = 0;
 
     void setEnabled(boolean enabled) {
         this.enabled = enabled;
@@ -75,9 +88,12 @@ final class AudioLevelingProcessor extends BaseAudioProcessor {
         int startPosition = inputBuffer.position();
 
         long sumSquares = 0;
+        int rawPeak = 0;
         for (int i = 0; i < sampleCount; i++) {
             short sample = inputBuffer.getShort(startPosition + i * 2);
             sumSquares += (long) sample * sample;
+            int abs = Math.abs(sample);
+            if (abs > rawPeak) rawPeak = abs;
         }
         double rms = Math.sqrt(sumSquares / (double) sampleCount) / 32768.0;
         double instantDb = Math.max(SILENCE_FLOOR_DBFS, rms > 0 ? 20 * Math.log10(rms) : SILENCE_FLOOR_DBFS);
@@ -96,9 +112,17 @@ final class AudioLevelingProcessor extends BaseAudioProcessor {
         double gainAlpha = clamp01(bufferDurationSeconds / GAIN_RAMP_TIME_CONSTANT_S);
         currentGain += (float) ((targetLinearGain - currentGain) * gainAlpha);
 
+        double bufferPeakScaled = (rawPeak / 32768.0) * currentGain;
+        double releaseAlpha = clamp01(bufferDurationSeconds / LIMITER_RELEASE_TIME_CONSTANT_S);
+        peakEnvelope = bufferPeakScaled > peakEnvelope
+                ? bufferPeakScaled
+                : peakEnvelope + (bufferPeakScaled - peakEnvelope) * releaseAlpha;
+        double limiterGain = peakEnvelope > LIMITER_CEILING_LINEAR ? LIMITER_CEILING_LINEAR / peakEnvelope : 1.0;
+        float appliedGain = (float) (currentGain * limiterGain);
+
         for (int i = 0; i < sampleCount; i++) {
             short sample = inputBuffer.getShort(startPosition + i * 2);
-            int scaled = Math.round(sample * currentGain);
+            int scaled = Math.round(sample * appliedGain);
             short clamped = (short) Math.max(Short.MIN_VALUE, Math.min(Short.MAX_VALUE, scaled));
             buffer.putShort(clamped);
         }
@@ -114,6 +138,7 @@ final class AudioLevelingProcessor extends BaseAudioProcessor {
     protected void onReset() {
         emaDb = null;
         currentGain = 1f;
+        peakEnvelope = 0;
     }
 
     private static double clamp01(double value) {

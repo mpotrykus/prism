@@ -476,7 +476,7 @@ namespace PrismUwp.Player
         public void SetPlaybackSpeed(double speed) => player.PlaybackSession.PlaybackRate = speed;
 
         /// <summary>
-        /// "fit"/"cover"/"stretch" from chrome-menu-extras.js's Aspect picker (see that file's
+        /// "fit"/"cover"/"stretch" from chrome-menu-options.js's Aspect picker (see that file's
         /// applyFitMode, which sets CSS object-fit on the web leg's own &lt;video&gt; instead - there is
         /// no such element here, so the equivalent lives on the MediaPlayerElement itself). Not a
         /// switch expression: this project has no explicit LangVersion set, which defaults to a C#

@@ -57,7 +57,7 @@ export function mountPlayerChrome(controller, mediaEl, { gpuPipelines }) {
     });
     controller._registerControlButton(menuBtn, { side: "right" });
     /* Kept on the controller so gamepad navigation can open this menu without a pointer - it is the
-       only route to Chapters/Version/Quality/Effects/Extras, so on a console it has to be reachable
+       only route to Chapters/Version/Quality/Effects/Options, so on a console it has to be reachable
        from a button press. See plex-player.js's nav handler. */
     controller._menuButtonEl = menuBtn;
 

@@ -24,7 +24,7 @@ import android.view.View;
 class MenuIconView extends View {
 
     enum Icon {
-        CHAPTERS, AUDIO_TRACK, SUBTITLES, VERSION, QUALITY_CAP, OPTIONS, AUTO_PLAY, AUTO_SKIP, EFFECTS, EXTRAS,
+        CHAPTERS, AUDIO_TRACK, SUBTITLES, VERSION, QUALITY_CAP, OPTIONS, AUTO_PLAY, AUTO_SKIP, EFFECTS,
         PERFORMANCE, SHADER, COLOR_BOOST, AMBIENT, AUDIO_LEVELING, SPEED, ASPECT, SLEEP, LOCK, PICTURE_IN_PICTURE,
         EPISODES,
     }
@@ -83,7 +83,6 @@ class MenuIconView extends View {
             case AUTO_PLAY: drawAutoPlay(canvas); break;
             case AUTO_SKIP: drawAutoSkip(canvas); break;
             case EFFECTS: drawEffects(canvas); break;
-            case EXTRAS: drawExtras(canvas); break;
             case PERFORMANCE: drawPerformance(canvas); break;
             case SHADER: drawShader(canvas); break;
             case COLOR_BOOST: drawColorBoost(canvas); break;
@@ -227,16 +226,6 @@ class MenuIconView extends View {
         path.lineTo(9.8f, 8.2f);
         path.close();
         canvas.drawPath(path, fillPaint);
-    }
-
-    /* Mirrors extrasIconMarkup's 3-line equalizer/sliders glyph. */
-    private void drawExtras(Canvas canvas) {
-        canvas.drawLine(4, 6, 20, 6, strokePaint);
-        canvas.drawCircle(9, 6, 2.2f, fillPaint);
-        canvas.drawLine(4, 12, 20, 12, strokePaint);
-        canvas.drawCircle(15, 12, 2.2f, fillPaint);
-        canvas.drawLine(4, 18, 20, 18, strokePaint);
-        canvas.drawCircle(11, 18, 2.2f, fillPaint);
     }
 
     /* Mirrors performanceIconMarkup's activity/pulse zigzag. */

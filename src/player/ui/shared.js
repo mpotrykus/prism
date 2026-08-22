@@ -2,7 +2,7 @@ export const CONTROLS_HIDE_DELAY_MS = 1000;
 export const PLAYBACK_RATES = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 4, 8];
 export const SLEEP_TIMER_PRESETS_MIN = [15, 30, 45, 60];
 /* key matches both the CSS object-fit keyword this maps to on the web leg (see
-   chrome-menu-extras.js's applyFitMode) and the Xbox bridge's "mode" param
+   chrome-menu-options.js's applyFitMode) and the Xbox bridge's "mode" param
    (NativePlayerHost.SetStretch) - "stretch" is the one exception, mapped to
    object-fit:fill/Stretch.Fill rather than reusing the word "fill" itself, since
    "Stretch" is the clearer label to show the viewer. */
@@ -38,7 +38,7 @@ export const MENU_SCROLL_CLASS = "streaming-player-menu-scroll";
 export const OVERLAY_CLOSE_BTN_CLASS = "streaming-player-overlay-close-btn";
 
 /* Marks every focusable/selectable element in the player's own chrome (corner buttons, the
-   floating play button, every hamburger/Effects/Extras/Audio & Subtitles/Episode/Chapter row
+   floating play button, every hamburger/Effects/Options/Audio & Subtitles/Episode/Chapter row
    and card) so they all share one focus-ring look - the same 2px solid #e5a00d outline the
    main browsing UI uses (see src/card/styles/shared-focus.css), rather than the player
    inventing its own. This chrome lives in plain document.body, not a shadow root, so unlike
@@ -53,13 +53,20 @@ export const OVERLAY_CLOSE_BTN_CLASS = "streaming-player-overlay-close-btn";
 export const PLAYER_FOCUSABLE_CLASS = "streaming-player-focusable";
 
 /* The hamburger "More" sheet's own rows (chrome-menu.js's buildAccordionRow/
-   renderPickerList/makeBackRow, also reused by chrome-menu-extras.js/chrome-subtitles.js
+   renderPickerList/makeBackRow, also reused by chrome-menu-options.js/chrome-subtitles.js
    for their nested screens) get a full-width highlighted background instead of the
    shared outline above - each row is already a real width:100% button, so the
    background naturally spans edge-to-edge without needing a separate bleed trick the
    way the card's narrower nav items do. Layered on top of PLAYER_FOCUSABLE_CLASS
    (kept for its border-radius/transition), not a replacement for it. */
 export const PLAYER_MENU_ROW_CLASS = "streaming-player-menu-row";
+
+/* Episode/chapter list cards (episode-list.js's buildEpisodeCard/buildChapterCard) - same
+   highlighted-background swap as PLAYER_MENU_ROW_CLASS above instead of the shared yellow
+   outline, since a thin ring around a 240px-wide card (thumb + title/subtitle stacked
+   below it) read as much fainter/harder to spot than on the plain buttons that class was
+   designed for. Layered on top of PLAYER_FOCUSABLE_CLASS, not a replacement for it. */
+export const PLAYER_CARD_CLASS = "streaming-player-card";
 
 /* Injected once, lazily, the same guarded pattern as ensureMenuScrollStyle below - nothing
    needs this until the first focusable element actually mounts. */
@@ -97,6 +104,21 @@ export function ensurePlayerFocusStyle() {
             outline: none !important;
         }
         .${PLAYER_MENU_ROW_CLASS}:focus-visible {
+            background: rgba(255,255,255,0.08) !important;
+        }
+        /* outline: none unconditionally, same reasoning as PLAYER_MENU_ROW_CLASS above.
+           background !important because buildEpisodeCard/buildChapterCard set their own
+           inline style.background ("transparent") directly on the card - same inline-
+           always-wins trap. padding/margin here (rather than just a background color)
+           give the highlight room to show past the thumbnail's own opaque background
+           instead of being fully hidden behind it, with the negative margin keeping the
+           card's own layout width/gap unchanged. */
+        .${PLAYER_CARD_CLASS} {
+            outline: none !important;
+            padding: 8px !important;
+            margin: -8px !important;
+        }
+        .${PLAYER_CARD_CLASS}:focus-visible {
             background: rgba(255,255,255,0.08) !important;
         }
         /* B/Escape already backs every one of these overlays out for a controller user - the
@@ -267,9 +289,9 @@ export function storedStatsOverlayEnabled() {
 
 /* Same immediate-persistence model as storedStatsOverlayEnabled - no per-video/genre
    concern, whatever this was last toggled to is what every subsequent session starts
-   from. Defaults to on (like storedAutoSkipIntroCreditsEnabled/storedAudioLevelingEnabled
-   below, unlike the quality/effect toggles) for a user who's never touched this setting
-   at all - a bare-missing key, not an explicit "0". */
+   from. Defaults to on (like storedAudioLevelingEnabled below, unlike the quality/effect
+   toggles, and unlike storedAutoSkipIntroCreditsEnabled which defaults off) for a user
+   who's never touched this setting at all - a bare-missing key, not an explicit "0". */
 export function storedAutoPlayEnabled() {
     const stored = localStorage.getItem(AUTO_PLAY_STORAGE_KEY);
     return stored === null ? true : stored === "1";
@@ -283,11 +305,11 @@ export function storedAutoQualityEnabled() {
     return localStorage.getItem(AUTO_QUALITY_STORAGE_KEY) === "1";
 }
 
-/* Same `stored === null` default-on reasoning as storedAutoPlayEnabled above - a
-   never-touched user gets automatic intro/credits skipping from their first session. */
+/* Unlike storedAutoPlayEnabled, this defaults OFF for a never-touched user - auto-skipping
+   past content (rather than just auto-advancing between titles) is intrusive enough that a
+   user should opt in rather than have it sprung on them. */
 export function storedAutoSkipIntroCreditsEnabled() {
-    const stored = localStorage.getItem(AUTO_SKIP_INTRO_CREDITS_STORAGE_KEY);
-    return stored === null ? true : stored === "1";
+    return localStorage.getItem(AUTO_SKIP_INTRO_CREDITS_STORAGE_KEY) === "1";
 }
 
 /* Same `stored === null` default-on reasoning as storedAutoPlayEnabled above - a
@@ -380,7 +402,7 @@ export function episodesIconMarkup() {
    every icon above. A handful of rows deliberately reuse an existing markup above
    rather than getting their own (Auto-Play reuses skipIconMarkup's "next" glyph, Shader
    Upscaling reuses fullscreenIconMarkup's expand glyph) since those already draw the
-   right concept - see openHamburgerMenu/renderEffectsList/renderExtrasList in chrome.js
+   right concept - see openHamburgerMenu/renderEffectsList/renderOptionsList in chrome.js
    for where each one is actually wired up. Android's MenuIconView mirrors this same set
    of shapes so the two platforms read as one icon family. */
 export function chaptersIconMarkup() {
@@ -423,17 +445,6 @@ export function optionsIconMarkup() {
 
 export function effectsIconMarkup() {
     return '<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path d="M12 2l2.2 6.2L20 10l-5.8 1.8L12 18l-2.2-6.2L4 10l5.8-1.8L12 2z"/></svg>';
-}
-
-export function extrasIconMarkup() {
-    return `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" xmlns="http://www.w3.org/2000/svg">
-        <line x1="4" y1="6" x2="20" y2="6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
-        <circle cx="9" cy="6" r="2.2" fill="currentColor"/>
-        <line x1="4" y1="12" x2="20" y2="12" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
-        <circle cx="15" cy="12" r="2.2" fill="currentColor"/>
-        <line x1="4" y1="18" x2="20" y2="18" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
-        <circle cx="11" cy="18" r="2.2" fill="currentColor"/>
-    </svg>`;
 }
 
 export function performanceIconMarkup() {

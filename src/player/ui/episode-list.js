@@ -6,7 +6,7 @@ import { fetchQueueItemsMetadata } from "../core/title-fetch.js";
 import { WATCHED_ICON_SVG } from "../../card/rows.js";
 import { formatRuntime } from "../../card/title-info.js";
 import { createRowScroll } from "../../card/row-scroll.js";
-import { PLAYER_FOCUSABLE_CLASS } from "./shared.js";
+import { PLAYER_FOCUSABLE_CLASS, PLAYER_CARD_CLASS } from "./shared.js";
 
 /* In-player episode/queue list overlay (HBO Max-style) - a bottom sheet over the still-
    playing video (see the "keep playing behind overlay" decision) listing every title in
@@ -477,7 +477,7 @@ export function closeChapterListOverlay(controller) {
 function buildChapterCard(session, chapter, isCurrent, onSelect) {
     const card = document.createElement("button");
     card.type = "button";
-    card.classList.add(PLAYER_FOCUSABLE_CLASS);
+    card.classList.add(PLAYER_FOCUSABLE_CLASS, PLAYER_CARD_CLASS);
     Object.assign(card.style, {
         flex: "0 0 auto",
         width: "240px",
@@ -587,7 +587,7 @@ export function formatEpisodeListItem(session, item) {
 function buildEpisodeCard(item, onSelect) {
     const card = document.createElement("button");
     card.type = "button";
-    card.classList.add(PLAYER_FOCUSABLE_CLASS);
+    card.classList.add(PLAYER_FOCUSABLE_CLASS, PLAYER_CARD_CLASS);
     Object.assign(card.style, {
         flex: "0 0 auto",
         width: "240px",

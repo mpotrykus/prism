@@ -15,7 +15,6 @@ import {
     versionIconMarkup,
     qualityCapIconMarkup,
     effectsIconMarkup,
-    extrasIconMarkup,
     optionsIconMarkup,
     performanceIconMarkup,
     PLAYER_MENU_ROW_CLASS,
@@ -32,13 +31,12 @@ import { openChapterListOverlay, openEpisodeListOverlay } from "./episode-list.j
    after both modules have finished loading. */
 import { openAudioSubtitlesOverlay } from "./chrome-subtitles.js";
 import { renderEffectsList } from "./chrome-menu-effects.js";
-import { renderExtrasList } from "./chrome-menu-extras.js";
 import { renderOptionsList } from "./chrome-menu-options.js";
 
 /* The hamburger "More" sheet: its top-level accordion list (Episodes/Chapters/Audio &
-   Subtitles/Version/Quality Cap/Auto-Play/Effects/Extras/Performance Overlay), the
+   Subtitles/Version/Quality Cap/Options/Effects/Performance Overlay), the
    accordion-row/picker-list primitives
-   shared with its Effects (chrome-menu-effects.js) and Extras (chrome-menu-extras.js)
+   shared with its Effects (chrome-menu-effects.js) and Options (chrome-menu-options.js)
    sub-screens, and the Version/Quality Cap pickers that stay inline here. Takes the
    StreamingPlayerController instance as an explicit first argument (see native-bridge.js/
    shader-pipeline.js for why) rather than owning independent state - the idle-fade timer
@@ -105,12 +103,12 @@ export function renderPickerList(content, items, { rowGap = 0 } = {}) {
     });
 }
 
-/* One row of the More sheet (also used by chrome-menu-extras.js's Extras sub-screen).
+/* One row of the More sheet (also used by chrome-menu-options.js's Options sub-screen).
    Sections with `render` expand in place (accordion, one section open at a time per
    `state` - opening a new one collapses whatever else was open, via
    `state.expandedCollapse`); sections with `nav` instead replace the whole list with a
-   different screen (see renderEffectsList/renderExtrasList) rather than expanding in
-   place - used for "Effects"/"Extras", whose sub-controls read better as their own
+   different screen (see renderEffectsList/renderOptionsList) rather than expanding in
+   place - used for "Effects"/"Options", whose sub-controls read better as their own
    dedicated list than squeezed inline under a fourth row. Sections with only `toggle`
    (Auto-Play, Auto-Skip Intro & Credits, Performance Overlay) are plain on/off rows with
    nothing to expand or navigate to. `toggle` and `render` are independent - Ambient
@@ -268,7 +266,7 @@ export function buildAccordionRow(list, state, section) {
     return { setDisabled };
 }
 
-/* Every navigated-to sub-list (Effects', Extras', Quality Cap's) gets the same dimmed,
+/* Every navigated-to sub-list (Effects', Options', Quality Cap's) gets the same dimmed,
    divider-topped "back up a level" row instead of each screen styling its own -
    distinguishes "leave this screen" from a selectable option in a way a plain row
    sharing the same style as everything else couldn't. */
@@ -302,16 +300,16 @@ export function makeBackRow(onClick) {
     return row;
 }
 
-/* Rebuilding a screen's list (a full nav swap - Quality Cap/Effects/Extras and Extras' own
-   Playback Speed/Zoom/Sleep Timer screens - or renderMainList itself) replaces whatever button
+/* Rebuilding a screen's list (a full nav swap - Quality Cap/Effects/Options and Options' own
+   Playback Speed/Aspect/Sleep Timer screens - or renderMainList itself) replaces whatever button
    was focused with a brand-new DOM subtree - the old element is gone, and nothing else claims
    focus in its place, so the browser drops it to <body>. Left alone, that silently breaks every
    subsequent D-pad/keyboard command: wireLinearNav's handler only ever acts when focus is
    already inside its own list, so the whole sheet would stop responding to B *and*
    Up/Down/Left/Right the moment a viewer navigated anywhere - it just happened to read as "B
    doesn't back out" because that's the one thing a mouse user would notice too. Exported (rather
-   than a private helper closing over one `list`) so chrome-menu-extras.js's own nested screens
-   can call it too - see its renderExtrasList. */
+   than a private helper closing over one `list`) so chrome-menu-options.js's own nested screens
+   can call it too - see its renderOptionsList. */
 export function refocusList(list) {
     focusAfterPaint(list.querySelector("button"));
 }
@@ -352,7 +350,7 @@ export function openHamburgerMenu(controller, anchor) {
     });
 
     /* The actual visible "menu" - header plus scrollable row list, capped at 82vh and
-       otherwise sized to its own content (a short row list, e.g. the Effects/Extras
+       otherwise sized to its own content (a short row list, e.g. the Effects/Options
        sub-screens, centers as a short card rather than stretching to fill the full
        backdrop). */
     const card = document.createElement("div");
@@ -393,16 +391,16 @@ export function openHamburgerMenu(controller, anchor) {
     card.appendChild(list);
 
     /* Tracks "what should B/Escape do right now" - closeInlineMenu at the main list, or back up to
-       the main list from whichever sub-screen (Quality Cap/Effects/Extras) is currently showing in
+       the main list from whichever sub-screen (Quality Cap/Effects/Options) is currently showing in
        this same `list` element. Reassigned by renderMainList and by each sub-screen's own `nav`
        entry below, rather than menuNav's onBack hardcoding one or the other, so gamepad/keyboard
        "back" matches exactly what the mouse-driven "‹ Back" row (makeBackRow) already does.
-       Extras nests one level deeper still (its own Playback Speed/Zoom/Sleep Timer screens) - see
-       setGoBack below for why a plain reassignment here isn't enough on its own for that case. */
+       Options nests one level deeper still (its own Playback Speed/Aspect/Sleep Timer screens) -
+       see setGoBack below for why a plain reassignment here isn't enough on its own for that case. */
     let goBack = () => closeInlineMenu(controller);
-    /* Passed into renderExtrasList so its own nav callbacks can point `goBack` at Extras' own
+    /* Passed into renderOptionsList so its own nav callbacks can point `goBack` at Options' own
        screen (not all the way back to Main) when the viewer drills one level deeper still, then
-       back at `renderMainList` again once they return to Extras' top screen - chrome-menu.js owns
+       back at `renderMainList` again once they return to Options' top screen - chrome-menu.js owns
        `goBack` itself, so a sub-screen module has no other way to redirect it correctly for its own
        nested "back" targets. */
     function setGoBack(fn) {
@@ -415,7 +413,7 @@ export function openHamburgerMenu(controller, anchor) {
     const state = { expandedCollapse: null };
     /* Ordered to match the Android native player's own More menu (PlayerUiHelper.java) so the
        two platforms read as the same app: source/quality (Version/Quality Cap) first;
-       Options/Effects/Extras/Performance Overlay last, in that order - the four rows here most
+       Options/Effects/Performance Overlay last, in that order - the three rows here most
        people set once and never revisit.
 
        Episodes and Audio & Subtitles are deliberately NOT duplicated here on web (or PC - see
@@ -489,7 +487,7 @@ export function openHamburgerMenu(controller, anchor) {
     }
     sections.push({
         /* Own dedicated screen (see renderQualityCapList), not an inline expand - same
-           reasoning as Effects/Extras below. */
+           reasoning as Effects/Options below. */
         key: "qualitycap",
         label: "Quality Cap",
         icon: qualityCapIconMarkup(),
@@ -501,16 +499,25 @@ export function openHamburgerMenu(controller, anchor) {
         },
     });
     sections.push({
-        /* Navigates to a dedicated Normalize Audio/Auto-Play/Auto-Skip Intro & Credits
-           screen (see chrome-menu-options.js's renderOptionsList) - moved out of this
-           top level into their own screen, same "three sub-controls read better as
-           their own screen" reasoning Effects/Extras below already follow. */
+        /* Navigates to a dedicated Normalize Audio/Auto-Play/Auto-Skip Intro & Credits/
+           Playback Speed/Aspect/Sleep Timer screen (see chrome-menu-options.js's
+           renderOptionsList) - moved out of this top level into their own screen, same
+           "several sub-controls read better as their own screen" reasoning Effects
+           below already follows. Playback Speed/Aspect/Sleep Timer used to live behind
+           their own top-level "Extras" row - folded into Options instead since none of
+           the six relate to each other the way Effects' GPU-pipeline controls do, but
+           each is simple/single-picker enough that one combined "everything else"
+           screen still reads as a sensible cluster. */
         key: "options",
         label: "Options",
         icon: optionsIconMarkup(),
         nav: () => {
             goBack = renderMainList;
-            renderOptionsList(controller, list, renderMainList);
+            /* Options nests one level deeper than Effects/Quality Cap - its own Playback Speed/
+               Aspect/Sleep Timer rows each navigate to their own screen too, rather than expanding
+               in place - so it needs a way to point `goBack` at its own top screen (not all the way
+               to Main) while one of those is open. See setGoBack's own comment above. */
+            renderOptionsList(controller, list, renderMainList, setGoBack);
             refocusList(list);
         },
     });
@@ -525,27 +532,6 @@ export function openHamburgerMenu(controller, anchor) {
         nav: () => {
             goBack = renderMainList;
             renderEffectsList(controller, list, renderMainList);
-            refocusList(list);
-        },
-    });
-    sections.push({
-        /* Same "own dedicated screen" reasoning as Effects above, for Playback Speed/
-           Zoom/Sleep Timer (see chrome-menu-extras.js's renderExtrasList) - grouped as
-           "Extras" since none of the three relate to each other the way Effects' three
-           GPU-pipeline controls do, but each is simple/single-picker enough that
-           squeezing all three top-level rows down to one still reads as a sensible
-           cluster (playback tweaks that aren't part of the everyday audio/subtitle/
-           quality set above). */
-        key: "extras",
-        label: "Extras",
-        icon: extrasIconMarkup(),
-        nav: () => {
-            goBack = renderMainList;
-            /* Extras nests one level deeper than Effects/Quality Cap - its own three rows (Playback
-               Speed/Zoom/Sleep Timer) each navigate to their own screen too, rather than expanding
-               in place - so it needs a way to point `goBack` at its own top screen (not all the way
-               to Main) while one of those is open. See setGoBack's own comment above. */
-            renderExtrasList(controller, list, renderMainList, setGoBack);
             refocusList(list);
         },
     });
@@ -589,7 +575,7 @@ export function openHamburgerMenu(controller, anchor) {
     const menuNav = wireLinearNav(document, `.${INLINE_MENU_CLASS} button:not(.${OVERLAY_CLOSE_BTN_CLASS}), .${INLINE_MENU_CLASS} input[type="range"]`, {
         orientation: "vertical",
         loop: true,
-        /* Back up a screen (Quality Cap/Effects/Extras -> the main list) if one is open, else close
+        /* Back up a screen (Quality Cap/Effects/Options -> the main list) if one is open, else close
            the whole sheet - see `goBack`'s own comment above for why this is a reassignable variable
            rather than always closeInlineMenu directly. */
         onBack: () => goBack(),
@@ -668,7 +654,7 @@ function renderQualityCapSection(controller, content, { setValue, collapse }) {
 }
 
 /* "Quality Cap" navigates to its own screen (see buildAccordionRow's `nav` case)
-   rather than expanding in place - same reasoning as Effects/Extras, just for one
+   rather than expanding in place - same reasoning as Effects/Options, just for one
    control instead of a cluster of several. Reuses renderQualityCapSection's picker-
    list body unchanged: `list` stands in for the accordion `content` div it normally
    renders into, and `onBack` (navigate to the main list, which re-derives every row's

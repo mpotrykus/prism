@@ -965,7 +965,7 @@ final class PlayerUiHelper {
 
         /* The actual visible "menu" - header plus scrollable row list, capped at ~82%
            of screen height and otherwise sized to its own content (see
-           clampMenuCardHeight) - a short row list (e.g. the Effects/Extras
+           clampMenuCardHeight) - a short row list (e.g. the Effects/Options
            sub-screens) centers as a short card rather than stretching to fill the full
            backdrop. */
         LinearLayout card = new LinearLayout(activity);
@@ -1044,7 +1044,7 @@ final class PlayerUiHelper {
            common reason to open this menu at all, when there's a queue to jump within),
            then what-you're-watching controls (Chapters/Audio Track), since those get
            touched per-video; source/quality (Version/Quality Cap) next; Options/Effects/
-           Extras/Performance Overlay last, in that order - the four rows here most
+           Performance Overlay last, in that order - the three rows here most
            people set once and never revisit. Lock/Picture-in-
            Picture aren't in this list at all any more, being actions rather than
            settings (see PlayerActivity.onCreate/buildLockButton/buildPipButton). */
@@ -1114,7 +1114,7 @@ final class PlayerUiHelper {
         }
 
         /* Own dedicated screen (see renderQualityCapList), not an inline expand - same
-           reasoning as Effects/Extras above, just for a single control. */
+           reasoning as Effects/Options above, just for a single control. */
         MenuSection qualityCapSection = new MenuSection("Quality Cap");
         qualityCapSection.icon = MenuIconView.Icon.QUALITY_CAP;
         qualityCapSection.showChevron = true;
@@ -1122,10 +1122,15 @@ final class PlayerUiHelper {
         qualityCapSection.onTap = () -> renderQualityCapList(activity, list);
         sections.add(qualityCapSection);
 
-        /* Navigates to a dedicated Normalize Audio/Auto-Play/Auto-Skip Intro & Credits list
-           (see renderOptionsList) - moved out of this top level into their own screen,
-           same "three sub-controls read better as their own screen" reasoning Effects/
-           Extras below already follow. */
+        /* Navigates to a dedicated Normalize Audio/Auto-Play/Auto-Skip Intro & Credits/
+           Playback Speed/Aspect/Sleep Timer list (see renderOptionsList) - moved out of
+           this top level into their own screen, same "several sub-controls read better
+           as their own screen" reasoning Effects below already follows. Playback Speed/
+           Aspect/Sleep Timer used to live behind their own top-level "Extras" row -
+           folded into Options instead since none of the six relate to each other the
+           way Effects' GPU-pipeline controls do, but each is simple/single-picker
+           enough that one combined "everything else" screen still reads as a sensible
+           cluster. */
         MenuSection optionsSection = new MenuSection("Options");
         optionsSection.icon = MenuIconView.Icon.OPTIONS;
         optionsSection.showChevron = true;
@@ -1140,18 +1145,6 @@ final class PlayerUiHelper {
         effectsSection.showChevron = true;
         effectsSection.onTap = () -> renderEffectsList(activity, list);
         sections.add(effectsSection);
-
-        /* Same "own dedicated screen" reasoning as Effects above, for Playback Speed/
-           Aspect/Sleep Timer - grouped as "Extras" since none of the three relates to
-           the others the way Effects' GPU-pipeline controls do, but each is simple/
-           single-picker enough that squeezing all three top-level rows down to one
-           still reads as a sensible cluster (playback tweaks outside the everyday
-           audio/subtitle/quality set above). */
-        MenuSection extrasSection = new MenuSection("Extras");
-        extrasSection.icon = MenuIconView.Icon.EXTRAS;
-        extrasSection.showChevron = true;
-        extrasSection.onTap = () -> renderExtrasList(activity, list);
-        sections.add(extrasSection);
 
         MenuSection statsSection = new MenuSection("Performance Overlay");
         /* No render - nothing to drill into, unlike Shader Upscaling/Color Boost/
@@ -1525,11 +1518,13 @@ final class PlayerUiHelper {
         });
     }
 
-    /* The "Options" sub-screen (Normalize Audio/Auto-Play/Auto-Skip Intro & Credits) -
-       moved out of the main list's own top level (Auto-Play/Auto-Skip) and out of the
-       Effects screen (Normalize Audio, formerly "Audio Leveling") into one dedicated
-       screen instead. Plain accordion toggle rows (see MenuSection.toggleChecked/
-       onToggle), same shape all three already had - just relocated, not restyled. */
+    /* The "Options" sub-screen: Normalize Audio/Auto-Play/Auto-Skip Intro & Credits (plain
+       accordion toggle rows - see MenuSection.toggleChecked/onToggle) - moved out of the main
+       list's own top level (Auto-Play/Auto-Skip) and out of the Effects screen (Normalize
+       Audio, formerly "Audio Leveling") into one dedicated screen instead - plus Playback
+       Speed/Aspect/Sleep Timer, folded in from the former standalone "Extras" screen (see
+       renderSpeedList/renderAspectList/renderSleepList below). Same rows, same behavior in
+       both cases, just relocated (and, for Normalize Audio, relabeled). */
     private static void renderOptionsList(PlayerActivity activity, LinearLayout list) {
         float density = activity.getResources().getDisplayMetrics().density;
         list.removeAllViews();
@@ -1581,22 +1576,6 @@ final class PlayerUiHelper {
         };
         sections.add(autoSkipSection);
 
-        for (MenuSection section : sections) {
-            list.addView(buildAccordionSection(activity, density, section, state));
-        }
-        clampMenuCardHeight(activity, list);
-    }
-
-    /* "Extras" - same dedicated-screen pattern as renderEffectsList above, for
-       Playback Speed/Aspect/Sleep Timer instead of the shader/color/ambient trio. */
-    private static void renderExtrasList(PlayerActivity activity, LinearLayout list) {
-        float density = activity.getResources().getDisplayMetrics().density;
-        list.removeAllViews();
-        list.addView(makeBackRow(activity, density, () -> renderMainList(activity, list)));
-
-        AccordionState state = new AccordionState();
-        List<MenuSection> sections = new ArrayList<>();
-
         MenuSection speedSection = new MenuSection("Playback Speed");
         speedSection.icon = MenuIconView.Icon.SPEED;
         speedSection.getValue = () -> formatRate(activity.player != null ? activity.player.getPlaybackParameters().speed : 1f);
@@ -1625,30 +1604,30 @@ final class PlayerUiHelper {
     }
 
     /* Own dedicated screen (matching Quality Cap/Version/Effects/Audio & Subtitles, and
-       the web/Xbox leg's own renderSpeedList - see chrome-menu-extras.js) rather than an
+       the web/Xbox leg's own renderSpeedList - see chrome-menu-options.js) rather than an
        in-place accordion expand - reuses renderSpeedSection's picker-list body unchanged,
-       `collapse` just points back at Extras instead of collapsing a row in place. */
+       `collapse` just points back at Options instead of collapsing a row in place. */
     private static void renderSpeedList(PlayerActivity activity, LinearLayout list) {
         float density = activity.getResources().getDisplayMetrics().density;
         list.removeAllViews();
-        list.addView(makeBackRow(activity, density, () -> renderExtrasList(activity, list)));
-        renderSpeedSection(activity, list, (value) -> {}, () -> renderExtrasList(activity, list));
+        list.addView(makeBackRow(activity, density, () -> renderOptionsList(activity, list)));
+        renderSpeedSection(activity, list, (value) -> {}, () -> renderOptionsList(activity, list));
         clampMenuCardHeight(activity, list);
     }
 
     private static void renderAspectList(PlayerActivity activity, LinearLayout list) {
         float density = activity.getResources().getDisplayMetrics().density;
         list.removeAllViews();
-        list.addView(makeBackRow(activity, density, () -> renderExtrasList(activity, list)));
-        renderAspectSection(activity, list, (value) -> {}, () -> renderExtrasList(activity, list));
+        list.addView(makeBackRow(activity, density, () -> renderOptionsList(activity, list)));
+        renderAspectSection(activity, list, (value) -> {}, () -> renderOptionsList(activity, list));
         clampMenuCardHeight(activity, list);
     }
 
     private static void renderSleepList(PlayerActivity activity, LinearLayout list) {
         float density = activity.getResources().getDisplayMetrics().density;
         list.removeAllViews();
-        list.addView(makeBackRow(activity, density, () -> renderExtrasList(activity, list)));
-        renderSleepSection(activity, list, (value) -> {}, () -> renderExtrasList(activity, list));
+        list.addView(makeBackRow(activity, density, () -> renderOptionsList(activity, list)));
+        renderSleepSection(activity, list, (value) -> {}, () -> renderOptionsList(activity, list));
         clampMenuCardHeight(activity, list);
     }
 
@@ -1997,7 +1976,7 @@ final class PlayerUiHelper {
 
     /* "Quality Cap" navigates to its own screen (see the MenuSection.onTap case in
        buildAccordionSection) rather than expanding in place - same reasoning as
-       Effects/Extras, just for one control instead of a cluster of several. Reuses
+       Effects/Options, just for one control instead of a cluster of several. Reuses
        renderQualityCapSection's picker-list body unchanged: `list` stands in for the
        accordion `content` LinearLayout it normally renders into, and navigating back to
        renderMainList (which re-derives every row's value fresh) stands in for
@@ -2163,7 +2142,7 @@ final class PlayerUiHelper {
     /* Replaces the old pinch/pan zoom's own would-be menu row - see PlayerActivity's own
        zoomScale/panX/panY, a separate continuous touch gesture on the video surface that this
        doesn't change - with a plain Fit/Cover/Stretch aspect picker, matching the web/Xbox
-       leg's Aspect screen (chrome-menu-extras.js's renderAspectSection). */
+       leg's Aspect screen (chrome-menu-options.js's renderAspectSection). */
     private static void renderAspectSection(PlayerActivity activity, LinearLayout content, Consumer<String> setValue, Runnable collapse) {
         float density = activity.getResources().getDisplayMetrics().density;
         List<PickerItem> items = new ArrayList<>();

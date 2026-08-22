@@ -20,7 +20,7 @@
 .hero-watchlist-btn:focus-visible,
 .hero-mute-btn:focus-visible,
 .hero-play-btn:focus-visible {
-    outline: 2px solid #e5a00d;
+    outline: 2px solid var(--color-accent);
 }
 
 .poster,
@@ -36,7 +36,7 @@
 .hero-watchlist-btn,
 .hero-mute-btn,
 .hero-play-btn {
-    outline: 2px solid #e5a00d00;
+    outline: 2px solid rgba(var(--color-accent-rgb), 0);
     outline-offset: 2px;
     transition: .125s;
 }

@@ -219,7 +219,7 @@ public class PlayerActivity extends AppCompatActivity {
     float zoomScale = 1f;
     float panX = 0f;
     float panY = 0f;
-    /* "fit"/"cover"/"stretch" - see PlayerUiHelper's Aspect row (renderExtrasList) and
+    /* "fit"/"cover"/"stretch" - see PlayerUiHelper's Aspect row (renderOptionsList) and
        applyAspectMode below. Independent of zoomScale/panX/panY above: that's a separate,
        continuous pinch/pan gesture on the video surface, not a picker in the menu. */
     String aspectMode = "fit";
@@ -324,12 +324,11 @@ public class PlayerActivity extends AppCompatActivity {
        Auto Quality only ever reacts to real degradation (see QualityAbrMonitor), so
        there's no downside to it running from a user's very first session. */
     boolean autoQualityEnabled = true;
-    /* Same "defaults on for a never-touched user" reasoning as autoPlayEnabled above - see
-       shared.js's storedAutoSkipIntroCreditsEnabled. Gated on autoPlayEnabled (see
-       PlayerUiHelper's menu row) since an auto-skipped credits marker only makes sense as
-       part of "keep watching automatically" - same reasoning chrome-skip.js's
-       shouldAutoSkip uses on web/Xbox. */
-    boolean autoSkipIntroCreditsEnabled = true;
+    /* Defaults OFF for a never-touched user - see shared.js's storedAutoSkipIntroCreditsEnabled.
+       Gated on autoPlayEnabled (see PlayerUiHelper's menu row) since an auto-skipped credits
+       marker only makes sense as part of "keep watching automatically" - same reasoning
+       chrome-skip.js's shouldAutoSkip uses on web/Xbox. */
+    boolean autoSkipIntroCreditsEnabled = false;
     QualityAbrMonitor abrMonitor;
     /* A fresh player's own initial buffering (before the first STATE_READY) isn't a real
        stall - reset to false at the top of createPlayer() so the ABR monitor's
@@ -574,8 +573,8 @@ public class PlayerActivity extends AppCompatActivity {
         /* Same "defaults on" reasoning as autoPlayEnabled above - see shared.js's
            storedAutoQualityEnabled for why. */
         autoQualityEnabled = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(PREF_AUTO_QUALITY_ENABLED, true);
-        /* Defaults to on - see shared.js's storedAutoSkipIntroCreditsEnabled for why. */
-        autoSkipIntroCreditsEnabled = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(PREF_AUTO_SKIP_INTRO_CREDITS, true);
+        /* Defaults to off - see shared.js's storedAutoSkipIntroCreditsEnabled for why. */
+        autoSkipIntroCreditsEnabled = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(PREF_AUTO_SKIP_INTRO_CREDITS, false);
         title = getIntent().getStringExtra(EXTRA_TITLE);
         if (title == null) title = "";
         episodeTitle = getIntent().getStringExtra(EXTRA_EPISODE_TITLE);
@@ -1606,7 +1605,7 @@ public class PlayerActivity extends AppCompatActivity {
     }
 
     static boolean getAutoSkipIntroCreditsEnabledPref(Context context) {
-        return context.getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(PREF_AUTO_SKIP_INTRO_CREDITS, true);
+        return context.getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(PREF_AUTO_SKIP_INTRO_CREDITS, false);
     }
 
     /* Same "toggle IS the persisted setting" immediate-persistence model as
@@ -1873,7 +1872,7 @@ public class PlayerActivity extends AppCompatActivity {
 
     /* "fit" letterboxes (ExoPlayer's own default), "cover" crops to fill without distorting,
        "stretch" fills exactly, distorting the picture - same three options as the web/Xbox
-       leg's Aspect picker (chrome-menu-extras.js's applyFitMode), applied here via
+       leg's Aspect picker (chrome-menu-options.js's applyFitMode), applied here via
        PlayerView's own AspectRatioFrameLayout instead of a CSS object-fit. layoutGlow (see its
        own comment) has to know the current mode too: Cover/Stretch leave no letterbox gap for
        ambient lighting's edge glow to show in, regardless of the video's own aspect ratio. */

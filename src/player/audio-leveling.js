@@ -57,6 +57,17 @@ const GAIN_RAMP_TIME_CONSTANT_S = 2;
    otherwise drag the running average toward "everything needs the max boost" the moment
    playback resumes. */
 const SILENCE_FLOOR_DBFS = -60;
+/* The EMA above tracks long-run average loudness, not peaks - a quiet-average scene with
+   a loud transient (a music swell, an emphasized line) still gets the full RMS-driven
+   boost, which pushes that transient past 0dBFS with nothing to stop it. A
+   DynamicsCompressorNode with a near-0dBFS threshold and a high ratio acts as a brick-wall
+   limiter that only engages on those transients - unlike the gain node above, it's not
+   part of the "steer toward a target level" logic, just a safety net so the leveling gain
+   never actually clips. */
+const LIMITER_THRESHOLD_DB = -1;
+const LIMITER_RATIO = 20;
+const LIMITER_ATTACK_S = 0.003;
+const LIMITER_RELEASE_S = 0.25;
 
 export function setAudioLevelingEnabled(controller, enabled) {
     controller._audioLevelingEnabled = enabled;
@@ -106,13 +117,21 @@ export function ensureAudioLevelingPipeline(controller) {
         const analyser = ctx.createAnalyser();
         analyser.fftSize = 2048;
         const gainNode = ctx.createGain();
+        const limiter = ctx.createDynamicsCompressor();
+        limiter.threshold.value = LIMITER_THRESHOLD_DB;
+        limiter.knee.value = 0;
+        limiter.ratio.value = LIMITER_RATIO;
+        limiter.attack.value = LIMITER_ATTACK_S;
+        limiter.release.value = LIMITER_RELEASE_S;
         source.connect(analyser);
         analyser.connect(gainNode);
-        gainNode.connect(ctx.destination);
+        gainNode.connect(limiter);
+        limiter.connect(ctx.destination);
         controller._audioLevelingCtx = ctx;
         controller._audioLevelingSource = source;
         controller._audioLevelingAnalyser = analyser;
         controller._audioLevelingGainNode = gainNode;
+        controller._audioLevelingLimiterNode = limiter;
         controller._audioLevelingVideoEl = controller._videoEl;
         controller._audioLevelingEmaDb = null;
         controller._audioLevelingSampleBuffer = new Float32Array(analyser.fftSize);
@@ -179,6 +198,7 @@ export function teardownAudioLeveling(controller) {
     controller._audioLevelingSource = null;
     controller._audioLevelingAnalyser = null;
     controller._audioLevelingGainNode = null;
+    controller._audioLevelingLimiterNode = null;
     controller._audioLevelingVideoEl = null;
     controller._audioLevelingEmaDb = null;
     controller._audioLevelingSampleBuffer = null;

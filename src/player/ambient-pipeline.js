@@ -307,7 +307,7 @@ export function ensureAmbientPipeline(controller) {
 function computePictureRect(controller) {
     const vw = window.innerWidth;
     const vh = window.innerHeight;
-    /* Cover/Stretch (see chrome-menu-extras.js's applyFitMode) fill the viewport exactly by
+    /* Cover/Stretch (see chrome-menu-options.js's applyFitMode) fill the viewport exactly by
        definition - no letterbox gap exists for the glow to show in, regardless of the video's
        own aspect ratio, so there's nothing for the object-fit:contain math below to do. */
     if (controller._fitMode && controller._fitMode !== "fit") {

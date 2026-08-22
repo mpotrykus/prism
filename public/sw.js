@@ -8,7 +8,7 @@ const SHELL_FILES = [
   "./settings.js",
   "./plex-netflix-card.js",
   "./manifest.webmanifest",
-  "./assets/plex-logo.png",
+  "./assets/prism-logo.svg",
 ];
 
 self.addEventListener("install", (event) => {

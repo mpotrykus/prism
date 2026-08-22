@@ -359,9 +359,26 @@ export class HeroController {
     const probe = new Image();
     probe.onload = () => {
       if (mediaEl.style.backgroundImage !== expected) return;
-      const heroAspect = this._heroEl.clientWidth / this._heroEl.clientHeight;
+      const heroW = this._heroEl.clientWidth;
+      const heroH = this._heroEl.clientHeight;
+      const heroAspect = heroW / heroH;
       const imgAspect = probe.naturalWidth / probe.naturalHeight;
       const horizontal = imgAspect > heroAspect;
+      /* The pan's pixel distance isn't constant - it's however much background-size:cover
+         overflows on the panned axis, which balloons on mobile because --hero-h is
+         max(100vh, 600px) (nearly full viewport height) against a narrow viewport width,
+         producing a far more extreme/lopsided hero aspect ratio than on desktop. A fixed
+         9s duration then has to cover a much bigger overflow in the same time, which reads
+         as the pan moving way faster. Cap px/sec instead of duration: stretch the duration
+         for large overflows, but never go below 9s so normal desktop cases are unaffected. */
+      const scale = Math.max(heroW / probe.naturalWidth, heroH / probe.naturalHeight);
+      const overflowPx = horizontal
+        ? probe.naturalWidth * scale - heroW
+        : probe.naturalHeight * scale - heroH;
+      const PAN_SPAN_FRACTION = 0.4; // keyframes sweep 30%-70% (horizontal) / 5%-45% (vertical) of the overflow
+      const MAX_PAN_SPEED_PX_PER_SEC = 30;
+      const duration = Math.max(9, (overflowPx * PAN_SPAN_FRACTION) / MAX_PAN_SPEED_PX_PER_SEC);
+      mediaEl.style.setProperty("--hero-pan-duration", `${duration}s`);
       void mediaEl.offsetWidth;
       mediaEl.classList.add(horizontal ? "hero-pan-horizontal" : "hero-pan-vertical");
     };

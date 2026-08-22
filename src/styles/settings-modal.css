@@ -10,7 +10,7 @@
 * { box-sizing: border-box; font-family: "Roboto", sans-serif; }
 .overlay {
   position: fixed; inset: 0; z-index: 1000;
-  background: rgba(0,0,0,0.72);
+  background: rgba(var(--color-shadow-rgb), 0.72);
   backdrop-filter: blur(6px);
   display: none;
   align-items: center; justify-content: center;
@@ -22,24 +22,24 @@
   height: min(640px, 88vh);
   display: flex; flex-direction: column;
   overflow: hidden;
-  background: #161619;
-  border: 1px solid rgba(255,255,255,0.08);
+  background: var(--color-surface);
+  border: 1px solid rgba(var(--color-fg-rgb), 0.08);
   border-radius: 16px;
-  color: #fff;
-  box-shadow: 0 24px 70px rgba(0,0,0,0.6);
+  color: var(--color-fg);
+  box-shadow: 0 24px 70px rgba(var(--color-shadow-rgb), 0.6);
 }
 .modal-header {
   flex: none;
   display: flex; align-items: center; justify-content: space-between;
-  padding: 20px 24px; background: #161619;
-  border-bottom: 1px solid rgba(255,255,255,0.08);
+  padding: 20px 24px; background: var(--color-surface);
+  border-bottom: 1px solid rgba(var(--color-fg-rgb), 0.08);
 }
 .modal-header h2 { font-size: 17px; font-weight: 700; margin: 0; }
 .modal-close {
-  border: none; background: transparent; color: rgba(255,255,255,0.6);
+  border: none; background: transparent; color: rgba(var(--color-fg-rgb), 0.6);
   font-size: 20px; cursor: pointer; line-height: 1; padding: 4px;
 }
-.modal-close:hover { color: #fff; }
+.modal-close:hover { color: var(--color-fg); }
 /* B/Escape already backs this modal out for a controller user - see focus-nav.js's
    controller-active-change comment - so the "X" is a redundant, unreachable-by-D-pad
    dead end for them. */
@@ -53,7 +53,7 @@ section.group { margin-top: 22px; }
 section.group:first-child { margin-top: 18px; }
 .group-title {
   font-size: 12px; font-weight: 700; text-transform: uppercase;
-  letter-spacing: 0.06em; color: rgba(255,255,255,0.45); margin-bottom: 10px;
+  letter-spacing: 0.06em; color: rgba(var(--color-fg-rgb), 0.45); margin-bottom: 10px;
 }
 .group-title-row { display: flex; align-items: center; justify-content: space-between; }
 .group-title-row .group-title { margin-bottom: 0; }
@@ -61,71 +61,71 @@ section.group:first-child { margin-top: 18px; }
 .switch input { position: absolute; inset: 0; opacity: 0; margin: 0; cursor: pointer; }
 .switch-track {
   position: absolute; inset: 0; border-radius: 999px;
-  background: rgba(255,255,255,0.18); transition: background-color 0.15s ease;
+  background: rgba(var(--color-fg-rgb), 0.18); transition: background-color 0.15s ease;
 }
 .switch-track::before {
   content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px;
-  border-radius: 50%; background: #fff; transition: transform 0.15s ease;
+  border-radius: 50%; background: var(--color-fg); transition: transform 0.15s ease;
 }
-.switch input:checked + .switch-track { background: #e5a00d; }
+.switch input:checked + .switch-track { background: var(--color-accent); }
 .switch input:checked + .switch-track::before { transform: translateX(14px); }
-.switch input:focus-visible + .switch-track { outline: 2px solid #e5a00d; outline-offset: 2px; }
-label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 6px; color: rgba(255,255,255,0.85); }
+.switch input:focus-visible + .switch-track { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 6px; color: rgba(var(--color-fg-rgb), 0.85); }
 .field { margin-bottom: 12px; }
 .field-row { display: flex; gap: 10px; align-items: center; }
 input[type="text"], input[type="password"], input[type="number"], select {
   width: 100%; padding: 9px 12px; border-radius: 8px;
-  border: 1px solid rgba(255,255,255,0.15); background: rgba(255,255,255,0.06);
-  color: #fff; font-size: 13px; outline: none;
+  border: 1px solid rgba(var(--color-fg-rgb), 0.15); background: rgba(var(--color-fg-rgb), 0.06);
+  color: var(--color-fg); font-size: 13px; outline: none;
 }
 select { color-scheme: dark; accent-color: #4a4a52; }
-select option { background: #1c1c20; color: #fff; }
-select option:checked { background: #3a3a40; }
-input:focus, select:focus { border-color: #e5a00d; }
+select option { background: var(--color-surface-raised); color: var(--color-fg); }
+select option:checked { background: var(--color-surface-selected); }
+input:focus, select:focus { border-color: var(--color-accent); }
 .btn {
   border: none; border-radius: 8px; padding: 9px 16px; font-size: 13px; font-weight: 700;
   cursor: pointer; white-space: nowrap;
 }
-.btn-primary { background: #e5a00d; color: #161619; }
-.btn-primary:hover { background: #f0ad1a; }
-.btn-secondary { background: rgba(255,255,255,0.1); color: #fff; }
-.btn-secondary:hover { background: rgba(255,255,255,0.18); }
+.btn-primary { background: var(--color-accent); color: var(--color-surface); }
+.btn-primary:hover { background: var(--color-accent-hover); }
+.btn-secondary { background: rgba(var(--color-fg-rgb), 0.1); color: var(--color-fg); }
+.btn-secondary:hover { background: rgba(var(--color-fg-rgb), 0.18); }
 .btn:disabled { opacity: 0.5; cursor: default; }
 .btn:focus-visible, .modal-close:focus-visible, input:focus-visible, select:focus-visible {
-  outline: 2px solid #e5a00d; outline-offset: 2px;
+  outline: 2px solid var(--color-accent); outline-offset: 2px;
 }
 /* Matches input[type="..."]'s own (0,1,1) specificity (line 72's outline:none) - a bare
    .nav-text-highlight class selector is only (0,1,0) and silently loses to it regardless
    of source order, which is why the virtual highlight (focus-nav.js) had no visible ring. */
 input.nav-text-highlight {
-  outline: 2px solid #e5a00d; outline-offset: 2px; border-color: #e5a00d;
+  outline: 2px solid var(--color-accent); outline-offset: 2px; border-color: var(--color-accent);
 }
-.hint { font-size: 11.5px; line-height: 1.4; color: rgba(255,255,255,0.5); margin-top: 6px; }
+.hint { font-size: 11.5px; line-height: 1.4; color: rgba(var(--color-fg-rgb), 0.5); margin-top: 6px; }
 .status { font-size: 12px; font-weight: 600; margin-top: 6px; min-height: 15px; }
-.status.ok { color: #4caf7d; }
-.status.err { color: #ff6b6b; }
+.status.ok { color: var(--color-success); }
+.status.err { color: var(--color-danger); }
 .save-status { flex: none; padding: 0 24px; margin-top: -6px; }
 .plex-server-card {
   display: flex; align-items: center; justify-content: space-between; gap: 14px;
-  background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08);
+  background: rgba(var(--color-fg-rgb), 0.04); border: 1px solid rgba(var(--color-fg-rgb), 0.08);
   border-radius: 10px; padding: 12px 14px;
 }
 .plex-server-info { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .plex-server-dot {
   flex: none; width: 8px; height: 8px; border-radius: 50%;
-  background: rgba(255,255,255,0.3); box-shadow: 0 0 0 3px rgba(255,255,255,0.06);
+  background: rgba(var(--color-fg-rgb), 0.3); box-shadow: 0 0 0 3px rgba(var(--color-fg-rgb), 0.06);
 }
 .plex-server-card:has(.plex-server-status.ok) .plex-server-dot {
-  background: #4caf7d; box-shadow: 0 0 0 3px rgba(76,175,125,0.18);
+  background: var(--color-success); box-shadow: 0 0 0 3px rgba(var(--color-success-rgb), 0.18);
 }
 .plex-server-card:has(.plex-server-status.err) .plex-server-dot {
-  background: #ff6b6b; box-shadow: 0 0 0 3px rgba(255,107,107,0.18);
+  background: var(--color-danger); box-shadow: 0 0 0 3px rgba(var(--color-danger-rgb), 0.18);
 }
 .plex-server-status {
   margin-top: 0; min-height: 0; font-size: 12.5px; font-family: "Roboto Mono", "Consolas", monospace;
   font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-.plex-server-status.ok { color: rgba(255,255,255,0.8); }
+.plex-server-status.ok { color: rgba(var(--color-fg-rgb), 0.8); }
 .plex-server-card .btn-reauth { flex: none; }
 @media (max-width: 700px) {
   .plex-server-card { flex-wrap: wrap; }
@@ -134,12 +134,12 @@ input.nav-text-highlight {
 .section-list { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
 .section-row {
   display: flex; align-items: center; gap: 10px;
-  background: rgba(255,255,255,0.05); border-radius: 8px; padding: 8px 10px;
+  background: rgba(var(--color-fg-rgb), 0.05); border-radius: 8px; padding: 8px 10px;
 }
 .section-row input[type="text"] { flex: 1; padding: 6px 10px; }
 .section-row .type-badge {
   flex: none; font-size: 10.5px; font-weight: 700; text-transform: uppercase;
-  color: rgba(255,255,255,0.5); border: 1px solid rgba(255,255,255,0.15);
+  color: rgba(var(--color-fg-rgb), 0.5); border: 1px solid rgba(var(--color-fg-rgb), 0.15);
   border-radius: 5px; padding: 2px 6px;
 }
 .row-2col { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
@@ -152,16 +152,16 @@ input.nav-text-highlight {
   flex: none;
   display: flex; gap: 18px;
   padding: 0 24px; margin-bottom: 4px;
-  border-bottom: 1px solid rgba(255,255,255,0.08);
+  border-bottom: 1px solid rgba(var(--color-fg-rgb), 0.08);
 }
 .tab-btn {
-  border: none; background: transparent; color: rgba(255,255,255,0.55);
+  border: none; background: transparent; color: rgba(var(--color-fg-rgb), 0.55);
   font-size: 13px; font-weight: 700; padding: 12px 8px; white-space: nowrap;
   cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px;
 }
-.tab-btn:hover { color: #fff; }
-.tab-btn.active { color: #fff; border-bottom-color: #e5a00d; }
-.tab-btn:focus-visible { outline: none; background: rgba(255,255,255,0.08); border-radius: 6px 6px 0 0; }
+.tab-btn:hover { color: var(--color-fg); }
+.tab-btn.active { color: var(--color-fg); border-bottom-color: var(--color-accent); }
+.tab-btn:focus-visible { outline: none; background: rgba(var(--color-fg-rgb), 0.08); border-radius: 6px 6px 0 0; }
 .tab-panel { display: none; }
 .tab-panel.active { display: block; }
 @media (max-width: 700px) {
