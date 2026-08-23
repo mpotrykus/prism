@@ -28,8 +28,7 @@
        actually need the clearance. */
         padding-top: 12px;
     }
-     :host-context([data-platform="android"]) .header,
-     :host-context([data-platform="uwp"]) .header {
+     :host-context([data-platform="android"]) .header {
         padding-top: calc(12px + var(--safe-top));
     }
     /* An ordinary flex child of .header now, not position:absolute - see header-search.css's
