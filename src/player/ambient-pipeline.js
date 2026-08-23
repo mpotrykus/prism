@@ -8,7 +8,7 @@ import { media } from "./core/media-facade.js";
 import { postAmbientLighting } from "./xbox-bridge.js";
 
 function isXbox() {
-    return hasNativePlayer() && platformTag() === "xbox";
+    return hasNativePlayer() && platformTag() === "uwp";
 }
 
 /* Ambient-lighting pipeline (web/Xbox only - Android's native ExoPlayer leg has its own

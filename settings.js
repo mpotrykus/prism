@@ -312,7 +312,7 @@ class StreamingSettingsModal extends HTMLElement {
     /* Xbox/UWP-only (see HdrDisplayController.cs) - hidden rather than removed, so
        wireLinearNav's own offsetParent!==null filtering excludes it from the nav list
        on every other platform for free, same as the OpenSubtitles fields above. */
-    const showXboxHdr = platformTag() === "xbox";
+    const showXboxHdr = platformTag() === "uwp";
     this.shadowRoot.querySelectorAll(".xbox-only-group").forEach((el) => {
       el.style.display = showXboxHdr ? "" : "none";
     });

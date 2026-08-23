@@ -57,14 +57,14 @@ function ensureScrollStyle() {
         .${SCROLL_CLASS} { scrollbar-width: none; -ms-overflow-style: none; }
         .${SCROLL_CLASS}::-webkit-scrollbar { display: none; width: 0; height: 0; }
         /* See QUEUE_ARROW_CLASS's own comment above and shared.js's OVERLAY_CLOSE_BTN_CLASS
-           rule for why two gates: [data-platform="xbox"] (core/platform.js) is the UWP
-           shell's own script-injected marker, reliable on real Xbox hardware regardless of
+           rule for why two gates: [data-platform="uwp"] (core/platform.js) is the UWP
+           shell's own script-injected marker, reliable on real Xbox hardware (and PC) regardless of
            the page's own input-mode heuristics; [data-input-mode="keyboard"] covers Fire TV
            and any keyboard/gamepad-driven desktop-web session, which has no such marker.
            !important because buildQueueScrollArrow sets display:"flex" as an inline style
            directly on the button - an inline style always wins over any stylesheet
            selector here regardless of specificity. */
-        html[data-platform="xbox"] .${QUEUE_ARROW_CLASS},
+        html[data-platform="uwp"] .${QUEUE_ARROW_CLASS},
         html[data-input-mode="keyboard"] .${QUEUE_ARROW_CLASS} {
             display: none !important;
         }

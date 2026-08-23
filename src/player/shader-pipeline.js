@@ -23,7 +23,7 @@ import { hasNativePlayer, platformTag } from "./core/platform.js";
 import { postShaderEffect, postColorBoost, postAiUpscaling } from "./xbox-bridge.js";
 
 function isXbox() {
-    return hasNativePlayer() && platformTag() === "xbox";
+    return hasNativePlayer() && platformTag() === "uwp";
 }
 
 /* Xbox has no real <video> element for ensureShaderPipeline's canvas/WebGL pass to read from -

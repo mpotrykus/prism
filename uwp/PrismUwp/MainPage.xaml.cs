@@ -220,10 +220,10 @@ namespace PrismUwp
             // has already been created.
             await coreWebView.AddScriptToExecuteOnDocumentCreatedAsync(@"
                 (function () {
-                  // Tells src/player/core/platform.js this is the Xbox shell, before any app module
-                  // evaluates. platformTag() then reports 'xbox', which routes playback to
+                  // Tells src/player/core/platform.js this is the UWP shell, before any app module
+                  // evaluates. platformTag() then reports 'uwp', which routes playback to
                   // xbox-bridge.js and makes Plex serve progressive output instead of HLS.
-                  window.__prismXboxNativePlayer = true;
+                  window.__prismUwpNativePlayer = true;
                   // Default true: this script runs once per new document, before any
                   // CoreWindow.Activated transition has necessarily happened again, so a
                   // mid-session navigation/reload shouldn't start the page assuming input is
@@ -267,8 +267,8 @@ namespace PrismUwp
                     $"document.documentElement.style.setProperty('--safe-area-inset-top', '{_titleBarInsetPx}px'); console.log('[prism] --safe-area-inset-top set to {_titleBarInsetPx}px');");
 
                 // Tells src/player/core/platform.js's usesGamepadChrome() this is the PC shell,
-                // not real Xbox - platformTag() still reports "xbox" here (the marker script
-                // above sets window.__prismXboxNativePlayer unconditionally, since PC shares
+                // not real Xbox - platformTag() still reports "uwp" here (the marker script
+                // above sets window.__prismUwpNativePlayer unconditionally, since PC shares
                 // Xbox's native-player/streaming/HDR routing), but the player chrome should use
                 // web's mouse/hover layout on PC, not Xbox's gamepad-only one.
                 await coreWebView.AddScriptToExecuteOnDocumentCreatedAsync("window.__prismPcShell = true;");

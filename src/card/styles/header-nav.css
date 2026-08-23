@@ -29,8 +29,8 @@
         padding-top: 12px;
     }
      :host-context([data-platform="android"]) .header,
-     :host-context([data-platform="xbox"]) .header {
-        padding-top: calc(28px + var(--safe-top));
+     :host-context([data-platform="uwp"]) .header {
+        padding-top: calc(12px + var(--safe-top));
     }
     /* An ordinary flex child of .header now, not position:absolute - see header-search.css's
      .header-side comment for why: .header-side-left/-right flank it with equal flex-grow,

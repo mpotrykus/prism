@@ -5,6 +5,7 @@ using PrismUwpEffects;
 using Windows.Foundation.Collections;
 using Windows.Media.Core;
 using Windows.Media.Playback;
+using Windows.System.Display;
 using Windows.UI.Xaml.Controls;
 
 namespace PrismUwp.Player
@@ -81,6 +82,17 @@ namespace PrismUwp.Player
         // has to be re-synced there too, not just from SetAudioLeveling.
         private bool audioEffectAttached;
         private readonly AiUpscaleFrameServer aiUpscale;
+        // Keeps the console/PC display from sleeping for as long as native playback is active -
+        // the UWP equivalent of Android's PlayerActivity FLAG_KEEP_SCREEN_ON (see that class's own
+        // onCreate). One instance reused for this class's whole lifetime rather than created fresh
+        // per Play(): RequestActive()/RequestRelease() calls on the SAME instance must be paired
+        // 1:1, so displayRequestActive is what stops Play()+SwitchTitle() (or a stray double-Play)
+        // from calling RequestActive() twice and leaving the display pinned awake after a single
+        // RequestRelease(). Applies to Xbox and PC identically - neither this field nor any of its
+        // call sites branch on DeviceFamily, unlike MainPage.xaml.cs's PC_SHELL_MARKER, which is
+        // UI-layout-only and has no bearing on playback.
+        private readonly DisplayRequest displayRequest = new DisplayRequest();
+        private bool displayRequestActive;
         // Read at the start of Play/SwitchTitle only (see those methods' own comments) - a
         // mid-playback toggle takes effect on the next play/switch, same as isHdr re-evaluation
         // already only happening at those two call sites.
@@ -320,6 +332,20 @@ namespace PrismUwp.Player
             audioEffectAttached = true;
         }
 
+        private void EnsureDisplayRequestActive()
+        {
+            if (displayRequestActive) return;
+            displayRequest.RequestActive();
+            displayRequestActive = true;
+        }
+
+        private void EnsureDisplayRequestReleased()
+        {
+            if (!displayRequestActive) return;
+            displayRequest.RequestRelease();
+            displayRequestActive = false;
+        }
+
         private static string JsonNumberArray(double[] values)
         {
             var parts = new string[values.Length];
@@ -339,6 +365,7 @@ namespace PrismUwp.Player
             currentUrl = url;
             baseOffsetMs = startPositionMs;
             currentContentIsHdr = isHdr;
+            EnsureDisplayRequestActive();
             // Play is always a fresh session started from the dashboard, where the display is
             // already SDR (Stop/RestoreDisplayAsync always restore it there - see their own
             // comments). Under alwaysOnHdr the display switches to HDR10 for THIS title regardless
@@ -426,6 +453,7 @@ namespace PrismUwp.Player
             currentUrl = url;
             baseOffsetMs = startPositionMs;
             currentContentIsHdr = isHdr;
+            EnsureDisplayRequestActive();
             // An in-place title swap can cross the SDR/HDR boundary, so the mode is re-evaluated here
             // too, not only on a cold start. Same alwaysOnHdr behavior as Play: the display switches
             // to (or stays in) HDR10 regardless of this title's own isHdr flag, so a binge session's
@@ -501,6 +529,7 @@ namespace PrismUwp.Player
 
         public void Stop()
         {
+            EnsureDisplayRequestReleased();
             player.Pause();
             player.Source = null;
             currentUrl = null;
@@ -518,12 +547,20 @@ namespace PrismUwp.Player
         }
 
         /// <summary>
-        /// For app suspend and close. moonlight-xbox omits this and leaves the console stuck in HDR when
-        /// killed mid-stream - a bug worth not inheriting. Unconditional even under alwaysOnHdr, same
-        /// reasoning as Stop above: suspending/backgrounding always means leaving the active playback
-        /// view, which must always land back in SDR.
+        /// For app suspend and close. moonlight-xbox omits the HDR-restore equivalent of this and
+        /// leaves the console stuck in HDR when killed mid-stream - a bug worth not inheriting, and
+        /// the same reasoning extends to the display request below: a suspended/backgrounded app
+        /// releasing its own process doesn't imply Windows/Xbox drops a still-active RequestActive(),
+        /// so without this the device could be left unable to sleep after the app leaves the
+        /// foreground. Unconditional even under alwaysOnHdr, same reasoning as Stop above:
+        /// suspending/backgrounding always means leaving the active playback view, which must always
+        /// land back in SDR (and release the keep-awake request) regardless of that setting.
         /// </summary>
-        public Task RestoreDisplayAsync() => hdr.RestoreAsync();
+        public Task RestoreDisplayAsync()
+        {
+            EnsureDisplayRequestReleased();
+            return hdr.RestoreAsync();
+        }
 
         private void EmitProgress(MediaPlaybackSession session)
         {

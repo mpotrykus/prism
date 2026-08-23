@@ -23,7 +23,7 @@ import "./input-mode.js";
   card.addEventListener("open-settings", () => modal.open());
   modal.addEventListener("settings-saved", (e) => {
     card.refreshConfig(e.detail);
-    if (platformTag() === "xbox") postAlwaysOnHdr(e.detail.xbox_hdr_always_on === true);
+    if (platformTag() === "uwp") postAlwaysOnHdr(e.detail.xbox_hdr_always_on === true);
   });
   modal.addEventListener("request-plex-reauth", () => signinModal.open({ blocking: false }));
   /* Reopening Settings after a reauth (but not after the first-run gate, which had no
@@ -42,7 +42,7 @@ import "./input-mode.js";
        it doesn't persist this natively across app restarts on its own. Only affects in-session
        title switches (see postAlwaysOnHdr's own comment), so it's safe to send here at boot,
        well before any playback session exists. */
-    if (platformTag() === "xbox") postAlwaysOnHdr(fullConfig.xbox_hdr_always_on === true);
+    if (platformTag() === "uwp") postAlwaysOnHdr(fullConfig.xbox_hdr_always_on === true);
   }
 
   boot(await loadFull());

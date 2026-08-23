@@ -7,7 +7,7 @@ import { hasNativePlayer, platformTag } from "./core/platform.js";
 import { postAudioLeveling } from "./xbox-bridge.js";
 
 function isXbox() {
-    return hasNativePlayer() && platformTag() === "xbox";
+    return hasNativePlayer() && platformTag() === "uwp";
 }
 
 /* "Normalize Audio" toggle (in the hamburger menu's "Options" screen - see

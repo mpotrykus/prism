@@ -37,7 +37,7 @@ export function updateContentAnalysis(controller) {
        native's own "auto" flags live in the same setShaderEffect/setColorBoost message
        shader-pipeline.js already owns building - re-posting here keeps them in sync without a
        third copy of the payload-building logic. */
-    if (hasNativePlayer() && platformTag() === "xbox") {
+    if (hasNativePlayer() && platformTag() === "uwp") {
         postXboxShaderSettings(controller);
         postXboxColorBoostSettings(controller);
         return;

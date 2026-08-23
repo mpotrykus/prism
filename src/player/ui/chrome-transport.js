@@ -18,7 +18,7 @@ import { openEpisodeListOverlay } from "./episode-list.js";
    a fuller transport row with. Web and PC keep the full mouse-driven row instead (play/pause
    flanked by 5s-seek and chapter/title nav, plus volume/Audio & Subtitles/fullscreen on the
    right - see buildCenterControls/buildTransportBar's !usesGamepadChrome() branches; PC
-   still reports platformTag() === "xbox" for streaming/native-player purposes, so this file
+   still reports platformTag() === "uwp" for streaming/native-player purposes, so this file
    deliberately doesn't test that directly - see usesGamepadChrome()'s own comment).
    Android never renders any of this file at all - it has its own native chrome (see
    PlayerUiHelper.java). Takes the StreamingPlayerController instance as an explicit first
@@ -768,7 +768,7 @@ export function buildTransportBar(controller, video) {
        mounted separately, see player-chrome.js's usesGamepadChrome() gate) and reaches
        chapter/title nav via its bumpers/triggers and the More menu. Android never renders
        this file at all. PC deliberately gets this row too, despite reporting
-       platformTag() === "xbox" - see usesGamepadChrome()'s own comment. */
+       platformTag() === "uwp" - see usesGamepadChrome()'s own comment. */
     if (!usesGamepadChrome()) {
         const controlsRow = document.createElement("div");
         Object.assign(controlsRow.style, { display: "flex", alignItems: "center" });

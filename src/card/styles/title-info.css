@@ -44,13 +44,21 @@
   filter: blur(60px) brightness(0.14) saturate(1.05);
   transform: scale(1.1);
 }
+/* Top-left transparent chevron, matching the player's own close button (see
+   src/player/ui/chrome-controls.js's makeControlButton) rather than a circular top-right
+   "X" - same close action, same back-affordance placement/style as the rest of the app.
+   Unlike the player (a single fixed-height view), this modal scrolls - position: absolute
+   against .title-info-modal (its positioned ancestor) anchors it to the hero art's own
+   corner so it scrolls away with the top of the page instead of hovering fixed over the
+   cast/episodes/similar sections the whole way down. */
 .title-info-close {
-  position: fixed; top: 24px; right: 32px; z-index: 10;
+  position: absolute; top: 24px; left: 32px; z-index: 10;
   width: 40px; height: 40px; border-radius: 50%; border: none;
-  background: rgba(var(--color-panel-rgb), 0.7); color: var(--color-fg); font-size: 16px; cursor: pointer;
+  background: transparent; color: var(--color-fg); font-size: 28px; font-weight: 600; cursor: pointer;
+  text-shadow: 0 1px 4px rgba(var(--color-shadow-rgb), 0.85);
   display: flex; align-items: center; justify-content: center;
 }
-.title-info-close:hover { background: rgba(var(--color-panel-rgb), 0.9); }
+.title-info-close:hover { background: rgba(var(--color-panel-rgb), 0.3); }
 /* B/Escape already backs this overlay out for a controller user - see focus-nav.js's
    controller-active-change comment - so the "X" is a redundant, unreachable-by-D-pad
    dead end for them. Keyed off the card's own host attribute (set in

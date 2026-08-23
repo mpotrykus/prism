@@ -5,6 +5,7 @@ import { setMediaFacade } from "./core/media-facade.js";
 import { closeEpisodeListOverlay, closeChapterListOverlay } from "./ui/episode-list.js";
 import { updateAbrMonitor, stopAbrLoop, notifyStall, setBandwidthSource } from "./core/abr.js";
 import { reloadTranscodeSession } from "./core/session-reload.js";
+import { acquireWakeLock, releaseWakeLock } from "./core/wake-lock.js";
 import { mountPlayerChrome, unmountPlayerChrome } from "./ui/player-chrome.js";
 import { teardownShaderPipeline } from "./shader-pipeline.js";
 import { teardownAmbient } from "./ambient-pipeline.js";
@@ -123,6 +124,7 @@ export function playWeb(controller, streamUrl, startOffsetMs) {
        depends on is this leg's bandwidth source (the hls.js instance attachSource just created), not
        the chrome. No-ops on the native-HLS branch, which registers no source - see core/abr.js. */
     updateAbrMonitor(controller);
+    acquireWakeLock(controller);
 }
 
 /* Shared by the initial load (playWeb) and reloadWebSource (audio-track switch) so the
@@ -250,6 +252,7 @@ export function reloadWebSource(controller, overrides = {}) {
 export function teardownWeb(controller) {
     stopAbrLoop(controller);
     setBandwidthSource(controller, null);
+    releaseWakeLock(controller);
     if (controller._hls) {
         controller._hls.destroy();
         controller._hls = null;

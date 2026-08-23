@@ -2,8 +2,14 @@
     position: sticky;
     top: 0;
     z-index: 20;
-    height: var(--header-h);
-    margin-bottom: calc(-1 * var(--header-h));
+    /* .header's height must grow with --safe-top to match its own padding-top growth
+     (below) - otherwise border-box clips the box at a fixed var(--header-h) while the
+     row's content keeps getting pushed down by the larger padding, spilling the
+     logo/nav/search row out past .header's own bottom edge (and past ::before's
+     backdrop, which is sized to match this box) on any platform with a nonzero
+     --safe-top (Android status bar, UWP PC title bar inset). */
+    height: calc(var(--header-h) + var(--safe-top));
+    margin-bottom: calc(-1 * (var(--header-h) + var(--safe-top)));
     display: flex;
     align-items: center;
     gap: 16px;
@@ -17,7 +23,7 @@
      (16px flat, top overridden per platform below for system-nav clearance), and
      ::before extends its own box past .header's bottom edge instead to keep the same
      fade reach. */
-    padding: calc(28px + var(--safe-top)) 18px 16px;
+    padding: calc(12px + var(--safe-top)) 18px 16px;
 }
 
 
@@ -70,7 +76,7 @@
      wherever the row itself happens to end. inset:0 (matching .header's own box exactly)
      would put the row's centering math and the fade's reach back in conflict, the bug
      just fixed above. */
-    bottom: -20px;
+    bottom: calc(-20px - (var(--safe-top) * 0.5));
     z-index: -1;
     background: linear-gradient(180deg, rgba(var(--color-bg-rgb), 0.95) 0%, rgba(var(--color-bg-rgb), 0.7) 70%, rgba(var(--color-bg-rgb), 0) 100%);
     backdrop-filter: blur(10px);

@@ -118,6 +118,9 @@ class StreamingPlayerController {
            the hls.js instance itself on web, null on a backend that can't measure
            bandwidth. Registered via setBandwidthSource, never assigned directly. */
         this._bandwidthSource = null;
+        /* navigator.wakeLock.request() sentinel - see core/wake-lock.js. Only ever set on the
+           web-fallback leg; Android and Xbox/PC each keep the display awake natively instead. */
+        this._wakeLock = null;
         this._nativeListenerHandles = [];
         this._pingTimer = null;
         /* Piggybacked timeline-ping throttle for native playback - see
@@ -231,7 +234,7 @@ class StreamingPlayerController {
                 this.stop();
                 return true;
             }
-            if (platformTag() !== "xbox") return false;
+            if (platformTag() !== "uwp") return false;
             return this._handlePlayerNavCommand(command);
         });
     }
@@ -554,7 +557,7 @@ class StreamingPlayerController {
                fire-and-forget ping and read the pre-stop position. */
             await this._reportTimeline("stopped");
             if (hasNativePlayer()) {
-                await (platformTag() === "xbox" ? stopXbox(this) : stopNative(this));
+                await (platformTag() === "uwp" ? stopXbox(this) : stopNative(this));
             } else {
                 this._teardownWeb();
             }
@@ -628,7 +631,7 @@ class StreamingPlayerController {
        and event NAMES - see xbox-bridge.js's header. buildPlaybackPayload is Android's, reused
        deliberately: it owns the String() coercions for Plex's numeric ids that a bridge must not lose. */
     _playNative(streamUrl, startOffsetMs) {
-        if (platformTag() === "xbox") {
+        if (platformTag() === "uwp") {
             return playXbox(
                 this,
                 streamUrl,
@@ -641,7 +644,7 @@ class StreamingPlayerController {
     }
 
     _switchNative(streamUrl, startOffsetMs) {
-        if (platformTag() === "xbox") {
+        if (platformTag() === "uwp") {
             return switchXbox(this, streamUrl, startOffsetMs, buildPlaybackPayload(this, streamUrl, startOffsetMs));
         }
         return switchNative(this, streamUrl, startOffsetMs);
@@ -827,7 +830,7 @@ class StreamingPlayerController {
     }
 
     _reloadSource(overrides) {
-        if (platformTag() === "xbox") {
+        if (platformTag() === "uwp") {
             return reloadXboxSource(this, overrides, (streamUrl, offsetMs) =>
                 buildPlaybackPayload(this, streamUrl, offsetMs)
             );
@@ -1003,7 +1006,7 @@ class StreamingPlayerController {
     async pause() {
         if (!this._session) return;
         if (hasNativePlayer()) {
-            await (platformTag() === "xbox" ? pauseXbox() : pauseNative());
+            await (platformTag() === "uwp" ? pauseXbox() : pauseNative());
         } else {
             media(this)?.pause();
         }
@@ -1012,7 +1015,7 @@ class StreamingPlayerController {
     async resume() {
         if (!this._session) return;
         if (hasNativePlayer()) {
-            await (platformTag() === "xbox" ? resumeXbox() : resumeNative());
+            await (platformTag() === "uwp" ? resumeXbox() : resumeNative());
         } else {
             media(this)?.play();
         }
