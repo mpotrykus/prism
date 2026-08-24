@@ -134,6 +134,11 @@ class StreamingPlayerController {
         this._autoSkippedMarker = null;
         this._skipBtnEl = null;
         this._skipButtonFocused = false;
+        /* -5/+5 flash overlays - see chrome-transport.js's ensureSeekFlashEl/teardownSeekFlash. */
+        this._seekFlashBackEl = null;
+        this._seekFlashForwardEl = null;
+        this._seekFlashBackTimer = null;
+        this._seekFlashForwardTimer = null;
         this._controlButtons = [];
         this._controlsHovering = false;
         this._controlsHideTimer = null;

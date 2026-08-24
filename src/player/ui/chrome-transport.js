@@ -120,6 +120,85 @@ export async function playQueuedTitle(controller, queue, newIndex) {
     }
 }
 
+/* Lazily builds the one flash overlay for a given direction (reused across repeated
+   presses, same lazy-singleton convention as chrome-skip.js's ensureSkipButtonEl) -
+   a dark gradient over the side of the screen the seek moved toward, fixed/full-height
+   like this file's other document.body-level overlays, so it sits above the video
+   regardless of which playback backend is rendering underneath it. */
+function ensureSeekFlashEl(controller, direction) {
+    const key = direction === "back" ? "_seekFlashBackEl" : "_seekFlashForwardEl";
+    if (controller[key]) return controller[key];
+    const isBack = direction === "back";
+    const el = document.createElement("div");
+    Object.assign(el.style, {
+        position: "fixed",
+        top: "0",
+        bottom: "0",
+        [isBack ? "left" : "right"]: "0",
+        width: "26%",
+        maxWidth: "300px",
+        zIndex: "10000",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        pointerEvents: "none",
+        background: isBack ?
+            "linear-gradient(to right, rgba(0,0,0,0.55), rgba(0,0,0,0))" : "linear-gradient(to left, rgba(0,0,0,0.55), rgba(0,0,0,0))",
+        opacity: "0",
+        transform: "scale(0.8)",
+        transition: "opacity .15s ease-out, transform .15s ease-out",
+    });
+    const label = document.createElement("span");
+    Object.assign(label.style, {
+        color: "#fff",
+        fontSize: "24px",
+        fontWeight: "700",
+        fontFamily: '"Roboto", sans-serif',
+    });
+    label.textContent = isBack ? "-5s" : "+5s";
+    el.appendChild(label);
+    document.body.appendChild(el);
+    controller[key] = el;
+    return el;
+}
+
+/* Pops the "-5"/"+5" flash in and fades it back out, restarting the animation from
+   scratch on every press (including a repeat press before the previous fade finished) -
+   forcing a reflow between resetting to the hidden state and re-triggering the visible
+   one is what makes the transition replay instead of no-op'ing because the end style
+   never changed. */
+function flashSeekIndicator(controller, direction) {
+    const el = ensureSeekFlashEl(controller, direction);
+    const timerKey = direction === "back" ? "_seekFlashBackTimer" : "_seekFlashForwardTimer";
+    clearTimeout(controller[timerKey]);
+    el.style.transition = "none";
+    el.style.opacity = "0";
+    el.style.transform = "scale(0.8)";
+    void el.offsetWidth;
+    el.style.transition = "opacity .15s ease-out, transform .15s ease-out";
+    el.style.opacity = "1";
+    el.style.transform = "scale(1)";
+    controller[timerKey] = setTimeout(() => {
+        el.style.transition = "opacity .4s ease-in";
+        el.style.opacity = "0";
+    }, 450);
+}
+
+/* Removes both flash overlays and their pending timers - called from
+   unmountPlayerChrome alongside this file's other document.body-level overlays
+   (chrome-skip.js's skip button, the volume flyout), which the same teardown pass
+   already knows aren't swept up by the control-row removal. */
+export function teardownSeekFlash(controller) {
+    clearTimeout(controller._seekFlashBackTimer);
+    clearTimeout(controller._seekFlashForwardTimer);
+    controller._seekFlashBackTimer = null;
+    controller._seekFlashForwardTimer = null;
+    controller._seekFlashBackEl?.remove();
+    controller._seekFlashForwardEl?.remove();
+    controller._seekFlashBackEl = null;
+    controller._seekFlashForwardEl = null;
+}
+
 function makeSeekButton(controller, direction, video) {
     const btn = document.createElement("button");
     btn.type = "button";
@@ -142,9 +221,10 @@ function makeSeekButton(controller, direction, video) {
     btn.addEventListener("click", () => {
         if (!video.duration) {
             video.currentTime = Math.max(0, (video.currentTime || 0) + (direction === "back" ? -5 : 5));
-            return;
+        } else {
+            video.currentTime = Math.min(video.duration, Math.max(0, video.currentTime + (direction === "back" ? -5 : 5)));
         }
-        video.currentTime = Math.min(video.duration, Math.max(0, video.currentTime + (direction === "back" ? -5 : 5)));
+        flashSeekIndicator(controller, direction);
     });
     return btn;
 }

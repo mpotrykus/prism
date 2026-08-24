@@ -1,6 +1,7 @@
 import { updateContentAnalysis } from "../content-analysis.js";
 import { closeEpisodeListOverlay, closeChapterListOverlay } from "./episode-list.js";
 import { closeAudioSubtitlesOverlay, stopSubtitleLoop } from "./chrome-subtitles.js";
+import { teardownSeekFlash } from "./chrome-transport.js";
 import { ensurePlayerFocusStyle } from "./shared.js";
 import { usesGamepadChrome } from "../core/platform.js";
 
@@ -175,6 +176,7 @@ export function unmountPlayerChrome(controller) {
         controller._skipBtnEl.remove();
         controller._skipBtnEl = null;
     }
+    teardownSeekFlash(controller);
     controller._activeSkipMarker = null;
     controller._autoSkippedMarker = null;
     if (controller._spinnerEl) {
