@@ -317,3 +317,23 @@
 .title-info-similar-item img { width: 100%; aspect-ratio: 2/3; object-fit: cover; border-radius: 6px; background: rgba(var(--color-fg-rgb), 0.05); display: block; transition: transform 0.18s ease; }
 .title-info-similar-item:hover img { transform: scale(1.06); }
 .title-info-similar-item .t { font-size: 11.5px; margin-top: 6px; color: rgba(var(--color-fg-rgb), 0.75); }
+/* Solid cover over the whole modal while the hero art/logo images are still loading (see
+   title-info.js's _revealWhenReady) - hides the header's title-vs-logo height swap and the
+   actions row's spinner-vs-buttons swap that otherwise visibly reflowed the page as the detail
+   fetch landed. position:fixed (like .title-info-modal::before's own ambient wash) rather than
+   absolute, so it always covers the full viewport even though .title-info-modal itself can
+   already be taller than the viewport by the time this resolves. z-index sits above the art/body
+   (1) and the progress bar (2) but below .title-info-close (10), so the close button stays
+   reachable even while this is up. */
+.title-info-loading-overlay {
+  position: fixed; inset: 0; z-index: 5;
+  background: var(--color-bg);
+  display: flex; align-items: center; justify-content: center;
+  opacity: 1; transition: opacity 0.25s ease;
+}
+.title-info-loading-overlay.ready { opacity: 0; pointer-events: none; }
+.title-info-loading-overlay .spinner {
+  width: 48px; height: 48px; border-radius: 50%;
+  border: 4px solid rgba(var(--color-fg-rgb), 0.25); border-top-color: var(--color-fg);
+  animation: title-info-spin 0.7s linear infinite;
+}

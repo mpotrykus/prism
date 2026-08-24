@@ -31,6 +31,18 @@ function rampThemeVolume(audio, to, onDone) {
   audio._themeRampRaf = requestAnimationFrame(step);
 }
 
+/* Resolves once `url` has actually finished loading (or failed) - used to gate the loading
+   overlay's reveal on the hero art being paintable, not just requested. Resolves immediately
+   for an item with no art at all rather than hanging forever. */
+function waitForImageLoad(url) {
+  if (!url) return Promise.resolve();
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = img.onerror = resolve;
+    img.src = url;
+  });
+}
+
 /* Plex's Media[].Part[].Stream[] carries every stream on a version (video/audio/
    subtitle, distinguished by streamType - 2 is audio). Only surfaced for the player's
    Audio Track menu, which stays hidden entirely when there's nothing to switch between
@@ -298,6 +310,7 @@ export class TitleInfoController {
     this._castEl = shadowRoot.querySelector(".title-info-cast");
     this._similarWrap = shadowRoot.querySelector(".title-info-similar-wrap");
     this._similarEl = shadowRoot.querySelector(".title-info-similar");
+    this._loadingOverlayEl = shadowRoot.querySelector(".title-info-loading-overlay");
 
     this._item = null;
     this._source = null;
@@ -389,6 +402,27 @@ export class TitleInfoController {
     this._watched = watched;
     this._watchedBtn.classList.toggle("watched", watched);
     this._watchedBtn.setAttribute("aria-label", watched ? "Mark as unwatched" : "Mark as watched");
+  }
+
+  /* Keeps the dark loading overlay up until the hero art - and the title logo, if this item
+     ends up having one - have actually finished loading, then fades it out to reveal the fully-
+     painted page in one go instead of the header/actions row visibly changing shape underneath
+     the user. Fire-and-forget (not awaited by open()): callers like openForEpisode only need the
+     detail fetch's own DOM work done, not the image decode. Re-checks this._item at each await
+     so a stale reveal from an abandoned open() call can't paper over a newer item's own
+     still-loading state - open() resets the overlay back to covering on every call, so the
+     newer item already has its own reveal in flight. */
+  async _revealWhenReady(item, artReady) {
+    await artReady;
+    if (this._item !== item) return;
+    const logo = this._titleEl.querySelector(".title-info-logo");
+    if (logo && !logo.complete) {
+      await new Promise((resolve) => {
+        logo.addEventListener("load", resolve, { once: true });
+        logo.addEventListener("error", resolve, { once: true });
+      });
+    }
+    if (this._item === item) this._loadingOverlayEl.classList.add("ready");
   }
 
   /* Fades whatever theme track is currently playing down to silence and pauses it - used
@@ -518,6 +552,8 @@ export class TitleInfoController {
     this._artImgEl.style.backgroundImage = art ? `url('${art}')` : "none";
     this._modal.style.setProperty("--title-info-bg", art ? `url('${art}')` : "none");
     this._updateArtParallax();
+    this._loadingOverlayEl.classList.remove("ready");
+    const artReady = waitForImageLoad(art);
     this._titleEl.textContent = item.title || "";
     this._metaEl.innerHTML = item.subtitle ? `<span>${this._ctx.escape(item.subtitle)}</span>` : "";
     this._summaryEl.textContent = "";
@@ -591,6 +627,7 @@ export class TitleInfoController {
     }
     if (!ratingKey) {
       this._setButtonsLoading(false);
+      this._revealWhenReady(item, artReady);
       return;
     }
     /* Playlists aren't part of library metadata (see the card's _fetchPlaylistsRaw) -
@@ -606,6 +643,7 @@ export class TitleInfoController {
     } finally {
       if (this._item === item) this._setButtonsLoading(false);
     }
+    this._revealWhenReady(item, artReady);
   }
 
   _renderDetail(meta) {

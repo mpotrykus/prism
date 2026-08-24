@@ -322,6 +322,7 @@ class PlexNetflixCard extends HTMLElement {
               <div class="title-info-similar"></div>
             </div>
           </div>
+          <div class="title-info-loading-overlay"><span class="spinner"></span></div>
         </div>
       </div>
     `;

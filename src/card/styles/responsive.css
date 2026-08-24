@@ -1,6 +1,6 @@
 @media (max-width: 700px) {
   .title-info-overlay { padding: 0; }
-  .title-info-modal { width: 100%; max-width: 100%; min-height: 100dvh; border-radius: 0; border: none; --title-info-art-h: 200px; }
+  .title-info-modal { width: 100%; max-width: 100%; min-height: 100dvh; border-radius: 0; border: none; --title-info-art-h: 280px; }
   .title-info-close { display: none; }
   .title-info-body { padding: 20px 20px calc(32px + var(--safe-bottom)); }
   /* Mobile keeps the old stacked vertical list instead of the desktop card row (see
@@ -33,6 +33,7 @@
   .title-info-episode-summary { display: block; -webkit-line-clamp: unset; overflow: visible; }
   .title-info-header { left: 20px; right: 20px; padding-bottom: 16px; }
   .title-info-title { font-size: 22px; }
+  .title-info-logo { max-height: 60px; }
   .title-info-meta { display: flex; flex-wrap: wrap; row-gap: 6px; }
   .title-info-meta span { white-space: nowrap; }
   .title-info-actions { flex-wrap: wrap; row-gap: 10px; }
