@@ -16,6 +16,7 @@ export class HeroController {
     this._ctx = ctx;
 
     this._rowsEl = shadowRoot.querySelector(".rows");
+    this._contentEl = shadowRoot.querySelector(".content");
     this._heroEl = shadowRoot.querySelector(".hero");
     this._mediaLayers = [shadowRoot.querySelector(".hero-media-a"), shadowRoot.querySelector(".hero-media-b")];
     this._activeLayer = 0;
@@ -385,7 +386,26 @@ export class HeroController {
     probe.src = url;
   }
 
+  /* Classic depth-parallax: the hero art drifts at a fraction of .content's own scroll
+     speed, so it appears to lag behind the rows scrolling up over it instead of moving in
+     lockstep. Scoped to .content (not window/document) for the same reason every other
+     scroll listener in this card is - see host-reset.css's own comment on why .content is
+     the app's real scroll container. Capped at the same 12% the media layers are oversized
+     by in hero.css, so the translate can never outrun the extra image hero-media.css already
+     renders past its own box - no gap can ever show at the top/bottom of .hero. */
+  _updateHeroParallax() {
+    if (!this._contentEl) return;
+    const heroH = this._heroEl.clientHeight || 1;
+    const maxTravel = heroH * 0.12;
+    const offset = Math.min(maxTravel, this._contentEl.scrollTop * 0.3);
+    this._heroEl.style.setProperty("--hero-parallax", `${offset}px`);
+  }
+
   _wire() {
+    if (this._contentEl) {
+      this._contentEl.addEventListener("scroll", () => this._updateHeroParallax(), { passive: true });
+      this._updateHeroParallax();
+    }
     this._infoBtn.addEventListener("click", () => {
       if (!this._item) return;
       this._ctx.onOpenTitleInfo(this._ctx.mapItem(this._item, false), "local");

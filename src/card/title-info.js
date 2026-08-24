@@ -256,6 +256,7 @@ export class TitleInfoController {
     this._modal = shadowRoot.querySelector(".title-info-modal");
     this._closeBtn = shadowRoot.querySelector(".title-info-close");
     this._artEl = shadowRoot.querySelector(".title-info-art");
+    this._artImgEl = shadowRoot.querySelector(".title-info-art-img");
     this._progressEl = shadowRoot.querySelector(".title-info-progress");
     this._progressBar = this._progressEl.querySelector(".bar");
     this._titleEl = shadowRoot.querySelector(".title-info-title");
@@ -443,8 +444,9 @@ export class TitleInfoController {
     this._progressBar.style.width = `${Math.round((item.progress || 0) * 100)}%`;
     this._updatePlayHistoryUI(!!(item.progress > 0 || item.hasHistory), null, !!(item.progress > 0));
     const art = item.art || item.image || "";
-    this._artEl.style.backgroundImage = art ? `url('${art}')` : "none";
+    this._artImgEl.style.backgroundImage = art ? `url('${art}')` : "none";
     this._modal.style.setProperty("--title-info-bg", art ? `url('${art}')` : "none");
+    this._updateArtParallax();
     this._titleEl.textContent = item.title || "";
     this._metaEl.innerHTML = item.subtitle ? `<span>${this._ctx.escape(item.subtitle)}</span>` : "";
     this._summaryEl.textContent = "";
@@ -1132,7 +1134,21 @@ export class TitleInfoController {
     return track;
   }
 
+  /* Same depth-parallax as hero.js's _updateHeroParallax, scoped to this modal's own scroll
+     container (.title-info-overlay, not .content - this overlay scrolls independently, see
+     lockScroll/unlockScroll above) - the art drifts at a fraction of scroll speed, capped to
+     the 12% overshoot title-info.css's .title-info-art-img is oversized by so the translate
+     never runs out of cropped image to reveal. */
+  _updateArtParallax() {
+    if (!this._artImgEl) return;
+    const artH = this._artEl.clientHeight || 1;
+    const maxTravel = artH * 0.12;
+    const offset = Math.min(maxTravel, this._overlay.scrollTop * 0.3);
+    this._artImgEl.style.transform = `translateY(${offset}px)`;
+  }
+
   _wire() {
+    this._overlay.addEventListener("scroll", () => this._updateArtParallax(), { passive: true });
     /* Recomputes which items land in which visual row whenever the grid's own width
        changes (window resize, or the responsive layout swapping breakpoints) - the
        auto-fill column count is purely width-driven, so a stale grouping from before a

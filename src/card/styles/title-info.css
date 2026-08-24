@@ -83,10 +83,22 @@
    the moment the ambient wash became the actual background there instead. */
 .title-info-art {
   width: 100%; height: var(--title-info-art-h);
-  background-size: cover; background-position: center;
   position: relative; z-index: 1; background-color: var(--color-bg);
+  overflow: hidden;
   -webkit-mask-image: linear-gradient(180deg, #000 0%, #000 55%, transparent 100%);
   mask-image: linear-gradient(180deg, #000 0%, #000 55%, transparent 100%);
+}
+/* The actual image, split out from .title-info-art itself so the parallax translate (driven
+   from title-info.js's scroll listener on .title-info-overlay) moves only the picture, not the
+   mask/scrim/box the rest of the modal is laid out against - .title-info-progress in particular
+   is positioned off .title-info-modal's own --title-info-art-h var, not this element, so it
+   would drift out of sync with the art's bottom edge if the whole box moved instead. Oversized
+   top/height the same way hero.css's .hero-media is, so the translate always has cropped image
+   left to show and the mask above never has an edge exposed to clip. */
+.title-info-art-img {
+  position: absolute; left: 0; right: 0;
+  top: -12%; height: 124%;
+  background-size: cover; background-position: center;
 }
 /* Darkening scrim only now - the fade-to-transparent job moved to the mask above. Left-side
    scrim for text legibility over whatever the image looks like there, plus a gentler bottom
@@ -213,6 +225,11 @@
    thumb rather than the old whole-row background tint, which only made sense for a
    full-width row. */
 .title-info-episode.current .title-info-episode-thumb { border-color: var(--color-accent); }
+/* Flat collection/playlist items (flatItemCardHtml) have no .title-info-episode-play
+   element for the :hover/:focus-visible rule below to reveal, so without this they had
+   no focus indicator at all - the accent border here covers both card shapes. */
+.title-info-episode:hover .title-info-episode-thumb,
+.title-info-episode:focus-visible .title-info-episode-thumb { border-color: var(--color-accent); }
 .title-info-episode-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .title-info-episode-progress {
   position: absolute; left: 0; right: 0; bottom: 0; height: 3px; background: rgba(var(--color-fg-rgb), 0.3);

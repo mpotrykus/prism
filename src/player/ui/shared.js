@@ -344,7 +344,7 @@ export function seekIconMarkup(direction) {
     const arc = `<path d="M12 4 A8 8 0 1 ${sweepFlag} ${arcEnd}" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" fill="none"/>`;
     const arrow = `<polygon points="${arrowhead}" fill="currentColor"/>`;
     const label = `<text x="12" y="16.5" font-size="7.5" font-weight="700" text-anchor="middle" font-family="Roboto, sans-serif" fill="currentColor">5</text>`;
-    return `<svg viewBox="-6 -6 36 36" width="26" height="26" fill="none" xmlns="http://www.w3.org/2000/svg">${arc}${arrow}${label}</svg>`;
+    return `<svg viewBox="-6 -9 36 36" width="36" height="36" fill="none" xmlns="http://www.w3.org/2000/svg">${arc}${arrow}${label}</svg>`;
 }
 
 /* Same currentColor-SVG reasoning as audioSubtitlesIconMarkup below - drawn from scratch
