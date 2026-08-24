@@ -289,6 +289,7 @@ export class TitleInfoController {
     this._episodeQueueCache = null;
     this._nextEpisodeCache = null;
     this._focusPlayOnceLoaded = false;
+    this._returnFocusEl = null;
 
     this._wire();
   }
@@ -302,9 +303,35 @@ export class TitleInfoController {
   }
 
   close() {
-    if (this.isOpen()) unlockScroll();
-    this._overlay.classList.remove("open");
+    if (!this.isOpen()) return;
+    unlockScroll();
+    /* "open" (drives isOpen(), read by the reentrancy checks above and elsewhere) comes off
+       immediately - only the visual fade lags behind, via "closing" (keeps display:block
+       while the opacity transition below plays out) and dropping "visible" (see open(),
+       which adds it a frame after "open" so display:block has already taken effect - the
+       fade-in needs the same split, otherwise toggling display and opacity in the same
+       style recalc gives the transition nothing to animate from). The timeout is a fallback
+       for prefers-reduced-motion/interrupted-transition cases where transitionend might not
+       fire. */
+    const el = this._overlay;
+    el.classList.remove("open", "visible");
+    el.classList.add("closing");
+    const finishClose = (e) => {
+      if (e && (e.target !== el || e.propertyName !== "opacity")) return;
+      el.classList.remove("closing");
+      el.removeEventListener("transitionend", finishClose);
+      clearTimeout(fallback);
+    };
+    const fallback = setTimeout(finishClose, 300);
+    el.addEventListener("transitionend", finishClose);
     this._item = null;
+    /* Returns focus to whatever was focused on the main page before this modal opened
+       (a poster, hero button, sidenav item, ...) rather than leaving it on the close
+       button or wherever nav last landed inside the now-hidden modal - .isConnected guards
+       against that element having been removed from the DOM (e.g. a row re-render) while
+       the modal was open. */
+    if (this._returnFocusEl?.isConnected) this._returnFocusEl.focus();
+    this._returnFocusEl = null;
   }
 
   /* hasHistory (Play vs Resume label) and hasProgress (Restart's own visibility) are
@@ -443,8 +470,21 @@ export class TitleInfoController {
        already open must not lock scroll a second time - only the matching close() call
        unlocks it once, so a second lock here would leave the counter permanently off by
        one. */
-    if (!this.isOpen()) lockScroll();
+    if (!this.isOpen()) {
+      lockScroll();
+      /* Captured only on the closed->open transition, same reasoning as the lockScroll
+         guard just above - a reopen for a different item while already open (e.g. clicking
+         a "More Like This" card) must keep pointing back at the original main-page element,
+         not whatever was focused inside this modal a moment ago. */
+      this._returnFocusEl = this._shadowRoot.activeElement;
+    }
+    this._overlay.classList.remove("closing");
     this._overlay.classList.add("open");
+    /* Split from "open" (see close()'s comment) so display:block has already taken effect
+       by the time "visible" lands and starts the opacity transition - added in the same
+       tick, both classes would compute in one style recalc and there'd be nothing for the
+       transition to animate from. */
+    requestAnimationFrame(() => this._overlay.classList.add("visible"));
     this._setButtonsLoading(true);
     /* Focusing the overlay shell itself (tabindex="-1", just so a click outside it can
        still blur out of whatever was focused before) would leave document.activeElement
@@ -1117,6 +1157,24 @@ export class TitleInfoController {
       ".title-info-close, .title-info-play, .title-info-restart-btn, .title-info-watched-btn, .title-info-watchlist-btn, .title-info-season-select, .title-info-season-option, .title-info-episode, .title-info-cast-wrap, .title-info-similar-item",
       { orientation: "vertical", onBack: () => this.close() }
     );
+    /* wireLinearNav's own focusItem centers each newly-focused stop along this overlay's
+       scroll axis, but the actions row (Play/Restart/Watched/Watchlist) sits right below
+       the hero art near the very top - centering it scrolls the art half out of view
+       instead of landing back at the natural top-of-modal position. Disabling scrollIntoView
+       on just these four (an own-instance override shadows the prototype method JS-wide, so
+       this only affects calls made through these specific elements) stops it fighting our
+       own explicit reset below - without this, Left/Right between two action buttons has
+       wireLinearNav re-center the newly-focused one (scrolling down from 0, since centering
+       doesn't know we'd already reset it), and our reset then snaps it straight back to 0 -
+       a visible jitter on every move within the row, not just on first arriving at it. */
+    [this._playBtn, this._restartBtn, this._watchedBtn, this._watchlistBtn].forEach((el) => {
+      el.scrollIntoView = () => {};
+    });
+    this._shadowRoot.addEventListener("focusin", (e) => {
+      if (e.target.closest(".title-info-actions") && this._overlay.scrollTop !== 0) {
+        this._overlay.scrollTop = 0;
+      }
+    });
     /* Play/Restart/Watched/Watchlist visually sit in one horizontal row (.title-info-actions,
        see title-info.css) except on mobile (responsive.css wraps them to one full-width button
        per line instead) - grouping them via data-nav-group (see wireLinearNav) only on the

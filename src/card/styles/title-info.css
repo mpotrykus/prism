@@ -3,14 +3,23 @@
   inset: 0;
   background: var(--color-bg);
   display: none;
+  opacity: 0;
+  transition: opacity 0.25s ease;
   z-index: 200;
   outline: none;
   overflow-y: auto;
+  scroll-behavior: smooth;
   padding: 0;
   scrollbar-width: none;
 }
 .title-info-overlay::-webkit-scrollbar { display: none; width: 0; height: 0; }
-.title-info-overlay.open { display: block; }
+/* "open"/"closing" both keep display:block (see title-info.js's open()/close()) - "closing"
+   is what lets the fade-out actually play instead of the element vanishing via display:none
+   the instant "open" comes off. "visible" is the separate opacity switch, added a frame
+   after "open" on the way in so the transition has a rendered 0-opacity state to animate
+   from. */
+.title-info-overlay.open, .title-info-overlay.closing { display: block; }
+.title-info-overlay.visible { opacity: 1; }
 .title-info-modal {
   /* Shared by .title-info-art's own height and .title-info-progress's top offset below -
      letting the progress bar live outside .title-info-art (so it isn't masked away along with
