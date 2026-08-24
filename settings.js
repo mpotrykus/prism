@@ -23,6 +23,8 @@ const DEFAULT_PLAIN_CONFIG = {
   trailers_enabled: true,
   ai_rows_enabled: true,
   xbox_hdr_always_on: false,
+  title_audio_enabled: true,
+  title_audio_volume: 0.65,
 };
 
 const SECTION_TYPE_MAP = { movie: 1, show: 2 };
@@ -179,6 +181,24 @@ class StreamingSettingsModal extends HTMLElement {
                 </div>
               </section>
 
+              <section class="group">
+                <div class="group-title-row">
+                  <div class="group-title">Title Audio</div>
+                  <label class="switch">
+                    <input type="checkbox" class="f-title-audio-enabled" />
+                    <span class="switch-track"></span>
+                  </label>
+                </div>
+                <div class="hint">Fades in a title's theme song when its info panel opens, and fades it out when the panel closes or you move to another title.</div>
+                <div class="field title-audio-fields">
+                  <label>Volume</label>
+                  <div class="field-row">
+                    <input type="range" class="f-title-audio-volume" min="0" max="100" step="5" />
+                    <span class="range-value title-audio-volume-value"></span>
+                  </div>
+                </div>
+              </section>
+
               <section class="group xbox-only-group">
                 <div class="group-title-row">
                   <div class="group-title">HDR - Stay On During Playback</div>
@@ -219,6 +239,8 @@ class StreamingSettingsModal extends HTMLElement {
     this._el(".f-subtitle-provider").addEventListener("change", () => this._syncSubtitleProviderFields());
     this._el(".f-trailers-enabled").addEventListener("change", () => this._syncIntegrationToggleFields());
     this._el(".f-ai-enabled").addEventListener("change", () => this._syncIntegrationToggleFields());
+    this._el(".f-title-audio-enabled").addEventListener("change", () => this._syncTitleAudioFields());
+    this._el(".f-title-audio-volume").addEventListener("input", () => this._updateTitleAudioVolumeLabel());
     this.shadowRoot.querySelectorAll(".tab-btn").forEach((btn) => {
       btn.addEventListener("click", () => this._switchTab(btn.dataset.tab));
     });
@@ -241,7 +263,7 @@ class StreamingSettingsModal extends HTMLElement {
       ".modal-close, .tab-btn, .btn-reauth, .btn-fetch-libraries, .section-row .s-enabled, .section-row .s-label, " +
         ".f-trailers-enabled, .f-youtube-key, .f-ai-enabled, .f-openrouter-key, .f-subtitle-provider, " +
         ".f-opensubtitles-username, .f-opensubtitles-password, .f-opensubtitles-key, " +
-        ".f-ai-cadence, .f-max-genre-rows, .f-row-size, .f-xbox-hdr-always-on, " +
+        ".f-ai-cadence, .f-max-genre-rows, .f-row-size, .f-title-audio-enabled, .f-title-audio-volume, .f-xbox-hdr-always-on, " +
         ".btn-cancel, .btn-save",
       { orientation: "vertical", onBack: () => this.close() }
     );
@@ -291,6 +313,18 @@ class StreamingSettingsModal extends HTMLElement {
     });
   }
 
+  /* Same show/hide-on-toggle pattern as _syncIntegrationToggleFields above, kept
+     separate since this toggle lives in the Preferences tab, not Integrations. */
+  _syncTitleAudioFields() {
+    this.shadowRoot.querySelectorAll(".title-audio-fields").forEach((el) => {
+      el.style.display = this._el(".f-title-audio-enabled").checked ? "" : "none";
+    });
+  }
+
+  _updateTitleAudioVolumeLabel() {
+    this._el(".title-audio-volume-value").textContent = `${this._el(".f-title-audio-volume").value}%`;
+  }
+
   _switchTab(key) {
     this.shadowRoot.querySelectorAll(".tab-btn").forEach((btn) => btn.classList.toggle("active", btn.dataset.tab === key));
     this.shadowRoot.querySelectorAll(".tab-panel").forEach((panel) => panel.classList.toggle("active", panel.dataset.tab === key));
@@ -308,6 +342,10 @@ class StreamingSettingsModal extends HTMLElement {
     this._sections = config.sections || [];
     this._el(".f-trailers-enabled").checked = config.trailers_enabled !== false;
     this._el(".f-ai-enabled").checked = config.ai_rows_enabled !== false;
+    this._el(".f-title-audio-enabled").checked = config.title_audio_enabled !== false;
+    this._el(".f-title-audio-volume").value = String(Math.round((config.title_audio_volume ?? 0.65) * 100));
+    this._updateTitleAudioVolumeLabel();
+    this._syncTitleAudioFields();
     this._el(".f-xbox-hdr-always-on").checked = config.xbox_hdr_always_on === true;
     /* Xbox/UWP-only (see HdrDisplayController.cs) - hidden rather than removed, so
        wireLinearNav's own offsetParent!==null filtering excludes it from the nav list
@@ -457,6 +495,8 @@ class StreamingSettingsModal extends HTMLElement {
       trailers_enabled: this._el(".f-trailers-enabled").checked,
       ai_rows_enabled: this._el(".f-ai-enabled").checked,
       xbox_hdr_always_on: this._el(".f-xbox-hdr-always-on").checked,
+      title_audio_enabled: this._el(".f-title-audio-enabled").checked,
+      title_audio_volume: Number(this._el(".f-title-audio-volume").value) / 100,
     };
   }
 

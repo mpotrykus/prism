@@ -401,6 +401,7 @@ class PlexNetflixCard extends HTMLElement {
       onRemoveFromWatchlist: (item, btnEl) => this._removeFromWatchlist(item, btnEl),
       onPlayItem: (item, opts) => this._playItem(item, opts),
       onPlayHistoryMutated: (ratingKey, watched) => this._onPlayHistoryMutated(ratingKey, watched),
+      getConfig: () => this._config,
     });
     this._hero = new HeroController(this.shadowRoot, {
       escape: (s) => this._escape(s),

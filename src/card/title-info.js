@@ -6,6 +6,31 @@ import { PROFILE_ICON_SVG } from "./profile.js";
 import { pickNextEpisode, extractLogoUrl } from "./logic/catalog.js";
 import { createRowScroll } from "./row-scroll.js";
 
+const THEME_AUDIO_FADE_MS = 900;
+const THEME_AUDIO_DEFAULT_VOLUME = 0.65;
+
+/* rAF-driven linear volume ramp - Audio elements have no built-in fade, and this is used
+   for both the fade-out (closing/switching away from a title) and the fade-in (opening/
+   landing on one), so the two runs overlap into a real crossfade rather than a hard cut
+   when TitleInfoController switches from one title's theme song to another's. Cancels
+   any ramp already running on this element first, so a rapid re-open doesn't leave two
+   rAF loops fighting over the same audio's volume. */
+function rampThemeVolume(audio, to, onDone) {
+  cancelAnimationFrame(audio._themeRampRaf);
+  const from = audio.volume;
+  const start = performance.now();
+  const step = (now) => {
+    const t = Math.min(1, (now - start) / THEME_AUDIO_FADE_MS);
+    audio.volume = Math.min(1, Math.max(0, from + (to - from) * t));
+    if (t < 1) {
+      audio._themeRampRaf = requestAnimationFrame(step);
+    } else {
+      onDone?.();
+    }
+  };
+  audio._themeRampRaf = requestAnimationFrame(step);
+}
+
 /* Plex's Media[].Part[].Stream[] carries every stream on a version (video/audio/
    subtitle, distinguished by streamType - 2 is audio). Only surfaced for the player's
    Audio Track menu, which stays hidden entirely when there's nothing to switch between
@@ -245,8 +270,8 @@ function flatItemCardHtml(ctx, mapped, rawSummary) {
    item's Media[] list, since it changes what's actually decoded, not what gets
    requested before playback starts.
    ctx: { escape, plexFetch, plexImageUrl, mapItem, isInWatchlist, onAddToWatchlist,
-   onRemoveFromWatchlist, onPlayItem } - the card's own collaborators, passed in
-   explicitly rather than this reaching into card state. */
+   onRemoveFromWatchlist, onPlayItem, getConfig } - the card's own collaborators, passed
+   in explicitly rather than this reaching into card state. */
 export class TitleInfoController {
   constructor(shadowRoot, ctx) {
     this._shadowRoot = shadowRoot;
@@ -291,6 +316,8 @@ export class TitleInfoController {
     this._nextEpisodeCache = null;
     this._focusPlayOnceLoaded = false;
     this._returnFocusEl = null;
+    this._themeAudioEl = null;
+    this._themeUrl = null;
 
     this._wire();
   }
@@ -306,6 +333,7 @@ export class TitleInfoController {
   close() {
     if (!this.isOpen()) return;
     unlockScroll();
+    this._stopThemeAudio();
     /* "open" (drives isOpen(), read by the reentrancy checks above and elsewhere) comes off
        immediately - only the visual fade lags behind, via "closing" (keeps display:block
        while the opacity transition below plays out) and dropping "visible" (see open(),
@@ -361,6 +389,41 @@ export class TitleInfoController {
     this._watched = watched;
     this._watchedBtn.classList.toggle("watched", watched);
     this._watchedBtn.setAttribute("aria-label", watched ? "Mark as unwatched" : "Mark as watched");
+  }
+
+  /* Fades whatever theme track is currently playing down to silence and pauses it - used
+     both when this modal closes and when navigating to a different title (see open()),
+     so the outgoing track's fade-out and the next title's fade-in (below) overlap into a
+     crossfade instead of a hard cut. */
+  _stopThemeAudio() {
+    const audio = this._themeAudioEl;
+    this._themeAudioEl = null;
+    this._themeUrl = null;
+    if (!audio) return;
+    rampThemeVolume(audio, 0, () => audio.pause());
+  }
+
+  /* Plex's `theme` field (a show/movie's background theme song) - starts silent and
+     ramps up, the mirror of the fade-out above. Autoplaying with sound here relies on the
+     click that opened this modal counting as user activation; a browser that refuses it
+     anyway just leaves the track silent rather than erroring anywhere visible, so this is
+     deliberately fire-and-forget. A no-op if this exact URL is already the track playing,
+     so re-rendering the same item's detail twice doesn't restart it from the top. */
+  _playThemeAudio(url, volume = THEME_AUDIO_DEFAULT_VOLUME) {
+    if (this._themeUrl === url) return;
+    this._stopThemeAudio();
+    if (!url) return;
+    this._themeUrl = url;
+    const audio = new Audio(url);
+    audio.loop = true;
+    audio.volume = 0;
+    this._themeAudioEl = audio;
+    audio
+      .play()
+      .then(() => {
+        if (this._themeAudioEl === audio) rampThemeVolume(audio, volume);
+      })
+      .catch(() => {});
   }
 
   /* The optimistic paint in open() (Play/Restart/Watched labels and visibility) is only
@@ -433,6 +496,11 @@ export class TitleInfoController {
     if (item.type === "episode" && item.showKey) {
       return this.openForEpisode(item, source);
     }
+    /* Starts fading out whatever title's theme is currently playing immediately, rather
+       than waiting on the detail fetch below to know whether the new title even has one -
+       the new track (if any) fades in once _renderDetail lands, overlapping with this
+       fade-out into a crossfade. A fresh open (nothing playing yet) is a no-op. */
+    this._playThemeAudio(null);
     this._resumeEpisodeKey = null;
     this._flatQueueContext = flatQueueContext;
     this._item = item;
@@ -547,6 +615,12 @@ export class TitleInfoController {
     this._markers = meta.Marker || [];
     this._chapters = meta.Chapter || [];
     this._media = meta.Media || [];
+    const audioConfig = this._ctx.getConfig?.() || {};
+    const themeAudioEnabled = audioConfig.title_audio_enabled !== false;
+    this._playThemeAudio(
+      themeAudioEnabled && meta.theme ? this._ctx.plexImageUrl(meta.theme) : null,
+      audioConfig.title_audio_volume ?? THEME_AUDIO_DEFAULT_VOLUME
+    );
     /* Swapped in only once this full fetch lands - open()'s optimistic paint sets plain
        text (via .textContent, which also clears out any previous item's logo <img> here)
        since the row/hero item it has to work from is unlikely to carry the `Image` array
@@ -1174,9 +1248,18 @@ export class TitleInfoController {
        focused (now torn down), so D-pad/gamepad nav silently stops responding to anything
        until a click forces focus somewhere new. Landing back on Play/Resume mirrors what
        open() already does for a freshly-opened modal (_nav.focusFirst() above). */
+    /* The theme song has no idea a full-screen playback session just started on top of
+       this modal (same decoupling as hero.js's own streaming-player-open/-close handling)
+       - without this it keeps playing underneath the title's real audio. Paused rather
+       than faded/stopped, so the same track just resumes (not re-fetched/re-faded-in)
+       once playback ends and this modal is still showing the same item. */
+    window.addEventListener("streaming-player-open", () => {
+      this._themeAudioEl?.pause();
+    });
     window.addEventListener("streaming-player-close", () => {
       this._refreshAfterPlayback();
       if (this.isOpen() && isControllerActive()) focusAfterPaint(this._playBtn);
+      if (this._themeAudioEl?.paused) this._themeAudioEl.play().catch(() => {});
     });
     this._closeBtn.addEventListener("click", () => this.close());
     this._overlay.addEventListener("click", (e) => {
