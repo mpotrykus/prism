@@ -79,6 +79,14 @@
   margin-bottom: 12px;
   overflow-wrap: break-word;
 }
+.hero-logo {
+  display: block;
+  max-width: 100%;
+  max-height: 90px;
+  object-fit: contain;
+  object-position: left;
+  filter: drop-shadow(0 2px 12px rgba(var(--color-shadow-rgb), 0.7));
+}
 .hero-subtitle {
   font-size: 14px;
   font-weight: 600;

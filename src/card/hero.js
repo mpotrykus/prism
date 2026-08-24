@@ -1,5 +1,6 @@
 import { paintWatchlistButton } from "./watchlist.js";
 import { pickHeroItem, pickHeroItemFromPool, heroArtUrl, heroSubtitleText, heroShouldPlay } from "./logic/hero.js";
+import { extractLogoUrl } from "./logic/catalog.js";
 
 /* The hero banner: autoplay trailer resolution/crossfade, mute/play controls, and the
    focus/visibility/IntersectionObserver plumbing that decides whether it should
@@ -85,7 +86,7 @@ export class HeroController {
   async loadInitialItem(pool) {
     this._item = pickHeroItemFromPool(undefined, pool);
     if (this._item) {
-      this._video = await this._resolveVideo(this._item);
+      [this._video, this._logo] = await Promise.all([this._resolveVideo(this._item), this._resolveLogo(this._item)]);
     }
   }
 
@@ -99,7 +100,7 @@ export class HeroController {
     const item = this.pickItem(undefined, sections);
     if (!item) return;
     this._item = item;
-    this._video = await this._resolveVideo(item);
+    [this._video, this._logo] = await Promise.all([this._resolveVideo(item), this._resolveLogo(item)]);
     this.show();
   }
 
@@ -112,7 +113,7 @@ export class HeroController {
       this._heroEl.classList.add("hero-transitioning");
       await new Promise((resolve) => setTimeout(resolve, 500));
       this._item = next;
-      this._video = await this._resolveVideo(next);
+      [this._video, this._logo] = await Promise.all([this._resolveVideo(next), this._resolveLogo(next)]);
       this.show(true, true);
     } finally {
       /* Always clear this, even if the view changed mid-transition - otherwise a stale
@@ -197,6 +198,22 @@ export class HeroController {
     }
   }
 
+  /* Genre-listing/on-deck/watchlist raw items (see pickHeroItem/pickHeroItemFromPool)
+     are unconfirmed to carry the `Image` array a single full metadata fetch does (see
+     extractLogoUrl's comment) - try the item's own data first (free), and only fall
+     back to a dedicated fetch when it's missing, rather than always paying for one. */
+  async _resolveLogo(item) {
+    const direct = extractLogoUrl(item, this._ctx.plexImageUrl);
+    if (direct) return direct;
+    try {
+      const data = await this._ctx.plexFetch(`/library/metadata/${item.ratingKey}`);
+      const meta = data?.MediaContainer?.Metadata?.[0];
+      return meta ? extractLogoUrl(meta, this._ctx.plexImageUrl) : "";
+    } catch (e) {
+      return "";
+    }
+  }
+
   shouldPlay() {
     return heroShouldPlay({
       heroUserPaused: this._userPaused,
@@ -231,7 +248,12 @@ export class HeroController {
     }
     this._heroEl.style.display = "block";
     this._rowsEl.classList.add("overlap-hero");
-    this._titleEl.textContent = this._item.title || this._item.grandparentTitle || "";
+    const heroTitle = this._item.title || this._item.grandparentTitle || "";
+    if (this._logo) {
+      this._titleEl.innerHTML = `<img class="hero-logo" src="${this._ctx.escape(this._logo)}" alt="${this._ctx.escape(heroTitle)}" />`;
+    } else {
+      this._titleEl.textContent = heroTitle;
+    }
     this._subtitleEl.textContent = heroSubtitleText(this._item);
     this._summaryEl.textContent = (this._item.summary || "").slice(0, 240);
 

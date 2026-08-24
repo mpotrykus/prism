@@ -135,38 +135,55 @@
    into the divider or the actions row below it. */
 .title-info-header { position: absolute; left: 60px; right: 60px; top: 0; transform: translateY(-100%); padding-bottom: 52px; }
 .title-info-title { font-size: 48px; font-weight: 800; margin-bottom: 14px; text-shadow: 0 2px 20px rgba(var(--color-shadow-rgb), 0.8); max-width: 900px; }
+.title-info-logo {
+  display: block;
+  max-width: 100%;
+  max-height: 130px;
+  object-fit: contain;
+  object-position: left;
+  filter: drop-shadow(0 2px 20px rgba(var(--color-shadow-rgb), 0.8));
+}
 .title-info-meta { font-size: 15px; color: rgba(var(--color-fg-rgb), 0.8); margin-bottom: 20px; text-shadow: 0 1px 10px rgba(var(--color-shadow-rgb), 0.8); }
 .title-info-meta span:not(:last-child)::after { content: "•"; margin: 0 8px; color: rgba(var(--color-fg-rgb), 0.3); }
 .title-info-actions { display: flex; align-items: center; gap: 12px; margin: 8px 0 24px; }
 .title-info-actions[hidden] { display: none; }
+/* Both buttons pin an explicit height rather than relying on padding to imply one -
+   padding math (matching each side's padding+border) still left them visibly different
+   heights, since the two labels' glyphs (a plain "R" vs. the "▶" play triangle) don't
+   share the same font metrics/ascent. */
 .title-info-play {
-  border: none; border-radius: 8px; padding: 14px 34px; font-size: 15px; font-weight: 700;
+  border: none; border-radius: 8px; height: 48px; padding: 0 34px; font-size: 15px; font-weight: 700;
   cursor: pointer; background: var(--color-fg); color: var(--color-surface);
+  display: inline-flex; align-items: center; justify-content: center;
 }
 .title-info-play:hover { background: rgba(var(--color-fg-rgb), 0.85); }
 .title-info-restart-btn {
-  border: 1px solid rgba(var(--color-fg-rgb), 0.3); border-radius: 8px; padding: 10px 20px; font-size: 14px; font-weight: 700;
+  border: 1px solid rgba(var(--color-fg-rgb), 0.3); border-radius: 8px; height: 48px; padding: 0 20px; font-size: 14px; font-weight: 700;
   cursor: pointer; background: transparent; color: var(--color-fg);
+  display: inline-flex; align-items: center; justify-content: center;
 }
 .title-info-restart-btn:hover { background: rgba(var(--color-fg-rgb), 0.1); }
 .title-info-restart-btn[hidden] { display: none; }
-.title-info-watched-btn {
-  width: 40px; height: 40px; border-radius: 50%; flex: none;
-  border: 1px solid rgba(var(--color-fg-rgb), 0.3); background: transparent; color: var(--color-fg);
-  cursor: pointer; display: flex; align-items: center; justify-content: center;
+/* Stacked icon-over-label buttons (HBO Max's "My List"/"Rate"/"Trailer" row is the
+   reference) rather than the bare circular icon buttons these used to be - an icon alone
+   reads fine the first time but is easy to forget the meaning of on a return visit. */
+.title-info-watched-btn, .title-info-watchlist-btn {
+  width: 60px; flex: none; border: none; border-radius: 8px;
+  background: transparent; color: var(--color-fg);
+  cursor: pointer; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 4px; padding: 4px 2px;
 }
-.title-info-watched-btn svg { width: 16px; height: 16px; }
-.title-info-watched-btn:hover { background: rgba(var(--color-fg-rgb), 0.1); }
-.title-info-watched-btn.watched { color: var(--color-accent); border-color: rgba(var(--color-accent-rgb), 0.7); }
+.title-info-action-icon { display: flex; align-items: center; justify-content: center; height: 18px; font-size: 16px; line-height: 1; }
+.title-info-action-icon svg { width: 16px; height: 16px; }
+.title-info-action-label { font-size: 11px; font-weight: 700; white-space: nowrap; }
+.title-info-watched-btn:hover, .title-info-watchlist-btn:hover { background: rgba(var(--color-fg-rgb), 0.1); }
+.title-info-watched-btn.watched { color: var(--color-accent); }
 .title-info-watched-btn.busy { opacity: 0.5; pointer-events: none; }
-.title-info-watched-btn.error { border-color: var(--color-danger); color: var(--color-danger); }
+.title-info-watched-btn.error { color: var(--color-danger); }
 .title-info-watched-btn[hidden] { display: none; }
-.title-info-watchlist-btn {
-  width: 40px; height: 40px; border-radius: 50%; flex: none;
-  border: 1px solid rgba(var(--color-fg-rgb), 0.3); background: transparent; color: var(--color-fg);
-  font-size: 17px; cursor: pointer;
-}
-.title-info-watchlist-btn:hover { background: rgba(var(--color-fg-rgb), 0.1); }
+.title-info-watchlist-btn.added { color: var(--color-accent); }
+.title-info-watchlist-btn.busy { opacity: 0.5; pointer-events: none; }
+.title-info-watchlist-btn.error { color: var(--color-danger); }
 .title-info-watchlist-btn[hidden] { display: none; }
 .title-info-actions-loading { display: flex; align-items: center; justify-content: center; height: 40px; margin-bottom: 20px; }
 .title-info-actions-loading[hidden] { display: none; }

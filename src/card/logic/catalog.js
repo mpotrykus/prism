@@ -13,6 +13,16 @@ export function shuffle(array) {
   return arr;
 }
 
+/* Plex only surfaces a clear (transparent, title-treatment) logo via the `Image` array
+   some metadata responses carry - unlike thumb/art/banner, there's no plain top-level
+   attribute for it. Not every item has one (depends on the metadata agent and whether
+   one was ever selected in Plex's own poster/art picker), so an empty return here is the
+   normal "no logo, fall back to text" case, not a bug. */
+export function extractLogoUrl(m, plexImageUrl) {
+  const entry = (m.Image || []).find((img) => img.type === "clearLogo");
+  return entry?.url ? plexImageUrl(entry.url) : "";
+}
+
 /* plexImageUrl: (path) => absolute Plex image URL, full source resolution - used for
    `art` (hero/backdrop, meant to fill the screen). plexThumbUrl: (path) => same but
    resized via Plex's /photo/:/transcode - used for `image` (poster grid, always
@@ -25,6 +35,7 @@ export function mapItem(m, withProgress, { plexImageUrl, plexThumbUrl = plexImag
   const thumbPath = m.thumb || m.grandparentThumb || m.composite || m.art || "";
   const image = plexThumbUrl(thumbPath);
   const art = plexImageUrl(m.art || m.grandparentArt || thumbPath);
+  const logo = extractLogoUrl(m, plexImageUrl);
   const title = m.grandparentTitle || m.title || "Untitled";
   const subtitle = m.grandparentTitle ? m.title : m.year ? String(m.year) : "";
   /* A show/season has no viewOffset/viewCount of its own the way a movie or episode
@@ -42,6 +53,7 @@ export function mapItem(m, withProgress, { plexImageUrl, plexThumbUrl = plexImag
     subtitle,
     image,
     art,
+    logo,
     year: m.year,
     showKey: m.grandparentRatingKey,
     seasonKey: m.parentRatingKey,

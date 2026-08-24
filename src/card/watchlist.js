@@ -10,7 +10,12 @@ import { normalizeTitle } from "./logic/watchlist-match.js";
    duplicated separately in the hero, poster, and title-info render paths. */
 export function paintWatchlistButton(btnEl, added) {
   btnEl.classList.toggle("added", added);
-  btnEl.textContent = added ? "✓" : "+";
+  /* title-info's watchlist button carries a separate icon+label span (see plex-netflix-card.js's
+     template) so a stacked description can sit under the icon on desktop - hero's and rows.js's
+     poster watchlist buttons don't, and just take the plain textContent path instead. */
+  const icon = btnEl.querySelector?.(".title-info-action-icon");
+  if (icon) icon.textContent = added ? "✓" : "+";
+  else btnEl.textContent = added ? "✓" : "+";
   btnEl.setAttribute("aria-label", added ? "Remove from My List" : "Add to My List");
 }
 

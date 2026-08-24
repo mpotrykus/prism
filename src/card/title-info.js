@@ -3,7 +3,7 @@ import { lockScroll, unlockScroll } from "../../scroll-lock.js";
 import { paintWatchlistButton } from "./watchlist.js";
 import { WATCHED_ICON_SVG, wireArrowVisibility } from "./rows.js";
 import { PROFILE_ICON_SVG } from "./profile.js";
-import { pickNextEpisode } from "./logic/catalog.js";
+import { pickNextEpisode, extractLogoUrl } from "./logic/catalog.js";
 import { createRowScroll } from "./row-scroll.js";
 
 /* Plex's Media[].Part[].Stream[] carries every stream on a version (video/audio/
@@ -335,18 +335,21 @@ export class TitleInfoController {
     this._returnFocusEl = null;
   }
 
-  /* hasHistory (Play vs Resume label) and hasProgress (Restart's own visibility) are
-     related but not the same thing - hasHistory also goes true once a title is fully
-     watched with no resume offset left, where Restart wouldn't do anything meaningful
-     (there's nothing to discard by "starting over"; Play already starts from zero).
-     Defaults hasProgress to hasHistory only so a caller that hasn't been taught the
-     distinction yet (there shouldn't be any) fails toward the old behavior rather than
-     silently hiding Restart. resumeEpisode ({season, episode}) is only known when this
-     modal stands in for a specific episode (see openForEpisode) - a show opened directly
-     has no single episode to name, so it keeps the plain label. */
-  _updatePlayHistoryUI(hasHistory, resumeEpisode = null, hasProgress = hasHistory) {
+  /* Play/Resume's label is driven by showResumeLabel, which defaults to hasProgress (an
+     actual resume position to continue from - the same condition that shows the yellow
+     progress bar) rather than hasHistory. hasHistory also goes true once a title is fully
+     watched with no resume offset left - labeling that "Resume" is misleading, e.g. right
+     after _markWatched clears the offset, there's nothing left to resume. Restart's own
+     visibility is still keyed off hasProgress too, for the same "nothing to discard by
+     starting over" reason. showResumeLabel is only ever overridden (to true) by
+     _loadShowResumeLabel below - a show's *own* watch history can be worth continuing
+     even though the specific next episode it lands on has hasProgress=false (it hasn't
+     been started itself). resumeEpisode ({season, episode}) is only known when this modal
+     stands in for a specific episode (see openForEpisode) - a show opened directly has no
+     single episode to name, so it keeps the plain label. */
+  _updatePlayHistoryUI(hasHistory, resumeEpisode = null, hasProgress = hasHistory, showResumeLabel = hasProgress) {
     const resumeLabel = resumeEpisode ? `▶ Resume S${resumeEpisode.season} E${resumeEpisode.episode}` : "▶ Resume";
-    this._playBtn.textContent = hasHistory ? resumeLabel : "▶ Play";
+    this._playBtn.textContent = showResumeLabel ? resumeLabel : "▶ Play";
     this._restartBtn.hidden = !hasProgress;
   }
 
@@ -544,6 +547,17 @@ export class TitleInfoController {
     this._markers = meta.Marker || [];
     this._chapters = meta.Chapter || [];
     this._media = meta.Media || [];
+    /* Swapped in only once this full fetch lands - open()'s optimistic paint sets plain
+       text (via .textContent, which also clears out any previous item's logo <img> here)
+       since the row/hero item it has to work from is unlikely to carry the `Image` array
+       this needs (see extractLogoUrl's own comment). */
+    const logoUrl = extractLogoUrl(meta, this._ctx.plexImageUrl);
+    const title = meta.title || this._item?.title || "";
+    if (logoUrl) {
+      this._titleEl.innerHTML = `<img class="title-info-logo" src="${this._ctx.escape(logoUrl)}" alt="${this._ctx.escape(title)}" />`;
+    } else {
+      this._titleEl.textContent = title;
+    }
     this._updatePlayHistoryUI(hasAnyHistory(meta), null, hasProgress(meta));
     if (!this._watchedBtn.hidden) this._updateWatchedUI(isFullyWatched(meta));
     /* Refines the possibly-truncated Genre list mapItem saw at row-click time (Plex list
@@ -859,7 +873,7 @@ export class TitleInfoController {
     const episode = await this._getNextEpisode(showRatingKey);
     if (!episode || this._item?.ratingKey !== showRatingKey) return;
     const resumeEpisode = episode.parentIndex != null && episode.index != null ? { season: episode.parentIndex, episode: episode.index } : null;
-    this._updatePlayHistoryUI(true, resumeEpisode, false);
+    this._updatePlayHistoryUI(true, resumeEpisode, false, true);
   }
 
   /* Full show-wide episode order (every season flattened, ratingKeys only) so the
@@ -1237,10 +1251,10 @@ export class TitleInfoController {
       }
     });
     this._watchlistBtn.addEventListener("mouseenter", () => {
-      if (this._watchlistBtn.classList.contains("added")) this._watchlistBtn.textContent = "−";
+      if (this._watchlistBtn.classList.contains("added")) this._watchlistBtn.querySelector(".title-info-action-icon").textContent = "−";
     });
     this._watchlistBtn.addEventListener("mouseleave", () => {
-      if (this._watchlistBtn.classList.contains("added")) this._watchlistBtn.textContent = "✓";
+      if (this._watchlistBtn.classList.contains("added")) this._watchlistBtn.querySelector(".title-info-action-icon").textContent = "✓";
     });
     this._playBtn.addEventListener("click", () => this._playCurrentItem());
     this._restartBtn.addEventListener("click", () => this._playCurrentItem({ restart: true }));
