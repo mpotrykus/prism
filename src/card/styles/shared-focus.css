@@ -20,7 +20,7 @@
 .hero-watchlist-btn:focus-visible,
 .hero-mute-btn:focus-visible,
 .hero-play-btn:focus-visible,
-.title-info-season-select:focus-visible {
+.title-info-season-trigger:focus-visible {
     outline: 2px solid var(--color-accent);
 }
 
@@ -37,7 +37,7 @@
 .hero-watchlist-btn,
 .hero-mute-btn,
 .hero-play-btn,
-.title-info-season-select {
+.title-info-season-trigger {
     outline: 2px solid rgba(var(--color-accent-rgb), 0);
     outline-offset: 2px;
     transition: .125s;
@@ -48,7 +48,8 @@
 .pin-key:focus-visible,
 .pin-cancel:focus-visible,
 .title-info-episode:focus-visible,
-.title-info-season-option:focus-visible,
+.title-info-season-modal-option:focus-visible,
+.title-info-season-modal-cancel:focus-visible,
 .more-sheet-item:focus-visible,
 .more-sheet-cancel:focus-visible,
 .profile-dropdown-item:focus-visible,

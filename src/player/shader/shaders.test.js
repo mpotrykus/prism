@@ -20,6 +20,20 @@ describe("detectShaderType", () => {
     expect(detectShaderType([])).toBe("live_action");
     expect(detectShaderType(undefined)).toBe("live_action");
   });
+  it("picks live_action for CGI animation from a known 3D studio", () => {
+    expect(detectShaderType(["Animation"], "Pixar Animation Studios")).toBe("live_action");
+    expect(detectShaderType(["Animation"], "DreamWorks Animation")).toBe("live_action");
+    expect(detectShaderType(["Animation"], "Illumination Entertainment")).toBe("live_action");
+    expect(detectShaderType(["Animation"], "Sony Pictures Animation")).toBe("live_action");
+  });
+  it("still picks anime4k for animation from an unrecognized or missing studio", () => {
+    expect(detectShaderType(["Animation"], "Studio Ghibli")).toBe("anime4k");
+    expect(detectShaderType(["Anime"], undefined)).toBe("anime4k");
+    expect(detectShaderType(["Animation"], "")).toBe("anime4k");
+  });
+  it("ignores studio entirely for non-animated genres", () => {
+    expect(detectShaderType(["Drama"], "Pixar Animation Studios")).toBe("live_action");
+  });
 });
 
 describe("shaderTuningAt", () => {

@@ -49,6 +49,15 @@ const PC_SHELL_MARKER = "__prismPcShell";
    chrome-menu.js); anything about streaming, native playback, or HDR should keep testing
    platformTag() === "uwp" directly. */
 export function usesGamepadChrome() {
+    return isXboxDevice();
+}
+
+/* True only on a real Xbox console, never the PC target - same construction as
+   usesGamepadChrome() above (platformTag() === "uwp" minus PC_SHELL_MARKER), but exported
+   separately since usesGamepadChrome()'s own scope is explicitly limited to player-chrome
+   UI-layout gates. Use this for other Xbox-only-vs-PC settings-visibility checks (e.g. the
+   Always-on HDR toggle in settings.js) that aren't about player-chrome layout. */
+export function isXboxDevice() {
     return platformTag() === "uwp" && !(typeof window !== "undefined" && window[PC_SHELL_MARKER]);
 }
 

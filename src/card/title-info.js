@@ -311,6 +311,9 @@ export class TitleInfoController {
     this._similarWrap = shadowRoot.querySelector(".title-info-similar-wrap");
     this._similarEl = shadowRoot.querySelector(".title-info-similar");
     this._loadingOverlayEl = shadowRoot.querySelector(".title-info-loading-overlay");
+    this._seasonOverlay = shadowRoot.querySelector(".title-info-season-overlay");
+    this._seasonModalListEl = shadowRoot.querySelector(".title-info-season-modal-list");
+    this._seasonCancelBtn = shadowRoot.querySelector(".title-info-season-modal-cancel");
 
     this._item = null;
     this._source = null;
@@ -331,6 +334,7 @@ export class TitleInfoController {
     this._returnFocusEl = null;
     this._themeAudioEl = null;
     this._themeUrl = null;
+    this._themePausedByVisibility = false;
 
     this._wire();
   }
@@ -341,6 +345,14 @@ export class TitleInfoController {
 
   isOpen() {
     return this._overlay.classList.contains("open");
+  }
+
+  isSeasonOverlayOpen() {
+    return this._seasonOverlay.classList.contains("open");
+  }
+
+  closeSeasonOverlay() {
+    this._seasonOverlay.classList.remove("open");
   }
 
   close() {
@@ -433,6 +445,7 @@ export class TitleInfoController {
     const audio = this._themeAudioEl;
     this._themeAudioEl = null;
     this._themeUrl = null;
+    this._themePausedByVisibility = false;
     if (!audio) return;
     rampThemeVolume(audio, 0, () => audio.pause());
   }
@@ -675,9 +688,12 @@ export class TitleInfoController {
     /* Refines the possibly-truncated Genre list mapItem saw at row-click time (Plex list
        endpoints cap it to ~2 tags) with this fetch's full, untruncated list, so shader
        auto-detection (plex-player.js's detectShaderType) sees every genre tag, not just
-       the first couple. */
+       the first couple. studio isn't truncated the same way (it's a single string, not a
+       capped list) but list endpoints may still omit it - refined here too so
+       detectShaderType's CGI-vs-2D-animation check sees it whenever this fuller fetch has it. */
     if (this._item) {
       this._item.genres = (meta.Genre || []).map((g) => (g.tag || "").trim()).filter(Boolean);
+      this._item.studio = meta.studio || "";
     }
     const progress = meta.duration ? Math.max(0, Math.min(1, this._viewOffset / meta.duration)) : 0;
     this._progressEl.hidden = progress <= 0;
@@ -717,6 +733,24 @@ export class TitleInfoController {
     this._loadSimilar(meta.ratingKey);
   }
 
+  _openSeasonOverlay(seasons, currentSeasonKey, seasonLabel, onSelect, returnFocusEl) {
+    this._seasonModalListEl.innerHTML = seasons
+      .map(
+        (s) =>
+          `<button type="button" class="title-info-season-modal-option${String(s.ratingKey) === String(currentSeasonKey) ? " selected" : ""}" data-rating-key="${s.ratingKey}">${this._ctx.escape(seasonLabel(s))}</button>`
+      )
+      .join("");
+    this._seasonModalListEl.querySelectorAll(".title-info-season-modal-option").forEach((opt) => {
+      opt.addEventListener("click", () => {
+        this.closeSeasonOverlay();
+        onSelect(opt.dataset.ratingKey);
+        focusAfterPaint(returnFocusEl);
+      });
+    });
+    this._seasonOverlay.classList.add("open");
+    this._seasonNav.focusFirst();
+  }
+
   async _loadSeasons(showRatingKey) {
     try {
       const data = await this._ctx.plexFetch(`/library/metadata/${showRatingKey}/children`);
@@ -724,30 +758,29 @@ export class TitleInfoController {
       if (!seasons.length || this._item?.ratingKey !== showRatingKey) return;
 
       this._episodesEl.innerHTML = "";
-      /* A native <select>'s dropdown-open is a browser-gated action - it only responds to a
-         genuinely trusted user gesture (a real mousedown, or a trusted keydown's own default
-         action), never to a script-driven `.click()`/`.showPicker()` call. That's exactly what
-         "activate" resolves to for a gamepad/D-pad press whose only path into the page is this
-         file's own synthetic-KeyboardEvent bridge (see focus-nav.js's dispatchSyntheticKey) -
-         same root cause as adjustRange's own comment in focus-nav.js, just hitting a browser
-         control this app can't work around by manually firing an "input"/"change" event. A
-         hand-built trigger+list instead opens/closes via a plain "open" class toggle in response
-         to whatever click the trigger's own listener sees - script-driven or real, it's all the
-         same to a plain click listener. */
-      const picker = document.createElement("div");
-      picker.className = "title-info-season-picker";
-      const trigger = document.createElement("button");
-      trigger.type = "button";
-      trigger.className = "title-info-season-select";
-      const options = document.createElement("div");
-      options.className = "title-info-season-options";
-      options.innerHTML = seasons
-        .map((s) => `<div class="title-info-season-option" data-rating-key="${s.ratingKey}" tabindex="0">${this._ctx.escape(s.title || `Season ${s.index}`)}</div>`)
-        .join("");
-      picker.appendChild(trigger);
-      picker.appendChild(options);
+      const seasonLabel = (s) => s.title || `Season ${s.index}`;
+      let trigger = null;
+      if (seasons.length > 1) {
+        /* A native <select>'s dropdown-open is a browser-gated action - it only responds to a
+           genuinely trusted user gesture (a real mousedown, or a trusted keydown's own default
+           action), never to a script-driven `.click()`/`.showPicker()` call. That's exactly what
+           "activate" resolves to for a gamepad/D-pad press whose only path into the page is this
+           file's own synthetic-KeyboardEvent bridge (see focus-nav.js's dispatchSyntheticKey) -
+           same root cause as adjustRange's own comment in focus-nav.js, just hitting a browser
+           control this app can't work around by manually firing an "input"/"change" event. This
+           hand-built trigger opens the season overlay via a plain click listener instead - script-
+           driven or real, it's all the same to a plain click listener. */
+        trigger = document.createElement("button");
+        trigger.type = "button";
+        trigger.className = "title-info-season-trigger";
+        this._episodesEl.appendChild(trigger);
+      } else {
+        const staticLabel = document.createElement("div");
+        staticLabel.className = "title-info-season-static";
+        staticLabel.textContent = seasonLabel(seasons[0]);
+        this._episodesEl.appendChild(staticLabel);
+      }
       const list = document.createElement("div");
-      this._episodesEl.appendChild(picker);
       this._episodesEl.appendChild(list);
 
       const showSeason = async (seasonRatingKey, focusEpisodeRatingKey) => {
@@ -781,22 +814,20 @@ export class TitleInfoController {
           }
         }
       };
+      let currentSeasonKey = null;
       const selectSeason = (seasonRatingKey, focusEpisodeRatingKey) => {
+        currentSeasonKey = seasonRatingKey;
         const season = seasons.find((s) => String(s.ratingKey) === String(seasonRatingKey));
-        trigger.textContent = `${season ? season.title || `Season ${season.index}` : "Season"} ▾`;
-        options.querySelectorAll(".title-info-season-option").forEach((opt) => {
-          opt.classList.toggle("selected", opt.dataset.ratingKey === String(seasonRatingKey));
-        });
-        options.classList.remove("open");
+        if (trigger) trigger.textContent = `${season ? seasonLabel(season) : "Season"} ▾`;
         showSeason(seasonRatingKey, focusEpisodeRatingKey);
       };
-      trigger.addEventListener("click", () => options.classList.toggle("open"));
-      options.querySelectorAll(".title-info-season-option").forEach((opt) => {
-        opt.addEventListener("click", () => {
-          selectSeason(opt.dataset.ratingKey);
-          focusAfterPaint(trigger);
+      if (trigger) {
+        trigger.addEventListener("click", () => {
+          this._openSeasonOverlay(seasons, currentSeasonKey, seasonLabel, (seasonRatingKey) => {
+            selectSeason(seasonRatingKey);
+          }, trigger);
         });
-      });
+      }
       /* Opening a show from an episode (e.g. Continue Watching) requests landing on that
          episode's own season/row instead of always season 1 - see openForEpisode. */
       const focus = this._pendingEpisodeFocus;
@@ -1299,15 +1330,44 @@ export class TitleInfoController {
       if (this.isOpen() && isControllerActive()) focusAfterPaint(this._playBtn);
       if (this._themeAudioEl?.paused) this._themeAudioEl.play().catch(() => {});
     });
+    /* The theme audio otherwise keeps playing after the user leaves the app or locks the
+       phone (see hero.js's own visibilitychange handler for the same problem on the hero) -
+       document.hidden is what actually fires reliably here, not just window blur, since
+       Android backgrounding/locking the app doesn't blur the WebView's window the way
+       switching to another app window on desktop does. _themePausedByVisibility (rather
+       than unconditionally resuming on show) keeps this from fighting the player-open/close
+       pause above - only resumes what visibility itself paused, never a track the player is
+       still covering. */
+    document.addEventListener("visibilitychange", () => {
+      const audio = this._themeAudioEl;
+      if (!audio) return;
+      if (document.hidden) {
+        if (!audio.paused) {
+          audio.pause();
+          this._themePausedByVisibility = true;
+        }
+      } else if (this._themePausedByVisibility) {
+        this._themePausedByVisibility = false;
+        audio.play().catch(() => {});
+      }
+    });
     this._closeBtn.addEventListener("click", () => this.close());
     this._overlay.addEventListener("click", (e) => {
       if (e.target === this._overlay) this.close();
     });
     this._nav = wireLinearNav(
       this._shadowRoot,
-      ".title-info-close, .title-info-play, .title-info-restart-btn, .title-info-watched-btn, .title-info-watchlist-btn, .title-info-season-select, .title-info-season-option, .title-info-episode, .title-info-cast-wrap, .title-info-similar-item",
+      ".title-info-close, .title-info-play, .title-info-restart-btn, .title-info-watched-btn, .title-info-watchlist-btn, .title-info-season-trigger, .title-info-episode, .title-info-cast-wrap, .title-info-similar-item",
       { orientation: "vertical", onBack: () => this.close() }
     );
+    this._seasonCancelBtn.addEventListener("click", () => this.closeSeasonOverlay());
+    this._seasonOverlay.addEventListener("click", (e) => {
+      if (e.target === this._seasonOverlay) this.closeSeasonOverlay();
+    });
+    this._seasonNav = wireLinearNav(this._shadowRoot, ".title-info-season-modal-option, .title-info-season-modal-cancel", {
+      orientation: "vertical",
+      onBack: () => this.closeSeasonOverlay(),
+    });
     /* wireLinearNav's own focusItem centers each newly-focused stop along this overlay's
        scroll axis, but the actions row (Play/Restart/Watched/Watchlist) sits right below
        the hero art near the very top - centering it scrolls the art half out of view

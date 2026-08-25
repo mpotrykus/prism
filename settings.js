@@ -1,6 +1,6 @@
 import { wireLinearNav, focusAfterPaint, isControllerActive, registerNavHandler } from "./focus-nav.js";
 import { hasSecrets, loadSecrets, saveSecrets } from "./vault.js";
-import { platformTag } from "./src/player/core/platform.js";
+import { isXboxDevice } from "./src/player/core/platform.js";
 import MODAL_STYLE from "./src/styles/settings-modal.css?inline";
 
 /* Only non-sensitive fields live here in plain localStorage. plex_token,
@@ -350,7 +350,7 @@ class StreamingSettingsModal extends HTMLElement {
     /* Xbox/UWP-only (see HdrDisplayController.cs) - hidden rather than removed, so
        wireLinearNav's own offsetParent!==null filtering excludes it from the nav list
        on every other platform for free, same as the OpenSubtitles fields above. */
-    const showXboxHdr = platformTag() === "uwp";
+    const showXboxHdr = isXboxDevice();
     this.shadowRoot.querySelectorAll(".xbox-only-group").forEach((el) => {
       el.style.display = showXboxHdr ? "" : "none";
     });

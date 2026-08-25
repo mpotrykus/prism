@@ -65,6 +65,32 @@ async function fetchSubtitleStreams(session) {
     return streams.filter((s) => s.streamType === 3);
 }
 
+/* The PUT above (the actual subtitle download request) is also what selects the new
+   stream as the Part's own "selected" subtitle server-side - the same "selected" flag
+   stream-url.js's subtitleStreamID=0 comment already calls out as the thing Plex would
+   otherwise burn in. subtitleStreamID=0 on our own transcode URLs masks that for every
+   session Prism itself starts, but it never touches the Part's stored selection - so it
+   stays selected for any OTHER session (this app after a full re-entry if some future
+   path skips that param, another Plex client, PMS's own web UI) until something
+   explicitly clears it. Nothing did. Clearing it back to "none" (the exact convention
+   the transcode URL's own subtitleStreamID=0 already uses) right after the download,
+   instead of only ever suppressing it downstream, is what makes this hold rather than
+   relying on every future caller to keep remembering the mask. Best-effort and
+   non-blocking - the sidecar text below is fetched from the stream's own key
+   regardless of whether Plex's Part bookkeeping updates in time. */
+async function deselectPartSubtitle(session, partId) {
+    if (!partId) return;
+    try {
+        const url = new URL(`${session.plexUrl}/library/parts/${partId}`);
+        url.searchParams.set("subtitleStreamID", "0");
+        url.searchParams.set("allParts", "1");
+        url.searchParams.set("X-Plex-Token", session.plexToken);
+        await fetch(url, { method: "PUT" });
+    } catch (e) {
+        // best-effort - see this function's own header comment
+    }
+}
+
 /* Backs off (2s, 3s, 4.5s, 6s, 6s, ...) instead of a flat 2s interval - PMS is already
    doing the expensive part of this request (fetching from the subtitle provider,
    writing the new stream into the library, re-analyzing the part to register it), so
@@ -108,6 +134,7 @@ export async function download(session, result) {
         }
         const newStream = streams.find((s) => !before.has(s.id));
         if (!newStream) continue;
+        await deselectPartSubtitle(session, session.partId);
         const fileRes = await fetch(plexAssetUrl(session, newStream.key));
         if (!fileRes.ok) throw new Error(`Failed fetching subtitle file: HTTP ${fileRes.status}`);
         return {

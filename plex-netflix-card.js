@@ -325,6 +325,13 @@ class PlexNetflixCard extends HTMLElement {
           <div class="title-info-loading-overlay"><span class="spinner"></span></div>
         </div>
       </div>
+      <div class="title-info-season-overlay" tabindex="-1">
+        <div class="title-info-season-modal">
+          <div class="title-info-season-modal-title">Select Season</div>
+          <div class="title-info-season-modal-list"></div>
+          <button type="button" class="title-info-season-modal-cancel">Cancel</button>
+        </div>
+      </div>
     `;
     this._rowsEl = this.shadowRoot.querySelector(".rows");
     this._searchWrap = this.shadowRoot.querySelector(".search-wrap");
@@ -478,7 +485,8 @@ class PlexNetflixCard extends HTMLElement {
        z-index (highest first) since more than one can theoretically be open at once. */
     App.addListener("backButton", () => {
       const settingsModal = document.querySelector("streaming-settings-modal");
-      if (this._titleInfo.isOpen()) this._titleInfo.close();
+      if (this._titleInfo.isSeasonOverlayOpen()) this._titleInfo.closeSeasonOverlay();
+      else if (this._titleInfo.isOpen()) this._titleInfo.close();
       else if (this._pin.isOpen()) this._pin.cancel();
       else if (this._profileOverlay.classList.contains("open")) this._closeProfileOverlay();
       else if (this._moreOverlay.classList.contains("open")) this._closeMoreSheet();
@@ -988,8 +996,12 @@ class PlexNetflixCard extends HTMLElement {
         seasonNumber: item.seasonNumber,
         episodeNumber: item.episodeNumber,
         /* Drives plex-player.js's shader auto-detection (anime vs. live-action) - see
-           _mapItem/_renderTitleInfoDetail for where this gets resolved. */
+           _mapItem/_renderTitleInfoDetail for where this gets resolved. studio is the
+           secondary signal detectShaderType uses to catch CGI animation (Pixar/DreamWorks/
+           Illumination-style) that would otherwise get misclassified as anime4k just for
+           being Genre-tagged "Animation". */
         genres: item.genres || [],
+        studio: item.studio || "",
         /* The ordered list of sibling ratingKeys (a show's full episode order, or a
            playlist/collection's own order) this item came from, if any - see
            title-info.js's _getShowEpisodeQueue/_flatQueueContext. Powers the player's
@@ -1188,6 +1200,7 @@ class PlexNetflixCard extends HTMLElement {
       plexImageUrl: (path) => this._plexImageUrl(path),
       plexThumbUrl: (path) => this._plexThumbUrl(path),
       episodeFallbackGenres: this._titleInfo?.item?.genres || [],
+      episodeFallbackStudio: this._titleInfo?.item?.studio || "",
     });
   }
 

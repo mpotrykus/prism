@@ -480,7 +480,7 @@ class StreamingPlayerController {
            as colorBoostEnabled/colorBoostStrength/colorBoostAuto just below - whatever
            the in-player menu was last set to (see shader-pipeline.js's setUpscaleMode/
            setColorBoostMode), not a Settings-modal default reset every video. */
-        this._shaderAutoType = detectShaderType(item.genres);
+        this._shaderAutoType = detectShaderType(item.genres, item.studio);
         this._shaderEnabled = storedShaderEnabled();
         this._shaderStrength = storedShaderStrength();
         /* _upscaleAuto has to be read before resolving _shaderType below - in Auto mode

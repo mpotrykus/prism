@@ -45,6 +45,7 @@ export async function fetchQueuedTitle(plexUrl, plexToken, ratingKey) {
         seasonNumber: meta.parentIndex ?? null,
         episodeNumber: meta.index ?? null,
         genres: (meta.Genre || []).map((g) => (g.tag || "").trim()).filter(Boolean),
+        studio: meta.studio || "",
     };
 }
 

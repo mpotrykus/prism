@@ -236,6 +236,18 @@ public class PlayerActivity extends AppCompatActivity {
     FrameLayout root;
     TextView skipButton;
     long skipButtonSeekToMs;
+    /* Transient "+5s"/"-5s" flash - see PlayerUiHelper.showSeekFlash, the native port of
+       chrome-transport.js's ensureSeekFlashEl/flashSeekIndicator. One shared view for
+       both directions (text/side swapped per call) rather than two, same reasoning
+       skipButton above only needs one instance. seekFlashView is the full-height edge
+       gradient panel (matches web's own edge-gradient treatment); seekFlashLabel is the
+       "+5s"/"-5s" text centered inside it. */
+    FrameLayout seekFlashView;
+    TextView seekFlashLabel;
+    final Handler seekFlashHandler = new Handler(Looper.getMainLooper());
+    final Runnable hideSeekFlashRunnable = () -> {
+        if (seekFlashView != null) seekFlashView.animate().alpha(0f).setDuration(400).start();
+    };
     /* detectedShaderType is never OFF - it's just the auto-detected algorithm for this
        title's genre, shown as read-only info in PlayerUiHelper's shader panel. shaderType
        is the one actually rendered with (OFF whenever disabled or upscaleStrength is 0),
@@ -998,6 +1010,7 @@ public class PlayerActivity extends AppCompatActivity {
         }
         seek(target);
         showControlsTemporarily();
+        PlayerUiHelper.showSeekFlash(this, deltaMs > 0);
     }
 
     private void showPlayerMenu(View anchor) {
@@ -2132,6 +2145,11 @@ public class PlayerActivity extends AppCompatActivity {
         PlayerUiHelper.closeChapterListMenu(this);
         PlayerUiHelper.closeAudioSubtitlesMenu(this);
         hideSkipButtonInternal();
+        seekFlashHandler.removeCallbacks(hideSeekFlashRunnable);
+        if (seekFlashView != null) {
+            seekFlashView.animate().cancel();
+            seekFlashView.setAlpha(0f);
+        }
         zoomScale = 1f;
         panX = 0f;
         panY = 0f;
@@ -2947,6 +2965,7 @@ public class PlayerActivity extends AppCompatActivity {
         sleepTimerHandler.removeCallbacksAndMessages(null);
         controlsFadeHandler.removeCallbacksAndMessages(null);
         lockMessageHandler.removeCallbacksAndMessages(null);
+        seekFlashHandler.removeCallbacksAndMessages(null);
         PlayerUiHelper.closePlayerMenu(this);
         PlayerUiHelper.closeEpisodeListMenu(this);
         PlayerUiHelper.closeChapterListMenu(this);

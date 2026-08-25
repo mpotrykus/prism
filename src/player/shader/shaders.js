@@ -361,14 +361,38 @@ export function autoContrastBoostStrength({ lumaStdDev }) {
     return clamp((COLOR_BOOST_AUTO_CONTRAST_HIGH - lumaStdDev) / (COLOR_BOOST_AUTO_CONTRAST_HIGH - COLOR_BOOST_AUTO_CONTRAST_LOW), 0, 1);
 }
 
-/* Picks which of the two SHADER_TYPES algorithms suits a title, from its Plex genre
-   tags - Anime4K's edge-gated line-art shader for anything animated (matches "Animation"
-   and "Anime" alike, Western or Japanese), CAS everywhere else. Both platforms (this
-   file and Android's PlayerActivity) get this same result computed once here rather
-   than duplicating the genre check in Java - see plex-player.js's _playNative. */
-export function detectShaderType(genres) {
+/* Studios whose animated output is (as far as this list's author could confirm) CGI, not
+   traditional/cel-shaded or stop-motion - Anime4K's line-art-oriented edge shader suits the
+   latter, not the former, which reads much closer to live-action in edge/detail profile. NOT
+   an exhaustive list of 3D animation studios, and deliberately leaves out ones whose slate
+   mixes techniques (e.g. Walt Disney Animation Studios did/does both 2D classics and modern
+   CGI under the same studio name - Genre+Studio alone can't tell those apart) and Laika
+   (stop-motion, not CGI, despite reading as a plausible name for this list). See
+   detectShaderType for how this is used. */
+const CGI_ANIMATION_STUDIOS = [
+    "pixar",
+    "dreamworks animation",
+    "illumination",
+    "sony pictures animation",
+    "blue sky studios",
+    "skydance animation",
+];
+
+/* Picks which of the two SHADER_TYPES algorithms suits a title, from its Plex genre tags and
+   (when available) Studio - Anime4K's edge-gated line-art shader for 2D/traditional/anime
+   animation (matches "Animation" and "Anime" alike, Western or Japanese), CAS everywhere
+   else, including CGI animation (Pixar/DreamWorks/Illumination-style) which is visually much
+   closer to live-action than to cel-shaded line art despite also being "Animation" genre-
+   tagged. Studio is a coarse, best-effort signal (see CGI_ANIMATION_STUDIOS above for its
+   known gaps), not proof - genres/studio can both be missing or wrong. Both platforms (this
+   file and Android's PlayerActivity) get this same result computed once here rather than
+   duplicating the check in Java - see plex-player.js's _playNative. */
+export function detectShaderType(genres, studio) {
     const isAnimated = (genres || []).some((g) => (g || "").toLowerCase().includes("anim"));
-    return isAnimated ? "anime4k" : "live_action";
+    if (!isAnimated) return "live_action";
+    const studioLower = (studio || "").toLowerCase();
+    const isCgiStudio = CGI_ANIMATION_STUDIOS.some((s) => studioLower.includes(s));
+    return isCgiStudio ? "live_action" : "anime4k";
 }
 
 /* Re-exported under their historical names so the Android/Xbox ports keep one obvious

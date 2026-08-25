@@ -711,6 +711,7 @@ final class PlayerUiHelper {
             }
             PlayerActivity.seek(target);
             showControlsTemporarily(activity);
+            showSeekFlash(activity, forward);
         });
         return btn;
     }
@@ -3262,6 +3263,62 @@ final class PlayerUiHelper {
         if (activity.skipButton != null) {
             activity.skipButton.setVisibility(View.GONE);
         }
+    }
+
+    /* Native port of chrome-transport.js's ensureSeekFlashEl/flashSeekIndicator (the
+       web transport bar's "+5s"/"-5s" flash) - fired from both native seek paths that
+       exist here, PlayerActivity.seekByOffset (the touch double-tap gesture) and
+       makeSeekButton's own click listener above (the Fire TV/remote transport-bar
+       buttons, shown on devices with no touchscreen to produce that gesture - see
+       buildCenterControlsRow), so either input still gets the same feedback. One shared
+       panel view for both directions, its gradient/text/side swapped per call, rather
+       than one per direction like the web leg's own two elements - only one can ever be showing
+       at a time here, so there's nothing to keep separate. Kept out of fadingControls
+       (same reasoning as skipButton above): it's a one-shot flash on its own hide timer,
+       not ambient chrome that should fade on the idle timeout. */
+    static void showSeekFlash(PlayerActivity activity, boolean forward) {
+        if (activity.seekFlashView == null) {
+            float density = activity.getResources().getDisplayMetrics().density;
+            /* Matches chrome-transport.js's ensureSeekFlashEl exactly: a full-height edge
+               panel (26% of the screen width, capped at 300dp - the CSS leg's own 300px
+               cap, taken as a 1:1 px-to-dp translation) with a linear gradient fading from
+               semi-transparent black at the screen edge to fully transparent toward the
+               center, not a small centered pill. */
+            int screenWidthPx = activity.getResources().getDisplayMetrics().widthPixels;
+            int panelWidth = Math.min(Math.round(screenWidthPx * 0.26f), Math.round(300 * density));
+
+            FrameLayout panel = new FrameLayout(activity);
+            TextView flash = new TextView(activity);
+            flash.setTextColor(Color.WHITE);
+            flash.setTextSize(24);
+            flash.setTypeface(flash.getTypeface(), android.graphics.Typeface.BOLD);
+            panel.addView(flash, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.CENTER));
+            panel.setAlpha(0f);
+            FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(panelWidth, FrameLayout.LayoutParams.MATCH_PARENT);
+            panel.setLayoutParams(params);
+            activity.seekFlashView = panel;
+            activity.seekFlashLabel = flash;
+            activity.root.addView(panel);
+        }
+        FrameLayout panel = activity.seekFlashView;
+        activity.seekFlashLabel.setText(forward ? "+5s" : "-5s");
+        // GradientDrawable.Orientation paints colors[0] at its start edge, colors[1] at its end edge.
+        GradientDrawable bg = new GradientDrawable(
+            forward ? GradientDrawable.Orientation.RIGHT_LEFT : GradientDrawable.Orientation.LEFT_RIGHT,
+            new int[] { Color.argb(140, 0, 0, 0), Color.argb(0, 0, 0, 0) });
+        panel.setBackground(bg);
+        FrameLayout.LayoutParams params = (FrameLayout.LayoutParams) panel.getLayoutParams();
+        params.gravity = forward ? Gravity.END : Gravity.START;
+        panel.setLayoutParams(params);
+
+        activity.seekFlashHandler.removeCallbacks(activity.hideSeekFlashRunnable);
+        panel.animate().cancel();
+        panel.setScaleX(0.8f);
+        panel.setScaleY(0.8f);
+        panel.setAlpha(0f);
+        panel.animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(150).start();
+        activity.seekFlashHandler.postDelayed(activity.hideSeekFlashRunnable, 450L);
     }
 
     static void applyZoomTransform(PlayerActivity activity, View v) {

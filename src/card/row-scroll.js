@@ -157,9 +157,18 @@ export function createRowScroll(scroller, track) {
     if (!drag) return;
     if (drag.moved) {
       scroller.classList.remove("dragging");
-      // Swallow the click a drag-release would otherwise fire on whatever poster it lands
-      // on - same "don't treat a drag as a tap" rule native overflow scrolling gives for free.
-      scroller.addEventListener("click", (e) => e.stopPropagation(), { capture: true, once: true });
+      /* Swallow the click a drag-release would otherwise fire on whatever poster it lands
+         on - same "don't treat a drag as a tap" rule native overflow scrolling gives for
+         free. `once: true` alone left this listener dangling forever on any drag whose
+         release never actually produced a click (confirmed: some touch/pointer-event
+         combinations don't synthesize one), silently eating the user's NEXT real tap
+         instead of this drag's phantom one - the reported "double tap after scrolling a
+         row" bug. The 0ms timeout self-removes it once this drag's own click (if any) has
+         had its chance to fire, which happens synchronously as part of native touch/pointer
+         handling and so always lands before a later, physically-separate tap could. */
+      const swallowClick = (e) => e.stopPropagation();
+      scroller.addEventListener("click", swallowClick, { capture: true, once: true });
+      setTimeout(() => scroller.removeEventListener("click", swallowClick, { capture: true }), 0);
       const first = drag.samples[0];
       const last = drag.samples[drag.samples.length - 1];
       const dt = last.t - first.t;

@@ -27,11 +27,11 @@ export function extractLogoUrl(m, plexImageUrl) {
    `art` (hero/backdrop, meant to fill the screen). plexThumbUrl: (path) => same but
    resized via Plex's /photo/:/transcode - used for `image` (poster grid, always
    displayed small); defaults to plexImageUrl so existing callers/tests that don't pass
-   it keep working unresized rather than throwing. episodeFallbackGenres: genre tags to
-   use for an episode item, whose own Plex metadata carries no Genre of its own (that
-   lives on the show) - see plex-netflix-card.js's _mapItem for why this matters to
-   plex-player.js's shader auto-detection. */
-export function mapItem(m, withProgress, { plexImageUrl, plexThumbUrl = plexImageUrl, episodeFallbackGenres = [] }) {
+   it keep working unresized rather than throwing. episodeFallbackGenres/episodeFallbackStudio:
+   genre tags/studio to use for an episode item, whose own Plex metadata carries no Genre of
+   its own (that lives on the show) - see plex-netflix-card.js's _mapItem for why this matters
+   to plex-player.js's shader auto-detection. */
+export function mapItem(m, withProgress, { plexImageUrl, plexThumbUrl = plexImageUrl, episodeFallbackGenres = [], episodeFallbackStudio = "" }) {
   const thumbPath = m.thumb || m.grandparentThumb || m.composite || m.art || "";
   const image = plexThumbUrl(thumbPath);
   const art = plexImageUrl(m.art || m.grandparentArt || thumbPath);
@@ -63,6 +63,7 @@ export function mapItem(m, withProgress, { plexImageUrl, plexThumbUrl = plexImag
     watched: isShowLike ? m.leafCount > 0 && m.viewedLeafCount === m.leafCount : (m.viewCount || 0) > 0,
     hasHistory: isShowLike ? (m.viewedLeafCount || 0) > 0 : (m.viewCount || 0) > 0,
     genres: m.Genre?.length ? m.Genre.map((g) => (g.tag || "").trim()).filter(Boolean) : m.type === "episode" ? episodeFallbackGenres || [] : [],
+    studio: m.studio || (m.type === "episode" ? episodeFallbackStudio || "" : ""),
   };
   if (withProgress && m.duration) {
     item.progress = Math.max(0, Math.min(1, (m.viewOffset || 0) / m.duration));
