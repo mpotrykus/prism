@@ -97,7 +97,7 @@ export function pickNextEpisode(episodes) {
 export function mergeGenreRows(sections, { genreBySection, mapItem: mapItemFn, shuffle: shuffleFn, rowSize }) {
   const merged = new Map();
   for (const s of sections) {
-    const entries = (genreBySection && genreBySection.get(s.key)) || [];
+    const entries = (genreBySection && genreBySection.get(`${s.server_id}:${s.key}`)) || [];
     for (const g of entries) {
       const norm = g.title.trim().toLowerCase();
       if (!merged.has(norm)) merged.set(norm, { title: g.title, items: [], totalSize: 0, sectionGenreKeys: [] });

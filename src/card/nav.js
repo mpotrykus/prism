@@ -63,11 +63,11 @@ function buildNavTabs(card) {
     seenServerIds.add(sv.id);
     if (sv.all_enabled !== false) tabs.push({ view: `server-${sv.id}`, label: sv.name, sublabel: "" });
     for (const s of sections.filter((x) => x.server_id === sv.id)) {
-      tabs.push({ view: `section-${s.key}`, label: s.label, sublabel: sv.name });
+      tabs.push({ view: `section-${sv.id}:${s.key}`, label: s.label, sublabel: sv.name });
     }
   }
   for (const s of sections.filter((x) => !seenServerIds.has(x.server_id))) {
-    tabs.push({ view: `section-${s.key}`, label: s.label, sublabel: "" });
+    tabs.push({ view: `section-${s.server_id}:${s.key}`, label: s.label, sublabel: "" });
   }
   return tabs;
 }

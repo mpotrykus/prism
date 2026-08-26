@@ -104,11 +104,11 @@ const noShuffle = (arr) => arr;
 describe("mergeGenreRows", () => {
   it("merges same-named genres across sections and drops small buckets", () => {
     const genreBySection = new Map([
-      [1, [{ title: "Horror", items: [{ addedAt: 1 }, { addedAt: 2 }, { addedAt: 3 }, { addedAt: 4 }, { addedAt: 5 }], totalSize: 5 }]],
-      [2, [{ title: "horror", items: [{ addedAt: 6 }], totalSize: 1 }]],
-      [3, [{ title: "Tiny", items: [{ addedAt: 1 }], totalSize: 1 }]],
+      ["srv1:1", [{ title: "Horror", items: [{ addedAt: 1 }, { addedAt: 2 }, { addedAt: 3 }, { addedAt: 4 }, { addedAt: 5 }], totalSize: 5 }]],
+      ["srv1:2", [{ title: "horror", items: [{ addedAt: 6 }], totalSize: 1 }]],
+      ["srv1:3", [{ title: "Tiny", items: [{ addedAt: 1 }], totalSize: 1 }]],
     ]);
-    const rows = mergeGenreRows([{ key: 1 }, { key: 2 }, { key: 3 }], {
+    const rows = mergeGenreRows([{ key: 1, server_id: "srv1" }, { key: 2, server_id: "srv1" }, { key: 3, server_id: "srv1" }], {
       genreBySection,
       mapItem: identityMapItem,
       shuffle: noShuffle,
@@ -117,6 +117,21 @@ describe("mergeGenreRows", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0].title).toBe("Horror");
     expect(rows[0].items).toHaveLength(6);
+  });
+
+  it("keys genre data by server_id+key, not key alone, so two servers' same-numbered libraries don't merge", () => {
+    const genreBySection = new Map([
+      ["srv1:1", [{ title: "Horror", items: [{ addedAt: 1, from: "srv1" }, { addedAt: 2, from: "srv1" }, { addedAt: 3, from: "srv1" }, { addedAt: 4, from: "srv1" }, { addedAt: 5, from: "srv1" }], totalSize: 5 }]],
+      ["srv2:1", [{ title: "Horror", items: [{ addedAt: 1, from: "srv2" }], totalSize: 1 }]],
+    ]);
+    const rows = mergeGenreRows([{ key: 1, server_id: "srv1" }], {
+      genreBySection,
+      mapItem: identityMapItem,
+      shuffle: noShuffle,
+      rowSize: 20,
+    });
+    expect(rows).toHaveLength(1);
+    expect(rows[0].items.every((m) => m.from === "srv1")).toBe(true);
   });
 });
 

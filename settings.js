@@ -664,7 +664,17 @@ class StreamingSettingsModal extends HTMLElement {
       const secrets = await this._collectSecrets();
       await saveSecrets(secrets);
       savePlain(plain);
-      const fullConfig = { ...plain, ...secrets };
+      /* Same server+token merge as loadFull() - plain.servers has no token field (see
+         _collectPlainConfig's comment) and secrets only carries the id-keyed
+         server_tokens map, so naively spreading both here would hand refreshConfig()
+         servers with no token at all. That undefined token was then round-tripping
+         through data.js's loadAll (which re-persists server_tokens keyed off whatever
+         card._config.servers already has) back into the vault as an empty string,
+         permanently wiping every server's real token on the very next save - each
+         later _playItem call then failed with a missing plexToken and silently fell
+         back to opening Plex's own web/app link instead of this app's player. */
+      const servers = (plain.servers || []).map((s) => ({ ...s, token: secrets.server_tokens?.[s.id] || "" }));
+      const fullConfig = { ...plain, ...secrets, servers };
       this.dispatchEvent(new CustomEvent("settings-saved", { bubbles: true, composed: true, detail: fullConfig }));
       this.close();
     } catch (e) {

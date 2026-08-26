@@ -65,6 +65,12 @@ export async function plexFetch(card, path, params = {}, server = null) {
   if (mc) {
     (mc.Metadata || []).forEach((m) => { m.__server = s; });
     (mc.Directory || []).forEach((d) => { d.__server = s; });
+    /* Hub-shaped endpoints (/library/metadata/<id>/related, /hubs/search, ...) nest
+       their items under Hub[].Metadata instead of a top-level Metadata array - missing
+       this left every item from those endpoints with no __server, silently falling back
+       to the primary server for its image/thumb URLs (and, if ever played, for playback
+       itself) whenever the fetch was actually against a different (e.g. shared) server. */
+    (mc.Hub || []).forEach((h) => (h.Metadata || []).forEach((m) => { m.__server = s; }));
   }
   return data;
 }
@@ -74,8 +80,17 @@ export async function plexFetch(card, path, params = {}, server = null) {
    sectionsForView. */
 export function sectionForView(card, view) {
   if (typeof view !== "string" || !view.startsWith("section-")) return null;
-  const key = Number(view.slice("section-".length));
-  return (card._config.sections || []).find((s) => s.key === key) || null;
+  /* Plex library keys are small integers assigned per-server (1, 2, 3...), NOT globally
+     unique - two servers' first movie library are both very likely "key 1". The view id
+     (see nav.js's buildNavTabs) is `section-<server_id>:<key>` for exactly this reason -
+     matching on key alone here previously always resolved to whichever server's section
+     happened to come first in card._config.sections, silently fetching/showing that
+     server's library contents under the other server's tab. */
+  const raw = view.slice("section-".length);
+  const sep = raw.indexOf(":");
+  const server_id = raw.slice(0, sep);
+  const key = Number(raw.slice(sep + 1));
+  return (card._config.sections || []).find((s) => s.server_id === server_id && s.key === key) || null;
 }
 
 export function sectionsForView(card, view) {
@@ -288,9 +303,13 @@ async function loadGenreDataBySection(card) {
             }
           })
         );
-        result.set(s.key, perGenre);
+        /* Keyed by server_id+key, not key alone - Plex library keys are small per-server
+           integers (1, 2, 3...), not globally unique, so two servers' first library would
+           otherwise collide in this Map and silently overwrite each other's genre data
+           (same convention settings.js's own section merge already uses). */
+        result.set(`${s.server_id}:${s.key}`, perGenre);
       } catch (e) {
-        result.set(s.key, []);
+        result.set(`${s.server_id}:${s.key}`, []);
       }
     })
   );
@@ -343,7 +362,7 @@ async function fetchAiRowsRaw(card, ideas) {
     ideas.map(async (idea) => {
       const perSection = await Promise.all(
         card._config.sections.map(async (s) => {
-          const genreEntries = (card._genreBySection && card._genreBySection.get(s.key)) || [];
+          const genreEntries = (card._genreBySection && card._genreBySection.get(`${s.server_id}:${s.key}`)) || [];
           const keys = idea.genres.map((g) => {
             const norm = g.trim().toLowerCase();
             const match = genreEntries.find((e) => e.title.trim().toLowerCase() === norm);

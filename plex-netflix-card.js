@@ -622,6 +622,32 @@ class PlexNetflixCard extends HTMLElement {
     return sectionForView(this, view);
   }
 
+  /* sectionsForView (data.js) already scopes genre/collection rows to the tapped
+     server's own sections, but onDeck/watchlist/recentlyAdded/recommended/popular are
+     built from card-wide raw caches (see loadAll) spanning every active server, with no
+     section to key off - this is the equivalent per-view filter for those, keyed off
+     each raw item's own __server stamp (see data.js's plexFetch) instead. */
+  _serverFilterForView(view) {
+    if (typeof view !== "string") return () => true;
+    if (view.startsWith("server-")) {
+      const id = view.slice("server-".length);
+      return (m) => m.__server?.id === id;
+    }
+    /* A library tab (view = "section-<server_id>:<key>") is just as server-specific as
+       a "server-<id>" (whole-server) tab, but has no separate id of its own to match on
+       - it's implied by whichever section _sectionForView resolves the view to. Without
+       this branch, every card-wide raw cache (onDeck/watchlist/recentlyAdded/recommended/
+       popular) fell through to the identity filter below on a library tab, so those rows
+       kept showing every active server's items even once the tab's own section/genre
+       data (which does key off the view directly) was scoped correctly. */
+    if (view.startsWith("section-")) {
+      const section = this._sectionForView(view);
+      if (!section) return () => true;
+      return (m) => m.__server?.id === section.server_id;
+    }
+    return () => true;
+  }
+
   _sectionsForView(view) {
     return sectionsForView(this, view);
   }
@@ -683,8 +709,9 @@ class PlexNetflixCard extends HTMLElement {
     const sectionsForGenres = this._sectionsForView(view);
 
     const sectionFilters = SECTION_TYPE_FILTERS[this._sectionForView(view)?.type];
-    const onDeckFilter = sectionFilters ? (m) => m.type === sectionFilters.onDeck : () => true;
-    const otherFilter = sectionFilters ? (m) => m.type === sectionFilters.other : () => true;
+    const serverFilter = this._serverFilterForView(view);
+    const onDeckFilter = (m) => (sectionFilters ? m.type === sectionFilters.onDeck : true) && serverFilter(m);
+    const otherFilter = (m) => (sectionFilters ? m.type === sectionFilters.other : true) && serverFilter(m);
     const watchlistFilter = otherFilter;
     const recentlyAddedFilter = otherFilter;
     const recommendedFilter = otherFilter;
@@ -757,7 +784,8 @@ class PlexNetflixCard extends HTMLElement {
   _refreshWatchlistRow() {
     const view = this._currentView || "home";
     const sectionFilters = SECTION_TYPE_FILTERS[this._sectionForView(view)?.type];
-    const watchlistFilter = sectionFilters ? (m) => m.type === sectionFilters.other : () => true;
+    const serverFilter = this._serverFilterForView(view);
+    const watchlistFilter = (m) => (sectionFilters ? m.type === sectionFilters.other : true) && serverFilter(m);
     const watchlistFull = (this._watchlistRaw || []).filter(watchlistFilter);
     const watchlist = watchlistFull.slice(0, this._config.row_size).map((m) => this._mapItem(m, false));
 
@@ -801,7 +829,8 @@ class PlexNetflixCard extends HTMLElement {
   _refreshOnDeckRow() {
     const view = this._currentView || "home";
     const sectionFilters = SECTION_TYPE_FILTERS[this._sectionForView(view)?.type];
-    const onDeckFilter = sectionFilters ? (m) => m.type === sectionFilters.onDeck : () => true;
+    const serverFilter = this._serverFilterForView(view);
+    const onDeckFilter = (m) => (sectionFilters ? m.type === sectionFilters.onDeck : true) && serverFilter(m);
     const onDeck = (this._onDeckRaw || [])
       .filter(onDeckFilter)
       .map((m) => this._mapItem(m, true));
@@ -856,8 +885,11 @@ class PlexNetflixCard extends HTMLElement {
   }
 
   _getCollectionsRowForView(sections) {
-    const keys = new Set(sections.map((s) => s.key));
-    const collections = (this._collectionsRaw || []).filter((c) => keys.has(c.section.key));
+    /* Composite server_id+key, not key alone - Plex library keys are small per-server
+       integers, not globally unique, so a bare key match here previously let a different
+       server's same-numbered library's collections leak into this view's Collections row. */
+    const keys = new Set(sections.map((s) => `${s.server_id}:${s.key}`));
+    const collections = (this._collectionsRaw || []).filter((c) => keys.has(`${c.section.server_id}:${c.section.key}`));
     if (!collections.length) return null;
     const items = collections.map((c) => ({
       ratingKey: c.ratingKey,
@@ -1097,7 +1129,8 @@ class PlexNetflixCard extends HTMLElement {
      (e.g. a 2-film franchise) are still worth showing as-is. */
   _typeFilterForView(view) {
     const sectionFilters = SECTION_TYPE_FILTERS[this._sectionForView(view)?.type];
-    return sectionFilters ? (m) => m.type === sectionFilters.other : () => true;
+    const serverFilter = this._serverFilterForView(view);
+    return (m) => (sectionFilters ? m.type === sectionFilters.other : true) && serverFilter(m);
   }
 
   /* Cheap candidate pool for the hero's very first pick (see data.js's loadAll and
@@ -1169,7 +1202,7 @@ class PlexNetflixCard extends HTMLElement {
   async _loadAiRowFull(genres, typeFilter) {
     const perSection = await Promise.all(
       (this._config.sections || []).map(async (s) => {
-        const genreEntries = (this._genreBySection && this._genreBySection.get(s.key)) || [];
+        const genreEntries = (this._genreBySection && this._genreBySection.get(`${s.server_id}:${s.key}`)) || [];
         const keys = (genres || []).map((g) => {
           const norm = g.trim().toLowerCase();
           const match = genreEntries.find((e) => e.title.trim().toLowerCase() === norm);

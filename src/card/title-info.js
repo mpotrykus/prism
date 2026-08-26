@@ -512,6 +512,11 @@ export class TitleInfoController {
       subtitle: "",
       image: item.image,
       art: item.art,
+      /* Without this, every ctx.plexFetch this modal makes for the redirected show falls
+         back to the primary/owned server (see plex-netflix-card.js's title-info binding),
+         silently fetching the wrong server's metadata whenever the episode that led here
+         (e.g. a Continue Watching row) lives on a shared, non-owned server. */
+      server: item.server || null,
     };
     await this.open(showItem, source);
     if (this._item === showItem) {
