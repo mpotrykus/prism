@@ -28,8 +28,18 @@
        actually need the clearance. */
         padding-top: 12px;
     }
-     :host-context([data-platform="android"]) .header {
+     :host-context([data-platform="android"]) .header,
+     :host-context([data-platform="uwp"]:not([data-xbox-device="true"])) .header {
         padding-top: calc(12px + var(--safe-top));
+    }
+    /* Xbox has no title bar and --safe-top is always 0 there (see MainPage.xaml.cs), so it
+     needs its own clearance rather than piggybacking on the android/PC rule above - and
+     MainPage.xaml.cs deliberately disables the automatic TV-safe-area border so the web app
+     manages this itself. 4vh is a rough approximation of Microsoft's ~5%-of-viewport TV-safe-
+     area guidance, not a measured value - unverified on real console hardware, revisit once
+     tested there. */
+     :host-context([data-xbox-device="true"]) .header {
+        padding-top: calc(12px + 4vh);
     }
     /* An ordinary flex child of .header now, not position:absolute - see header-search.css's
      .header-side comment for why: .header-side-left/-right flank it with equal flex-grow,

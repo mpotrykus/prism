@@ -329,7 +329,6 @@ class PlexNetflixCard extends HTMLElement {
         <div class="title-info-season-modal">
           <div class="title-info-season-modal-title">Select Season</div>
           <div class="title-info-season-modal-list"></div>
-          <button type="button" class="title-info-season-modal-cancel">Cancel</button>
         </div>
       </div>
     `;

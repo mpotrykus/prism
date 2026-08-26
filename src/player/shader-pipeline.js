@@ -1,4 +1,4 @@
-import { shaderTuningAt, colorBoostAt, SHADER_TYPES, DEBAND_TUNING } from "./shader/shaders.js";
+import { shaderTuningAt, colorBoostAt, SHADER_TYPES, DEBAND_TUNING, detectShaderType } from "./shader/shaders.js";
 import { createPassChain } from "./shader/pass-chain.js";
 import { createPerfWatchdog } from "./shader/perf-watchdog.js";
 import {
@@ -99,6 +99,48 @@ export function setShaderStrength(controller, strength) {
     controller._shaderStrength = strength;
     controller._shaderType = resolveShaderType(controller);
     localStorage.setItem(UPSCALE_STRENGTH_STORAGE_KEY, String(strength));
+    updateShaderPipeline(controller);
+}
+
+/* Manual Animation/Live-Action override for the Effects menu's Sharpening row
+   (chrome-menu-effects.js) - "auto" defers to detectShaderType's own genre/studio guess
+   (today's behavior), "anime4k"/"live_action" pin the family outright regardless of what
+   the title's genres/studio say, for the case auto-detection got it wrong. Same immediate-
+   persistence model as storedShaderEnabled/storedShaderStrength (see ui/shared.js) - kept
+   here instead of there since this key is only ever read/written from this file. */
+const SHADER_FAMILY_OVERRIDE_STORAGE_KEY = "prism_player_shader_family_override";
+
+export function storedShaderFamilyOverride() {
+    const stored = localStorage.getItem(SHADER_FAMILY_OVERRIDE_STORAGE_KEY);
+    return stored === "anime4k" || stored === "live_action" ? stored : "auto";
+}
+
+/* The one place _shaderAutoType is ever computed - both plex-player.js's per-video reset
+   and setShaderFamilyOverride below call this rather than either duplicating the override
+   check or calling detectShaderType directly, so there's exactly one spot that has to know
+   the override can win outright over genre/studio detection. */
+export function resolveShaderFamily(genres, studio) {
+    const override = storedShaderFamilyOverride();
+    return override === "auto" ? detectShaderType(genres, studio) : override;
+}
+
+/* Changing the override has to re-resolve _shaderAutoType for the CURRENT video too, not
+   just future ones - genres/studio for the title already playing aren't kept anywhere else
+   once _shaderAutoType is first resolved, so plex-player.js's per-video reset stashes them
+   on the controller (_shaderGenres/_shaderStudio) purely so this can reach them later.
+   _shaderType is re-resolved right behind it for the same reason setShaderStrength/
+   setShaderEnabled below do - it, not _shaderAutoType, is what renderShaderFrame's web path
+   and resolveShaderType's own "off" check actually key off. updateShaderPipeline is what
+   makes this apply immediately: it swaps the web leg's GL chain and re-posts to Xbox
+   (postXboxShaderSettings/postXboxAiUpscalingSettings both send controller._shaderAutoType
+   already) - see that function below. Android has no live mid-playback path for this field
+   (native-bridge.js's buildPlaybackPayload only reads it once, at payload-build time), so a
+   change made there takes effect starting with the next title/session rather than instantly -
+   deliberately out of scope to build a native bridge update just for this. */
+export function setShaderFamilyOverride(controller, override) {
+    localStorage.setItem(SHADER_FAMILY_OVERRIDE_STORAGE_KEY, override);
+    controller._shaderAutoType = resolveShaderFamily(controller._shaderGenres, controller._shaderStudio);
+    controller._shaderType = resolveShaderType(controller);
     updateShaderPipeline(controller);
 }
 

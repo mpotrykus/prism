@@ -23,7 +23,6 @@
    reaching into the shared control-row/menu chrome) keeps working unchanged. */
 import { registerNavHandler } from "./focus-nav.js";
 import { lockScroll, unlockScroll } from "./scroll-lock.js";
-import { detectShaderType } from "./src/player/shader/shaders.js";
 import { hasNativePlayer, platformTag, plexPlatformTag, usesProgressiveStream, supportsHdr, getDecodeCapabilities } from "./src/player/core/platform.js";
 import { media } from "./src/player/core/media-facade.js";
 import { buildStreamUrl, buildDecisionUrl, resolvePlaybackUrl } from "./src/player/core/stream-url.js";
@@ -31,7 +30,7 @@ import { deriveChapterMarkers } from "./src/player/core/chapter-markers.js";
 import { playNative, switchNative, stopNative, pauseNative, resumeNative, buildPlaybackPayload } from "./src/player/native-bridge.js";
 import { playXbox, switchXbox, stopXbox, pauseXbox, resumeXbox, reloadXboxSource } from "./src/player/xbox-bridge.js";
 import { playWeb, attachSource, reloadWebSource, teardownWeb } from "./src/player/web-fallback.js";
-import { setShaderStrength, setColorBoostSaturationStrength, setColorBoostContrastStrength, setAiUpscalingEnabled, updateShaderPipeline, ensureShaderPipeline, stopShaderLoop } from "./src/player/shader-pipeline.js";
+import { setShaderStrength, setColorBoostSaturationStrength, setColorBoostContrastStrength, setAiUpscalingEnabled, updateShaderPipeline, ensureShaderPipeline, stopShaderLoop, resolveShaderFamily } from "./src/player/shader-pipeline.js";
 import { setAmbientEnabled, setAmbientOpacity, updateAmbientPipeline, stopAmbientLoop } from "./src/player/ambient-pipeline.js";
 import { setStatsOverlayEnabled, updateStatsOverlayPipeline } from "./src/player/stats-overlay.js";
 import { setAudioLevelingEnabled, updateAudioLevelingPipeline } from "./src/player/audio-leveling.js";
@@ -474,13 +473,20 @@ class StreamingPlayerController {
            wrongly read that as "already handled this session" and skip it entirely. */
         this._subtitleAutoApplyRatingKey = null;
 
-        /* detectShaderType still resolves fresh per-video from this title's own genre
-           tags - the only part of this that's genuinely per-video. shaderEnabled/
-           shaderStrength/upscaleAuto below follow the same immediate-persistence model
-           as colorBoostEnabled/colorBoostStrength/colorBoostAuto just below - whatever
-           the in-player menu was last set to (see shader-pipeline.js's setUpscaleMode/
-           setColorBoostMode), not a Settings-modal default reset every video. */
-        this._shaderAutoType = detectShaderType(item.genres, item.studio);
+        /* resolveShaderFamily still resolves fresh per-video from this title's own genre
+           tags via detectShaderType, unless the Effects menu's manual Animation/Live-Action
+           override (shader-pipeline.js's setShaderFamilyOverride) says otherwise - the only
+           part of this whole block that's genuinely per-video. genres/studio are stashed on
+           the controller rather than just fed in and discarded so a later override change
+           mid-playback can re-resolve _shaderAutoType for the CURRENT video too, without
+           this file needing to remember the original item. shaderEnabled/shaderStrength/
+           upscaleAuto below follow the same immediate-persistence model as colorBoostEnabled/
+           colorBoostStrength/colorBoostAuto just below - whatever the in-player menu was
+           last set to (see shader-pipeline.js's setUpscaleMode/setColorBoostMode), not a
+           Settings-modal default reset every video. */
+        this._shaderGenres = item.genres || [];
+        this._shaderStudio = item.studio || "";
+        this._shaderAutoType = resolveShaderFamily(this._shaderGenres, this._shaderStudio);
         this._shaderEnabled = storedShaderEnabled();
         this._shaderStrength = storedShaderStrength();
         /* _upscaleAuto has to be read before resolving _shaderType below - in Auto mode

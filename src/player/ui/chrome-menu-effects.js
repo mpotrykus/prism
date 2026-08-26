@@ -11,9 +11,11 @@ import {
     setColorBoostContrastMode,
     idleUpgradeLabel,
     sourceWillUpscale,
+    storedShaderFamilyOverride,
+    setShaderFamilyOverride,
 } from "../shader-pipeline.js";
 import { setAmbientOpacity } from "../ambient-pipeline.js";
-import { fullscreenIconMarkup, colorBoostIconMarkup, ambientIconMarkup, aiUpscalingIconMarkup, PLAYER_FOCUSABLE_CLASS } from "./shared.js";
+import { fullscreenIconMarkup, colorBoostIconMarkup, ambientIconMarkup, aiUpscalingIconMarkup, versionIconMarkup, PLAYER_FOCUSABLE_CLASS } from "./shared.js";
 /* Circular with chrome-menu.js (which imports renderEffectsList from this file for its
    "Effects" row) - safe here because both sides only reference the other module's
    export from inside a function body (makeBackRow/makeToggleSwitch are only called once
@@ -21,26 +23,42 @@ import { fullscreenIconMarkup, colorBoostIconMarkup, ambientIconMarkup, aiUpscal
    loading), never at top-level module-evaluation time. */
 import { makeBackRow, makeToggleSwitch } from "./chrome-menu.js";
 
-/* The hamburger "More" sheet's Effects sub-screen: AI Upscaling/Sharpening/Color Boost/
-   Ambient Lighting, each a plain always-visible row (not an accordion section, see
-   renderEffectsList). Sharpening and AI Upscaling used to be one row that silently swapped
-   which algorithm it meant depending on runtime state - split into two independent toggles
-   since they're genuinely different algorithms (a hand-written sharpen kernel vs. a trained
-   CNN/analytic upscaler) with different costs and no reason to share one on/off state. */
+/* The hamburger "More" sheet's Effects sub-screen: Content Type/AI Upscaling/Sharpening/
+   Color Boost/Ambient Lighting, each a plain always-visible row (not an accordion section,
+   see renderEffectsList). Sharpening and AI Upscaling used to be one row that silently
+   swapped which algorithm it meant depending on runtime state - split into two independent
+   toggles since they're genuinely different algorithms (a hand-written sharpen kernel vs. a
+   trained CNN/analytic upscaler) with different costs and no reason to share one on/off
+   state. Both still key off the same auto-detected/overridden family though (see Content
+   Type below) - that's one shared concept, not two to keep in sync. */
 
 /* "Effects" navigates to a whole separate list (see chrome-menu.js's buildAccordionRow
-   `nav` case) rather than expanding in place - these four read better as their own
+   `nav` case) rather than expanding in place - these five read better as their own
    dedicated screen than squeezed inline under a fifth row. Clears and rebuilds `list` in
    place (same element, new contents) rather than swapping in a second list element, so the
    sheet's own scroll position/height logic doesn't need to know which screen is currently
    showing. Unlike the main list's rows, these are plain always-visible rows (see
    buildEffectRow) rather than accordion sections - each one landing on either a slider or a
    toggle, so tap-to-expand would only have added a step between opening "Effects" and
-   reaching the control someone came here for. */
+   reaching the control someone came here for.
+
+   Content Type is built first so its Auto/Animation/Live-Action override sits above both
+   rows it actually affects (AI Upscaling's chosen CNN/FSR chain and Sharpening's chosen
+   kernel both read controller._shaderAutoType - see shader-pipeline.js's
+   upgradedPresetKey/chooseRenderPreset), but `refreshAiUpscalingCaption` is only assigned
+   once buildAiUpscalingEffectRow itself runs, just after. That's fine: the `let` binding is
+   only ever invoked later, from a click inside buildContentTypeEffectRow's own onChange
+   handler, by which point this whole function has already finished running and reassigned
+   it - JS closures capture the variable, not its value at the time onFamilyChange was
+   created. */
 export function renderEffectsList(controller, list, onBack) {
     list.innerHTML = "";
     list.appendChild(makeBackRow(onBack));
-    buildAiUpscalingEffectRow(controller, list);
+    let refreshAiUpscalingCaption = () => {};
+    buildContentTypeEffectRow(controller, list, {
+        onFamilyChange: () => refreshAiUpscalingCaption(),
+    });
+    refreshAiUpscalingCaption = buildAiUpscalingEffectRow(controller, list);
     buildShaderEffectRow(controller, list);
     buildColorBoostEffectRow(controller, list);
     buildAmbientEffectRow(controller, list);
@@ -216,8 +234,12 @@ function buildEffectRow(list, { icon, label, caption, toggleReachable = false })
     labelEl.textContent = label;
     Object.assign(labelEl.style, { color: "#fff", fontSize: "15px", fontWeight: "600" });
     labelStack.appendChild(labelEl);
+    /* captionEl is returned (not just written once) so a caller whose caption can change
+       after this row is built - buildShaderEffectRow's Detected/manual-override wording -
+       can update it in place instead of rebuilding the whole row. */
+    let captionEl = null;
     if (caption) {
-        const captionEl = document.createElement("span");
+        captionEl = document.createElement("span");
         captionEl.textContent = caption;
         Object.assign(captionEl.style, { fontSize: "11px", fontWeight: "400", color: "rgba(255,255,255,0.45)" });
         labelStack.appendChild(captionEl);
@@ -231,15 +253,103 @@ function buildEffectRow(list, { icon, label, caption, toggleReachable = false })
 
     wrap.appendChild(header);
     list.appendChild(wrap);
-    return { wrap, rightSide, header };
+    return { wrap, rightSide, header, captionEl };
+}
+
+/* Segmented control for Content Type's row (buildContentTypeEffectRow below) - Auto/
+   Animation/Live-Action, overriding which family resolveShaderFamily/detectShaderType would
+   otherwise have picked (shader-pipeline.js's storedShaderFamilyOverride/
+   setShaderFamilyOverride) for the case auto-detection got it wrong (e.g. a live-action title
+   whose genre tags happen to include "Animation"). Lives in its own row rather than under
+   Sharpening specifically - it drives AI Upscaling's chosen chain just as much (both read
+   controller._shaderAutoType, see chooseRenderPreset/upgradedPresetKey), and burying it under
+   one of the two rows it affects left the other one's viewers with no reason to look for it
+   there. Copies buildModeRow's button-rendering/pill-style approach above rather than sharing
+   it outright - buildModeRow's `strips`/mode semantics (Auto/On/Off driving a strength slider)
+   don't fit this control at all, there's no slider here, just a three-way family pick - but
+   sized to each label's own text instead of a fixed 44px column, since "Live-Action" doesn't
+   fit that width. */
+function buildFamilyOverrideRow({ groupId, current, onChange }) {
+    const row = document.createElement("div");
+    Object.assign(row.style, { display: "flex", gap: "6px", padding: "0 0 10px" });
+
+    const options = [
+        { key: "auto", label: "Auto" },
+        { key: "anime4k", label: SHADER_TYPES.anime4k.label },
+        { key: "live_action", label: SHADER_TYPES.live_action.label },
+    ];
+
+    const buttons = options.map((opt) => {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.classList.add(PLAYER_FOCUSABLE_CLASS);
+        /* Same data-nav-group reasoning as buildModeRow's own buttons - see focus-nav.js's
+           wireLinearNav. Own group id, scoped to just these three buttons. */
+        btn.dataset.navGroup = groupId;
+        btn.textContent = opt.label;
+        Object.assign(btn.style, {
+            padding: "6px 10px",
+            textAlign: "center",
+            boxSizing: "border-box",
+            fontSize: "12px",
+            fontWeight: "600",
+            border: "1px solid rgba(255,255,255,0.15)",
+            borderRadius: "6px",
+            cursor: "pointer",
+            background: "transparent",
+            color: "rgba(255,255,255,0.7)",
+        });
+        btn.addEventListener("click", () => {
+            onChange(opt.key);
+            setActive(opt.key);
+        });
+        row.appendChild(btn);
+        return { key: opt.key, btn };
+    });
+
+    const setActive = (activeKey) => {
+        buttons.forEach(({ key, btn }) => {
+            const selected = key === activeKey;
+            btn.style.background = selected ? "#e5a00d" : "transparent";
+            btn.style.color = selected ? "#1a1a1a" : "rgba(255,255,255,0.7)";
+            btn.style.borderColor = selected ? "#e5a00d" : "rgba(255,255,255,0.15)";
+        });
+    };
+    setActive(current);
+
+    return row;
+}
+
+/* One row, shared by both AI Upscaling and Sharpening below - both read the same
+   controller._shaderAutoType (see chooseRenderPreset/upgradedPresetKey in
+   shader-pipeline.js), so this is one control to keep in sync, not two. `onFamilyChange` lets
+   renderEffectsList refresh AI Upscaling's own caption (its wording depends on which family
+   won just as much as this row's does) right after the override changes, without this row
+   needing to know anything about AI Upscaling's internals itself. No caption here - the
+   Auto/Animation/Live-Action buttons themselves already say which family is in effect, so a
+   "Detected: X"/"X (manual)" subtitle underneath was redundant. */
+function buildContentTypeEffectRow(controller, list, { onFamilyChange }) {
+    const { rightSide } = buildEffectRow(list, {
+        icon: versionIconMarkup(),
+        label: "Content",
+    });
+
+    const familyRow = buildFamilyOverrideRow({
+        groupId: "shader-family-override",
+        current: storedShaderFamilyOverride(),
+        onChange: (override) => {
+            setShaderFamilyOverride(controller, override);
+            onFamilyChange();
+        },
+    });
+    rightSide.appendChild(familyRow);
 }
 
 /* Reuses fullscreenIconMarkup's expand-corners glyph - a sharpen kernel is, visually, the same
-   "stretch the picture outward" idea. No manual Off/Anime4K/Live-Action picker -
-   controller._shaderAutoType is decided once per video from its Plex genre tags (see
-   detectShaderType) and shown here as read-only info via the caption. The mode row + slider
-   are the only remaining controls, and dragging strength to 0% in "on" mode is what a plain
-   "Off" used to be.
+   "stretch the picture outward" idea. The mode row + slider are the only strength-side
+   controls, and dragging strength to 0% in "on" mode is what a plain "Off" used to be.
+   Which family (Animation/Live-Action) is actually being sharpened is Content Type's row
+   above to show/override, not this one's concern any more.
 
    This is deliberately always the full mode-row+slider now, with no branching on whether AI
    Upscaling happens to be the thing actually rendering - that branching (via activePresetKey/
@@ -247,11 +357,9 @@ function buildEffectRow(list, { icon, label, caption, toggleReachable = false })
    underneath a single toggle. AI Upscaling is its own row below with its own toggle;
    Sharpening's own row no longer needs to know or care what it's doing. */
 function buildShaderEffectRow(controller, list) {
-    const familyLabel = SHADER_TYPES[controller._shaderAutoType].label;
     const { wrap, rightSide } = buildEffectRow(list, {
         icon: fullscreenIconMarkup(false),
         label: "Sharpening",
-        caption: `Detected: ${familyLabel}`,
     });
 
     const strengthLabel = document.createElement("div");
@@ -320,20 +428,11 @@ function xboxAiUpscalingCaption(controller, preset) {
     return `${preset.label} idle - pass-through`;
 }
 
-/* AI Upscaling (the real Anime4K CNN / FSR 1 chains): a plain on/off toggle, independent of
-   Sharpening's own toggle - no strength slider (see `strengthless`, a trained network/analytic
-   upscaler has no intensity knob) and no Auto (there's nothing for Auto to compute either). Same
-   toggle-reachable header treatment as Ambient Lighting, for the same D-pad reason.
-
-   "Independent" no longer means "mutually exclusive": Sharpening's own kernel always runs as a
-   trailing pass on top of AI Upscaling's output now (see shaders.js's buildAnime4kCnn/buildFsr)
-   rather than one toggle silently superseding the other - explicit user call. The pass count in
-   the caption below already reflects that extra pass when it applies.
-
-   The caption does the same explaining idleUpgradeLabel always did, just covering the "off"
-   and "unsupported" states too now that this is its own row rather than one that only existed
-   when the upgrade was already the thing rendering. */
-function buildAiUpscalingEffectRow(controller, list) {
+/* Split out of buildAiUpscalingEffectRow so Content Type's own override can trigger a
+   recompute (via the `onFamilyChange` callback threaded through renderEffectsList) without
+   this row needing to rebuild itself from scratch - familyKey/preset/caption/noUpscaleNeeded
+   all depend on controller._shaderAutoType, which a family override changes live. */
+function computeAiUpscalingStatus(controller) {
     const familyKey = controller._shaderAutoType;
     const upgradeKey = SHADER_TYPES[familyKey]?.upgradeTo;
     const preset = upgradeKey ? SHADER_TYPES[upgradeKey] : null;
@@ -371,8 +470,30 @@ function buildAiUpscalingEffectRow(controller, list) {
            needs assembling here. */
         caption = idleUpgradeLabel(controller, familyKey) ?? `${preset.label} · ${presetPassCount(controller, preset)} passes`;
     }
+    return { caption, noUpscaleNeeded };
+}
 
-    const { rightSide, header } = buildEffectRow(list, {
+/* AI Upscaling (the real Anime4K CNN / FSR 1 chains): a plain on/off toggle, independent of
+   Sharpening's own toggle - no strength slider (see `strengthless`, a trained network/analytic
+   upscaler has no intensity knob) and no Auto (there's nothing for Auto to compute either). Same
+   toggle-reachable header treatment as Ambient Lighting, for the same D-pad reason.
+
+   "Independent" no longer means "mutually exclusive": Sharpening's own kernel always runs as a
+   trailing pass on top of AI Upscaling's output now (see shaders.js's buildAnime4kCnn/buildFsr)
+   rather than one toggle silently superseding the other - explicit user call. The pass count in
+   the caption below already reflects that extra pass when it applies.
+
+   The caption does the same explaining idleUpgradeLabel always did, just covering the "off"
+   and "unsupported" states too now that this is its own row rather than one that only existed
+   when the upgrade was already the thing rendering.
+
+   Returns a refresh function - see renderEffectsList - so Content Type's family override can
+   recompute this row's caption/disabled-state live instead of only reflecting whatever family
+   was in effect when the Effects screen was first opened. */
+function buildAiUpscalingEffectRow(controller, list) {
+    const { caption, noUpscaleNeeded } = computeAiUpscalingStatus(controller);
+
+    const { rightSide, header, captionEl } = buildEffectRow(list, {
         icon: aiUpscalingIconMarkup(),
         label: "AI Upscaling",
         caption,
@@ -382,18 +503,25 @@ function buildAiUpscalingEffectRow(controller, list) {
     rightSide.appendChild(toggleEl);
     header.addEventListener("click", () => toggleEl.click());
 
-    if (noUpscaleNeeded) {
-        /* header.disabled (a real <button>, see buildEffectRow) is what focus-nav.js's own
-           items() filter already skips - same pattern as the strength/opacity sliders' own
-           .disabled toggling elsewhere in this file, not a bespoke disabled state. toggleEl
-           itself is a plain div (see makeToggleSwitch), so it needs its own pointer-events/
-           opacity treatment rather than inheriting header's disabled semantics automatically. */
-        header.disabled = true;
-        header.style.opacity = "0.5";
-        header.style.cursor = "default";
-        toggleEl.style.opacity = "0.5";
-        toggleEl.style.pointerEvents = "none";
-    }
+    /* header.disabled (a real <button>, see buildEffectRow) is what focus-nav.js's own
+       items() filter already skips - same pattern as the strength/opacity sliders' own
+       .disabled toggling elsewhere in this file, not a bespoke disabled state. toggleEl
+       itself is a plain div (see makeToggleSwitch), so it needs its own pointer-events/
+       opacity treatment rather than inheriting header's disabled semantics automatically. */
+    const applyDisabled = (disabled) => {
+        header.disabled = disabled;
+        header.style.opacity = disabled ? "0.5" : "1";
+        header.style.cursor = disabled ? "default" : "pointer";
+        toggleEl.style.opacity = disabled ? "0.5" : "1";
+        toggleEl.style.pointerEvents = disabled ? "none" : "auto";
+    };
+    applyDisabled(noUpscaleNeeded);
+
+    return () => {
+        const next = computeAiUpscalingStatus(controller);
+        captionEl.textContent = next.caption;
+        applyDisabled(next.noUpscaleNeeded);
+    };
 }
 
 /* One sub-control (its own title, its own Auto/On/Off mode row, its own slider) - shared by

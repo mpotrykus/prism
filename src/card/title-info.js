@@ -313,7 +313,6 @@ export class TitleInfoController {
     this._loadingOverlayEl = shadowRoot.querySelector(".title-info-loading-overlay");
     this._seasonOverlay = shadowRoot.querySelector(".title-info-season-overlay");
     this._seasonModalListEl = shadowRoot.querySelector(".title-info-season-modal-list");
-    this._seasonCancelBtn = shadowRoot.querySelector(".title-info-season-modal-cancel");
 
     this._item = null;
     this._source = null;
@@ -1360,11 +1359,10 @@ export class TitleInfoController {
       ".title-info-close, .title-info-play, .title-info-restart-btn, .title-info-watched-btn, .title-info-watchlist-btn, .title-info-season-trigger, .title-info-episode, .title-info-cast-wrap, .title-info-similar-item",
       { orientation: "vertical", onBack: () => this.close() }
     );
-    this._seasonCancelBtn.addEventListener("click", () => this.closeSeasonOverlay());
     this._seasonOverlay.addEventListener("click", (e) => {
       if (e.target === this._seasonOverlay) this.closeSeasonOverlay();
     });
-    this._seasonNav = wireLinearNav(this._shadowRoot, ".title-info-season-modal-option, .title-info-season-modal-cancel", {
+    this._seasonNav = wireLinearNav(this._shadowRoot, ".title-info-season-modal-option", {
       orientation: "vertical",
       onBack: () => this.closeSeasonOverlay(),
     });

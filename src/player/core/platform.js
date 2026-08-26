@@ -71,6 +71,7 @@ export function isXboxDevice() {
    imported by plain-Node vitest specs, which have no DOM. */
 if (typeof document !== "undefined") {
     document.documentElement.dataset.platform = platformTag();
+    document.documentElement.dataset.xboxDevice = String(isXboxDevice());
 }
 
 /* The platforms whose native playback bridge actually exists and is wired up. Add "uwp"
