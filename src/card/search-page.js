@@ -1,5 +1,5 @@
 import { parseYearQuery, buildGenreMatchHubs, buildReasonMatchHubs, SEARCH_REASON_LABELS } from "./logic/search.js";
-import { plexFetch } from "./data.js";
+import { plexFetch, activeServers, serverForSection, isFromEnabledSection } from "./data.js";
 import { releasePosterImgClaims } from "./rows.js";
 
 /* Search: the search-box input handling, the /hubs/search + genre/year/facet hub
@@ -62,28 +62,59 @@ async function runSearch(card, q) {
   }
 }
 
+/* /hubs/search is a single server's own endpoint (like /library/onDeck in data.js) -
+   fetch it from every active server, not just the primary one, so a second connected
+   server's enabled libraries actually show up in search. */
+async function fetchSearchHubs(card, q, hubLimit) {
+  const perServer = await Promise.all(
+    activeServers(card).map(async (sv) => {
+      try {
+        /* /hubs/search ignores X-Plex-Container-Size for its per-hub result count
+           (silently caps at 3 regardless of that value) - the real per-hub limit param
+           is `limit`, confirmed empirically. */
+        const data = await plexFetch(card, "/hubs/search", { query: q, limit: hubLimit }, sv);
+        return data?.MediaContainer?.Hub || [];
+      } catch (e) {
+        return [];
+      }
+    })
+  );
+  /* Merge same-titled hubs ("Movies", "TV Shows", "People", ...) across servers into one
+     row instead of showing a duplicate row per server. */
+  const merged = new Map();
+  for (const hubs of perServer) {
+    for (const h of hubs) {
+      const items = h.Metadata || [];
+      if (!items.length) continue;
+      if (!merged.has(h.title)) merged.set(h.title, { title: h.title, Metadata: [], hasMore: false });
+      const entry = merged.get(h.title);
+      entry.Metadata.push(...items);
+      /* /hubs/search DOES honor `limit` (unlike X-Plex-Container-Size elsewhere), so a
+         single server's response hitting it exactly is a reliable "there may be more"
+         signal - there's no per-hub totalSize in this response to check precisely. */
+      if (items.length >= hubLimit) entry.hasMore = true;
+    }
+  }
+  return Array.from(merged.values());
+}
+
 /* Shared by both the normal (capped) search page and "See All" section expansion - the
    two differ only in the limits passed to Plex's hub search and to the locally-built
    genre/year/facet hubs. */
 async function buildSearchHubs(card, q, hubLimit, rowLimit) {
-  /* /hubs/search ignores X-Plex-Container-Size for its per-hub result count (silently
-     caps at 3 regardless of that value) - the real per-hub limit param is `limit`,
-     confirmed empirically. */
-  const data = await plexFetch(card, "/hubs/search", { query: q, limit: hubLimit });
-  const hubs = (data?.MediaContainer?.Hub || []).filter((h) => (h.Metadata || []).length);
+  const rawHubs = await fetchSearchHubs(card, q, hubLimit);
+  /* /hubs/search is server-wide - like /library/onDeck (data.js), it returns matches
+     from every library on that server, including ones this app's Settings has
+     unchecked. Filter those back out the same way onDeck does. */
+  const hubs = rawHubs
+    .map((h) => ({ ...h, Metadata: h.Metadata.filter((m) => isFromEnabledSection(card, m)) }))
+    .filter((h) => h.Metadata.length);
   const reasonHubs = buildReasonMatchHubs(hubs, hubLimit);
   const otherHubs = hubs
-    .map((h) => {
-      const rawLen = (h.Metadata || []).length;
-      return {
-        ...h,
-        Metadata: (h.Metadata || []).filter((m) => !SEARCH_REASON_LABELS[m.reason]),
-        /* /hubs/search DOES honor `limit` (unlike X-Plex-Container-Size elsewhere), so
-           hitting it exactly is a reliable "there may be more" signal - there's no
-           per-hub totalSize in this response to check precisely. */
-        hasMore: rawLen >= hubLimit,
-      };
-    })
+    .map((h) => ({
+      ...h,
+      Metadata: h.Metadata.filter((m) => !SEARCH_REASON_LABELS[m.reason]),
+    }))
     .filter((h) => h.Metadata.length);
   const genreHubs = buildGenreMatchHubs(q, rowLimit, {
     genreBySection: card._genreBySection,
@@ -120,11 +151,16 @@ async function buildYearMatchHubs(card, query, limit) {
   const perSection = await Promise.all(
     card._config.sections.map(async (s) => {
       try {
-        const data = await plexFetch(card, `/library/sections/${s.key}/all`, {
-          type: s.type,
-          "X-Plex-Container-Size": limit,
-          ...yearParams,
-        });
+        const data = await plexFetch(
+          card,
+          `/library/sections/${s.key}/all`,
+          {
+            type: s.type,
+            "X-Plex-Container-Size": limit,
+            ...yearParams,
+          },
+          serverForSection(card, s)
+        );
         return data?.MediaContainer?.Metadata || [];
       } catch (e) {
         return [];
@@ -163,9 +199,9 @@ async function buildFacetMatchHubs(card, query, limit) {
            fetch (data.js's fetchCollectionsRaw) instead, matched within the same
            section. */
         const match = (card._collectionsRaw || []).find(
-          (c) => c.section.key === facet.section.key && c.title === facet.title
+          (c) => c.section.key === facet.section.key && c.section.server_id === facet.section.server_id && c.title === facet.title
         );
-        if (match?.thumb) hub.image = card._plexThumbUrl(match.thumb);
+        if (match?.thumb) hub.image = card._plexThumbUrl(match.thumb, undefined, undefined, match.__server);
       }
       return hub;
     })
@@ -180,10 +216,11 @@ async function fetchByFacet(card, facet, filterName, limit) {
        studio names with spaces, e.g. "Marvel%2520Studios") - it must be appended to the
        URL as-is, not passed through URLSearchParams/searchParams.set, which would
        re-encode the literal "%" characters and break the match. */
-    const base = new URL(`${card._config.plex_url}/library/sections/${facet.section.key}/all`);
+    const server = serverForSection(card, facet.section);
+    const base = new URL(`${server.url}/library/sections/${facet.section.key}/all`);
     base.searchParams.set("type", facet.section.type);
     base.searchParams.set("X-Plex-Container-Size", limit);
-    base.searchParams.set("X-Plex-Token", card._config.plex_token);
+    base.searchParams.set("X-Plex-Token", server.token);
     const res = await fetch(`${base.toString()}&${filterName}=${facet.key}`, {
       headers: { Accept: "application/json" },
     });

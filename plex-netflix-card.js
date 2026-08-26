@@ -151,7 +151,7 @@ class PlexNetflixCard extends HTMLElement {
   }
 
   _build() {
-    this._currentView = "home";
+    this._currentView = this._config.default_view || "home";
     this._lastSearchQuery = null;
     this._lastSearchHubs = null;
     this._searchSeq = 0;

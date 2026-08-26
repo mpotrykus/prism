@@ -19,6 +19,7 @@ const DEFAULT_PLAIN_CONFIG = {
   home_enabled: true,
   servers: [],
   sections: [],
+  default_view: "home",
   ai_rows_cadence_ms: 7 * 24 * 60 * 60 * 1000,
   max_genre_rows: 12,
   row_size: 20,
@@ -252,6 +253,12 @@ class StreamingSettingsModal extends HTMLElement {
     this._el(".f-ai-enabled").addEventListener("change", () => this._syncIntegrationToggleFields());
     this._el(".f-title-audio-enabled").addEventListener("change", () => this._syncTitleAudioFields());
     this._el(".f-title-audio-volume").addEventListener("input", () => this._updateTitleAudioVolumeLabel());
+    /* Delegated on .section-list itself (not the individual radios) since those are
+       torn down and rebuilt by every _renderSectionList() call - the container div is
+       the one element in this area that survives across renders. */
+    this._el(".section-list").addEventListener("change", (e) => {
+      if (e.target.classList.contains("default-view-radio")) this._defaultView = e.target.value;
+    });
     this.shadowRoot.querySelectorAll(".tab-btn").forEach((btn) => {
       btn.addEventListener("click", () => this._switchTab(btn.dataset.tab));
     });
@@ -272,7 +279,7 @@ class StreamingSettingsModal extends HTMLElement {
     wireLinearNav(
       this.shadowRoot,
       ".modal-close, .tab-btn, .btn-reauth, .btn-fetch-libraries, .home-enabled, .server-all-row .sv-enabled, " +
-        ".section-row .s-enabled, .section-row .s-label, " +
+        ".section-row .s-enabled, .section-row .s-label, .section-row .default-view-radio, " +
         ".f-trailers-enabled, .f-youtube-key, .f-ai-enabled, .f-openrouter-key, .f-subtitle-provider, " +
         ".f-opensubtitles-username, .f-opensubtitles-password, .f-opensubtitles-key, " +
         ".f-ai-cadence, .f-max-genre-rows, .f-row-size, .f-title-audio-enabled, .f-title-audio-volume, .f-xbox-hdr-always-on, " +
@@ -348,6 +355,7 @@ class StreamingSettingsModal extends HTMLElement {
     this._el(".plex-server-status").textContent = this._plexUrl ? `Connected — ${this._plexUrl}` : "Not connected.";
     this._el(".plex-server-status").className = this._plexUrl ? "status plex-server-status ok" : "status plex-server-status err";
     this._el(".f-ai-cadence").value = String(config.ai_rows_cadence_ms || 604800000);
+    this._defaultView = config.default_view || "home";
     this._el(".f-max-genre-rows").value = config.max_genre_rows ?? 12;
     this._el(".f-row-size").value = config.row_size ?? 20;
     this._machineId = config.machine_id || "";
@@ -535,6 +543,13 @@ class StreamingSettingsModal extends HTMLElement {
       if (!sectionsByServer.has(s.server_id)) sectionsByServer.set(s.server_id, []);
       sectionsByServer.get(s.server_id).push(i);
     });
+    /* Radio "Default" - one per row (Home/server-All/library), all sharing name=
+       "default-view" so the browser's own native radio-group behavior (checking one
+       unchecks the rest) does the mutual-exclusion work - see nav.js's buildNavTabs for
+       why these exact view-key strings ("home"/"server-<id>"/"section-<id>:<key>") are
+       what plex-netflix-card.js's _currentView expects. A disabled row's radio is
+       disabled too (can't be the default if it won't even be a tab); _reconcileDefaultView
+       below moves the selection off a row the instant its own toggle turns it off. */
     const homeHtml = `
       <div class="section-row home-row">
         <label class="switch">
@@ -545,6 +560,10 @@ class StreamingSettingsModal extends HTMLElement {
           <span class="section-row-title">Home</span>
           <span class="section-row-server">Everything, across every server</span>
         </div>
+        <label class="default-radio">
+          <input type="radio" name="default-view" class="default-view-radio" value="home" data-nav-group="home-row" ${this._defaultView === "home" ? "checked" : ""} ${this._homeEnabled === false ? "disabled" : ""} />
+          <span>Default</span>
+        </label>
       </div>`;
     const serverGroupsHtml = this._servers
       .map((sv) => {
@@ -555,6 +574,7 @@ class StreamingSettingsModal extends HTMLElement {
         const rowsHtml = indices
           .map((i) => {
             const s = this._sections[i];
+            const view = `section-${sv.id}:${s.key}`;
             return `
           <div class="section-row" data-index="${i}">
             <label class="switch">
@@ -566,9 +586,14 @@ class StreamingSettingsModal extends HTMLElement {
               <span class="section-row-server">${this._escape(sv.name)}</span>
             </div>
             <span class="type-badge">${s.type === 1 ? "Movies" : "TV"}</span>
+            <label class="default-radio">
+              <input type="radio" name="default-view" class="default-view-radio" value="${this._escape(view)}" data-nav-group="section-row-${i}" ${this._defaultView === view ? "checked" : ""} ${s.enabled === false ? "disabled" : ""} />
+              <span>Default</span>
+            </label>
           </div>`;
           })
           .join("");
+        const serverView = `server-${sv.id}`;
         return `
         <div class="server-group">
           <div class="server-group-header">
@@ -583,6 +608,10 @@ class StreamingSettingsModal extends HTMLElement {
               <span class="section-row-title">${this._escape(sv.name)}</span>
               <span class="section-row-server">All libraries on this server</span>
             </div>
+            <label class="default-radio">
+              <input type="radio" name="default-view" class="default-view-radio" value="${this._escape(serverView)}" data-nav-group="server-row-${this._escape(sv.id)}" ${this._defaultView === serverView ? "checked" : ""} ${sv.all_enabled === false ? "disabled" : ""} />
+              <span>Default</span>
+            </label>
           </div>
           ${rowsHtml}
         </div>`;
@@ -592,22 +621,48 @@ class StreamingSettingsModal extends HTMLElement {
 
     list.querySelector(".home-enabled").addEventListener("change", (e) => {
       this._homeEnabled = e.target.checked;
+      list.querySelector(".home-row .default-view-radio").disabled = !e.target.checked;
+      this._reconcileDefaultView();
     });
     list.querySelectorAll(".server-all-row").forEach((row) => {
       row.querySelector(".sv-enabled").addEventListener("change", (e) => {
         const sv = this._servers.find((s) => s.id === row.dataset.server);
         if (sv) sv.all_enabled = e.target.checked;
+        row.querySelector(".default-view-radio").disabled = !e.target.checked;
+        this._reconcileDefaultView();
       });
     });
     list.querySelectorAll(".section-row[data-index]").forEach((row) => {
       const i = Number(row.dataset.index);
       row.querySelector(".s-enabled").addEventListener("change", (e) => {
         this._sections[i].enabled = e.target.checked;
+        row.querySelector(".default-view-radio").disabled = !e.target.checked;
+        this._reconcileDefaultView();
       });
       row.querySelector(".s-label").addEventListener("input", (e) => {
         this._sections[i].label = e.target.value;
       });
     });
+    this._reconcileDefaultView();
+  }
+
+  /* Moves the Default selection off a row the moment that row's own enable toggle turns
+     it off - a disabled row's radio can't be interacted with (see the `disabled`
+     attributes set above/inline in the change handlers), but a browser doesn't
+     auto-uncheck a radio just because it becomes disabled, so without this the
+     previously-checked-but-now-disabled radio would stay "checked" and get read back
+     as the default at Save time despite being greyed out and unreachable in the UI.
+     Prefers Home, then falls back to the first remaining enabled row. */
+  _reconcileDefaultView() {
+    const list = this._el(".section-list");
+    const checked = list.querySelector(".default-view-radio:checked");
+    if (checked && !checked.disabled) return;
+    const fallback =
+      list.querySelector(".home-row .default-view-radio:not(:disabled)") ||
+      list.querySelector(".default-view-radio:not(:disabled)");
+    if (!fallback) return;
+    fallback.checked = true;
+    this._defaultView = fallback.value;
   }
 
   _escape(s) {
@@ -624,6 +679,7 @@ class StreamingSettingsModal extends HTMLElement {
       sections: (this._sections || [])
         .filter((s) => s.enabled !== false)
         .map((s) => ({ key: s.key, type: s.type, label: s.label, server_id: s.server_id })),
+      default_view: this.shadowRoot.querySelector(".default-view-radio:checked")?.value || "home",
       ai_rows_cadence_ms: Number(this._el(".f-ai-cadence").value),
       max_genre_rows: Number(this._el(".f-max-genre-rows").value) || 12,
       row_size: Number(this._el(".f-row-size").value) || 20,

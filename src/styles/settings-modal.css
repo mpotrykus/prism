@@ -156,6 +156,16 @@ input.nav-text-highlight {
   font-size: 10.5px; font-weight: 500; color: rgba(var(--color-fg-rgb), 0.5);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
+.default-radio {
+  display: flex; align-items: center; gap: 5px; flex: none; margin: 0;
+  font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em;
+  color: rgba(var(--color-fg-rgb), 0.4); cursor: pointer; white-space: nowrap;
+}
+.default-radio input[type="radio"] { margin: 0; width: 14px; height: 14px; accent-color: var(--color-accent); cursor: pointer; }
+.default-radio input[type="radio"]:disabled { cursor: default; }
+.default-radio input[type="radio"]:disabled + span { opacity: 0.4; }
+.section-row:has(.default-view-radio:checked) { outline: 2px solid var(--color-accent); outline-offset: -1px; }
+.section-row:has(.default-view-radio:checked) .default-radio { color: var(--color-accent); }
 .home-row { background: rgba(var(--color-accent-rgb), 0.07); }
 .server-group { display: flex; flex-direction: column; gap: 8px; margin-top: 14px; }
 .server-group:first-of-type { margin-top: 12px; }

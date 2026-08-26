@@ -136,7 +136,7 @@ function stampSection(m, s) {
    necessarily the primary server. Items with no librarySectionID (unexpected, but Plex
    response shapes drift) are kept rather than dropped, so a field-name mismatch fails
    open instead of silently emptying the whole row. */
-function isFromEnabledSection(card, m) {
+export function isFromEnabledSection(card, m) {
   if (m.librarySectionID == null) return true;
   const sid = m.__server?.id;
   return (card._config.sections || []).some(
