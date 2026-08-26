@@ -3,8 +3,8 @@ import { pickHeroItem, pickHeroItemFromPool, formatDuration, heroArtUrl, heroSub
 
 describe("pickHeroItem", () => {
   const genreBySection = new Map([
-    [1, [{ title: "Sci-Fi", items: [{ ratingKey: "1" }, { ratingKey: "2" }] }]],
-    [2, [{ title: "Horror", items: [{ ratingKey: "3" }] }]],
+    ["srv1:1", [{ title: "Sci-Fi", items: [{ ratingKey: "1" }, { ratingKey: "2" }] }]],
+    ["srv1:2", [{ title: "Horror", items: [{ ratingKey: "3" }] }]],
   ]);
 
   it("returns null when the pool is empty", () => {
@@ -12,13 +12,13 @@ describe("pickHeroItem", () => {
   });
 
   it("restricts to the given sections", () => {
-    const pick = pickHeroItem(undefined, [{ key: 2 }], { genreBySection });
+    const pick = pickHeroItem(undefined, [{ server_id: "srv1", key: 2 }], { genreBySection });
     expect(pick.ratingKey).toBe("3");
   });
 
   it("excludes the given ratingKey when more than one candidate remains", () => {
     for (let i = 0; i < 10; i++) {
-      const pick = pickHeroItem("1", [{ key: 1 }], { genreBySection });
+      const pick = pickHeroItem("1", [{ server_id: "srv1", key: 1 }], { genreBySection });
       expect(pick.ratingKey).toBe("2");
     }
   });

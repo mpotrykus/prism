@@ -16,7 +16,13 @@ function pickRandom(pool, excludeKey) {
    ended, or the static-backdrop dwell timer) before it lands. Treat that as "no
    candidates yet" rather than throwing. */
 export function pickHeroItem(excludeKey, sections, { genreBySection }) {
-  const keys = sections ? new Set(sections.map((s) => s.key)) : null;
+  /* genreBySection is keyed by `${server_id}:${key}`, not key alone - Plex library keys
+     are small per-server integers, not globally unique (see data.js's
+     loadGenreDataBySection). Matching on key alone here left every genreBySection entry
+     filtered out whenever `sections` was passed, so advance() (the only caller that
+     passes sections) always got null back and the hero silently stopped auto-advancing
+     after its first attempt. */
+  const keys = sections ? new Set(sections.map((s) => `${s.server_id}:${s.key}`)) : null;
   const seen = new Map();
   for (const [sectionKey, entries] of (genreBySection || new Map()).entries()) {
     if (keys && !keys.has(sectionKey)) continue;

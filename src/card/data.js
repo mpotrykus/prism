@@ -98,9 +98,50 @@ export function sectionsForView(card, view) {
   if (section) return [section];
   if (typeof view === "string" && view.startsWith("server-")) {
     const id = view.slice("server-".length);
-    return (card._config.sections || []).filter((s) => s.server_id === id);
+    return (card._config.sections || []).filter((s) => s.server_id === id && s.enabled !== false);
   }
-  return card._config.sections;
+  /* Home/"everything" - explicit enabled filter rather than trusting
+     card._config.sections to already be enabled-only (true today only because
+     settings.js's save strips disabled sections out of what it persists - an implicit
+     invariant this makes explicit instead of relying on). */
+  return (card._config.sections || []).filter((s) => s.enabled !== false);
+}
+
+/* Tags a raw item with the exact section it was fetched from (server_id+key) - stamped
+   at every per-section fetch below (recentlyAdded/genre-by-section/AI rows) so later
+   per-library-tab filtering (plex-netflix-card.js's _serverFilterForView) can match
+   against this instead of trusting Plex's own librarySectionID field on the item, which
+   real-world testing against a multi-library server showed was NOT reliably present/
+   correct on every endpoint this app calls - genre rows (mergeGenreRows, keyed off this
+   same server_id+key at the Map level rather than a per-item field) never had this bug,
+   which is what exposed it: every OTHER row (Recently Added/Recommended/Popular/AI),
+   built by flattening several sections' items together and filtering by librarySectionID
+   afterward, kept mixing sections of the same type on the same server even after that
+   filter was added. m.__section here is the authoritative fix - it's set from the exact
+   section object this fetch was made for, no trust in Plex's response shape required. */
+function stampSection(m, s) {
+  m.__section = { server_id: s.server_id, key: s.key };
+}
+
+/* /library/onDeck is server-wide (not fetched per-section, so stampSection above doesn't
+   apply here) - it returns in-progress items from every library on that server,
+   including ones the user has unchecked in this app's Settings (unchecking a library
+   only drops it from card._config.sections, a client-side "which libraries does this app
+   show" list - Plex itself has no concept of that toggle). This is the one place this
+   app still has to trust Plex's own librarySectionID field on each item, for lack of any
+   fetch-time section context to stamp instead - filtered against the same enabled-
+   sections list genre/collection rows already use, keyed the same server_id+key way as
+   everything else here (see sectionForView's own comment on why key alone isn't safe) -
+   m.__server is the server this item's own fetch was tagged with (plexFetch), not
+   necessarily the primary server. Items with no librarySectionID (unexpected, but Plex
+   response shapes drift) are kept rather than dropped, so a field-name mismatch fails
+   open instead of silently emptying the whole row. */
+function isFromEnabledSection(card, m) {
+  if (m.librarySectionID == null) return true;
+  const sid = m.__server?.id;
+  return (card._config.sections || []).some(
+    (s) => s.enabled !== false && s.server_id === sid && s.key === Number(m.librarySectionID)
+  );
 }
 
 export async function fetchOnDeckRaw(card) {
@@ -114,7 +155,7 @@ export async function fetchOnDeckRaw(card) {
       }
     })
   );
-  return perServer.flat();
+  return perServer.flat().filter((m) => isFromEnabledSection(card, m));
 }
 
 export async function fetchWatchlistRaw(card) {
@@ -174,7 +215,13 @@ async function fetchRecentlyAddedRaw(card) {
           { type: s.type, sort: "addedAt:desc", "X-Plex-Container-Size": rowSize },
           serverForSection(card, s)
         );
-        return data?.MediaContainer?.Metadata || [];
+        const items = data?.MediaContainer?.Metadata || [];
+        /* Stamp with the section this was actually queried against, same idea as
+           plexFetch's own __server stamp - see stampSection's own comment for why this
+           is authoritative where trusting Plex's own librarySectionID field on each item
+           was not. */
+        items.forEach((m) => stampSection(m, s));
+        return items;
       } catch (e) {
         return [];
       }
@@ -297,7 +344,14 @@ async function loadGenreDataBySection(card) {
                 server
               );
               const mc = gdata?.MediaContainer || {};
-              return { title: g.title, key: g.key, items: mc.Metadata || [], totalSize: mc.totalSize ?? mc.size ?? 0 };
+              const items = mc.Metadata || [];
+              /* This per-section/per-genre pool also backs buildRecommendedRaw/
+                 buildPopularRaw (catalog.js), which flatten items across every section
+                 into one deduped-by-ratingKey pool - stamping here is what lets
+                 plex-netflix-card.js's _serverFilterForView scope those two rows back
+                 down to a single library tab afterward (see stampSection's own comment). */
+              items.forEach((m) => stampSection(m, s));
+              return { title: g.title, key: g.key, items, totalSize: mc.totalSize ?? mc.size ?? 0 };
             } catch (e) {
               return { title: g.title, key: g.key, items: [], totalSize: 0 };
             }
@@ -376,7 +430,9 @@ async function fetchAiRowsRaw(card, ideas) {
               { type: s.type, genre: keys, sort: "addedAt:desc", "X-Plex-Container-Size": rowSize },
               serverForSection(card, s)
             );
-            return data?.MediaContainer?.Metadata || [];
+            const items = data?.MediaContainer?.Metadata || [];
+            items.forEach((m) => stampSection(m, s));
+            return items;
           } catch (e) {
             return [];
           }

@@ -633,17 +633,35 @@ class PlexNetflixCard extends HTMLElement {
       const id = view.slice("server-".length);
       return (m) => m.__server?.id === id;
     }
-    /* A library tab (view = "section-<server_id>:<key>") is just as server-specific as
-       a "server-<id>" (whole-server) tab, but has no separate id of its own to match on
-       - it's implied by whichever section _sectionForView resolves the view to. Without
-       this branch, every card-wide raw cache (onDeck/watchlist/recentlyAdded/recommended/
-       popular) fell through to the identity filter below on a library tab, so those rows
-       kept showing every active server's items even once the tab's own section/genre
-       data (which does key off the view directly) was scoped correctly. */
+    /* A library tab (view = "section-<server_id>:<key>") is scoped to one specific
+       library, not merely one server - a server with two movie libraries has both
+       tagged server_id-equal, so matching server_id alone left every card-wide raw
+       cache (onDeck/watchlist/recentlyAdded/recommended/popular/AI rows) mixing both
+       libraries' items into whichever movie-library tab you opened (SECTION_TYPE_FILTERS
+       above only narrows by movie-vs-show type, not by which library).
+       data.js's stampSection tags recentlyAdded/genre-by-section(-> recommended/popular)/
+       AI-row items with m.__section = {server_id,key} at the exact per-section fetch
+       that produced them - that's checked first and is authoritative. onDeck/watchlist
+       have no such per-section fetch to stamp from (onDeck is a single server-wide
+       endpoint; watchlist is account-level, not tied to any one server's library at
+       all), so those still fall back to trusting Plex's own librarySectionID field on
+       the item - which is NOT reliable enough to use as the *only* signal (confirmed:
+       real-world testing against a multi-library server showed Recently Added/
+       Recommended/Popular/AI rows still mixing sections even after filtering on
+       librarySectionID alone, which is why those sources now get the authoritative
+       __section stamp instead). Missing librarySectionID on the fallback path fails
+       open (kept) rather than dropped, same convention as data.js's own
+       isFromEnabledSection. */
     if (view.startsWith("section-")) {
       const section = this._sectionForView(view);
       if (!section) return () => true;
-      return (m) => m.__server?.id === section.server_id;
+      return (m) => {
+        if (m.__section) return m.__section.server_id === section.server_id && m.__section.key === section.key;
+        return (
+          m.__server?.id === section.server_id &&
+          (m.librarySectionID == null || Number(m.librarySectionID) === section.key)
+        );
+      };
     }
     return () => true;
   }
