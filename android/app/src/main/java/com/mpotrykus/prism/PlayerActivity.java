@@ -1272,7 +1272,7 @@ public class PlayerActivity extends AppCompatActivity {
             effectsInstalled = true;
             Log.d(SHADER_TAG, "applyVideoEffects: installing persistent effect (bootstrap)");
             player.setVideoEffects(Collections.singletonList(
-                new AiUpscaleEffect(this, detectedShaderType, sharpenTuning, colorTuning, aiUpscalingEnabled, null)));
+                new AiUpscaleEffect(this, detectedShaderType, sharpenTuning, colorTuning, aiUpscalingEnabled, null, aspectMode)));
         } else if (hasTrackInfo && !hdrDecided) {
             hdrDecided = true;
             if (hdr) {
@@ -1318,14 +1318,20 @@ public class PlayerActivity extends AppCompatActivity {
        a TRANSCODED (not direct-play) title with a real baked-in border before this can be
        considered safe to ship. setAutoCropEnabled's off-branch calls this a second time (insets
        null) to undo an already-applied crop - same reinstall, same unverified risk, just a rarer
-       trigger (an explicit user toggle rather than the automatic detection-confirmed path). */
+       trigger (an explicit user toggle rather than the automatic detection-confirmed path).
+
+       applyAspectMode reuses this same method (passing the CURRENT autoCropInsets back through
+       unchanged) for the exact same structural reason: Stretch/Cover's own reshape of
+       AiUpscaleShaderProgram's output Size (see that class's own configure() comment) is just as
+       pinned-once as Auto-Crop's own crop is, so picking a new aspectMode needs a fresh
+       construction too, not a live field. */
     void reinstallVideoEffectsForCrop(AutoCropSampler.Insets insets) {
         if (player == null || isHdrContent()) return;
         ShaderTuning sharpenTuning = resolveSharpenTuning();
         ColorBoostTuning colorTuning = resolveColorBoostTuning();
-        Log.d(SHADER_TAG, "reinstallVideoEffectsForCrop: reinstalling effects, insets=" + insets);
+        Log.d(SHADER_TAG, "reinstallVideoEffectsForCrop: reinstalling effects, insets=" + insets + " aspectMode=" + aspectMode);
         player.setVideoEffects(Collections.singletonList(
-            new AiUpscaleEffect(this, detectedShaderType, sharpenTuning, colorTuning, aiUpscalingEnabled, insets)));
+            new AiUpscaleEffect(this, detectedShaderType, sharpenTuning, colorTuning, aiUpscalingEnabled, insets, aspectMode)));
         cropAppliedViaReinstall = insets != null;
         // contentFrame/ambient lighting's own gap sizing (layoutGlow) both need to pick up the
         // new cropAdjustedAspectRatio right away, not wait for whatever next triggers a relayout -
@@ -1915,7 +1921,16 @@ public class PlayerActivity extends AppCompatActivity {
            program is what makes it safe to adjust this box's AR now: buffer and box change
            together, so they can never disagree the way they did before. */
         float rawVideoAR = resolveVideoAR(screenAR);
-        float videoAR = cropAdjustedAspectRatio(rawVideoAR);
+        /* Stretch/Cover, once GL effects are installed, already reshape AiUpscaleShaderProgram's
+           own output canvas to the screen's own AR (see applyAspectMode's own comment and that
+           class's configure()) - so contentFrame has to agree with THAT AR, not the content's,
+           or RESIZE_MODE_ZOOM's real crop math (driven by comparing this declared AR against the
+           container's own measured AR) would crop the already-correctly-shaped GL buffer a
+           second time. HDR content (activeAiUpscaleProgram null, no GL effects at all) always
+           falls through to the plain content AR - resizeMode alone already handles Stretch/Cover
+           correctly there, the same way it always has. */
+        boolean glReshaped = activeAiUpscaleProgram != null && !"fit".equals(aspectMode);
+        float videoAR = glReshaped ? screenAR : cropAdjustedAspectRatio(rawVideoAR);
 
         /* PlayerView's own internal exo_content_frame relies on the same broken
            onVideoSizeChanged/getVideoSize signal (see resolveVideoAR's comment above) to
@@ -2120,14 +2135,33 @@ public class PlayerActivity extends AppCompatActivity {
        leg's Aspect picker (chrome-menu-options.js's applyFitMode), applied here via
        PlayerView's own AspectRatioFrameLayout instead of a CSS object-fit. layoutGlow (see its
        own comment) has to know the current mode too: Cover/Stretch leave no letterbox gap for
-       ambient lighting's edge glow to show in, regardless of the video's own aspect ratio. */
+       ambient lighting's edge glow to show in, regardless of the video's own aspect ratio.
+
+       Real-device finding (2026-08-26): setResizeMode alone is NOT enough once the always-on SDR
+       GL effects pipeline is installed (applyVideoEffects) - confirmed on hardware, Stretch had
+       no visible effect at all. AspectRatioFrameLayout only ever controls the outer View's on-
+       screen bounds; once Media3 owns final compositing via video effects, it blits
+       AiUpscaleShaderProgram's own output canvas onto that View using THAT canvas's declared
+       aspect ratio, entirely independent of resizeMode - a canvas still shaped like the raw
+       content stays letterboxed/pillarboxed inside a stretched-bounds View no matter what
+       resizeMode says. Reinstalling (same reused path as a confirmed Auto-Crop border, see
+       reinstallVideoEffectsForCrop's own comment) is what lets AiUpscaleShaderProgram.configure()
+       reshape that canvas itself for Stretch/Cover - same accepted mid-playback wedge/stall risk
+       as that path, not re-litigated here. HDR content (no GL effects at all) never hits this:
+       resizeMode alone already works there, the same way it always has. */
     private void applyAspectMode(String mode) {
+        boolean changed = !mode.equals(aspectMode);
         aspectMode = mode;
         int resizeMode;
         if ("cover".equals(mode)) resizeMode = AspectRatioFrameLayout.RESIZE_MODE_ZOOM;
         else if ("stretch".equals(mode)) resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FILL;
         else resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT;
         playerView.setResizeMode(resizeMode);
+        if (changed && effectsInstalled && !isHdrContent()) {
+            reinstallVideoEffectsForCrop(autoCropInsets);
+        } else {
+            layoutGlow();
+        }
     }
 
     /* View mutations, same as the player-only static methods above, need to run on the

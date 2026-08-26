@@ -106,6 +106,16 @@ final class AiUpscaleShaderProgram extends BaseGlShaderProgram {
     // why Auto-Crop is the one piece of state here that isn't live-updatable via updateState().
     // Null means "no crop for this player instance" (the bootstrap-installed, common case).
     private final AutoCropSampler.Insets cropInsets;
+    // "fit"/"cover"/"stretch" - see PlayerActivity.applyAspectMode. Baked in at construction like
+    // cropInsets above and for the same reason: configure()'s output Size is pinned once, so a
+    // live aspectMode change (PlayerActivity.applyAspectMode) needs its own reinstall
+    // (PlayerActivity.reinstallVideoEffectsForCrop, reused for this too - see its own comment)
+    // exactly like a newly-confirmed crop does, not a live updateState() field.
+    private final String aspectMode;
+    // cropInsets, widened with extra cover-only cropping when aspectMode is "cover" (see
+    // configure()'s own comment) so the crop pass's sub-rect already matches the target AR by
+    // construction - null means "no crop pass needed at all" (renderCropPass's own gate).
+    private AutoCropSampler.Insets effectiveCropInsets;
 
     /* Live-mutable, updated in place from PlayerActivity's toggle setters via updateState() -
        volatile rather than synchronized: each is swapped as a whole new immutable instance, so a
@@ -142,7 +152,7 @@ final class AiUpscaleShaderProgram extends BaseGlShaderProgram {
     private int activeOutH;
     private int frameSeed;
 
-    private GlPassChain cropChain; // lazy, built once on first frame, only when cropInsets != null
+    private GlPassChain cropChain; // lazy, built once on first frame, only when effectiveCropInsets != null
     private int cropTex = -1;
     private int cropFbo = -1;
     private int cropTexW = -1;
@@ -168,7 +178,7 @@ final class AiUpscaleShaderProgram extends BaseGlShaderProgram {
 
     AiUpscaleShaderProgram(Context context, boolean useHdr, ShaderType family, ShaderTuning sharpeningTuning,
         ColorBoostTuning colorTuning, boolean aiUpscalingEnabled, int maxOutputWidth, int maxOutputHeight,
-        AutoCropSampler.Insets cropInsets) {
+        AutoCropSampler.Insets cropInsets, String aspectMode) {
         super(/* useHighPrecisionColorComponents= */ useHdr, /* texturePoolCapacity= */ 1);
         this.context = context;
         this.family = family;
@@ -178,6 +188,7 @@ final class AiUpscaleShaderProgram extends BaseGlShaderProgram {
         this.maxOutputWidth = maxOutputWidth;
         this.maxOutputHeight = maxOutputHeight;
         this.cropInsets = cropInsets;
+        this.aspectMode = aspectMode;
     }
 
     /* The size declared here has to stay valid across every future toggle/strength/family change
@@ -197,9 +208,20 @@ final class AiUpscaleShaderProgram extends BaseGlShaderProgram {
     public Size configure(int inputWidth, int inputHeight) {
         lastInputWidth = inputWidth;
         lastInputHeight = inputHeight;
-        if (cropInsets != null) {
-            float cropW = Math.max(0.001f, 1f - cropInsets.left - cropInsets.right);
-            float cropH = Math.max(0.001f, 1f - cropInsets.top - cropInsets.bottom);
+        float targetAR = maxOutputHeight > 0 ? (float) maxOutputWidth / maxOutputHeight : 0f;
+
+        // Cover needs the crop pass's OWN sub-rect widened (beyond whatever Auto-Crop already
+        // found) until its AR matches the screen's - see combineCoverInsets's own comment. Fit
+        // and Stretch both leave cropInsets untouched: Fit doesn't reshape at all, and Stretch
+        // reshapes downstream (see the outSize branch below), never by cropping further here -
+        // honoring Auto-Crop's own AR as the thing that gets stretched, not cropped again.
+        effectiveCropInsets = "cover".equals(aspectMode) && targetAR > 0
+            ? combineCoverInsets(cropInsets, inputWidth, inputHeight, targetAR)
+            : cropInsets;
+
+        if (effectiveCropInsets != null) {
+            float cropW = Math.max(0.001f, 1f - effectiveCropInsets.left - effectiveCropInsets.right);
+            float cropH = Math.max(0.001f, 1f - effectiveCropInsets.top - effectiveCropInsets.bottom);
             effectiveInputWidth = Math.max(1, Math.round(inputWidth * cropW));
             effectiveInputHeight = Math.max(1, Math.round(inputHeight * cropH));
         } else {
@@ -210,10 +232,56 @@ final class AiUpscaleShaderProgram extends BaseGlShaderProgram {
         ShaderType fam = family;
         AiUpscalingPresets.Preset preset = AiUpscalingPresets.forFamily(context.getAssets(), fam);
         float maxScale = preset != null ? preset.scale : fam.maxScaleFactor();
-        int[] outSize = scaledOutputSize(maxScale, maxOutputWidth, maxOutputHeight, effectiveInputWidth, effectiveInputHeight);
+        /* Stretch is the one mode that reshapes WITHOUT cropping - effectiveInputWidth/Height
+           above still carries Auto-Crop's own (uncropped-further) AR, honoring it as the source,
+           and the actual non-uniform stretch happens implicitly in chain.render's own resize from
+           that source AR to this method's returned Size once it's a different shape - same
+           mechanism the upscale chain already uses to go from 1x to preset.scale, just fed a
+           differently-shaped target here. The area-preserving reshape below keeps the same pixel
+           budget (hence the same upscale quality) Fit would have used, just poured into the
+           screen's own AR instead of the content's. */
+        int[] outSize;
+        if ("stretch".equals(aspectMode) && targetAR > 0) {
+            long area = (long) effectiveInputWidth * effectiveInputHeight;
+            int virtualH = Math.max(1, Math.round((float) Math.sqrt(area / targetAR)));
+            int virtualW = Math.max(1, Math.round(virtualH * targetAR));
+            outSize = scaledOutputSize(maxScale, maxOutputWidth, maxOutputHeight, virtualW, virtualH);
+        } else {
+            outSize = scaledOutputSize(maxScale, maxOutputWidth, maxOutputHeight, effectiveInputWidth, effectiveInputHeight);
+        }
         activeOutW = outSize[0];
         activeOutH = outSize[1];
         return new Size(activeOutW, activeOutH);
+    }
+
+    /* Widens `base` (Auto-Crop's own confirmed insets, or null) with extra symmetric cropping on
+       whichever axis is oversized relative to targetAR, until the remaining sub-rect's AR equals
+       targetAR exactly - the same "source and destination share the same AR by construction, so
+       this is a plain crop+resample, never a stretch" invariant crop.frag.glsl's own header
+       comment already relies on, just with a target AR that's now the screen's instead of always
+       being the raw frame's. Builds ON TOP of base rather than replacing it, so a real detected
+       border stays honored as the thing Cover crops further from, not discarded. */
+    private static AutoCropSampler.Insets combineCoverInsets(AutoCropSampler.Insets base, int inputWidth, int inputHeight, float targetAR) {
+        float left = base != null ? base.left : 0f;
+        float right = base != null ? base.right : 0f;
+        float top = base != null ? base.top : 0f;
+        float bottom = base != null ? base.bottom : 0f;
+        float croppedW = inputWidth * Math.max(0.001f, 1f - left - right);
+        float croppedH = inputHeight * Math.max(0.001f, 1f - top - bottom);
+        float subAR = croppedW / croppedH;
+        if (subAR > targetAR) {
+            float wantedW = croppedH * targetAR;
+            float extra = Math.max(0f, (croppedW - wantedW) / inputWidth) / 2f;
+            left += extra;
+            right += extra;
+        } else if (subAR < targetAR) {
+            float wantedH = croppedW / targetAR;
+            float extra = Math.max(0f, (croppedH - wantedH) / inputHeight) / 2f;
+            top += extra;
+            bottom += extra;
+        }
+        AutoCropSampler.Insets combined = new AutoCropSampler.Insets(top, bottom, left, right);
+        return combined.isZero() ? null : combined;
     }
 
     @Override
@@ -230,7 +298,7 @@ final class AiUpscaleShaderProgram extends BaseGlShaderProgram {
             usingUpgrade = aiUpscalingEnabled && upgrade != null;
             upgradeUnsupported = preset == null || upgradeChainFailed.contains(fam);
 
-            int sourceTex = cropInsets != null ? renderCropPass(inputTexId) : inputTexId;
+            int sourceTex = effectiveCropInsets != null ? renderCropPass(inputTexId) : inputTexId;
 
             Map<String, Object> uniforms = new HashMap<>();
             // The trailing sharpen pass in the upgrade chain samples an already-output-resolution
@@ -279,10 +347,10 @@ final class AiUpscaleShaderProgram extends BaseGlShaderProgram {
             cropChain = new GlPassChain(context.getAssets(), passes);
         }
         Map<String, Object> uniforms = new HashMap<>();
-        uniforms.put("uInsetLeft", cropInsets.left);
-        uniforms.put("uInsetTop", cropInsets.top);
-        uniforms.put("uInsetRight", cropInsets.right);
-        uniforms.put("uInsetBottom", cropInsets.bottom);
+        uniforms.put("uInsetLeft", effectiveCropInsets.left);
+        uniforms.put("uInsetTop", effectiveCropInsets.top);
+        uniforms.put("uInsetRight", effectiveCropInsets.right);
+        uniforms.put("uInsetBottom", effectiveCropInsets.bottom);
         boolean ok = cropChain.render(inputTexId, lastInputWidth, lastInputHeight, cropTexW, cropTexH, uniforms, cropFbo);
         if (!ok) {
             Log.e(TAG, "Auto-Crop pass render failed (intermediate target allocation) for this frame");

@@ -32,15 +32,21 @@ final class AiUpscaleEffect implements GlEffect {
     // own header comment and PlayerActivity.reinstallVideoEffectsForCrop for why Auto-Crop is the
     // one exception to this class's own "every toggle is live, no reinstall" design.
     private final AutoCropSampler.Insets cropInsets;
+    // Same reinstall-only treatment as cropInsets above, same reason: AiUpscaleShaderProgram.
+    // configure()'s output Size (Stretch's reshape, Cover's extra crop) is pinned once, so a live
+    // aspectMode change needs a fresh construction, not a live updateState() field - see
+    // PlayerActivity.applyAspectMode.
+    private final String aspectMode;
 
     AiUpscaleEffect(Context context, ShaderType family, ShaderTuning sharpeningTuning, ColorBoostTuning colorTuning,
-        boolean aiUpscalingEnabled, AutoCropSampler.Insets cropInsets) {
+        boolean aiUpscalingEnabled, AutoCropSampler.Insets cropInsets, String aspectMode) {
         this.context = context;
         this.family = family;
         this.sharpeningTuning = sharpeningTuning;
         this.colorTuning = colorTuning;
         this.aiUpscalingEnabled = aiUpscalingEnabled;
         this.cropInsets = cropInsets;
+        this.aspectMode = aspectMode;
         DisplayMetrics metrics = context.getResources().getDisplayMetrics();
         this.maxOutputWidth = metrics.widthPixels;
         this.maxOutputHeight = metrics.heightPixels;
@@ -53,7 +59,7 @@ final class AiUpscaleEffect implements GlEffect {
         // pipeline was set up with, not guaranteed to be the PlayerActivity instance the
         // instanceof check below (and getAssets()) needs.
         AiUpscaleShaderProgram program = new AiUpscaleShaderProgram(
-            context, useHdr, family, sharpeningTuning, colorTuning, aiUpscalingEnabled, maxOutputWidth, maxOutputHeight, cropInsets);
+            context, useHdr, family, sharpeningTuning, colorTuning, aiUpscalingEnabled, maxOutputWidth, maxOutputHeight, cropInsets, aspectMode);
         // PlayerActivity also implements Context here (see applyVideoEffects's `new
         // AiUpscaleEffect(this, ...)`) - stashed so the stats overlay AND applyVideoEffects's own
         // later toggle calls can reach this instance without a separate listener interface. See
