@@ -39,7 +39,7 @@
      area guidance, not a measured value - unverified on real console hardware, revisit once
      tested there. */
      :host-context([data-xbox-device="true"]) .header {
-        padding-top: calc(12px + 4vh);
+        padding-top: 12px;
     }
     /* An ordinary flex child of .header now, not position:absolute - see header-search.css's
      .header-side comment for why: .header-side-left/-right flank it with equal flex-grow,
