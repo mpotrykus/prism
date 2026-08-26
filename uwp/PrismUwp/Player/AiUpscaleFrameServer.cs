@@ -111,7 +111,7 @@ namespace PrismUwp.Player
             };
 
             pixelEffect = new AiUpscalePixelEffect(canvasDevice);
-            autoCrop = new AutoCropDetector(canvasDevice);
+            autoCrop = new AutoCropDetector(canvasDevice, emit);
 
             player.VideoFrameAvailable += OnVideoFrameAvailable;
         }

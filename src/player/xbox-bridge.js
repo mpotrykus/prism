@@ -426,6 +426,20 @@ function handleMessage(controller, message) {
         case "contentAnalysis":
             applyXboxContentAnalysis(controller, params.avgSaturation, params.edgeEnergy, params.lumaStdDev);
             break;
+        case "autoCropInsets":
+            /* From AutoCropDetector.cs (uwp/PrismUwp/Player) - AiUpscaleFrameServer's Present
+               already sizes/crops the on-screen native picture from these same fractions, but
+               that never otherwise reaches JS. ambient-pipeline.js's computePictureRect (via
+               auto-crop.js's cropAdjustedAspectRatio) needs controller._autoCropInsets set to
+               lay the glow panels out against the picture rect actually on screen instead of
+               the raw, uncropped one - without this the glow panels land on the wrong (stale/
+               uncropped) letterbox gap once a real crop is confirmed. All-zero means "no crop"
+               here, same convention reconcileSamples' web-leg equivalent uses. */
+            controller._autoCropInsets =
+                params.top || params.bottom || params.left || params.right
+                    ? { top: params.top, bottom: params.bottom, left: params.left, right: params.right }
+                    : null;
+            break;
         case "ambientColors":
             applyXboxAmbientColors(controller, {
                 top: params.top,

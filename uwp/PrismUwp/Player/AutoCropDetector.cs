@@ -1,4 +1,5 @@
 using System;
+using System.Globalization;
 using Microsoft.Graphics.Canvas;
 using Windows.Foundation;
 using Windows.UI;
@@ -54,6 +55,10 @@ namespace PrismUwp.Player
         private const double ConfirmSampleGapSec = 2;
 
         private readonly CanvasDevice device;
+        // (eventName, jsonParams) - same delegate NativePlayerHost/AiUpscaleFrameServer forward
+        // everywhere else, already dispatcher-safe to call from this class's own worker thread
+        // (see MainPage.xaml.cs's Dispatcher.RunAsync wrapper around it).
+        private readonly Action<string, string> emit;
         private CanvasRenderTarget scratch;
         private int scratchWidth;
         private int scratchHeight;
@@ -84,9 +89,36 @@ namespace PrismUwp.Player
         /// </summary>
         public CropInsets? Insets { get; private set; }
 
-        public AutoCropDetector(CanvasDevice device)
+        public AutoCropDetector(CanvasDevice device, Action<string, string> emit)
         {
             this.device = device;
+            this.emit = emit;
+        }
+
+        /// <summary>
+        /// Pushes the current <see cref="Insets"/> (or an all-zero "no crop" payload when null)
+        /// to JS as the "autoCropInsets" bridge event - src/player/ambient-pipeline.js's
+        /// computePictureRect needs these fractions (via auto-crop.js's cropAdjustedAspectRatio)
+        /// to lay out the ambient-lighting glow panels against the picture rect this class's own
+        /// Present-side crop actually renders on screen, not the raw uncropped frame. Without
+        /// this, controller._autoCropInsets is never set on the Xbox leg at all (this detector's
+        /// insets never otherwise leave native code - see Present's own crop application),
+        /// leaving the glow panels sized to the old, wrong (uncropped) letterbox gap even once a
+        /// real crop is confirmed and actively narrowing the on-screen picture. Called on every
+        /// state transition that changes what Insets reports (SetEnabled(false), Reset, and a
+        /// completed ConsiderFrame reconciliation) rather than only on a real detected crop, so
+        /// JS always has a fresh, correct value instead of a stale one left over from a previous
+        /// title or from before this session's detection finished.
+        /// </summary>
+        private void EmitInsets()
+        {
+            if (emit == null) return;
+            CropInsets i = Insets ?? new CropInsets();
+            string top = i.Top.ToString("R", CultureInfo.InvariantCulture);
+            string bottom = i.Bottom.ToString("R", CultureInfo.InvariantCulture);
+            string left = i.Left.ToString("R", CultureInfo.InvariantCulture);
+            string right = i.Right.ToString("R", CultureInfo.InvariantCulture);
+            emit("autoCropInsets", $"{{\"top\":{top},\"bottom\":{bottom},\"left\":{left},\"right\":{right}}}");
         }
 
         /// <summary>
@@ -102,6 +134,7 @@ namespace PrismUwp.Player
             if (!value)
             {
                 Insets = null;
+                EmitInsets();
                 return;
             }
             Insets = null;
@@ -131,6 +164,11 @@ namespace PrismUwp.Player
             frameWidth = videoWidth;
             frameHeight = videoHeight;
             Insets = null;
+            // Clears out whatever the PREVIOUS title's Insets left JS holding - without this, a
+            // mid-session title switch (autoplay next episode) would leave the new title's ambient
+            // lighting laid out against the old title's crop for the several seconds this
+            // detection window takes to reconcile a fresh result of its own.
+            EmitInsets();
             detectionComplete = !enabled || videoWidth <= 0 || videoHeight <= 0;
             nextSampleAtSeconds = DetectMinTimeSec;
             sampleCount = 0;
@@ -169,6 +207,7 @@ namespace PrismUwp.Player
                 // partial sample list couldn't recover from either way).
                 detectionComplete = true;
                 Insets = null;
+                EmitInsets();
                 return;
             }
             nextSampleAtSeconds += ConfirmSampleGapSec;
@@ -176,6 +215,7 @@ namespace PrismUwp.Player
             {
                 Insets = Reconcile(samples);
                 detectionComplete = true;
+                EmitInsets();
             }
         }
 
