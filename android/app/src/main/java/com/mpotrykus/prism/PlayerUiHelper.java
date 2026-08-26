@@ -1180,6 +1180,10 @@ final class PlayerUiHelper {
         float density = activity.getResources().getDisplayMetrics().density;
         list.removeAllViews();
         list.addView(makeBackRow(activity, density, () -> renderMainList(activity, list)));
+        // Content Type first - it drives both rows below it (both read
+        // activity.detectedShaderType, see PlayerActivity.resolveEffectiveShaderFamily), same
+        // ordering as the web leg's Effects list (chrome-menu-effects.js's renderEffectsList).
+        buildContentTypeEffectRow(activity, list, density);
         // Ahead of Sharpening, not after - same ordering as the web leg's Effects list once AI
         // Upscaling became its own toggle (chrome-menu-effects.js's renderEffectsList).
         buildAiUpscaleEffectRow(activity, list, density);
@@ -1263,6 +1267,87 @@ final class PlayerUiHelper {
         return new EffectRowParts(wrap, rightSide);
     }
 
+    /* Content Type: Auto/Animation/Live-Action override, driving both AI Upscaling's and
+       Sharpening's chosen family below (both read activity.detectedShaderType - see
+       PlayerActivity.resolveEffectiveShaderFamily/setShaderFamilyOverride) for the case
+       auto-detection got it wrong (e.g. a live-action title whose genre tags happen to include
+       "Animation"). Built first, same ordering as the web leg's Effects screen
+       (chrome-menu-effects.js's renderEffectsList) - this drives both rows below it. No caption
+       here, same reasoning as that file's own buildContentTypeEffectRow: the three buttons
+       themselves already say which family is in effect, so a "Detected: X"/"X (manual)"
+       subtitle underneath would be redundant (Shader Upscaling's own caption below still
+       carries that wording, since its row predates this one and the task only asked to add an
+       override on top of it, not remove it). Reuses the VERSION icon (a three-layer stack) -
+       same icon versionIconMarkup() draws for this exact row on the web leg. Rebuilds the whole
+       Effects screen on change rather than threading a fine-grained refresh callback through -
+       same "just re-render the list" pattern renderOptionsList's autoPlaySection.onToggle
+       already uses to keep a sibling row's greyed-out state in sync. */
+    private static void buildContentTypeEffectRow(PlayerActivity activity, LinearLayout list, float density) {
+        EffectRowParts row = buildEffectRow(activity, list, density, MenuIconView.Icon.VERSION, "Content Type", null);
+        addFamilyOverrideRow(activity, row.rightSide, density, activity.shaderFamilyOverride, (override) -> {
+            activity.setShaderFamilyOverride(override);
+            renderEffectsList(activity, list);
+        });
+    }
+
+    private static final String[] FAMILY_KEYS = { "auto", "anime4k", "live_action" };
+
+    /* Segmented control for Content Type's row above - Auto/Animation/Live-Action. Copies
+       addModeRow's button-rendering/pill-style approach below rather than sharing it outright -
+       addModeRow's MODE_KEYS/MODE_LABELS and fixed 44dp button width don't fit this control
+       (three different keys, and "Live-Action" doesn't fit that width) - same "copy, don't
+       share" reasoning chrome-menu-effects.js's buildFamilyOverrideRow uses on the web leg.
+       WRAP_CONTENT per button (sized to its own label) rather than a fixed width, for the same
+       reason. */
+    private static void addFamilyOverrideRow(PlayerActivity activity, LinearLayout content, float density, String current, Consumer<String> onChange) {
+        String[] labels = { "Auto", ShaderType.ANIME4K.label, ShaderType.LIVE_ACTION.label };
+        LinearLayout row = new LinearLayout(activity);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        int gap = Math.round(6 * density);
+        row.setLayoutParams(new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        TextView[] buttons = new TextView[FAMILY_KEYS.length];
+        for (int i = 0; i < FAMILY_KEYS.length; i++) {
+            String key = FAMILY_KEYS[i];
+            TextView btn = new TextView(activity);
+            btn.setText(labels[i]);
+            btn.setGravity(Gravity.CENTER);
+            btn.setTextSize(12);
+            btn.setTypeface(btn.getTypeface(), android.graphics.Typeface.BOLD);
+            int padH = Math.round(10 * density);
+            int padV = Math.round(6 * density);
+            btn.setPadding(padH, padV, padH, padV);
+            LinearLayout.LayoutParams btnParams = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+            if (i > 0) btnParams.setMarginStart(gap);
+            btn.setLayoutParams(btnParams);
+            btn.setOnClickListener(v -> {
+                onChange.accept(key);
+                setFamilyButtonsSelected(buttons, key);
+            });
+            buttons[i] = btn;
+            row.addView(btn);
+        }
+        setFamilyButtonsSelected(buttons, current);
+        content.addView(row);
+    }
+
+    private static void setFamilyButtonsSelected(TextView[] buttons, String selectedKey) {
+        for (int i = 0; i < FAMILY_KEYS.length; i++) {
+            boolean selected = FAMILY_KEYS[i].equals(selectedKey);
+            GradientDrawable bg = new GradientDrawable();
+            bg.setShape(GradientDrawable.RECTANGLE);
+            bg.setCornerRadius(buttons[i].getResources().getDisplayMetrics().density * 6);
+            if (selected) {
+                bg.setColor(ACCENT_COLOR);
+            } else {
+                bg.setColor(Color.TRANSPARENT);
+                bg.setStroke(1, Color.argb(38, 255, 255, 255));
+            }
+            buttons[i].setBackground(bg);
+            buttons[i].setTextColor(selected ? Color.parseColor("#1A1A1A") : VALUE_TEXT);
+        }
+    }
+
     /* Plain On/Off toggle, no strength slider and no Auto mode - the real Anime4K CNN / FSR 1
        chain (see AiUpscalingPresets) has no intensity knob to speak of, same reasoning as the
        equivalent presets on the web leg being "strengthless". Independent of Sharpening below -
@@ -1276,7 +1361,15 @@ final class PlayerUiHelper {
            source already fills playerView (nothing for the CNN/FSR chain to actually do), rather
            than leaving it interactive for no visible effect. */
         boolean wouldUpscale = activity.wouldAiUpscaleSource();
-        String caption = wouldUpscale ? "Anime4K CNN / FSR 1" : "Anime4K CNN / FSR 1 - source already matches display";
+        /* Names the chain Content Type's override (or auto-detection) actually picked, not a
+           static "Anime4K CNN / FSR 1" that never changed regardless of family - this caption
+           never updated when Content Type changed families, which is what actually prompted
+           this fix (Shader Upscaling's own caption below already did the right thing; this row
+           just never mirrored it). Mirrors the web leg's own idleUpgradeLabel-driven caption
+           (chrome-menu-effects.js's buildAiUpscalingEffectRow), which is likewise refreshed on
+           every Content Type change via renderEffectsList's full rebuild here. */
+        String chainName = activity.detectedShaderType == ShaderType.ANIME4K ? "Anime4K CNN" : "FSR 1";
+        String caption = wouldUpscale ? chainName : chainName + " - source already matches display";
         EffectRowParts row = buildEffectRow(activity, list, density, MenuIconView.Icon.SHADER, "AI Upscaling", caption);
         SwitchCompat toggle = new SwitchCompat(activity);
         toggle.setChecked(activity.aiUpscalingEnabled);
@@ -1287,15 +1380,18 @@ final class PlayerUiHelper {
         row.rightSide.addView(toggle);
     }
 
-    /* No more manual Off/Anime4K/Live-Action picker - detectedShaderType came from
-       plex-player.js's genre-based detection before this Activity ever launched, shown
-       here as read-only info via the row's caption. The SeekBar + mode row are the only
-       remaining controls; dragging strength to 0% in "on" mode is what "Off" used to
-       be. setVideoEffects() supports being called mid-playback (see
-       PlayerActivity.applyVideoEffects's own comment), so there's no Apply/Cancel
-       step. */
+    /* No more manual Off/Anime4K/Live-Action picker directly on THIS row - that override now
+       lives on Content Type above (see buildContentTypeEffectRow), which feeds
+       activity.detectedShaderType the same way genre-based auto-detection always did, so this
+       row's own caption still reads as accurate read-only info either way. The SeekBar + mode
+       row are the only remaining controls here; dragging strength to 0% in "on" mode is what
+       "Off" used to be. setVideoEffects() supports being called mid-playback (see
+       PlayerActivity.applyVideoEffects's own comment), so there's no Apply/Cancel step. */
     private static void buildShaderEffectRow(PlayerActivity activity, LinearLayout list, float density) {
-        EffectRowParts row = buildEffectRow(activity, list, density, MenuIconView.Icon.SHADER, "Shader Upscaling", "Detected: " + activity.detectedShaderType.label);
+        String familyCaption = "auto".equals(activity.shaderFamilyOverride)
+            ? "Detected: " + activity.detectedShaderType.label
+            : activity.detectedShaderType.label + " (manual)";
+        EffectRowParts row = buildEffectRow(activity, list, density, MenuIconView.Icon.SHADER, "Shader Upscaling", familyCaption);
         int padH = Math.round(16 * density);
 
         TextView strengthLabel = new TextView(activity);
@@ -1576,6 +1672,28 @@ final class PlayerUiHelper {
             return checked ? "On" : null;
         };
         sections.add(autoSkipSection);
+
+        /* Native port of the web leg's Auto-Crop Black Bars toggle (see auto-crop.js's own
+           extensive header comment for the algorithm) - detects black bars BAKED INTO the
+           source video file and crops them via a zoom, distinct from the outer letterbox
+           RESIZE_MODE_FIT already adds for AR mismatch against the screen. Greyed out on HDR
+           content, not just silently a no-op - the GL pipeline this depends on (see
+           AiUpscaleShaderProgram) is never installed for HDR titles at all (applyVideoEffects
+           installs an empty effects list instead), so there is structurally nothing for this
+           toggle to do then, same "don't expose a toggle that can't work" reasoning that
+           prompted auditing Xbox for the same class of bug elsewhere in this codebase. NOT
+           confirmed on a real Android device yet - see AutoCropSampler's own header comment. */
+        MenuSection autoCropSection = new MenuSection("Auto-Crop Black Bars");
+        // Reuses Aspect's frame-in-frame glyph - no dedicated crop icon exists yet, and this is
+        // visually the closest existing shape to "picture boundary" of the icons already here.
+        autoCropSection.icon = MenuIconView.Icon.ASPECT;
+        autoCropSection.disabled = activity.isHdrContent();
+        autoCropSection.toggleChecked = activity.autoCropEnabled;
+        autoCropSection.onToggle = (checked) -> {
+            activity.setAutoCropEnabled(checked);
+            return checked ? "On" : null;
+        };
+        sections.add(autoCropSection);
 
         MenuSection speedSection = new MenuSection("Playback Speed");
         speedSection.icon = MenuIconView.Icon.SPEED;

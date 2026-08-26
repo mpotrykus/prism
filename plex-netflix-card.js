@@ -94,6 +94,8 @@ const CLEAR_ICON_SVG =
   '<svg viewBox="0 0 24 24"><line x1="6" y1="6" x2="18" y2="18" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><line x1="18" y1="6" x2="6" y2="18" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>';
 const MORE_ICON_SVG =
   '<svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.8" fill="currentColor"/><circle cx="12" cy="12" r="1.8" fill="currentColor"/><circle cx="19" cy="12" r="1.8" fill="currentColor"/></svg>';
+const LIBRARIES_ICON_SVG =
+  '<svg viewBox="0 0 24 24"><rect x="3" y="3" width="8" height="8" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.6"/><rect x="13" y="3" width="8" height="8" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.6"/><rect x="3" y="13" width="8" height="8" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.6"/><rect x="13" y="13" width="8" height="8" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>';
 
 class PlexNetflixCard extends HTMLElement {
   /* No required fields here, unlike the original HA-card version - this can be called
@@ -173,6 +175,10 @@ class PlexNetflixCard extends HTMLElement {
               <span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M4 11 12 4l8 7" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M6 10v9h12v-9" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><rect x="10" y="14" width="4" height="5" fill="currentColor"/></svg></span>
               <span class="nav-label">Home</span>
             </div>
+            <div class="nav-item nav-libraries" title="Libraries" tabindex="0">
+              <span class="nav-icon">${LIBRARIES_ICON_SVG}</span>
+              <span class="nav-label">Libraries</span>
+            </div>
           </div>
           <div class="nav-bottom">
             <div class="nav-item nav-settings" title="Settings" tabindex="0">
@@ -190,6 +196,13 @@ class PlexNetflixCard extends HTMLElement {
             <div class="more-sheet-title">More</div>
             <div class="more-sheet-list"></div>
             <button type="button" class="more-sheet-cancel">Cancel</button>
+          </div>
+        </div>
+        <div class="libraries-overlay" tabindex="-1">
+          <div class="more-sheet">
+            <div class="more-sheet-title">Libraries</div>
+            <div class="libraries-sheet-list more-sheet-list"></div>
+            <button type="button" class="libraries-sheet-cancel more-sheet-cancel">Cancel</button>
           </div>
         </div>
         <div class="content">
@@ -400,6 +413,10 @@ class PlexNetflixCard extends HTMLElement {
     this._moreOverlay = this.shadowRoot.querySelector(".more-overlay");
     this._moreListEl = this.shadowRoot.querySelector(".more-sheet-list");
     this._moreCancelBtn = this.shadowRoot.querySelector(".more-sheet-cancel");
+    this._librariesBtn = this.shadowRoot.querySelector(".nav-libraries");
+    this._librariesOverlay = this.shadowRoot.querySelector(".libraries-overlay");
+    this._librariesListEl = this.shadowRoot.querySelector(".libraries-sheet-list");
+    this._librariesCancelBtn = this.shadowRoot.querySelector(".libraries-sheet-cancel");
     this._pin = new PinEntry(this.shadowRoot);
     this._titleInfo = new TitleInfoController(this.shadowRoot, {
       escape: (s) => this._escape(s),
@@ -488,10 +505,21 @@ class PlexNetflixCard extends HTMLElement {
     this._moreOverlay.addEventListener("click", (e) => {
       if (e.target === this._moreOverlay) this._closeMoreSheet();
     });
-    this._moreNav = wireLinearNav(this.shadowRoot, ".more-sheet-item, .more-sheet-cancel", {
+    this._moreNav = wireLinearNav(this.shadowRoot, ".more-overlay .more-sheet-item, .more-overlay .more-sheet-cancel", {
       orientation: "vertical",
       onBack: () => this._closeMoreSheet(),
     });
+
+    this._librariesBtn.addEventListener("click", () => this._openLibrariesSheet());
+    this._librariesCancelBtn.addEventListener("click", () => this._closeLibrariesSheet());
+    this._librariesOverlay.addEventListener("click", (e) => {
+      if (e.target === this._librariesOverlay) this._closeLibrariesSheet();
+    });
+    this._librariesNav = wireLinearNav(
+      this.shadowRoot,
+      ".libraries-overlay .more-sheet-item, .libraries-overlay .more-sheet-cancel",
+      { orientation: "vertical", onBack: () => this._closeLibrariesSheet() }
+    );
 
     /* Registering a backButton listener at all switches off Capacitor's own default
        Android hardware-back handling (goBack()-if-possible, else exit the app) - without
@@ -505,6 +533,7 @@ class PlexNetflixCard extends HTMLElement {
       else if (this._pin.isOpen()) this._pin.cancel();
       else if (this._profileOverlay.classList.contains("open")) this._closeProfileOverlay();
       else if (this._moreOverlay.classList.contains("open")) this._closeMoreSheet();
+      else if (this._librariesOverlay.classList.contains("open")) this._closeLibrariesSheet();
       else if (settingsModal?.isOpen()) settingsModal.close();
       else if (this._currentView === "search") {
         this._clearSearchInput();
@@ -974,27 +1003,15 @@ class PlexNetflixCard extends HTMLElement {
     this._profileOverlay.classList.remove("open");
   }
 
-  /* Mobile-only overflow menu (see .nav-more/.nav-item-overflow) - every row here just
-     delegates to the real nav item's own click handler instead of reimplementing Profile/
-     Settings/library-switch behavior a second time. */
+  /* Mobile-only overflow menu (see .nav-more) - every row here just delegates to the
+     real nav item's own click handler instead of reimplementing Profile/Settings
+     behavior a second time. Library switching has its own dedicated sheet now (see
+     .nav-libraries/_renderLibrariesSheet below), so this one is just Profile + Settings. */
   _renderMoreSheet() {
     const rows = [];
     const addRow = (label, iconHTML, active, target, sublabel = "") => {
       rows.push({ label, sublabel, iconHTML, active, onSelect: () => { this._closeMoreSheet(); target.click(); } });
     };
-    this.shadowRoot.querySelectorAll(".nav-item-overflow").forEach((el) => {
-      addRow(
-        el.querySelector(".nav-label").textContent,
-        el.querySelector(".nav-icon").innerHTML,
-        el.classList.contains("active"),
-        el,
-        /* The bottom bar's real tabs are icon-only (no room for even the primary label -
-           see responsive.css) - this sheet is the one place on mobile that already shows
-           text, so it's also where a library tab's server-name subtitle (see nav.js's
-           navItemHtml) actually gets to show up. */
-        el.querySelector(".nav-sublabel")?.textContent || ""
-      );
-    });
     if (this._hasMultipleProfiles) {
       rows.push({
         label: this._profileNavLabel.textContent,
@@ -1016,6 +1033,34 @@ class PlexNetflixCard extends HTMLElement {
 
   _closeMoreSheet() {
     this._moreOverlay.classList.remove("open");
+  }
+
+  /* Mobile-only library-switcher sheet (see .nav-libraries) - the one place on mobile a
+     library tab is ever reachable now (see responsive.css's .nav-item-dynamic rule), so
+     unlike _renderMoreSheet above this always lists every tab, not just an overflow past
+     some cap. Same real-.click()-delegation pattern as _renderMoreSheet. */
+  _renderLibrariesSheet() {
+    const rows = [...this.shadowRoot.querySelectorAll(".nav-item-dynamic")].map((el) => ({
+      label: el.querySelector(".nav-label").textContent,
+      /* See _renderMoreSheet's own comment on this - the bottom bar's real tabs are
+         icon-only, so this sheet is the one place a library tab's server-name subtitle
+         (nav.js's navItemHtml) actually gets to show up on mobile. */
+      sublabel: el.querySelector(".nav-sublabel")?.textContent || "",
+      iconHTML: el.querySelector(".nav-icon").innerHTML,
+      active: el.classList.contains("active"),
+      onSelect: () => { this._closeLibrariesSheet(); el.click(); },
+    }));
+    renderMoreSheet(this._librariesListEl, rows, (s) => this._escape(s));
+  }
+
+  _openLibrariesSheet() {
+    this._renderLibrariesSheet();
+    this._librariesOverlay.classList.add("open");
+    this._librariesNav.focusFirst();
+  }
+
+  _closeLibrariesSheet() {
+    this._librariesOverlay.classList.remove("open");
   }
 
   _renderProfileList() {

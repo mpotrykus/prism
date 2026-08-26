@@ -146,6 +146,10 @@ public class PlayerActivity extends AppCompatActivity {
     private static final String PREF_AUTO_QUALITY_ENABLED = "auto_quality_enabled";
     private static final String PREF_AUDIO_LEVELING_ENABLED = "audio_leveling_enabled";
     private static final String PREF_AUTO_SKIP_INTRO_CREDITS = "auto_skip_intro_credits_enabled";
+    /* "auto"/"anime4k"/"live_action" - matches shader-pipeline.js's
+       SHADER_FAMILY_OVERRIDE_STORAGE_KEY values exactly, see setShaderFamilyOverride below. */
+    private static final String PREF_SHADER_FAMILY_OVERRIDE = "shader_family_override";
+    private static final String PREF_AUTO_CROP_ENABLED = "auto_crop_enabled";
 
     public interface PlaybackListener {
         void onProgress(long positionMs, long durationMs);
@@ -248,11 +252,24 @@ public class PlayerActivity extends AppCompatActivity {
     final Runnable hideSeekFlashRunnable = () -> {
         if (seekFlashView != null) seekFlashView.animate().alpha(0f).setDuration(400).start();
     };
-    /* detectedShaderType is never OFF - it's just the auto-detected algorithm for this
-       title's genre, shown as read-only info in PlayerUiHelper's shader panel. shaderType
-       is the one actually rendered with (OFF whenever disabled or upscaleStrength is 0),
-       same "0% is off" model as plex-player.js's web-side _setShaderStrength. */
+    /* autoDetectedShaderType is the raw genre/studio-detected algorithm for this title, exactly
+       what the old single detectedShaderType field used to hold before Content Type's manual
+       override existed - never OFF. detectedShaderType is now the EFFECTIVE value every
+       downstream consumer (resolveSharpenTuning, wouldAiUpscaleSource, AiUpscalingPresets.
+       forFamily, applyVideoEffects's AiUpscaleEffect construction, PlayerUiHelper's "Detected: "
+       caption) actually reads - autoDetectedShaderType when shaderFamilyOverride is "auto",
+       otherwise whichever family the override pins. Keeping the EFFECTIVE value under the
+       original field name (rather than renaming every one of those read sites to something
+       like "effectiveShaderType") is deliberate - see resolveEffectiveShaderFamily below, the
+       one place that recomputes it. shaderType is the one actually rendered with (OFF whenever
+       disabled or upscaleStrength is 0), same "0% is off" model as plex-player.js's web-side
+       _setShaderStrength. */
+    ShaderType autoDetectedShaderType = ShaderType.LIVE_ACTION;
     ShaderType detectedShaderType = ShaderType.LIVE_ACTION;
+    /* "auto"/"anime4k"/"live_action" - see setShaderFamilyOverride/resolveEffectiveShaderFamily
+       below. Mirrors shader-pipeline.js's storedShaderFamilyOverride semantics exactly, same
+       immediate-persistence model as every other Effects-panel setting on this leg. */
+    String shaderFamilyOverride = "auto";
     ShaderType shaderType = ShaderType.OFF;
     /* Same immediate-persistence model as ambientEnabled/colorBoostSaturationEnabled below -
        see setShaderStrength/setShaderEnabled. No JS Settings-modal default any more (unlike
@@ -364,6 +381,32 @@ public class PlayerActivity extends AppCompatActivity {
     private AmbientLightSampler ambientSampler;
     private boolean loggedFirstAmbientLayout = false;
     private ContentAnalysisSampler contentSampler;
+    /* Auto-Crop (see AutoCropSampler/reinstallVideoEffectsForCrop) - default ON, matching the web
+       leg's storedAutoCropEnabled default (see that function's own comment in shared.js for why:
+       a never-touched user should get baked-in borders cropped automatically, not opt in). */
+    boolean autoCropEnabled = true;
+    private AutoCropSampler autoCropSampler;
+    /* Reconciled fractional insets from the last completed detection this title, or null (no
+       border found / detection hasn't finished yet / toggle is off) - applied via a one-time
+       reinstallVideoEffectsForCrop call once set to non-null (see that method's own header
+       comment), and read by cropAdjustedAspectRatio/layoutGlow so contentFrame's own AR stays in
+       agreement with whatever the GL pipeline is actually outputting. */
+    AutoCropSampler.Insets autoCropInsets;
+    /* Guards startAutoCropDetection() to once per title - same "first real answer" shape as
+       hdrDecided above, reset alongside it at the top of createPlayer(). Detection needs a real
+       video Format (width/height) to size its downscaled sample against (see
+       startAutoCropDetection), which - like isHdrContent() - isn't available until
+       onTracksChanged actually fires. */
+    private boolean cropSamplerArmedForTrack = false;
+    /* True once reinstallVideoEffectsForCrop has actually baked a real crop into the currently-
+       installed AiUpscaleShaderProgram this title (see that method's own header comment for why
+       this needs a player.setVideoEffects() reinstall rather than a live update). Reset alongside
+       autoCropInsets/cropSamplerArmedForTrack at the top of createPlayer() - a fresh player
+       always starts un-reinstalled, same as effectsInstalled/hdrDecided. Read by
+       setAutoCropEnabled's off-branch to decide whether undoing an already-applied crop needs its
+       own reinstall (back to no-crop dimensions) or whether there's nothing baked in yet to
+       undo. */
+    private boolean cropAppliedViaReinstall = false;
     int sleepMinutes = 0;
     /* Bumped by every switchAudioStreamViaRestart/switchMediaVersion/switchQualityCap
        call, captured by each call's own async decision-then-apply pipeline before it
@@ -559,7 +602,10 @@ public class PlayerActivity extends AppCompatActivity {
         if (bifUrl != null && !bifUrl.isEmpty()) {
             BifIndex.load(bifUrl, index -> bifIndex = index);
         }
-        detectedShaderType = parseShaderType(getIntent().getStringExtra(EXTRA_SHADER_TYPE));
+        autoDetectedShaderType = parseShaderType(getIntent().getStringExtra(EXTRA_SHADER_TYPE));
+        shaderFamilyOverride = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getString(PREF_SHADER_FAMILY_OVERRIDE, "auto");
+        detectedShaderType = resolveEffectiveShaderFamily();
+        autoCropEnabled = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(PREF_AUTO_CROP_ENABLED, true);
         upscaleStrength = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getFloat(PREF_UPSCALE_STRENGTH, 0.65f);
         shaderEnabled = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(PREF_UPSCALE_ENABLED, false);
         /* upscaleAuto has to be read before resolving shaderType below - in Auto mode
@@ -849,6 +895,17 @@ public class PlayerActivity extends AppCompatActivity {
         // AiUpscaleEffect.toGlShaderProgram callback lands sees "not installed yet" instead of
         // silently updating a dead GlShaderProgram (see applyVideoEffects's own comment).
         activeAiUpscaleProgram = null;
+        // A fresh title needs its own detection run, not the outgoing title's insets carried
+        // forward - see startAutoCropDetection's own "first real answer" comment. The just-
+        // released program (activeAiUpscaleProgram, nulled above) already takes any crop with
+        // it; the new one starts with no crop active until detection completes again.
+        cropSamplerArmedForTrack = false;
+        autoCropInsets = null;
+        cropAppliedViaReinstall = false;
+        if (autoCropSampler != null) {
+            autoCropSampler.stop();
+            autoCropSampler = null;
+        }
         DefaultHttpDataSource.Factory httpDataSourceFactory = new DefaultHttpDataSource.Factory();
         /* Wrapped in DefaultDataSource.Factory rather than handing httpDataSourceFactory
            to setDataSourceFactory directly - DefaultMediaSourceFactory uses whatever
@@ -950,6 +1007,14 @@ public class PlayerActivity extends AppCompatActivity {
                     if (playPauseButton != null) {
                         playPauseButton.setPlaying(isPlaying);
                     }
+                    /* Tracks actual playing state (not just playWhenReady), so buffering doesn't
+                       let the device sleep but a real pause - from any source: JS bridge, the
+                       key handler above, media session controls - does. */
+                    if (isPlaying) {
+                        getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+                    } else {
+                        getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+                    }
                 }
 
                 @Override
@@ -971,6 +1036,14 @@ public class PlayerActivity extends AppCompatActivity {
                        source doesn't slip through with the effects pass still
                        attached for the first few frames. */
                     applyVideoEffects();
+                    /* Same "first real answer" gate as applyVideoEffects's own hdrDecided -
+                       Auto-Crop's detection sample needs a real video Format (width/height) to
+                       size itself against (see startAutoCropDetection), which isn't known any
+                       earlier than this either. */
+                    if (!cropSamplerArmedForTrack && selectedVideoFormat() != null) {
+                        cropSamplerArmedForTrack = true;
+                        startAutoCropDetection();
+                    }
                 }
             }
         );
@@ -1199,7 +1272,7 @@ public class PlayerActivity extends AppCompatActivity {
             effectsInstalled = true;
             Log.d(SHADER_TAG, "applyVideoEffects: installing persistent effect (bootstrap)");
             player.setVideoEffects(Collections.singletonList(
-                new AiUpscaleEffect(this, detectedShaderType, sharpenTuning, colorTuning, aiUpscalingEnabled)));
+                new AiUpscaleEffect(this, detectedShaderType, sharpenTuning, colorTuning, aiUpscalingEnabled, null)));
         } else if (hasTrackInfo && !hdrDecided) {
             hdrDecided = true;
             if (hdr) {
@@ -1211,9 +1284,144 @@ public class PlayerActivity extends AppCompatActivity {
         }
 
         if (activeAiUpscaleProgram != null) {
-            activeAiUpscaleProgram.updateState(aiUpscalingEnabled, sharpenTuning, colorTuning);
+            activeAiUpscaleProgram.updateState(detectedShaderType, aiUpscalingEnabled, sharpenTuning, colorTuning);
         }
         PlayerUiHelper.updateStatsOverlay(this);
+    }
+
+    /* The ONE deliberate exception to applyVideoEffects's "only ever one real
+       player.setVideoEffects() call per player instance" rule (see that method's own header
+       comment for why that rule exists at all - a real, previously-hit bug where a mid-playback
+       setVideoEffects() call left the renderer wedged, and the seekTo used to unstick it could
+       itself stall forever on a live Plex HLS transcode session).
+
+       Auto-Crop's insets aren't known at bootstrap time - AutoCropSampler needs several real
+       seconds of decoded frames to confirm a border isn't just a dark scene or a fade (see that
+       class's own header comment) - so AiUpscaleShaderProgram.configure() has already declared
+       and pinned an output Size based on the RAW (uncropped) frame before Auto-Crop ever has an
+       answer, and Media3 will never call configure() again on its own just because this program
+       would prefer a different size later (see that class's own comment on configure()). A crop
+       applied via a live update into that already-pinned buffer can only ever be a UV remap
+       INSIDE the same fixed canvas - which is what the two earlier attempts this title went
+       through (a View-transform zoom, then a stretch-to-fill GL pass, then a fit-and-letterbox GL
+       pass) all ran into in one way or another. The only way to get a truly undistorted,
+       gap-free, un-cropped-into crop is to have configure() see the CROPPED effective dimensions
+       from the very start - which means reinstalling with a fresh AiUpscaleShaderProgram
+       constructed with the confirmed insets already baked in, exactly once, right when detection
+       confirms a real border.
+
+       This is accepted as worth the wedge/stall risk the header comment above warns about
+       (rather than ruled out because of it) - but it is a real, not hypothetical, risk on this
+       exact class of call, and this specific path (a reinstall firing automatically, mid-title,
+       while a live - possibly transcoding - session is already playing) has NOT been verified
+       against that failure mode on real hardware. Needs real-device testing specifically against
+       a TRANSCODED (not direct-play) title with a real baked-in border before this can be
+       considered safe to ship. setAutoCropEnabled's off-branch calls this a second time (insets
+       null) to undo an already-applied crop - same reinstall, same unverified risk, just a rarer
+       trigger (an explicit user toggle rather than the automatic detection-confirmed path). */
+    void reinstallVideoEffectsForCrop(AutoCropSampler.Insets insets) {
+        if (player == null || isHdrContent()) return;
+        ShaderTuning sharpenTuning = resolveSharpenTuning();
+        ColorBoostTuning colorTuning = resolveColorBoostTuning();
+        Log.d(SHADER_TAG, "reinstallVideoEffectsForCrop: reinstalling effects, insets=" + insets);
+        player.setVideoEffects(Collections.singletonList(
+            new AiUpscaleEffect(this, detectedShaderType, sharpenTuning, colorTuning, aiUpscalingEnabled, insets)));
+        cropAppliedViaReinstall = insets != null;
+        // contentFrame/ambient lighting's own gap sizing (layoutGlow) both need to pick up the
+        // new cropAdjustedAspectRatio right away, not wait for whatever next triggers a relayout -
+        // that trigger is normally piggybacked on AmbientLightSampler's ~42ms tick (see
+        // ambientSampler's own construction comment), which never fires at all when ambient
+        // lighting itself is off, so this can't be left implicit here.
+        layoutGlow();
+    }
+
+    /* The one place detectedShaderType (the EFFECTIVE family) is ever computed - both onCreate's
+       initial read and applyTitleSwitch's per-title re-read call this rather than either
+       duplicating the override check or leaving detectedShaderType out of sync with
+       shaderFamilyOverride, mirroring shader-pipeline.js's resolveShaderFamily on the web leg. */
+    private ShaderType resolveEffectiveShaderFamily() {
+        if ("anime4k".equals(shaderFamilyOverride)) return ShaderType.ANIME4K;
+        if ("live_action".equals(shaderFamilyOverride)) return ShaderType.LIVE_ACTION;
+        return autoDetectedShaderType;
+    }
+
+    /* Content Type's manual Auto/Animation/Live-Action override (PlayerUiHelper's Effects
+       screen) - mirrors shader-pipeline.js's setShaderFamilyOverride exactly, including the
+       "re-resolve detectedShaderType for the CURRENT title too, not just future ones" behavior:
+       autoDetectedShaderType (this title's own genre/studio guess) is never lost, just
+       overridden. applyVideoEffects() is what actually pushes the new effective family into
+       activeAiUpscaleProgram (see AiUpscaleShaderProgram.updateState) - live, no
+       player.setVideoEffects() reinstall, see that class's own header comment for why that's
+       safe here. shaderType is re-resolved too since resolveShaderType reads detectedShaderType
+       directly. */
+    void setShaderFamilyOverride(String override) {
+        shaderFamilyOverride = override;
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().putString(PREF_SHADER_FAMILY_OVERRIDE, override).apply();
+        detectedShaderType = resolveEffectiveShaderFamily();
+        shaderType = resolveShaderType();
+        applyVideoEffects();
+    }
+
+    /* Same "toggle IS the persisted setting" immediate-persistence model as setAmbientEnabled -
+       see AutoCropSampler's own header comment for the detection algorithm. Turning this off
+       clears whatever crop is currently active immediately; turning it back on re-runs detection
+       for the CURRENT title from scratch, same as web's setAutoCropEnabled.
+
+       If a crop was already baked in via reinstallVideoEffectsForCrop this title
+       (cropAppliedViaReinstall), undoing it needs its own reinstall back to no-crop dimensions -
+       see that method's own header comment for why a live update alone can't do this (the
+       buffer's declared output Size is pinned by whichever insets configure() saw at construction
+       time, crop-off included). If detection hadn't confirmed anything yet, there's nothing baked
+       in to undo - just clearing autoCropInsets is enough, same as before. */
+    void setAutoCropEnabled(boolean enabled) {
+        autoCropEnabled = enabled;
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().putBoolean(PREF_AUTO_CROP_ENABLED, enabled).apply();
+        if (autoCropSampler != null) {
+            autoCropSampler.stop();
+            autoCropSampler = null;
+        }
+        if (!enabled) {
+            autoCropInsets = null;
+            if (cropAppliedViaReinstall) reinstallVideoEffectsForCrop(null);
+        } else {
+            cropSamplerArmedForTrack = false;
+            if (selectedVideoFormat() != null) {
+                cropSamplerArmedForTrack = true;
+                startAutoCropDetection();
+            }
+            // Else: no track info yet (very early in a fresh title) - onTracksChanged's own
+            // cropSamplerArmedForTrack gate above will pick this up once it fires.
+        }
+    }
+
+    /* Sizes the downscaled sample to the video's own aspect ratio (mirrors auto-crop.js's
+       sampleFrameToCanvas: scale = min(1, SAMPLE_MAX_DIM / max(vw, vh))) rather than the fixed
+       32x18 grid AmbientLightSampler/ContentAnalysisSampler use - see AutoCropSampler's own
+       constructor comment for why an undistorted sample matters here specifically. HDR content
+       is skipped outright: the GL pipeline this feature's crop step depends on (see
+       AiUpscaleShaderProgram) is never installed for HDR titles at all (applyVideoEffects
+       installs an empty effects list instead), so there is structurally nothing for a detected
+       crop to hook into - same reasoning AI Upscaling's own wouldAiUpscaleSource/isHdrContent
+       gate follows. */
+    private void startAutoCropDetection() {
+        autoCropInsets = null;
+        if (cropAppliedViaReinstall) reinstallVideoEffectsForCrop(null);
+        if (!autoCropEnabled || isHdrContent()) return;
+        Format format = selectedVideoFormat();
+        if (format == null || format.width <= 0 || format.height <= 0) return;
+        float scale = Math.min(1f, AutoCropSampler.SAMPLE_MAX_DIM / (float) Math.max(format.width, format.height));
+        int sampleW = Math.max(1, Math.round(format.width * scale));
+        int sampleH = Math.max(1, Math.round(format.height * scale));
+        autoCropSampler = new AutoCropSampler(playerView.getVideoSurfaceView(), sampleW, sampleH,
+            () -> player != null ? player.getCurrentPosition() : 0L,
+            (insets) -> {
+                autoCropInsets = insets;
+                // null (no border found) needs no reinstall - the bootstrap program already has
+                // the correct (uncropped) dimensions. A real insets result is the main trigger
+                // for reinstallVideoEffectsForCrop - see that method's own header comment.
+                if (insets != null) reinstallVideoEffectsForCrop(insets);
+            });
+        autoCropSampler.start();
     }
 
     /* Both Sharpening and Color Boost share one GL pass (see AiUpscaleShaderProgram's own header
@@ -1663,6 +1871,21 @@ public class PlayerActivity extends AppCompatActivity {
         return format.rotationDegrees % 180 != 0 ? 1f / ar : ar;
     }
 
+    /* Mirrors auto-crop.js's own cropAdjustedAspectRatio on the web leg: rawAR unchanged when no
+       crop is active, or the CROPPED effective AR when autoCropInsets is set. Only meaningful to
+       call once cropAppliedViaReinstall is true - see AiUpscaleShaderProgram's own header comment
+       for why the GL buffer's real dimensions only actually change once
+       reinstallVideoEffectsForCrop has landed a fresh program built with these exact insets baked
+       in; calling this before that lands would tell contentFrame to size itself for a buffer the
+       GL pipeline isn't actually producing yet. */
+    private float cropAdjustedAspectRatio(float rawAR) {
+        AutoCropSampler.Insets insets = autoCropInsets;
+        if (insets == null || !cropAppliedViaReinstall) return rawAR;
+        float visibleW = Math.max(0.001f, 1f - insets.left - insets.right);
+        float visibleH = Math.max(0.001f, 1f - insets.top - insets.bottom);
+        return rawAR * (visibleW / visibleH);
+    }
+
     /* Mirrors ambient-pipeline.js's computePictureRect on the web leg: where the
        video's actual rendered picture sits within root's own bounds, accounting for
        its own aspect-ratio letterboxing/pillarboxing against the full screen
@@ -1683,7 +1906,16 @@ public class PlayerActivity extends AppCompatActivity {
         if (vw == 0 || vh == 0) return;
 
         float screenAR = (float) vw / vh;
-        float videoAR = resolveVideoAR(screenAR);
+        /* Adjusted for Auto-Crop via cropAdjustedAspectRatio - see that method's own comment and
+           AiUpscaleShaderProgram's header comment. This box has to agree with whatever AR the GL
+           pipeline is ACTUALLY outputting (raw, or cropped once reinstallVideoEffectsForCrop has
+           landed), not always the raw track AR - two earlier attempts at reconciling a real crop
+           against a box that stayed pinned to the raw AR both hit a visible double-letterbox/
+           residual-band bug (see AiUpscaleShaderProgram's own history). Reinstalling the GL
+           program is what makes it safe to adjust this box's AR now: buffer and box change
+           together, so they can never disagree the way they did before. */
+        float rawVideoAR = resolveVideoAR(screenAR);
+        float videoAR = cropAdjustedAspectRatio(rawVideoAR);
 
         /* PlayerView's own internal exo_content_frame relies on the same broken
            onVideoSizeChanged/getVideoSize signal (see resolveVideoAR's comment above) to
@@ -2201,8 +2433,27 @@ public class PlayerActivity extends AppCompatActivity {
         if (bifUrl != null && !bifUrl.isEmpty()) {
             BifIndex.load(bifUrl, index -> bifIndex = index);
         }
-        detectedShaderType = parseShaderType(shaderTypeName);
+        autoDetectedShaderType = parseShaderType(shaderTypeName);
+        detectedShaderType = resolveEffectiveShaderFamily();
         shaderType = resolveShaderType();
+        /* Unlike createPlayer's fresh-instance path, activeAiUpscaleProgram survives an
+           in-place title switch (no player.setVideoEffects() reinstall happens here) - without
+           resetting this state too, the OUTGOING title's crop insets stay fed into the shared
+           GL program (visibly wrong-cropping the new title until its own detection somehow
+           reran), and never would: cropSamplerArmedForTrack staying true from the previous
+           title would permanently block onTracksChanged's own re-arm check (see that gate's own
+           comment) for every title switched to via this path, i.e. every Auto-Play transition. */
+        cropSamplerArmedForTrack = false;
+        autoCropInsets = null;
+        // createPlayer() below tears down and rebuilds the whole player/effects pipeline from
+        // scratch (fresh bootstrap install, cropAppliedViaReinstall reset alongside it) - no
+        // separate reinstall-back-to-null call is needed here the way setAutoCropEnabled's
+        // off-branch needs one, since nothing from the outgoing title's program survives past
+        // that call anyway.
+        if (autoCropSampler != null) {
+            autoCropSampler.stop();
+            autoCropSampler = null;
+        }
 
         title = newTitle != null ? newTitle : "";
         episodeTitle = newEpisodeTitle != null ? newEpisodeTitle : "";
@@ -2958,6 +3209,9 @@ public class PlayerActivity extends AppCompatActivity {
         }
         if (contentSampler != null) {
             contentSampler.stop();
+        }
+        if (autoCropSampler != null) {
+            autoCropSampler.stop();
         }
         if (abrMonitor != null) {
             abrMonitor.stop();

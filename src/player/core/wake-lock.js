@@ -22,7 +22,12 @@ export async function acquireWakeLock(controller) {
     if (!visibilityListenerAttached) {
         visibilityListenerAttached = true;
         document.addEventListener("visibilitychange", () => {
-            if (document.visibilityState === "visible" && controller._session && !controller._wakeLock) {
+            if (
+                document.visibilityState === "visible" &&
+                controller._session &&
+                controller._session.state !== "paused" &&
+                !controller._wakeLock
+            ) {
                 acquireWakeLock(controller);
             }
         });

@@ -1,6 +1,6 @@
 import { wireLinearNav, focusAfterPaint, isControllerActive, registerNavHandler } from "./focus-nav.js";
 import { hasSecrets, loadSecrets, saveSecrets } from "./vault.js";
-import { discoverServers, resolveBestConnection } from "./plex-auth.js";
+import { discoverLibraries } from "./plex-auth.js";
 import { isXboxDevice } from "./src/player/core/platform.js";
 import MODAL_STYLE from "./src/styles/settings-modal.css?inline";
 
@@ -31,8 +31,6 @@ const DEFAULT_PLAIN_CONFIG = {
   title_audio_enabled: true,
   title_audio_volume: 0.65,
 };
-
-const SECTION_TYPE_MAP = { movie: 1, show: 2 };
 
 export function loadPlain() {
   try {
@@ -446,13 +444,10 @@ class StreamingSettingsModal extends HTMLElement {
   }
 
   /* Discovers every server on the signed-in account - the owned one plus any a friend
-     has shared - not just the single server the app originally connected to (see
-     plex-auth.js's discoverServers, which already returns owned:false entries with
-     their own accessToken; this is the first place that keeps more than the one the
-     user picked at sign-in). Re-running this later re-probes connections and re-lists
-     libraries but preserves every existing enabled/label/all_enabled toggle, matched by
-     server clientIdentifier and library key - same "keep what's already set" merge the
-     single-server version did, just one level deeper now. */
+     has shared - not just the single server the app originally connected to. Re-running
+     this later re-probes connections and re-lists libraries but preserves every
+     existing enabled/label/all_enabled toggle (see plex-auth.js's discoverLibraries,
+     shared with the sign-in flow which now runs this same discovery automatically). */
   async _fetchLibraries() {
     const statusEl = this._el(".fetch-status");
     const accountToken = (await this._getEffectiveSecrets()).plex_account_token || "";
@@ -464,79 +459,20 @@ class StreamingSettingsModal extends HTMLElement {
     statusEl.textContent = "Discovering servers…";
     statusEl.className = "status fetch-status";
     try {
-      const discovered = await discoverServers(accountToken);
-      const prevServersById = new Map((this._servers || []).map((s) => [s.id, s]));
-      const prevSectionsByServerKey = new Map((this._sections || []).map((s) => [`${s.server_id}:${s.key}`, s]));
-      const nextServers = [];
-      const nextSections = [];
-      let unreachableCount = 0;
-      for (const d of discovered) {
-        const id = d.clientIdentifier;
-        if (!id) continue;
-        const prevServer = prevServersById.get(id);
-        const uri = await resolveBestConnection(d);
-        if (!uri) {
-          unreachableCount++;
-          /* Keep whatever was already saved for it rather than dropping it - a friend's
-             server being briefly offline shouldn't wipe out every toggle the user set
-             for it, and data.js's own fetches already tolerate a stale/unreachable
-             server gracefully (empty results, not a hard error). */
-          if (prevServer) {
-            nextServers.push(prevServer);
-            nextSections.push(...(this._sections || []).filter((s) => s.server_id === id));
-          }
-          continue;
-        }
-        const server = {
-          id,
-          name: d.name,
-          owned: d.owned,
-          sourceTitle: d.sourceTitle || "",
-          url: uri,
-          token: d.accessToken,
-          /* Defaults to fully on for a newly-discovered server (confirmed with the user:
-             a friend sharing a library should show up right away, not require an opt-in
-             per library first). */
-          all_enabled: prevServer ? prevServer.all_enabled !== false : true,
-        };
-        nextServers.push(server);
-        try {
-          const data = await this._plexGet(uri, d.accessToken, "/library/sections");
-          const dirs = data?.MediaContainer?.Directory || [];
-          for (const dir of dirs) {
-            if (!SECTION_TYPE_MAP[dir.type]) continue;
-            const prev = prevSectionsByServerKey.get(`${id}:${dir.key}`);
-            nextSections.push({
-              key: Number(dir.key),
-              type: SECTION_TYPE_MAP[dir.type],
-              label: prev?.label || dir.title,
-              enabled: prev ? prev.enabled !== false : true,
-              server_id: id,
-            });
-          }
-        } catch (e) {
-          // couldn't list this server's libraries this pass - keep whatever was already saved for it
-          nextSections.push(...(this._sections || []).filter((s) => s.server_id === id));
-        }
-      }
-      this._servers = nextServers;
-      this._sections = nextSections;
+      const { servers, sections, unreachableCount } = await discoverLibraries(accountToken, {
+        prevServers: this._servers || [],
+        prevSections: this._sections || [],
+      });
+      this._servers = servers;
+      this._sections = sections;
       this._renderSectionList();
       const suffix = unreachableCount ? ` — ${unreachableCount} server(s) unreachable right now` : "";
-      statusEl.textContent = `Found ${nextSections.length} library section(s) across ${nextServers.length} server(s)${suffix}.`;
+      statusEl.textContent = `Found ${sections.length} library section(s) across ${servers.length} server(s)${suffix}.`;
       statusEl.className = "status fetch-status ok";
     } catch (e) {
       statusEl.textContent = `Couldn't discover Plex servers: ${e.message}`;
       statusEl.className = "status fetch-status err";
     }
-  }
-
-  async _plexGet(url, token, path) {
-    const u = new URL(url + path);
-    u.searchParams.set("X-Plex-Token", token);
-    const res = await fetch(u, { headers: { Accept: "application/json" } });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return res.json();
   }
 
   /* Renders, in order: a top "Home" toggle (everything, across every server - mirrors

@@ -1,6 +1,7 @@
 import { parseYearQuery, buildGenreMatchHubs, buildReasonMatchHubs, SEARCH_REASON_LABELS } from "./logic/search.js";
 import { plexFetch, activeServers, serverForSection, isFromEnabledSection } from "./data.js";
 import { releasePosterImgClaims } from "./rows.js";
+import { updateNavActiveState } from "./nav.js";
 
 /* Search: the search-box input handling, the /hubs/search + genre/year/facet hub
    building, and the results-page render. Takes the PlexNetflixCard instance as an
@@ -27,7 +28,7 @@ export function onSearchInput(card) {
 function enterSearch(card) {
   card._preSearchView = card._currentView;
   card._currentView = "search";
-  card._navItems.forEach((n) => n.classList.remove("active"));
+  updateNavActiveState(card);
   card._showHero();
   card._renderLoading();
 }
@@ -35,7 +36,7 @@ function enterSearch(card) {
 export function exitSearch(card) {
   if (card._currentView !== "search") return;
   card._currentView = card._preSearchView || "home";
-  card._navItems.forEach((n) => n.classList.toggle("active", n.dataset.view === card._currentView));
+  updateNavActiveState(card);
   card._renderCurrentView();
   card._advanceHero();
   card._centerActiveHeaderNav?.(false);

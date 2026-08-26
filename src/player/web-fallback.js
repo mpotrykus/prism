@@ -67,10 +67,14 @@ function createVideoElement(controller) {
         controller._handlePlaybackEnded();
     });
     video.addEventListener("pause", () => {
-        if (controller._videoEl === video && controller._session) controller._session.state = "paused";
+        if (controller._videoEl !== video) return;
+        if (controller._session) controller._session.state = "paused";
+        releaseWakeLock(controller);
     });
     video.addEventListener("play", () => {
-        if (controller._videoEl === video && controller._session) controller._session.state = "playing";
+        if (controller._videoEl !== video) return;
+        if (controller._session) controller._session.state = "playing";
+        acquireWakeLock(controller);
     });
     video.addEventListener("error", () => {
         if (controller._videoEl !== video) return;

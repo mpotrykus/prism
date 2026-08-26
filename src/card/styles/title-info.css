@@ -1,40 +1,57 @@
 .title-info-overlay {
-  position: fixed;
-  inset: 0;
-  background: var(--color-bg);
-  display: none;
-  opacity: 0;
-  transition: opacity 0.25s ease;
-  z-index: 200;
-  outline: none;
-  overflow-y: auto;
-  scroll-behavior: smooth;
-  padding: 0;
-  scrollbar-width: none;
+    position: fixed;
+    inset: 0;
+    background: var(--color-bg);
+    display: none;
+    opacity: 0;
+    transition: opacity 0.25s ease;
+    z-index: 200;
+    outline: none;
+    overflow-y: auto;
+    scroll-behavior: smooth;
+    padding: 0;
+    scrollbar-width: none;
 }
-.title-info-overlay::-webkit-scrollbar { display: none; width: 0; height: 0; }
+
+.title-info-overlay::-webkit-scrollbar {
+    display: none;
+    width: 0;
+    height: 0;
+}
+
+
 /* "open"/"closing" both keep display:block (see title-info.js's open()/close()) - "closing"
    is what lets the fade-out actually play instead of the element vanishing via display:none
    the instant "open" comes off. "visible" is the separate opacity switch, added a frame
    after "open" on the way in so the transition has a rendered 0-opacity state to animate
    from. */
-.title-info-overlay.open, .title-info-overlay.closing { display: block; }
-.title-info-overlay.visible { opacity: 1; }
+
+.title-info-overlay.open,
+.title-info-overlay.closing {
+    display: block;
+}
+
+.title-info-overlay.visible {
+    opacity: 1;
+}
+
 .title-info-modal {
-  /* Shared by .title-info-art's own height and .title-info-progress's top offset below -
+    /* Shared by .title-info-art's own height and .title-info-progress's top offset below -
      letting the progress bar live outside .title-info-art (so it isn't masked away along with
      the image, see that comment below) while still tracking art's actual (responsive) height
      requires both to read the same value rather than .title-info-art hardcoding its own. */
-  --title-info-art-h: clamp(480px, 72vh, 860px);
-  width: 100%;
-  max-width: 100%;
-  min-height: 100%;
-  background: transparent;
-  border: none;
-  border-radius: 0;
-  box-shadow: none;
-  position: relative;
+    --title-info-art-h: clamp(480px, 72vh, 860px);
+    width: 100%;
+    max-width: 100%;
+    min-height: 100%;
+    background: transparent;
+    border: none;
+    border-radius: 0;
+    box-shadow: none;
+    position: relative;
 }
+
+
 /* Ambient backdrop (same idea the old centered-card modal had via this same ::before, just
    fixed to the viewport now instead of scrolling with the (now full-page) modal) - a blurred/
    darkened wash of the same art image, showing through wherever content below (the body's
@@ -46,13 +63,20 @@
    this element's own (possibly taller-than-viewport) box, since neither this element nor any
    ancestor sets a transform/filter/perspective that would trap it to a different containing
    block. */
+
 .title-info-modal::before {
-  content: ""; position: fixed; inset: 0; z-index: 0;
-  background-image: var(--title-info-bg, none);
-  background-size: cover; background-position: center;
-  filter: blur(60px) brightness(0.14) saturate(1.05);
-  transform: scale(1.1);
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    background-image: var(--title-info-bg, none);
+    background-size: cover;
+    background-position: center;
+    filter: blur(60px) brightness(0.14) saturate(1.05);
+    transform: scale(1.1);
 }
+
+
 /* Top-left transparent chevron, matching the player's own close button (see
    src/player/ui/chrome-controls.js's makeControlButton) rather than a circular top-right
    "X" - same close action, same back-affordance placement/style as the rest of the app.
@@ -60,19 +84,42 @@
    against .title-info-modal (its positioned ancestor) anchors it to the hero art's own
    corner so it scrolls away with the top of the page instead of hovering fixed over the
    cast/episodes/similar sections the whole way down. */
+
 .title-info-close {
-  position: absolute; top: 24px; left: 32px; z-index: 10;
-  width: 40px; height: 40px; border-radius: 50%; border: none;
-  background: transparent; color: var(--color-fg); font-size: 28px; font-weight: 600; cursor: pointer;
-  text-shadow: 0 1px 4px rgba(var(--color-shadow-rgb), 0.85);
-  display: flex; align-items: center; justify-content: center;
+    position: absolute;
+    top: 24px;
+    left: 32px;
+    z-index: 10;
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    border: none;
+    background: transparent;
+    color: var(--color-fg);
+    font-size: 28px;
+    font-weight: 600;
+    cursor: pointer;
+    text-shadow: 0 1px 4px rgba(var(--color-shadow-rgb), 0.85);
+    display: flex;
+    align-items: center;
+    justify-content: center;
 }
-.title-info-close:hover { background: rgba(var(--color-panel-rgb), 0.3); }
+
+.title-info-close:hover {
+    background: rgba(var(--color-panel-rgb), 0.3);
+}
+
+
 /* B/Escape already backs this overlay out for a controller user - see focus-nav.js's
    controller-active-change comment - so the "X" is a redundant, unreachable-by-D-pad
    dead end for them. Keyed off the card's own host attribute (set in
    plex-netflix-card.js's _build), same reasoning as rows-poster.css's watchlist-btn rule. */
-:host([controller-active]) .title-info-close { display: none; }
+
+:host([controller-active]) .title-info-close {
+    display: none;
+}
+
+
 /* Full-bleed hero-style treatment (same idea as .hero/.hero-fade on the home page), with one
    difference from the hero: the bottom edge doesn't fade to a flat color anymore. This element
    sits directly above the fixed, blurred ambient wash of this same art (.title-info-modal::before,
@@ -81,13 +128,19 @@
    blurred backdrop, which stays seamless regardless of the art's actual colors. A flat-color fade
    (the previous approach) only matched when what sat behind it was that same flat color - it broke
    the moment the ambient wash became the actual background there instead. */
+
 .title-info-art {
-  width: 100%; height: var(--title-info-art-h);
-  position: relative; z-index: 1; background-color: var(--color-bg);
-  overflow: hidden;
-  -webkit-mask-image: linear-gradient(180deg, #000 0%, #000 55%, transparent 100%);
-  mask-image: linear-gradient(180deg, #000 0%, #000 55%, transparent 100%);
+    width: 100%;
+    height: var(--title-info-art-h);
+    position: relative;
+    z-index: 1;
+    background-color: var(--color-bg);
+    overflow: hidden;
+    -webkit-mask-image: linear-gradient(180deg, #000 0%, #000 55%, transparent 100%);
+    mask-image: linear-gradient(180deg, #000 0%, #000 55%, transparent 100%);
 }
+
+
 /* The actual image, split out from .title-info-art itself so the parallax translate (driven
    from title-info.js's scroll listener on .title-info-overlay) moves only the picture, not the
    mask/scrim/box the rest of the modal is laid out against - .title-info-progress in particular
@@ -95,22 +148,45 @@
    would drift out of sync with the art's bottom edge if the whole box moved instead. Oversized
    top/height the same way hero.css's .hero-media is, so the translate always has cropped image
    left to show and the mask above never has an edge exposed to clip. */
+
 .title-info-art-img {
-  position: absolute; left: 0; right: 0;
-  top: -12%; height: 124%;
-  background-size: cover; background-position: center;
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: -12%;
+    height: 124%;
+    background-size: cover;
+    background-position: center;
 }
+
+
 /* Same Ken-Burns drift as the home hero's .hero-media (hero.css), applied to this art
    layer instead - reuses hero.css's own keyframes rather than redefining them, since
    both files land in the same merged shadow-root stylesheet (see
    plex-netflix-card.js's STYLE array). Only runs while showing a static backdrop -
    title-info.js removes these classes the moment a trailer starts playing, same as the
    hero does. */
-.title-info-art-img.pan-vertical { animation: hero-pan-vertical var(--title-info-pan-duration, 9s) ease-in-out infinite alternate; }
-.title-info-art-img.pan-horizontal { animation: hero-pan-horizontal var(--title-info-pan-duration, 9s) ease-in-out infinite alternate; }
-.title-info-art-img video { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+.title-info-art-img.pan-vertical {
+    animation: hero-pan-vertical var(--title-info-pan-duration, 9s) ease-in-out infinite alternate;
+}
+
+.title-info-art-img.pan-horizontal {
+    animation: hero-pan-horizontal var(--title-info-pan-duration, 9s) ease-in-out infinite alternate;
+}
+
+.title-info-art-img video {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+
+
 /* .hero-yt-wrap (hero.css) is reused as-is for the YouTube-fallback trailer embed here -
    same centered/oversized iframe sizing trick, no title-info-specific version needed. */
+
+
 /* Mirrors .hero-mute-btn/.hero-play-btn (hero.css), bottom-right over the art like the hero -
    but, like .title-info-progress below, these have to live as siblings of .title-info-art
    rather than children of it: .title-info-art has a mask fading it to transparent near its own
@@ -118,27 +194,54 @@
    with the image instead of staying solid and legible. Positioned off .title-info-modal's
    shared --title-info-art-h var for the same reason .title-info-progress is, sitting just
    above that progress bar (top: art-h - 24px) rather than overlapping it. */
-.title-info-trailer-mute-btn, .title-info-trailer-play-btn {
-  position: absolute; top: calc(var(--title-info-art-h) - 90px); z-index: 2;
-  width: 40px; height: 40px; border-radius: 50%;
-  border: 1.5px solid rgba(var(--color-fg-rgb), 0.6);
-  background: rgba(var(--color-panel-rgb), 0.5);
-  color: var(--color-fg); font-size: 17px; cursor: pointer;
+
+.title-info-trailer-mute-btn,
+.title-info-trailer-play-btn {
+    position: absolute;
+    top: calc(var(--title-info-art-h) - 90px);
+    z-index: 2;
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    border: 1.5px solid rgba(var(--color-fg-rgb), 0.6);
+    background: rgba(var(--color-panel-rgb), 0.5);
+    color: var(--color-fg);
+    font-size: 17px;
+    cursor: pointer;
 }
-.title-info-trailer-mute-btn:hover, .title-info-trailer-play-btn:hover { background: rgba(var(--color-panel-rgb), 0.8); }
-.title-info-trailer-mute-btn[hidden], .title-info-trailer-play-btn[hidden] { display: none; }
-.title-info-trailer-mute-btn { right: 32px; }
-.title-info-trailer-play-btn { right: 82px; }
+
+.title-info-trailer-mute-btn:hover,
+.title-info-trailer-play-btn:hover {
+    background: rgba(var(--color-panel-rgb), 0.8);
+}
+
+.title-info-trailer-mute-btn[hidden],
+.title-info-trailer-play-btn[hidden] {
+    display: none;
+}
+
+.title-info-trailer-mute-btn {
+    right: 32px;
+}
+
+.title-info-trailer-play-btn {
+    right: 82px;
+}
+
+
 /* Darkening scrim only now - the fade-to-transparent job moved to the mask above. Left-side
    scrim for text legibility over whatever the image looks like there, plus a gentler bottom
    darkening (capped well short of fully opaque) so the title/meta text overlaid lower down still
    reads clearly before the mask above takes over and dissolves the image away entirely. */
+
 .title-info-art::after {
-  content: ""; position: absolute; inset: 0;
-  background:
-    linear-gradient(90deg, rgba(var(--color-bg-rgb), 0.75) 0%, rgba(var(--color-bg-rgb), 0.2) 42%, rgba(var(--color-bg-rgb), 0) 68%),
-    linear-gradient(180deg, rgba(var(--color-bg-rgb), 0) 35%, rgba(var(--color-bg-rgb), 0.55) 75%, rgba(var(--color-bg-rgb), 0.55) 100%);
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(90deg, rgba(var(--color-bg-rgb), 0.75) 0%, rgba(var(--color-bg-rgb), 0.2) 42%, rgba(var(--color-bg-rgb), 0) 68%), linear-gradient(180deg, rgba(var(--color-bg-rgb), 0) 35%, rgba(var(--color-bg-rgb), 0.55) 75%, rgba(var(--color-bg-rgb), 0.55) 100%);
 }
+
+
 /* A sibling of .title-info-art (both direct children of .title-info-modal) rather than living
    inside .title-info-art itself - .title-info-art now has a mask fading it to transparent near
    its own bottom edge (see above), and mask applies to an element's entire rendered subtree,
@@ -149,191 +252,586 @@
    (narrower, centered) max-width - positioned off .title-info-modal's shared --title-info-art-h
    variable instead, since .title-info-modal (unlike .title-info-body) has no width cap of its
    own to fight. */
+
 .title-info-progress {
-  position: absolute; left: 0; right: 0; height: 4px; z-index: 2;
-  top: calc(var(--title-info-art-h) - 24px);
-  background: rgba(var(--color-fg-rgb), 0.25);
+    position: absolute;
+    left: 0;
+    right: 0;
+    height: 4px;
+    z-index: 2;
+    top: calc(var(--title-info-art-h) - 24px);
+    background: rgba(var(--color-fg-rgb), 0.25);
 }
-.title-info-progress[hidden] { display: none; }
-.title-info-progress .bar { height: 100%; background: var(--color-accent); }
-.title-info-body { padding: 0 60px 80px; position: relative; z-index: 1; }
+
+.title-info-progress[hidden] {
+    display: none;
+}
+
+.title-info-progress .bar {
+    height: 100%;
+    background: var(--color-accent);
+}
+
+.title-info-body {
+    padding: 0 60px 80px;
+    position: relative;
+    z-index: 1;
+}
+
+
 /* Anchored to the bottom of its own starting line (title-info-body's own top edge,
    which lines up with title-info-art's bottom edge/the progress bar) via top:0 +
    translateY(-100%) rather than a fixed negative margin - a long/wrapped title or
    genre list then grows upward into the art image instead of pushing this text down
    into the divider or the actions row below it. */
-.title-info-header { position: absolute; left: 60px; right: 60px; top: 0; transform: translateY(-100%); padding-bottom: 52px; }
-.title-info-title { font-size: 48px; font-weight: 800; margin-bottom: 14px; text-shadow: 0 2px 20px rgba(var(--color-shadow-rgb), 0.8); max-width: 900px; }
-.title-info-logo {
-  display: block;
-  max-width: 100%;
-  max-height: 130px;
-  object-fit: contain;
-  object-position: left;
-  filter: drop-shadow(0 2px 20px rgba(var(--color-shadow-rgb), 0.8));
+
+.title-info-header {
+    position: absolute;
+    left: 60px;
+    right: 60px;
+    top: 0;
+    transform: translateY(-100%);
+    padding-bottom: 52px;
 }
-.title-info-meta { font-size: 15px; color: rgba(var(--color-fg-rgb), 0.8); margin-bottom: 20px; text-shadow: 0 1px 10px rgba(var(--color-shadow-rgb), 0.8); }
-.title-info-meta span:not(:last-child)::after { content: "•"; margin: 0 8px; color: rgba(var(--color-fg-rgb), 0.3); }
-.title-info-actions { display: flex; align-items: center; gap: 12px; margin: 8px 0 24px; }
-.title-info-actions[hidden] { display: none; }
+
+.title-info-title {
+    font-size: 48px;
+    font-weight: 800;
+    margin-bottom: 14px;
+    text-shadow: 0 2px 20px rgba(var(--color-shadow-rgb), 0.8);
+    max-width: 900px;
+}
+
+.title-info-logo {
+    display: block;
+    max-width: 80%;
+    max-height: 175px;
+    padding-bottom: 12px;
+    object-fit: contain;
+    object-position: left;
+    filter: drop-shadow(0 2px 20px rgba(var(--color-shadow-rgb), 0.8));
+}
+
+.title-info-meta {
+    font-size: 15px;
+    color: rgba(var(--color-fg-rgb), 0.8);
+    margin-bottom: 20px;
+    text-shadow: 0 1px 10px rgba(var(--color-shadow-rgb), 0.8);
+}
+
+.title-info-meta span:not(:last-child)::after {
+    content: "•";
+    margin: 0 8px;
+    color: rgba(var(--color-fg-rgb), 0.3);
+}
+
+.title-info-actions {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin: 8px 0 24px;
+}
+
+.title-info-actions[hidden] {
+    display: none;
+}
+
+
 /* Both buttons pin an explicit height rather than relying on padding to imply one -
    padding math (matching each side's padding+border) still left them visibly different
    heights, since the two labels' glyphs (a plain "R" vs. the "▶" play triangle) don't
    share the same font metrics/ascent. */
+
 .title-info-play {
-  border: none; border-radius: 8px; height: 48px; padding: 0 34px; font-size: 15px; font-weight: 700;
-  cursor: pointer; background: var(--color-fg); color: var(--color-surface);
-  display: inline-flex; align-items: center; justify-content: center;
+    border: none;
+    border-radius: 8px;
+    height: 48px;
+    padding: 0 34px;
+    font-size: 15px;
+    font-weight: 700;
+    cursor: pointer;
+    background: var(--color-fg);
+    color: var(--color-surface);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
 }
-.title-info-play:hover { background: rgba(var(--color-fg-rgb), 0.85); }
+
+.title-info-play:hover {
+    background: rgba(var(--color-fg-rgb), 0.85);
+}
+
 .title-info-restart-btn {
-  border: 1px solid rgba(var(--color-fg-rgb), 0.3); border-radius: 8px; height: 48px; padding: 0 20px; font-size: 14px; font-weight: 700;
-  cursor: pointer; background: transparent; color: var(--color-fg);
-  display: inline-flex; align-items: center; justify-content: center;
+    border: 1px solid rgba(var(--color-fg-rgb), 0.3);
+    border-radius: 8px;
+    height: 48px;
+    padding: 0 20px;
+    font-size: 14px;
+    font-weight: 700;
+    cursor: pointer;
+    background: transparent;
+    color: var(--color-fg);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
 }
-.title-info-restart-btn:hover { background: rgba(var(--color-fg-rgb), 0.1); }
-.title-info-restart-btn[hidden] { display: none; }
+
+.title-info-restart-btn:hover {
+    background: rgba(var(--color-fg-rgb), 0.1);
+}
+
+.title-info-restart-btn[hidden] {
+    display: none;
+}
+
+
 /* Stacked icon-over-label buttons (HBO Max's "My List"/"Rate"/"Trailer" row is the
    reference) rather than the bare circular icon buttons these used to be - an icon alone
    reads fine the first time but is easy to forget the meaning of on a return visit. */
-.title-info-watched-btn, .title-info-watchlist-btn {
-  width: 60px; flex: none; border: none; border-radius: 8px;
-  background: transparent; color: var(--color-fg);
-  cursor: pointer; display: flex; flex-direction: column; align-items: center; justify-content: center;
-  gap: 4px; padding: 4px 2px;
+
+.title-info-watched-btn,
+.title-info-watchlist-btn {
+    width: 60px;
+    flex: none;
+    border: none;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--color-fg);
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    padding: 4px 2px;
 }
-.title-info-action-icon { display: flex; align-items: center; justify-content: center; height: 18px; font-size: 16px; line-height: 1; }
-.title-info-action-icon svg { width: 16px; height: 16px; }
-.title-info-action-label { font-size: 11px; font-weight: 700; white-space: nowrap; }
-.title-info-watched-btn:hover, .title-info-watchlist-btn:hover { background: rgba(var(--color-fg-rgb), 0.1); }
-.title-info-watched-btn.watched { color: var(--color-accent); }
-.title-info-watched-btn.busy { opacity: 0.5; pointer-events: none; }
-.title-info-watched-btn.error { color: var(--color-danger); }
-.title-info-watched-btn[hidden] { display: none; }
-.title-info-watchlist-btn.added { color: var(--color-accent); }
-.title-info-watchlist-btn.busy { opacity: 0.5; pointer-events: none; }
-.title-info-watchlist-btn.error { color: var(--color-danger); }
-.title-info-watchlist-btn[hidden] { display: none; }
-.title-info-actions-loading { display: flex; align-items: center; justify-content: center; height: 40px; margin-bottom: 20px; }
-.title-info-actions-loading[hidden] { display: none; }
+
+.title-info-action-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 18px;
+    font-size: 16px;
+    line-height: 1;
+}
+
+.title-info-action-icon svg {
+    width: 16px;
+    height: 16px;
+}
+
+.title-info-action-label {
+    font-size: 11px;
+    font-weight: 700;
+    white-space: nowrap;
+}
+
+.title-info-watched-btn:hover,
+.title-info-watchlist-btn:hover {
+    background: rgba(var(--color-fg-rgb), 0.1);
+}
+
+.title-info-watched-btn.watched {
+    color: var(--color-accent);
+}
+
+.title-info-watched-btn.busy {
+    opacity: 0.5;
+    pointer-events: none;
+}
+
+.title-info-watched-btn.error {
+    color: var(--color-danger);
+}
+
+.title-info-watched-btn[hidden] {
+    display: none;
+}
+
+.title-info-watchlist-btn.added {
+    color: var(--color-accent);
+}
+
+.title-info-watchlist-btn.busy {
+    opacity: 0.5;
+    pointer-events: none;
+}
+
+.title-info-watchlist-btn.error {
+    color: var(--color-danger);
+}
+
+.title-info-watchlist-btn[hidden] {
+    display: none;
+}
+
+.title-info-actions-loading {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 40px;
+    margin-bottom: 20px;
+}
+
+.title-info-actions-loading[hidden] {
+    display: none;
+}
+
 .title-info-actions-loading .spinner {
-  width: 32px; height: 32px; border-radius: 50%;
-  border: 3px solid rgba(var(--color-fg-rgb), 0.25); border-top-color: var(--color-fg);
-  animation: title-info-spin 0.7s linear infinite;
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    border: 3px solid rgba(var(--color-fg-rgb), 0.25);
+    border-top-color: var(--color-fg);
+    animation: title-info-spin 0.7s linear infinite;
 }
-@keyframes title-info-spin { to { transform: rotate(360deg); } }
-.title-info-summary { font-size: 14px; line-height: 1.6; color: rgba(var(--color-fg-rgb), 0.85); margin-bottom: 28px; max-width: 900px; }
-.title-info-section-title { font-size: 14px; font-weight: 700; margin: 40px 0 16px; }
-.title-info-cast-wrap[hidden], .title-info-similar-wrap[hidden] { display: none; }
+
+@keyframes title-info-spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+.title-info-summary {
+    font-size: 14px;
+    line-height: 1.6;
+    color: rgba(var(--color-fg-rgb), 0.85);
+    margin-bottom: 28px;
+    max-width: 900px;
+}
+
+.title-info-section-title {
+    font-size: 14px;
+    font-weight: 700;
+    margin: 40px 0 16px;
+}
+
+.title-info-cast-wrap[hidden],
+.title-info-similar-wrap[hidden] {
+    display: none;
+}
+
+
 /* Nav stop with no click action of its own - only exists so D-pad/gamepad Down doesn't
    skip over the cast row entirely (it has no other focusable member above episodes/similar
    items). No visible focus ring on purpose - see shared-focus.css's opt-in list. */
-.title-info-cast-wrap:focus { outline: none; }
-.title-info-cast { display: grid; grid-template-columns: repeat(auto-fill, minmax(76px, 1fr)); gap: 14px; }
-.title-info-cast-chip { display: flex; flex-direction: column; align-items: center; text-align: center; }
+
+.title-info-cast-wrap:focus {
+    outline: none;
+}
+
+.title-info-cast {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(76px, 1fr));
+    gap: 14px;
+}
+
+.title-info-cast-chip {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+}
+
 .title-info-cast-avatar {
-  position: relative; width: 56px; height: 56px; border-radius: 50%; overflow: hidden; margin-bottom: 6px;
-  background: rgba(var(--color-fg-rgb), 0.08); display: flex; align-items: center; justify-content: center;
+    position: relative;
+    width: 56px;
+    height: 56px;
+    border-radius: 50%;
+    overflow: hidden;
+    margin-bottom: 6px;
+    background: rgba(var(--color-fg-rgb), 0.08);
+    display: flex;
+    align-items: center;
+    justify-content: center;
 }
-.title-info-cast-avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
-.title-info-cast-avatar-fallback { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; color: rgba(var(--color-fg-rgb), 0.45); }
-.title-info-cast-avatar-fallback svg { width: 28px; height: 28px; }
-.title-info-cast-name { font-size: 12px; color: rgba(var(--color-fg-rgb), 0.85); line-height: 1.3; margin-bottom: 2px; }
-.title-info-cast-role { font-size: 11px; color: rgba(var(--color-fg-rgb), 0.5); line-height: 1.3; }
+
+.title-info-cast-avatar img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+
+.title-info-cast-avatar-fallback {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: rgba(var(--color-fg-rgb), 0.45);
+}
+
+.title-info-cast-avatar-fallback svg {
+    width: 28px;
+    height: 28px;
+}
+
+.title-info-cast-name {
+    font-size: 12px;
+    color: rgba(var(--color-fg-rgb), 0.85);
+    line-height: 1.3;
+    margin-bottom: 2px;
+}
+
+.title-info-cast-role {
+    font-size: 11px;
+    color: rgba(var(--color-fg-rgb), 0.5);
+    line-height: 1.3;
+}
+
 .title-info-season-trigger {
-  background: rgba(var(--color-fg-rgb), 0.08); border: 1px solid rgba(var(--color-fg-rgb), 0.12); color: var(--color-fg);
-  border-radius: 8px; padding: 8px 12px; font-size: 13px; font: inherit; cursor: pointer; margin-bottom: 12px;
+    background: rgba(var(--color-fg-rgb), 0.08);
+    border: 1px solid rgba(var(--color-fg-rgb), 0.12);
+    color: var(--color-fg);
+    border-radius: 8px;
+    padding: 8px 12px;
+    font-size: 13px;
+    font: inherit;
+    cursor: pointer;
+    margin-bottom: 12px;
 }
-.title-info-season-trigger:hover, .title-info-season-trigger:focus-visible { background: rgba(var(--color-fg-rgb), 0.16); }
-.title-info-season-static { font-size: 13px; font-weight: 600; color: rgba(var(--color-fg-rgb), 0.75); margin-bottom: 12px; }
+
+.title-info-season-trigger:hover,
+.title-info-season-trigger:focus-visible {
+    background: rgba(var(--color-fg-rgb), 0.16);
+}
+
+.title-info-season-static {
+    font-size: 13px;
+    font-weight: 600;
+    color: rgba(var(--color-fg-rgb), 0.75);
+    margin-bottom: 12px;
+}
+
 
 /* Same centered-card overlay pattern as .profile-overlay/.profile-modal (see profile.css) -
    z-index above .title-info-overlay's own 200 since this opens on top of an already-open
    title-info modal rather than the page behind it. */
+
 .title-info-season-overlay {
-  position: fixed; inset: 0; background: rgba(var(--color-shadow-rgb), 0.72); backdrop-filter: blur(6px);
-  display: none; align-items: center; justify-content: center; z-index: 210; outline: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(var(--color-shadow-rgb), 0.72);
+    backdrop-filter: blur(6px);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    z-index: 210;
+    outline: none;
 }
-.title-info-season-overlay.open { display: flex; }
+
+.title-info-season-overlay.open {
+    display: flex;
+}
+
 .title-info-season-modal {
-  width: 360px; max-width: 88vw; max-height: 80vh; overflow-y: auto; scrollbar-width: none;
-  /* --color-shadow-rgb (literal 0,0,0) rather than --color-bg-rgb - stays reliably black
+    width: 360px;
+    max-width: 88vw;
+    max-height: 80vh;
+    overflow-y: auto;
+    scrollbar-width: none;
+    /* --color-shadow-rgb (literal 0,0,0) rather than --color-bg-rgb - stays reliably black
      even if a light theme is ever added, unlike --color-bg-rgb. */
-  background: rgba(var(--color-shadow-rgb), 0.6);
-  backdrop-filter: blur(20px) saturate(1.6);
-  -webkit-backdrop-filter: blur(20px) saturate(1.6);
-  border: 1px solid rgba(var(--color-fg-rgb), 0.08); border-radius: 16px;
-  padding: 24px; box-shadow: 0 24px 70px rgba(var(--color-shadow-rgb), 0.6);
+    background: rgba(var(--color-shadow-rgb), 0.6);
+    backdrop-filter: blur(20px) saturate(1.6);
+    -webkit-backdrop-filter: blur(20px) saturate(1.6);
+    border: 1px solid rgba(var(--color-fg-rgb), 0.08);
+    border-radius: 16px;
+    padding: 24px;
+    box-shadow: 0 24px 70px rgba(var(--color-shadow-rgb), 0.6);
 }
-.title-info-season-modal::-webkit-scrollbar { display: none; width: 0; height: 0; }
-.title-info-season-modal-title { font-size: 15px; font-weight: 700; margin-bottom: 16px; text-align: center; }
-.title-info-season-modal-list { display: flex; flex-direction: column; gap: 6px; }
+
+.title-info-season-modal::-webkit-scrollbar {
+    display: none;
+    width: 0;
+    height: 0;
+}
+
+.title-info-season-modal-title {
+    font-size: 15px;
+    font-weight: 700;
+    margin-bottom: 16px;
+    text-align: center;
+}
+
+.title-info-season-modal-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
 .title-info-season-modal-option {
-  width: 100%; text-align: left; padding: 10px 12px; border-radius: 8px; border: none;
-  background: rgba(var(--color-fg-rgb), 0.05); color: var(--color-fg); font-size: 14px; font-weight: 600;
-  font: inherit; cursor: pointer;
+    width: 100%;
+    text-align: left;
+    padding: 10px 12px;
+    border-radius: 8px;
+    border: none;
+    background: rgba(var(--color-fg-rgb), 0.05);
+    color: var(--color-fg);
+    font-size: 14px;
+    font-weight: 600;
+    font: inherit;
+    cursor: pointer;
 }
-.title-info-season-modal-option:hover, .title-info-season-modal-option:focus-visible { background: rgba(var(--color-fg-rgb), 0.1); }
-.title-info-season-modal-option.selected { background: rgba(var(--color-accent-rgb), 0.16); }
+
+.title-info-season-modal-option:hover,
+.title-info-season-modal-option:focus-visible {
+    background: rgba(var(--color-fg-rgb), 0.1);
+}
+
+.title-info-season-modal-option.selected {
+    background: rgba(var(--color-accent-rgb), 0.16);
+}
+
+
 /* Row/card layout (same shape as the in-player episode list's own cards - see
    src/player/ui/episode-list.js's buildEpisodeCard) rather than a stacked list of full-
    width rows - see .title-info-row-wrap/-scroller/-track below for the horizontally-
    scrolling row these cards sit in. Used for both a season's episodes and (via
    _renderFlatItems) a collection/playlist's flat item list. */
-.title-info-episode { display: flex; flex-direction: column; gap: 8px; width: 240px; flex: none; cursor: pointer; }
-.title-info-episode-thumb {
-  position: relative; width: 100%; height: 135px; border-radius: 8px; box-sizing: border-box;
-  background: rgba(var(--color-fg-rgb), 0.05); overflow: hidden;
-  border: 2px solid transparent;
+
+.title-info-episode {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    width: 240px;
+    flex: none;
+    cursor: pointer;
 }
+
+.title-info-episode-thumb {
+    position: relative;
+    width: 100%;
+    height: 135px;
+    border-radius: 8px;
+    box-sizing: border-box;
+    background: rgba(var(--color-fg-rgb), 0.05);
+    overflow: hidden;
+    border: 2px solid transparent;
+}
+
+
 /* The "on-deck"/currently-resumed episode (see openForEpisode) - an accent border on the
    thumb rather than the old whole-row background tint, which only made sense for a
    full-width row. */
-.title-info-episode.current .title-info-episode-thumb { border-color: var(--color-accent); }
+
+.title-info-episode.current .title-info-episode-thumb {
+    border-color: var(--color-accent);
+}
+
+
 /* Flat collection/playlist items (flatItemCardHtml) have no .title-info-episode-play
    element for the :hover/:focus-visible rule below to reveal, so without this they had
    no focus indicator at all - the accent border here covers both card shapes. */
+
 .title-info-episode:hover .title-info-episode-thumb,
-.title-info-episode:focus-visible .title-info-episode-thumb { border-color: var(--color-accent); }
-.title-info-episode-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.title-info-episode:focus-visible .title-info-episode-thumb {
+    border-color: var(--color-accent);
+}
+
+.title-info-episode-thumb img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+
 .title-info-episode-progress {
-  position: absolute; left: 0; right: 0; bottom: 0; height: 3px; background: rgba(var(--color-fg-rgb), 0.3);
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 3px;
+    background: rgba(var(--color-fg-rgb), 0.3);
 }
-.title-info-episode-progress .bar { height: 100%; background: var(--color-accent); }
+
+.title-info-episode-progress .bar {
+    height: 100%;
+    background: var(--color-accent);
+}
+
 .title-info-episode-watched {
-  position: absolute; top: 4px; left: 4px; width: 18px; height: 18px; border-radius: 50%;
-  background: rgba(var(--color-panel-rgb), 0.7); color: var(--color-accent); display: flex; align-items: center; justify-content: center;
+    position: absolute;
+    top: 4px;
+    left: 4px;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: rgba(var(--color-panel-rgb), 0.7);
+    color: var(--color-accent);
+    display: flex;
+    align-items: center;
+    justify-content: center;
 }
-.title-info-episode-watched svg { width: 11px; height: 11px; }
+
+.title-info-episode-watched svg {
+    width: 11px;
+    height: 11px;
+}
+
 .title-info-episode-play {
-  position: absolute; inset: 0; z-index: 2;
-  background: rgba(var(--color-shadow-rgb), 0.5);
-  display: flex; align-items: center; justify-content: center;
-  opacity: 0; transition: opacity 0.15s ease;
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    background: rgba(var(--color-shadow-rgb), 0.5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    transition: opacity 0.15s ease;
 }
+
 .title-info-episode:hover .title-info-episode-play,
-.title-info-episode:focus-visible .title-info-episode-play { opacity: 1; }
+.title-info-episode:focus-visible .title-info-episode-play {
+    opacity: 1;
+}
+
 .title-info-episode-play-icon {
-  width: 34px; height: 34px; border-radius: 50%;
-  background: rgba(var(--color-fg-rgb), 0.9); color: var(--color-surface);
-  display: flex; align-items: center; justify-content: center;
-  font-size: 13px;
+    width: 34px;
+    height: 34px;
+    border-radius: 50%;
+    background: rgba(var(--color-fg-rgb), 0.9);
+    color: var(--color-surface);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 13px;
 }
+
 .title-info-episode-title {
-  font-size: 13.5px; font-weight: 700;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    font-size: 13.5px;
+    font-weight: 700;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
+
 .title-info-episode-summary {
-  font-size: 12.5px; color: rgba(var(--color-fg-rgb), 0.6); line-height: 1.4;
-  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+    font-size: 12.5px;
+    color: rgba(var(--color-fg-rgb), 0.6);
+    line-height: 1.4;
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
 }
-.title-info-loading { padding: 20px 0; color: rgba(var(--color-fg-rgb), 0.5); font-size: 13px; }
+
+.title-info-loading {
+    padding: 20px 0;
+    color: rgba(var(--color-fg-rgb), 0.5);
+    font-size: 13px;
+}
+
+
 /* The horizontally-scrolling row itself (episodes for the season .title-info-episode-title
    picker selects, or a collection/playlist's flat item list) - same idea as the main page's
    own .row-scroll-wrap/-scroller/-track (rows-poster.css) and the in-player episode list's
    overlay (src/player/ui/episode-list.js), just sized for this card's own dimensions rather
    than reusing either of those directly (see buildEpisodeRowArrow's own comment in
    title-info.js for why the arrows specifically aren't shared). */
+
+
 /* Negates .title-info-body's own 60px side padding (rather than a 100vw/negative-viewport-
    margin trick) so the row reaches the true edges of the window - body itself is full-width
    now (no centered max-width to fight, see that rule's own history), so escaping just its
@@ -341,30 +839,107 @@
    internal padding, so the first/current card still lines up with the title/summary text
    above rather than starting flush at the very edge - only the row's own scrollable/clipped
    area (and the cards once scrolled) actually reaches edge-to-edge. */
-.title-info-row-wrap { position: relative; margin: 0 -60px; }
-.title-info-row-scroller { overflow: hidden; padding: 4px 60px; touch-action: pan-y; }
-.title-info-row-scroller.dragging { cursor: grabbing; }
-.title-info-row-track { display: flex; gap: 16px; will-change: transform; }
+
+.title-info-row-wrap {
+    position: relative;
+    margin: 0 -60px;
+}
+
+.title-info-row-scroller {
+    overflow: hidden;
+    padding: 4px 60px;
+    touch-action: pan-y;
+}
+
+.title-info-row-scroller.dragging {
+    cursor: grabbing;
+}
+
+.title-info-row-track {
+    display: flex;
+    gap: 16px;
+    will-change: transform;
+}
+
 .title-info-row-arrow {
-  position: absolute; top: 0; bottom: 0; width: 40px; border: none; padding: 0;
-  display: flex; align-items: center; justify-content: center;
-  color: var(--color-fg); cursor: pointer; z-index: 5; opacity: 0;
-  transition: opacity 0.15s ease, background-color 0.15s ease;
-  background: linear-gradient(90deg, rgba(var(--color-bg-rgb), 0.9), rgba(var(--color-bg-rgb), 0));
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 40px;
+    border: none;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--color-fg);
+    cursor: pointer;
+    z-index: 5;
+    opacity: 0;
+    transition: opacity 0.15s ease, background-color 0.15s ease;
+    background: linear-gradient(90deg, rgba(var(--color-bg-rgb), 0.9), rgba(var(--color-bg-rgb), 0));
 }
-.title-info-row-arrow.right { left: auto; right: 0; background: linear-gradient(270deg, rgba(var(--color-bg-rgb), 0.9), rgba(var(--color-bg-rgb), 0)); }
-.title-info-row-arrow.left { left: 0; }
-.title-info-row-arrow:focus-visible { background-color: rgba(var(--color-shadow-rgb), 0.35); opacity: 1; }
-.title-info-row-arrow.hidden { opacity: 0 !important; pointer-events: none; }
+
+.title-info-row-arrow.right {
+    left: auto;
+    right: 0;
+    background: linear-gradient(270deg, rgba(var(--color-bg-rgb), 0.9), rgba(var(--color-bg-rgb), 0));
+}
+
+.title-info-row-arrow.left {
+    left: 0;
+}
+
+.title-info-row-arrow:focus-visible {
+    background-color: rgba(var(--color-shadow-rgb), 0.35);
+    opacity: 1;
+}
+
+.title-info-row-arrow.hidden {
+    opacity: 0 !important;
+    pointer-events: none;
+}
+
 @media (hover: hover) {
-  .title-info-row-arrow:hover { background-color: rgba(var(--color-shadow-rgb), 0.35); }
-  .title-info-row-wrap:hover .title-info-row-arrow:not(.hidden) { opacity: 1; }
+    .title-info-row-arrow:hover {
+        background-color: rgba(var(--color-shadow-rgb), 0.35);
+    }
+    .title-info-row-wrap:hover .title-info-row-arrow:not(.hidden) {
+        opacity: 1;
+    }
 }
-.title-info-similar { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 12px; }
-.title-info-similar-item { cursor: pointer; border-radius: 6px; }
-.title-info-similar-item img { width: 100%; aspect-ratio: 2/3; object-fit: cover; border-radius: 6px; background: rgba(var(--color-fg-rgb), 0.05); display: block; transition: transform 0.18s ease; }
-.title-info-similar-item:hover img { transform: scale(1.06); }
-.title-info-similar-item .t { font-size: 11.5px; margin-top: 6px; color: rgba(var(--color-fg-rgb), 0.75); }
+
+.title-info-similar {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+    gap: 12px;
+}
+
+.title-info-similar-item {
+    cursor: pointer;
+    border-radius: 6px;
+}
+
+.title-info-similar-item img {
+    width: 100%;
+    aspect-ratio: 2/3;
+    object-fit: cover;
+    border-radius: 6px;
+    background: rgba(var(--color-fg-rgb), 0.05);
+    display: block;
+    transition: transform 0.18s ease;
+}
+
+.title-info-similar-item:hover img {
+    transform: scale(1.06);
+}
+
+.title-info-similar-item .t {
+    font-size: 11.5px;
+    margin-top: 6px;
+    color: rgba(var(--color-fg-rgb), 0.75);
+}
+
+
 /* Solid cover over the whole modal while the hero art/logo images are still loading (see
    title-info.js's _revealWhenReady) - hides the header's title-vs-logo height swap and the
    actions row's spinner-vs-buttons swap that otherwise visibly reflowed the page as the detail
@@ -373,15 +948,29 @@
    already be taller than the viewport by the time this resolves. z-index sits above the art/body
    (1) and the progress bar (2) but below .title-info-close (10), so the close button stays
    reachable even while this is up. */
+
 .title-info-loading-overlay {
-  position: fixed; inset: 0; z-index: 5;
-  background: var(--color-bg);
-  display: flex; align-items: center; justify-content: center;
-  opacity: 1; transition: opacity 0.25s ease;
+    position: fixed;
+    inset: 0;
+    z-index: 5;
+    background: var(--color-bg);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 1;
+    transition: opacity 0.25s ease;
 }
-.title-info-loading-overlay.ready { opacity: 0; pointer-events: none; }
+
+.title-info-loading-overlay.ready {
+    opacity: 0;
+    pointer-events: none;
+}
+
 .title-info-loading-overlay .spinner {
-  width: 48px; height: 48px; border-radius: 50%;
-  border: 4px solid rgba(var(--color-fg-rgb), 0.25); border-top-color: var(--color-fg);
-  animation: title-info-spin 0.7s linear infinite;
+    width: 48px;
+    height: 48px;
+    border-radius: 50%;
+    border: 4px solid rgba(var(--color-fg-rgb), 0.25);
+    border-top-color: var(--color-fg);
+    animation: title-info-spin 0.7s linear infinite;
 }

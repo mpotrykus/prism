@@ -55,6 +55,7 @@
       <DependentUpon>MainPage.xaml</DependentUpon>
     </Compile>
     <Compile Include="Player\AiUpscaleFrameServer.cs" />
+    <Compile Include="Player\AutoCropDetector.cs" />
     <Compile Include="Player\HdrDisplayController.cs" />
     <Compile Include="Player\NativePlayerHost.cs" />
     <Compile Include="Player\PlayerBridge.cs" />

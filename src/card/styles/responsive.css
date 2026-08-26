@@ -75,11 +75,12 @@
   .nav-top, .nav-bottom { display: contents; }
   .nav-item { width: 30px; height: 30px; padding: 0; justify-content: center; gap: 0; }
   .nav-label { display: none; }
-  /* Profile/Settings and any library tab past the mobile cap move into the
-     .more-sheet overflow menu instead - a phone-width row has no room for 6+ icons at
-     a real touch-target size. */
-  .nav-profile, .nav-settings, .nav-item-overflow { display: none; }
-  .nav-more { display: flex; }
+  /* Profile/Settings move into the .more-sheet menu (lower-right), and every library
+     tab moves into the .libraries-sheet menu (lower-left, see .nav-libraries) instead of
+     appearing directly in the bar - a phone-width row has no room for 6+ icons at a real
+     touch-target size. */
+  .nav-profile, .nav-settings, .nav-item-dynamic { display: none; }
+  .nav-more, .nav-libraries { display: flex; }
   .main { padding-bottom: calc(56px + var(--safe-bottom)); }
   .row-title { padding-left: 24px; }
   .row-scroller { padding-left: 24px; }

@@ -8,8 +8,6 @@ import { loadPlain, savePlain } from "./settings.js";
 import { hasSecrets, loadSecrets, saveSecrets } from "./vault.js";
 import SIGNIN_MODAL_STYLE from "./src/styles/signin-modal.css?inline";
 
-const SECTION_TYPE_MAP = { movie: 1, show: 2 };
-
 class StreamingPlexSigninModal extends HTMLElement {
   connectedCallback() {
     if (this._built) return;
@@ -188,7 +186,6 @@ class StreamingPlexSigninModal extends HTMLElement {
       statusEl.className = "status signin-status err";
       return;
     }
-    statusEl.textContent = `Connected to ${server.name} - fetching libraries…`;
     let machineId = "";
     try {
       const identity = await this._plexGet(uri, server.accessToken, "/identity");
@@ -196,24 +193,47 @@ class StreamingPlexSigninModal extends HTMLElement {
     } catch (e) {
       /* non-fatal - machine_id is only needed for Android deep links */
     }
-    let sections;
+
+    /* Discover every server on the account (owned + shared), not just the one just
+       picked - a fresh sign-in should land with everything already browsable, same
+       discovery Settings' "refresh servers" runs later (see plex-auth.js's
+       discoverLibraries). The picked server only decides the legacy plex_url/
+       machine_id/plex_token fields below (still needed for Android deep links and
+       settings.isConfigured()'s reachability check). */
+    statusEl.textContent = `Connected to ${server.name} - discovering your libraries…`;
+    let servers, sections, unreachableCount;
     try {
-      const data = await this._plexGet(uri, server.accessToken, "/library/sections");
-      const dirs = data?.MediaContainer?.Directory || [];
-      sections = dirs.filter((d) => SECTION_TYPE_MAP[d.type]).map((d) => ({ key: Number(d.key), type: SECTION_TYPE_MAP[d.type], label: d.title, enabled: true }));
+      ({ servers, sections, unreachableCount } = await StreamingPlexAuth.discoverLibraries(this._plexAccountToken));
     } catch (e) {
-      statusEl.textContent = `Connected, but couldn't fetch libraries: ${e.message}`;
+      statusEl.textContent = `Connected, but couldn't discover libraries: ${e.message}`;
+      statusEl.className = "status signin-status err";
+      return;
+    }
+    if (!sections.length) {
+      statusEl.textContent = `Connected to ${server.name}, but no movie/show libraries were found.`;
       statusEl.className = "status signin-status err";
       return;
     }
 
-    const plain = { ...loadPlain(), plex_url: uri, machine_id: machineId, sections };
+    const plain = {
+      ...loadPlain(),
+      plex_url: uri,
+      machine_id: machineId,
+      servers: servers.map(({ token, ...rest }) => rest),
+      sections,
+    };
     const existingSecrets = hasSecrets() ? await loadSecrets() : {};
-    const secrets = { ...existingSecrets, plex_token: server.accessToken, plex_account_token: this._plexAccountToken || existingSecrets.plex_account_token || "" };
+    const secrets = {
+      ...existingSecrets,
+      plex_token: server.accessToken,
+      plex_account_token: this._plexAccountToken || existingSecrets.plex_account_token || "",
+      server_tokens: Object.fromEntries(servers.map((sv) => [sv.id, sv.token])),
+    };
     savePlain(plain);
     await saveSecrets(secrets);
 
-    statusEl.textContent = `Connected to ${server.name}.`;
+    const unreachableSuffix = unreachableCount ? ` (${unreachableCount} other server(s) were unreachable and skipped)` : "";
+    statusEl.textContent = `Connected to ${server.name} - found ${sections.length} library section(s) across ${servers.length} server(s)${unreachableSuffix}.`;
     statusEl.className = "status signin-status ok";
     const wasBlocking = this._blocking;
     this._blocking = false;

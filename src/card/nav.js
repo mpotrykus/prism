@@ -8,8 +8,6 @@ import { wireArrowVisibility } from "./rows.js";
    1D list here - see wireHomeNav's own comment). Takes the PlexNetflixCard instance as
    an explicit first argument (same pattern as data.js/search-page.js). */
 
-const MOBILE_VISIBLE_SECTION_CAP = 3;
-
 const MOVIE_NAV_ICON_SVG =
   '<svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2" fill="none" stroke="currentColor" stroke-width="1.6"/><rect x="3" y="8" width="4" height="1.6" fill="currentColor"/><rect x="3" y="13" width="4" height="1.6" fill="currentColor"/><rect x="17" y="8" width="4" height="1.6" fill="currentColor"/><rect x="17" y="13" width="4" height="1.6" fill="currentColor"/></svg>';
 const TV_NAV_ICON_SVG =
@@ -29,6 +27,22 @@ function iconForLibraryLabel(label) {
   return rule ? rule.icon : GENERIC_NAV_ICON_SVG;
 }
 
+/* Shared by every place that changes card._currentView to a nav-tab view (a nav-item
+   click, renderNavSections' initial render, search-page.js's exitSearch) - besides the
+   plain per-item .active toggle (matched by view, not by `el` itself, since the same
+   view has two nav elements now: one in the mobile sidenav, one in the desktop
+   header-nav strip), the mobile-only .nav-libraries button (see renderNavSections below)
+   needs its own active state too, since none of its own library tabs are ever visible on
+   mobile to carry that highlight themselves. */
+export function updateNavActiveState(card) {
+  card._navItems.forEach((n) => n.classList.toggle("active", n.dataset.view === card._currentView));
+  const librariesBtn = card.shadowRoot.querySelector(".nav-libraries");
+  librariesBtn?.classList.toggle(
+    "active",
+    card._currentView.startsWith("section-") || card._currentView.startsWith("server-")
+  );
+}
+
 export function wireNavItem(card, el) {
   el.addEventListener("click", () => {
     const view = el.dataset.view;
@@ -36,10 +50,7 @@ export function wireNavItem(card, el) {
     card._searchWrap.classList.remove("expanded");
     if (view === card._currentView) return;
     card._currentView = view;
-    /* Matched by view, not by `el` itself - the same view has two nav elements now (one
-       in the mobile sidenav, one in the desktop header-nav strip, see renderNavSections
-       below), and only one of them is ever the one actually clicked. */
-    card._navItems.forEach((n) => n.classList.toggle("active", n.dataset.view === view));
+    updateNavActiveState(card);
     card.shadowRoot.querySelector(".content")?.scrollTo({ top: 0, behavior: "instant" });
     card._renderCurrentView();
     card._advanceHero();
@@ -101,25 +112,31 @@ export function renderNavSections(card) {
   headerHomeItem.style.display = homeEnabled ? "" : "none";
 
   const tabs = buildNavTabs(card);
-  const html = tabs
-    .map((t, i) =>
-      navItemHtml(card, t, `nav-item nav-item-dynamic${i >= MOBILE_VISIBLE_SECTION_CAP ? " nav-item-overflow" : ""}`)
-    )
-    .join("");
-  /* No overflow cap here - the desktop strip has no "more" sheet to spill into, every
-     tab stays reachable by scrolling the strip (see wireHeaderNav's arrows). */
+  /* The mobile sidenav copy of every tab is never shown directly on that breakpoint
+     any more (see responsive.css's .nav-item-dynamic rule) - .nav-libraries is the one
+     mobile entry point for all of them, via _renderLibrariesSheet's own query for this
+     same class. Still rendered here (not skipped) since the desktop hover-sidenav has
+     room to show them directly, and D-pad/gamepad nav (wireHomeNav) walks this same
+     list regardless of breakpoint. */
+  const html = tabs.map((t) => navItemHtml(card, t, "nav-item nav-item-dynamic")).join("");
   const headerHtml = tabs.map((t) => navItemHtml(card, t, "nav-item header-nav-item header-nav-item-dynamic")).join("");
   if (html) homeItem.insertAdjacentHTML("afterend", html);
   if (headerHtml) headerHomeItem.insertAdjacentHTML("afterend", headerHtml);
   card._navItems = [...card.shadowRoot.querySelectorAll(".nav-item[data-view]")];
   card.shadowRoot.querySelectorAll(".nav-item-dynamic, .header-nav-item-dynamic").forEach((el) => wireNavItem(card, el));
 
+  /* Only worth showing the mobile Libraries button at all when there's actually a choice
+     to make - a single tab has nothing to switch between (and, if Home is disabled too,
+     it's already what card._currentView falls back to below). */
+  const librariesBtn = card.shadowRoot.querySelector(".nav-libraries");
+  if (librariesBtn) librariesBtn.style.display = tabs.length > 1 ? "" : "none";
+
   const validViews = new Set(["search", ...tabs.map((t) => t.view)]);
   if (homeEnabled) validViews.add("home");
   if (!validViews.has(card._currentView)) {
     card._currentView = homeEnabled ? "home" : tabs[0]?.view || "home";
   }
-  card._navItems.forEach((n) => n.classList.toggle("active", n.dataset.view === card._currentView));
+  updateNavActiveState(card);
   card._centerActiveHeaderNav?.(false);
   card._headerNavScroll?.refresh();
 }

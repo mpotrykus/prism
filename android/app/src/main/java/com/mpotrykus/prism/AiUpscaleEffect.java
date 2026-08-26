@@ -17,20 +17,30 @@ import androidx.media3.effect.GlShaderProgram;
 final class AiUpscaleEffect implements GlEffect {
 
     private final Context context;
+    /* The INITIAL family only - AiUpscaleShaderProgram makes this live-mutable via its own
+       updateState() once installed (see that class's own header comment for why: Content
+       Type's manual Auto/Animation/Live-Action override needs to change this mid-title, with
+       no reinstall). Passed through unchanged here since this class's job is purely
+       constructing that program with its correct starting state. */
     private final ShaderType family;
     private final ShaderTuning sharpeningTuning;
     private final ColorBoostTuning colorTuning;
     private final boolean aiUpscalingEnabled;
     private final int maxOutputWidth;
     private final int maxOutputHeight;
+    // Baked into the constructed AiUpscaleShaderProgram, never updated after - see that class's
+    // own header comment and PlayerActivity.reinstallVideoEffectsForCrop for why Auto-Crop is the
+    // one exception to this class's own "every toggle is live, no reinstall" design.
+    private final AutoCropSampler.Insets cropInsets;
 
     AiUpscaleEffect(Context context, ShaderType family, ShaderTuning sharpeningTuning, ColorBoostTuning colorTuning,
-        boolean aiUpscalingEnabled) {
+        boolean aiUpscalingEnabled, AutoCropSampler.Insets cropInsets) {
         this.context = context;
         this.family = family;
         this.sharpeningTuning = sharpeningTuning;
         this.colorTuning = colorTuning;
         this.aiUpscalingEnabled = aiUpscalingEnabled;
+        this.cropInsets = cropInsets;
         DisplayMetrics metrics = context.getResources().getDisplayMetrics();
         this.maxOutputWidth = metrics.widthPixels;
         this.maxOutputHeight = metrics.heightPixels;
@@ -43,7 +53,7 @@ final class AiUpscaleEffect implements GlEffect {
         // pipeline was set up with, not guaranteed to be the PlayerActivity instance the
         // instanceof check below (and getAssets()) needs.
         AiUpscaleShaderProgram program = new AiUpscaleShaderProgram(
-            context, useHdr, family, sharpeningTuning, colorTuning, aiUpscalingEnabled, maxOutputWidth, maxOutputHeight);
+            context, useHdr, family, sharpeningTuning, colorTuning, aiUpscalingEnabled, maxOutputWidth, maxOutputHeight, cropInsets);
         // PlayerActivity also implements Context here (see applyVideoEffects's `new
         // AiUpscaleEffect(this, ...)`) - stashed so the stats overlay AND applyVideoEffects's own
         // later toggle calls can reach this instance without a separate listener interface. See

@@ -99,5 +99,5 @@
 .nav-item:has(.nav-label-wrap) { height: auto; min-height: 30px; padding: 4px 7px; }
 /* Only ever shown at the mobile breakpoint below - the hover sidenav has room for
    every item on desktop, so there's nothing to collapse there. */
-.nav-more { display: none; }
+.nav-more, .nav-libraries { display: none; }
 .main { position: relative; flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }

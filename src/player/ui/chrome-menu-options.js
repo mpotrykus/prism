@@ -1,5 +1,5 @@
 import { media } from "../core/media-facade.js";
-import { postAspectMode } from "../xbox-bridge.js";
+import { postAspectMode, postAutoCrop } from "../xbox-bridge.js";
 import { applyAutoCropGeometry } from "../auto-crop.js";
 import {
     skipIconMarkup,
@@ -208,13 +208,23 @@ export function renderOptionsList(controller, list, onBack, setGoBack) {
            source frame itself, never the legitimate outer letterbox/pillarbox Fit mode adds
            for a genuine aspect-ratio mismatch against the viewport. On by default (see
            storedAutoCropEnabled) - a title with a matted-in border looks wrapped in two
-           stacked sets of bars until this runs, not a look anyone would want to opt into. */
+           stacked sets of bars until this runs, not a look anyone would want to opt into.
+           controller._autoCropEnabled is set the same way on both legs (plex-player.js's
+           _prepareSession resolves it from storedAutoCropEnabled() regardless of platform), so
+           getValue below reads correctly on Xbox with no extra branching - only actually
+           APPLYING a change needs one, same as applyFitMode above, since there's no
+           controller._videoEl on Xbox for auto-crop.js's own web pipeline to run against. */
         icon: autoCropIconMarkup(),
         getValue: () => (controller._autoCropEnabled ? "On" : null),
         toggle: {
             checked: controller._autoCropEnabled,
             onChange: (checked) => {
+                /* Sets the flag + persists it either way (auto-crop.js's setAutoCropEnabled is
+                   safe to call unconditionally - its own video-pipeline calls already no-op
+                   when controller._videoEl is null); Xbox additionally needs the native side
+                   told, since nothing else does that for a mid-session toggle. */
                 controller._setAutoCropEnabled(checked);
+                if (!controller._videoEl) postAutoCrop(checked);
                 return checked ? "On" : null;
             },
         },

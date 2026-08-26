@@ -4,6 +4,7 @@ using System.Globalization;
 using Microsoft.Graphics.Canvas;
 using Microsoft.Graphics.Canvas.UI.Xaml;
 using PrismUwpEffects;
+using Windows.Foundation;
 using Windows.Media.Playback;
 using Windows.UI.Core;
 using Windows.UI.Xaml.Controls;
@@ -30,6 +31,9 @@ namespace PrismUwp.Player
         private readonly CoreDispatcher dispatcher;
         private readonly CanvasDevice canvasDevice = new CanvasDevice();
         private readonly AiUpscalePixelEffect pixelEffect;
+        // See AutoCropDetector's own header comment for the full algorithm, its HDR scope
+        // limitation, and its hardware-confirmation status.
+        private readonly AutoCropDetector autoCrop;
 
         private CanvasRenderTarget frameTarget;
         private int frameWidth;
@@ -107,6 +111,7 @@ namespace PrismUwp.Player
             };
 
             pixelEffect = new AiUpscalePixelEffect(canvasDevice);
+            autoCrop = new AutoCropDetector(canvasDevice);
 
             player.VideoFrameAvailable += OnVideoFrameAvailable;
         }
@@ -137,6 +142,15 @@ namespace PrismUwp.Player
             this.family = family ?? "";
         }
 
+        /// <summary>Xbox counterpart to the web leg's Auto-Crop Black Bars toggle
+        /// (src/player/auto-crop.js's setAutoCropEnabled) - see PlayerBridge.cs's
+        /// "setAutoCrop" case / NativePlayerHost.SetAutoCrop, and AutoCropDetector's own
+        /// header comment for the algorithm this delegates to.</summary>
+        public void SetAutoCropEnabled(bool enabled)
+        {
+            autoCrop.SetEnabled(enabled);
+        }
+
         public void SetActive(bool active)
         {
             this.active = active;
@@ -165,6 +179,11 @@ namespace PrismUwp.Player
         {
             frameWidth = videoWidth;
             frameHeight = videoHeight;
+            // The real per-title reset for Auto-Crop - see AutoCropDetector.Reset's own comment
+            // for why this (not SetActive/SetFamily above) is the right place: detection needs
+            // real dimensions, which are only known here, and this always runs before any real
+            // frame of the new title reaches OnVideoFrameAvailable.
+            autoCrop.Reset(videoWidth, videoHeight);
         }
 
         private void OnVideoFrameAvailable(MediaPlayer sender, object args)
@@ -195,6 +214,15 @@ namespace PrismUwp.Player
                 }
                 CanvasRenderTarget target = EnsureFrameTarget();
                 sender.CopyFrameToVideoSurface(target);
+
+                // Reads the RAW frame, before pixelEffect.Render below - see
+                // AutoCropDetector.ConsiderFrame's own comment for why detection must not see a
+                // CNN/FSR-upscaled reinterpretation of the source picture. sender.PlaybackSession
+                // is read directly off this worker thread, same as NativePlayerHost's own
+                // PositionChanged handler already does elsewhere in this app without a dispatcher
+                // hop - MediaPlaybackSession's plain property getters are treated as safe from any
+                // thread throughout this codebase, not just here.
+                autoCrop.ConsiderFrame(target, sender.PlaybackSession.Position.TotalSeconds);
 
                 // Safe on this background thread - PixelShaderEffect/CanvasRenderTarget/
                 // CanvasDrawingSession are D2D/Direct3D-backed, not XAML-interop, the same
@@ -268,20 +296,71 @@ namespace PrismUwp.Player
         {
             try
             {
-                if (imageSource == null || presentedWidth != width || presentedHeight != height)
+                /* Auto-Crop's zoom is folded into this same Present call rather than a separate
+                   draw pass. autoCrop.Insets is read here (not passed in from
+                   OnVideoFrameAvailable) - see that property's own comment for why reading it
+                   without a lock is safe given the dispatch ordering between ConsiderFrame and
+                   this call.
+
+                   Applied against `target`/`width`/`height` - i.e. AFTER pixelEffect.Render,
+                   not against the raw decoded frame detection itself sampled. This is safe
+                   because insets are FRACTIONS of the frame, not pixel counts: they apply
+                   identically whether the frame is still at native resolution (plain
+                   pass-through) or at whatever resolution the CNN/FSR chain produced (a fixed
+                   2x scale) - there's no need to crop before Render, which would mean feeding a
+                   smaller, already-cropped input into a chain tuned for the source's own native
+                   resolution, for a result identical to just cropping the chain's own output. */
+                CropInsets? insets = autoCrop.Insets;
+                int presentWidth = width;
+                int presentHeight = height;
+                Rect? sourceRect = null;
+                if (insets.HasValue)
                 {
-                    // Sized to whatever pixelEffect.Render actually produced - native resolution
-                    // for plain pass-through (family unsupported, or an error fell back to
-                    // target), or the fixed 2x scale once a real chain is running.
-                    imageSource = new CanvasImageSource(canvasDevice, width, height, 96);
-                    presentedWidth = width;
-                    presentedHeight = height;
+                    CropInsets i = insets.Value;
+                    double srcX = i.Left * width;
+                    double srcY = i.Top * height;
+                    double srcW = width * (1 - i.Left - i.Right);
+                    double srcH = height * (1 - i.Top - i.Bottom);
+                    sourceRect = new Rect(srcX, srcY, Math.Max(1, srcW), Math.Max(1, srcH));
+                    presentWidth = Math.Max(1, (int)Math.Round(srcW));
+                    presentHeight = Math.Max(1, (int)Math.Round(srcH));
+                }
+
+                if (imageSource == null || presentedWidth != presentWidth || presentedHeight != presentHeight)
+                {
+                    /* Sized to the CROPPED dimensions when a crop is active, not just whatever
+                       pixelEffect.Render produced (native resolution for plain pass-through, or
+                       the fixed 2x scale once a real chain is running) - this is deliberate, not
+                       just a byproduct of drawing a smaller source rect. XAML's Stretch math
+                       (NativePlayerHost.SetStretch's plain Element.Stretch assignment) is driven
+                       entirely by the source image's own reported size, so sizing imageSource
+                       itself to the cropped AR is what makes Fit/Cover/Stretch already box
+                       against the CROPPED picture for free - no separate "cropped AR" box
+                       computation needed here the way the web leg's own pictureBoxFor
+                       (auto-crop.js) has to duplicate, since that leg's object-fit can't be
+                       handed a synthetic aspect ratio the way an image source's own intrinsic
+                       size implicitly can. See SetStretch's own comment for confirmation nothing
+                       there needed to change. */
+                    imageSource = new CanvasImageSource(canvasDevice, presentWidth, presentHeight, 96);
+                    presentedWidth = presentWidth;
+                    presentedHeight = presentHeight;
                     Element.Source = imageSource;
                 }
 
                 using (CanvasDrawingSession ds = imageSource.CreateDrawingSession(Windows.UI.Colors.Black))
                 {
-                    ds.DrawImage(target);
+                    if (sourceRect.HasValue)
+                    {
+                        // Draws only the interior sub-rectangle, scaled up to fill the whole
+                        // (now smaller) image source - exactly the "zoom" the web leg's own crop
+                        // produces, via the (image, destinationRectangle, sourceRectangle)
+                        // overload instead of CSS sizing/clip-path.
+                        ds.DrawImage(target, new Rect(0, 0, presentWidth, presentHeight), sourceRect.Value);
+                    }
+                    else
+                    {
+                        ds.DrawImage(target);
+                    }
                 }
 
                 if (!receivedFrame || upscaledLastFrame != upscaled)

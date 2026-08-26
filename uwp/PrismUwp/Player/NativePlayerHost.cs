@@ -82,9 +82,10 @@ namespace PrismUwp.Player
         // has to be re-synced there too, not just from SetAudioLeveling.
         private bool audioEffectAttached;
         private readonly AiUpscaleFrameServer aiUpscale;
-        // Keeps the console/PC display from sleeping for as long as native playback is active -
-        // the UWP equivalent of Android's PlayerActivity FLAG_KEEP_SCREEN_ON (see that class's own
-        // onCreate). One instance reused for this class's whole lifetime rather than created fresh
+        // Keeps the console/PC display from sleeping while native playback is actively playing -
+        // released while paused so the device can sleep, same as Android's PlayerActivity
+        // FLAG_KEEP_SCREEN_ON toggle (see that class's own onIsPlayingChanged). One instance
+        // reused for this class's whole lifetime rather than created fresh
         // per Play(): RequestActive()/RequestRelease() calls on the SAME instance must be paired
         // 1:1, so displayRequestActive is what stops Play()+SwitchTitle() (or a stray double-Play)
         // from calling RequestActive() twice and leaving the display pinned awake after a single
@@ -269,6 +270,20 @@ namespace PrismUwp.Player
             // SDR title regardless of whether upscaling is turned on (see
             // SetAiUpscalePathActive's own comment for why).
             aiUpscale.SetFamily(aiUpscalingEnabled ? aiUpscalingPreset : "");
+        }
+
+        /// <summary>
+        /// Xbox counterpart to the web leg's Auto-Crop Black Bars toggle
+        /// (src/player/auto-crop.js's setAutoCropEnabled). Unlike SetAiUpscaling above, this
+        /// takes effect immediately against whatever title is already playing rather than
+        /// waiting for the next Play/SwitchTitle - see AutoCropDetector.SetEnabled's own
+        /// comment. Out of scope for HDR titles: aiUpscale (AiUpscaleFrameServer) is never the
+        /// active presenter for one in the first place (see SetAiUpscalePathActive), so this
+        /// call is simply inert whenever the current title is HDR, not specially guarded here.
+        /// </summary>
+        public void SetAutoCrop(bool enabled)
+        {
+            aiUpscale.SetAutoCropEnabled(enabled);
         }
 
         /// <summary>
@@ -595,6 +610,11 @@ namespace PrismUwp.Player
             {
                 bool paused = state == MediaPlaybackState.Paused;
                 emit("stateChanged", $"{{\"paused\":{(paused ? "true" : "false")}}}");
+                // Tracks actual playing state, not just Play()/Pause() call sites, so a pause from
+                // any source (JS bridge, gamepad, remote) lets the display sleep, and resuming
+                // re-acquires it - same reasoning as Android's onIsPlayingChanged toggle.
+                if (paused) EnsureDisplayRequestReleased();
+                else EnsureDisplayRequestActive();
             }
         }
 

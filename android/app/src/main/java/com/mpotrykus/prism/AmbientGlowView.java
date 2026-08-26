@@ -22,15 +22,14 @@ import android.view.View;
    AspectRatioFrameLayout letterbox gap. Deliberately doesn't resize or zoom playerView
    itself - see PlayerActivity.layoutGlow's own comment for why. */
 final class AmbientGlowView extends View {
-    /* Fixed reach (not scaled to the actual letterbox/pillarbox gap size), matching
-       ambient-pipeline.js's AMBIENT_GLOW_REACH_PX on the web leg - see onDraw for how
-       this gets used as the fade gradient's own endpoint instead of the true screen
-       edge, so the glow's falloff distance stays constant regardless of how large or
-       small a given video's gap happens to be. DP rather than a flat px literal (unlike
-       the web leg's CSS px) since, unlike blur radius, a "how far does the light travel"
-       distance should look the same physical size across this app's actual density
-       range (phone/tablet/TV), not just whatever the web leg's own viewport happens to
-       be. */
+    /* Baseline reach, not a hard cap - matches ambient-pipeline.js's AMBIENT_GLOW_REACH_PX on
+       the web leg exactly, including that file's own "never shorter, stretched up to at least
+       the real gap size" behavior (see onDraw, which computes each edge's own reach as
+       Math.max(this baseline, that edge's actual gap) - mirrors layoutGlowPanels' setReach).
+       DP rather than a flat px literal (unlike the web leg's CSS px) since, unlike blur radius,
+       a "how far does the light travel" distance should look the same physical size across
+       this app's actual density range (phone/tablet/TV), not just whatever the web leg's own
+       viewport happens to be. */
     private static final float GLOW_REACH_DP = 240f;
     /* Sampled points along a cosine ease (0.5*(1+cos(pi*t))) rather than a flat-hold-
        then-linear-drop - continuously eases from full opacity to fully transparent with
@@ -130,15 +129,25 @@ final class AmbientGlowView extends View {
         float right = pictureRight >= 0 ? pictureRight : w;
         float bottom = pictureBottom >= 0 ? pictureBottom : h;
 
-        /* Color at the picture's own edge, fading out over glowReachPx - not necessarily
-           all the way to this view's true edge (see GLOW_REACH_DP's own comment). A gap
-           narrower than the reach only shows this curve's early, still-bright portion;
-           a gap wider than the reach lets the glow fully fade out before reaching the
-           true edge, leaving plain black beyond it - both intentional. */
-        drawHorizontalEdge(canvas, 0, 0, w, top, top, top - glowReachPx, topColors);
-        drawHorizontalEdge(canvas, 0, bottom, w, h, bottom, bottom + glowReachPx, bottomColors);
-        drawVerticalEdge(canvas, 0, 0, left, h, left, left - glowReachPx, leftColors);
-        drawVerticalEdge(canvas, right, 0, w, h, right, right + glowReachPx, rightColors);
+        /* Color at the picture's own edge, fading out over this EDGE'S OWN reach - never
+           shorter than glowReachPx (preserves the normal-gap look exactly), but stretched up
+           to at least the real gap size when the gap itself is wider - mirrors
+           ambient-pipeline.js's layoutGlowPanels/setReach on the web leg exactly (see that
+           file's own AMBIENT_GLOW_REACH_PX comment for the full diagnosis this ports: Auto-Crop
+           can leave a residual letterbox/pillarbox gap wider than the fixed baseline reach on
+           one axis, and a reach that never stretches past the baseline left a plain black band
+           across the rest of it even with the glow on - misread as "the crop didn't work" when
+           the crop itself was fine, the glow just didn't reach far enough). A gap narrower than
+           glowReachPx still only shows the falloff curve's early, still-bright portion, same as
+           before. */
+        float topReach = Math.max(glowReachPx, top);
+        float bottomReach = Math.max(glowReachPx, h - bottom);
+        float leftReach = Math.max(glowReachPx, left);
+        float rightReach = Math.max(glowReachPx, w - right);
+        drawHorizontalEdge(canvas, 0, 0, w, top, top, top - topReach, topColors);
+        drawHorizontalEdge(canvas, 0, bottom, w, h, bottom, bottom + bottomReach, bottomColors);
+        drawVerticalEdge(canvas, 0, 0, left, h, left, left - leftReach, leftColors);
+        drawVerticalEdge(canvas, right, 0, w, h, right, right + rightReach, rightColors);
     }
 
     /* One draw call for the whole edge (used for top/bottom) instead of one rect per

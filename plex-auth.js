@@ -115,8 +115,13 @@ export async function discoverServers(authToken) {
   if (!res.ok) throw new Error(`Couldn't list Plex servers (HTTP ${res.status}): ${text.slice(0, 200)}`);
   const isJson = (res.headers.get("content-type") || "").includes("json");
   const resources = isJson ? JSON.parse(text) : parseResourcesXml(text);
+  /* Plex's own /api/resources registration for a server can go stale and report
+     provides="sync" instead of "server,sync" (confirmed on a real owned server that's
+     been online and working the whole time) - product is a more reliable signal since
+     "Plex Media Server" is the actual PMS software's fixed product name, not a
+     capability list that can drift out of sync with reality. */
   return resources
-    .filter((r) => (r.provides || "").split(",").includes("server"))
+    .filter((r) => (r.provides || "").split(",").includes("server") || r.product === "Plex Media Server")
     .map((r) => ({
       name: r.name,
       owned: truthy(r.owned),
@@ -156,6 +161,82 @@ export async function resolveBestConnection(server) {
     if (await probeConnection(conn.uri, server.accessToken)) return conn.uri;
   }
   return null;
+}
+
+const SECTION_TYPE_MAP = { movie: 1, show: 2 };
+
+async function plexGetJson(url, token, path) {
+  const u = new URL(url + path);
+  u.searchParams.set("X-Plex-Token", token);
+  const res = await fetch(u, { headers: { Accept: "application/json" } });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
+/* Discovers every server on the signed-in account - owned plus anything a friend has
+   shared - and every movie/show library on each, defaulting everything to enabled.
+   Shared by the sign-in flow (plex-signin.js - a fresh sign-in should land with
+   everything already browsable, not require a manual trip to Settings) and Settings'
+   own "refresh servers" flow, which passes prevServers/prevSections so a re-discovery
+   preserves whatever enabled/label/all_enabled toggles the user already set instead of
+   resetting them every time. */
+export async function discoverLibraries(accountToken, { prevServers = [], prevSections = [] } = {}) {
+  const discovered = await discoverServers(accountToken);
+  const prevServersById = new Map(prevServers.map((s) => [s.id, s]));
+  const prevSectionsByServerKey = new Map(prevSections.map((s) => [`${s.server_id}:${s.key}`, s]));
+  const servers = [];
+  const sections = [];
+  let unreachableCount = 0;
+  for (const d of discovered) {
+    const id = d.clientIdentifier;
+    if (!id) continue;
+    const prevServer = prevServersById.get(id);
+    const uri = await resolveBestConnection(d);
+    if (!uri) {
+      unreachableCount++;
+      /* Keep whatever was already saved for it rather than dropping it - a friend's
+         server being briefly offline shouldn't wipe out every toggle the user set
+         for it, and data.js's own fetches already tolerate a stale/unreachable
+         server gracefully (empty results, not a hard error). */
+      if (prevServer) {
+        servers.push(prevServer);
+        sections.push(...prevSections.filter((s) => s.server_id === id));
+      }
+      continue;
+    }
+    const server = {
+      id,
+      name: d.name,
+      owned: d.owned,
+      sourceTitle: d.sourceTitle || "",
+      url: uri,
+      token: d.accessToken,
+      /* Defaults to fully on for a newly-discovered server (confirmed with the user:
+         a friend sharing a library should show up right away, not require an opt-in
+         per library first). */
+      all_enabled: prevServer ? prevServer.all_enabled !== false : true,
+    };
+    servers.push(server);
+    try {
+      const data = await plexGetJson(uri, d.accessToken, "/library/sections");
+      const dirs = data?.MediaContainer?.Directory || [];
+      for (const dir of dirs) {
+        if (!SECTION_TYPE_MAP[dir.type]) continue;
+        const prev = prevSectionsByServerKey.get(`${id}:${dir.key}`);
+        sections.push({
+          key: Number(dir.key),
+          type: SECTION_TYPE_MAP[dir.type],
+          label: prev?.label || dir.title,
+          enabled: prev ? prev.enabled !== false : true,
+          server_id: id,
+        });
+      }
+    } catch (e) {
+      // couldn't list this server's libraries this pass - keep whatever was already saved for it
+      sections.push(...prevSections.filter((s) => s.server_id === id));
+    }
+  }
+  return { servers, sections, unreachableCount };
 }
 
 /* Called before every data load - the connection resolveBestConnection() picks at

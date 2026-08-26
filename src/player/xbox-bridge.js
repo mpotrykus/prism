@@ -76,6 +76,15 @@ export function playXbox(controller, streamUrl, startOffsetMs, payload, payloadF
     updateShaderPipeline(controller);
     updateAmbientPipeline(controller);
     updateContentAnalysis(controller);
+    /* Auto-Crop Black Bars (see ../auto-crop.js's own header comment) - detection/cropping runs
+       natively on this leg (AiUpscaleFrameServer.cs's AutoCropDetector) instead of that file's
+       own <video>-sampling pipeline, but controller._autoCropEnabled is the one
+       platform-agnostic source of truth either way: plex-player.js's _prepareSession already
+       resolved it from storedAutoCropEnabled() before playXbox ever runs, same as
+       _shaderEnabled/_ambientEnabled above. This just pushes that already-resolved value to
+       native at mount; mid-session toggles are posted separately, from chrome-menu-options.js's
+       Options screen. */
+    postAutoCrop(!!controller._autoCropEnabled);
     /* Stall-driven rather than bandwidth-driven: the native player hands HTTP fetching to
        MediaFoundation, so there are no per-segment byte/duration callbacks to derive kbps from. See
        core/abr.js's setStallDrivenAbr. */
@@ -260,6 +269,17 @@ export function postAiUpscaling({ enabled, preset }) {
    NativePlayerHost.SetStretch. */
 export function postAspectMode(mode) {
     post("setStretch", { mode });
+}
+
+/* Auto-Crop Black Bars (see ../auto-crop.js's own header comment) - that file's own
+   setAutoCropEnabled/updateAutoCropPipeline are web-only (gated on controller._videoEl, no-op
+   here), so this leg relays the toggle to native instead. Native counterpart:
+   AiUpscaleFrameServer's AutoCropDetector (uwp/PrismUwp/Player), which reimplements the same
+   detection algorithm against the decoded frame-server output rather than sampling a
+   <video> element - see that class's own header comment for the port and its HDR-scope
+   limitation. UNVERIFIED ON REAL HARDWARE - see AutoCropDetector's own header comment. */
+export function postAutoCrop(enabled) {
+    post("setAutoCrop", { enabled });
 }
 
 /* The Xbox leg's rebuild step, over the same shared sequence the web leg uses
