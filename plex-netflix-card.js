@@ -29,7 +29,7 @@ import { renderMoreSheet } from "./src/card/more-sheet.js";
 import { fetchHomeProfiles, renderProfileNav, renderProfileList, switchToUser } from "./src/card/profile.js";
 import { TitleInfoController } from "./src/card/title-info.js";
 import { HeroController } from "./src/card/hero.js";
-import { plexFetch, loadAll, sectionForView, sectionsForView, fetchWatchlistRaw, fetchOnDeckRaw } from "./src/card/data.js";
+import { plexFetch, loadAll, sectionForView, sectionsForView, fetchWatchlistRaw, fetchOnDeckRaw, primaryServer, serverForSection } from "./src/card/data.js";
 import { onSearchInput, exitSearch, renderSearchPage, openRowSeeMore } from "./src/card/search-page.js";
 import {
   wireNavItem,
@@ -398,9 +398,16 @@ class PlexNetflixCard extends HTMLElement {
     this._pin = new PinEntry(this.shadowRoot);
     this._titleInfo = new TitleInfoController(this.shadowRoot, {
       escape: (s) => this._escape(s),
-      plexFetch: (path, params) => this._plexFetch(path, params),
-      plexImageUrl: (path) => this._plexImageUrl(path),
-      plexThumbUrl: (path, width, height) => this._plexThumbUrl(path, width, height),
+      /* Bound to whichever item the title-info overlay currently has open, not a
+         global server - every metadata/scrobble/season/episode fetch this overlay makes
+         is for the same show/movie (and therefore the same server) as this._item, so a
+         single binding here covers every ctx.plexFetch/plexImageUrl call inside
+         title-info.js without threading a server through each one individually. Safe
+         because open() sets this._item synchronously before any of these fire. */
+      plexFetch: (path, params, server) => this._plexFetch(path, params, server || this._titleInfo?.item?.server),
+      plexImageUrl: (path, server) => this._plexImageUrl(path, server || this._titleInfo?.item?.server),
+      plexThumbUrl: (path, width, height, server) =>
+        this._plexThumbUrl(path, width, height, server || this._titleInfo?.item?.server),
       mapItem: (m, withProgress) => this._mapItem(m, withProgress),
       isInWatchlist: (item) => this._isInWatchlist(item),
       resolveLocalRatingKey: (item) => this._resolveLocalRatingKey(item),
@@ -412,8 +419,12 @@ class PlexNetflixCard extends HTMLElement {
     });
     this._hero = new HeroController(this.shadowRoot, {
       escape: (s) => this._escape(s),
-      plexFetch: (path, params) => this._plexFetch(path, params),
-      plexImageUrl: (path) => this._plexImageUrl(path),
+      /* Same "bind to the current item's server" reasoning as title-info's ctx above -
+         hero.js explicitly passes an item's own __server through to most of these calls
+         already (see its _resolveVideo/_resolveLogo), this is just the fallback for the
+         couple of spots that don't. */
+      plexFetch: (path, params, server) => this._plexFetch(path, params, server || this._hero?.item?.__server),
+      plexImageUrl: (path, server) => this._plexImageUrl(path, server || this._hero?.item?.__server),
       mapItem: (m, withProgress) => this._mapItem(m, withProgress),
       isInWatchlist: (item) => this._isInWatchlist(item),
       onAddToWatchlist: (item, btnEl) => this._addToWatchlist(item, btnEl),
@@ -599,8 +610,8 @@ class PlexNetflixCard extends HTMLElement {
     this._searchToggle.setAttribute("aria-label", hasValue ? "Clear search" : "Search");
   }
 
-  _plexFetch(path, params = {}) {
-    return plexFetch(this, path, params);
+  _plexFetch(path, params = {}, server = null) {
+    return plexFetch(this, path, params, server);
   }
 
   _loadAll() {
@@ -623,11 +634,12 @@ class PlexNetflixCard extends HTMLElement {
     return shuffle(array);
   }
 
-  _plexImageUrl(path) {
+  _plexImageUrl(path, server = null) {
     if (!path) return "";
     if (path.startsWith("http")) return path;
+    const s = server || primaryServer(this);
     const sep = path.includes("?") ? "&" : "?";
-    return `${this._config.plex_url}${path}${sep}X-Plex-Token=${this._config.plex_token}`;
+    return `${s.url}${path}${sep}X-Plex-Token=${s.token}`;
   }
 
   /* Poster-grid/avatar/episode-thumb images are always displayed small but Plex hands
@@ -642,16 +654,17 @@ class PlexNetflixCard extends HTMLElement {
      Doesn't handle `path` values that are already absolute URLs (e.g. Gracenote-hosted
      agent artwork on metadata-static.plex.tv) - those aren't served by this PMS so can't
      be transcoded through it; falls back to the untouched original for those. */
-  _plexThumbUrl(path, width = 320, height = 480) {
+  _plexThumbUrl(path, width = 320, height = 480, server = null) {
     if (!path) return "";
     if (path.startsWith("http")) return path;
-    const sourceUrl = `${path}${path.includes("?") ? "&" : "?"}X-Plex-Token=${this._config.plex_token}`;
-    const url = new URL(`${this._config.plex_url}/photo/:/transcode`);
+    const s = server || primaryServer(this);
+    const sourceUrl = `${path}${path.includes("?") ? "&" : "?"}X-Plex-Token=${s.token}`;
+    const url = new URL(`${s.url}/photo/:/transcode`);
     url.searchParams.set("width", String(width));
     url.searchParams.set("height", String(height));
     url.searchParams.set("minSize", "1");
     url.searchParams.set("upscale", "0");
-    url.searchParams.set("X-Plex-Token", this._config.plex_token);
+    url.searchParams.set("X-Plex-Token", s.token);
     url.searchParams.set("url", sourceUrl);
     return url.toString();
   }
@@ -911,15 +924,26 @@ class PlexNetflixCard extends HTMLElement {
      Settings/library-switch behavior a second time. */
   _renderMoreSheet() {
     const rows = [];
-    const addRow = (label, iconHTML, active, target) => {
-      rows.push({ label, iconHTML, active, onSelect: () => { this._closeMoreSheet(); target.click(); } });
+    const addRow = (label, iconHTML, active, target, sublabel = "") => {
+      rows.push({ label, sublabel, iconHTML, active, onSelect: () => { this._closeMoreSheet(); target.click(); } });
     };
     this.shadowRoot.querySelectorAll(".nav-item-overflow").forEach((el) => {
-      addRow(el.querySelector(".nav-label").textContent, el.querySelector(".nav-icon").innerHTML, el.classList.contains("active"), el);
+      addRow(
+        el.querySelector(".nav-label").textContent,
+        el.querySelector(".nav-icon").innerHTML,
+        el.classList.contains("active"),
+        el,
+        /* The bottom bar's real tabs are icon-only (no room for even the primary label -
+           see responsive.css) - this sheet is the one place on mobile that already shows
+           text, so it's also where a library tab's server-name subtitle (see nav.js's
+           navItemHtml) actually gets to show up. */
+        el.querySelector(".nav-sublabel")?.textContent || ""
+      );
     });
     if (this._hasMultipleProfiles) {
       rows.push({
         label: this._profileNavLabel.textContent,
+        sublabel: "",
         iconHTML: this._profileNavIcon.innerHTML,
         active: false,
         onSelect: () => { this._closeMoreSheet(); this._openProfileOverlay(); },
@@ -968,13 +992,14 @@ class PlexNetflixCard extends HTMLElement {
      ratingKey, which player.play rejects by design. Shared by the title-info modal's
      Play button and the episode list's direct-play rows. */
   async _playItem(item, { durationMs = null, startOffsetMs = 0, source, markers = [], chapters = [], mediaIndex = 0, mediaVersions = [], audioStreams = [], isHdr = false, bifIndexPath = null, partId = null, partKey = null, queueRatingKeys = null, queueIndex = null } = {}) {
+    const server = item.server || primaryServer(this);
     try {
       await player.play({
         ratingKey: item.ratingKey,
         key: item.key,
         type: item.type,
-        plexUrl: this._config.plex_url,
-        plexToken: this._config.plex_token,
+        plexUrl: server.url,
+        plexToken: server.token,
         durationMs,
         startOffsetMs,
         markers,
@@ -1124,14 +1149,14 @@ class PlexNetflixCard extends HTMLElement {
      buildCollectionRows) - their source fetch is already unbounded. */
   async _loadGenreRowFull(sectionGenreKeys) {
     const perSection = await Promise.all(
-      (sectionGenreKeys || []).map(async ({ key, type, genreKey }) => {
+      (sectionGenreKeys || []).map(async ({ key, type, genreKey, server_id }) => {
         try {
-          const data = await plexFetch(this, `/library/sections/${key}/all`, {
-            type,
-            genre: genreKey,
-            sort: "addedAt:desc",
-            "X-Plex-Container-Size": ROW_SEE_MORE_LIMIT,
-          });
+          const data = await plexFetch(
+            this,
+            `/library/sections/${key}/all`,
+            { type, genre: genreKey, sort: "addedAt:desc", "X-Plex-Container-Size": ROW_SEE_MORE_LIMIT },
+            serverForSection(this, { server_id })
+          );
           return data?.MediaContainer?.Metadata || [];
         } catch (e) {
           return [];
@@ -1152,12 +1177,12 @@ class PlexNetflixCard extends HTMLElement {
         });
         if (!keys.length || keys.some((k) => !k)) return [];
         try {
-          const data = await plexFetch(this, `/library/sections/${s.key}/all`, {
-            type: s.type,
-            genre: keys,
-            sort: "addedAt:desc",
-            "X-Plex-Container-Size": ROW_SEE_MORE_LIMIT,
-          });
+          const data = await plexFetch(
+            this,
+            `/library/sections/${s.key}/all`,
+            { type: s.type, genre: keys, sort: "addedAt:desc", "X-Plex-Container-Size": ROW_SEE_MORE_LIMIT },
+            serverForSection(this, s)
+          );
           return data?.MediaContainer?.Metadata || [];
         } catch (e) {
           return [];
@@ -1196,17 +1221,18 @@ class PlexNetflixCard extends HTMLElement {
      plex-player.js's shader auto-detection. */
   _mapItem(m, withProgress) {
     return mapItem(m, withProgress, {
-      plexImageUrl: (path) => this._plexImageUrl(path),
-      plexThumbUrl: (path) => this._plexThumbUrl(path),
+      plexImageUrl: (path) => this._plexImageUrl(path, m.__server),
+      plexThumbUrl: (path) => this._plexThumbUrl(path, undefined, undefined, m.__server),
       episodeFallbackGenres: this._titleInfo?.item?.genres || [],
       episodeFallbackStudio: this._titleInfo?.item?.studio || "",
     });
   }
 
   _tapUrl(item, source) {
+    const server = item.server || primaryServer(this);
     return tapUrl(item, source, {
-      machineId: this._config.machine_id,
-      plexUrl: this._config.plex_url,
+      machineId: server.id,
+      plexUrl: server.url,
       userAgent: navigator.userAgent,
     });
   }

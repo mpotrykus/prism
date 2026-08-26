@@ -76,6 +76,7 @@
     }
     .header-nav-track {
         display: flex;
+        align-items: center;
         gap: 4px;
         will-change: transform;
     }
@@ -96,6 +97,29 @@
     .header-nav-item .nav-label {
         opacity: 1;
         font-size: 13.5px;
+    }
+    /* A library tab's label gets a small server-name caption under it (see nav.js's
+     navItemHtml) - grows the pill to fit both lines; a plain single-line tab (Home, a
+     server's own "All" tab) keeps the shorter default height above untouched. */
+    .header-nav-item .nav-label-wrap {
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        gap: 1px;
+        min-width: 0;
+    }
+    .header-nav-item .nav-sublabel {
+        font-size: 10px;
+        font-weight: 500;
+        line-height: 1.15;
+        opacity: 0.75;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    .header-nav-item:has(.nav-label-wrap) {
+        height: 44px;
+        padding: 5px 14px;
     }
     /* sidenav.css's ::before highlight bar is sized for the vertical rail's own 130px
      expanded width - left alone it would overhang a much narrower pill here. The pill's

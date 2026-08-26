@@ -125,6 +125,10 @@ export async function discoverServers(authToken) {
          match "the server I already know about" across a re-discovery done under a
          different token (see switchHomeUser below) without re-probing connections. */
       clientIdentifier: r.clientIdentifier || "",
+      /* Only present on a shared (owned:false) server - names the friend's account that
+         shared it, straight from Plex's own /api/resources response. Used to label
+         multi-server library tabs by owner (settings.js/nav.js). */
+      sourceTitle: r.sourceTitle || "",
       connections: (r.connections || []).map((c) => ({ uri: c.uri, local: truthy(c.local) })),
     }));
 }

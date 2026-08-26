@@ -81,6 +81,22 @@
 .sidenav:hover .nav-label, :host([controller-active]) .sidenav:focus-within .nav-label {
   opacity: 1;
 }
+/* A library tab's label gets a small server-name caption under it (see nav.js's
+   navItemHtml) - only present on tabs that actually carry one, so Home/a server's own
+   "All" tab (which don't) stay the plain single-line row they always were. */
+.nav-label-wrap { display: flex; flex-direction: column; justify-content: center; gap: 1px; min-width: 0; }
+.nav-sublabel {
+  font-size: 10px;
+  font-weight: 500;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  color: rgba(var(--color-fg-rgb), 0.6);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.sidenav:hover .nav-sublabel, :host([controller-active]) .sidenav:focus-within .nav-sublabel {
+  opacity: 1;
+}
+.nav-item:has(.nav-label-wrap) { height: auto; min-height: 30px; padding: 4px 7px; }
 /* Only ever shown at the mobile breakpoint below - the hover sidenav has room for
    every item on desktop, so there's nothing to collapse there. */
 .nav-more { display: none; }

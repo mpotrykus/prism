@@ -53,6 +53,8 @@
 }
 .more-sheet-item:hover, .more-sheet-item:active, .more-sheet-item:focus-visible { background: rgba(var(--color-fg-rgb), 0.08); }
 .more-sheet-item.active { color: var(--color-accent); }
+.more-sheet-item-label { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.more-sheet-item-sublabel { font-size: 11.5px; font-weight: 500; color: rgba(var(--color-fg-rgb), 0.5); }
 .more-sheet-item-icon { width: 22px; height: 22px; flex: none; display: flex; align-items: center; justify-content: center; }
 .more-sheet-item-icon svg { width: 20px; height: 20px; }
 .more-sheet-item-icon img { width: 100%; height: 100%; border-radius: 50%; object-fit: cover; display: block; }

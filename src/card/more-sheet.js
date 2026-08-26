@@ -7,7 +7,11 @@ export function renderMoreSheet(moreListEl, rows, escape) {
       (r) => `
         <button type="button" class="more-sheet-item${r.active ? " active" : ""}" tabindex="0">
           <span class="more-sheet-item-icon">${r.iconHTML}</span>
-          <span>${escape(r.label)}</span>
+          ${
+            r.sublabel
+              ? `<span class="more-sheet-item-label"><span>${escape(r.label)}</span><span class="more-sheet-item-sublabel">${escape(r.sublabel)}</span></span>`
+              : `<span>${escape(r.label)}</span>`
+          }
         </button>`
     )
     .join("");

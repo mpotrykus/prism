@@ -47,44 +47,77 @@ export function wireNavItem(card, el) {
   });
 }
 
-/* Renders one nav tab per fetched library (config.sections) instead of fixed Movies/TV
-   entries - lets Settings' "Fetch Libraries" list drive the tabs directly, so it
-   naturally covers however many/whatever-named libraries the server actually has.
-   Re-run on every setConfig() after the initial build so re-fetching/renaming/toggling
-   libraries in Settings updates the nav without a full rebuild. Home stays a separate
-   static item since it's the fixed "everything combined" view, not tied to any one
-   section. */
+/* Builds the ordered list of dynamic tabs from config.servers/config.sections: one
+   "everything on this server" tab per server with all_enabled, then that server's own
+   individually-enabled libraries (subtitled with the server's name so a library tab
+   reads unambiguously once more than one server is in play) - repeated per server, in
+   discovery order. A section whose server was never (re-)discovered this session (a
+   config saved before this app tracked servers, or a server that's since vanished from
+   the account) still gets a tab, just without a subtitle. */
+function buildNavTabs(card) {
+  const servers = card._config.servers || [];
+  const sections = card._config.sections || [];
+  const tabs = [];
+  const seenServerIds = new Set();
+  for (const sv of servers) {
+    seenServerIds.add(sv.id);
+    if (sv.all_enabled !== false) tabs.push({ view: `server-${sv.id}`, label: sv.name, sublabel: "" });
+    for (const s of sections.filter((x) => x.server_id === sv.id)) {
+      tabs.push({ view: `section-${s.key}`, label: s.label, sublabel: sv.name });
+    }
+  }
+  for (const s of sections.filter((x) => !seenServerIds.has(x.server_id))) {
+    tabs.push({ view: `section-${s.key}`, label: s.label, sublabel: "" });
+  }
+  return tabs;
+}
+
+function navItemHtml(card, t, classes) {
+  const label = card._escape(t.label);
+  const labelHtml = t.sublabel
+    ? `<div class="nav-label-wrap"><span class="nav-label">${label}</span><span class="nav-sublabel">${card._escape(t.sublabel)}</span></div>`
+    : `<span class="nav-label">${label}</span>`;
+  return `
+          <div class="${classes}" data-view="${t.view}" tabindex="0">
+            <span class="nav-icon">${iconForLibraryLabel(t.label)}</span>
+            ${labelHtml}
+          </div>`;
+}
+
+/* Renders one nav tab per server-All/library entry (config.servers/config.sections)
+   instead of fixed Movies/TV entries - lets Settings' "Discover Libraries" list drive
+   the tabs directly, so it naturally covers however many servers/libraries the account
+   actually has access to. Re-run on every setConfig() after the initial build so
+   re-discovering/renaming/toggling in Settings updates the nav without a full rebuild.
+   Home stays the same static item as before, just now hideable via config.home_enabled
+   instead of being unconditionally present. */
 export function renderNavSections(card) {
   const homeItem = card.shadowRoot.querySelector('.nav-top .nav-item[data-view="home"]');
   const headerHomeItem = card.shadowRoot.querySelector('.header-nav-item[data-view="home"]');
   card.shadowRoot.querySelectorAll(".nav-item-dynamic, .header-nav-item-dynamic").forEach((el) => el.remove());
-  const sections = card._config.sections || [];
-  const html = sections
-    .map(
-      (s, i) => `
-          <div class="nav-item nav-item-dynamic${i >= MOBILE_VISIBLE_SECTION_CAP ? " nav-item-overflow" : ""}" data-view="section-${s.key}" tabindex="0">
-            <span class="nav-icon">${iconForLibraryLabel(s.label)}</span>
-            <span class="nav-label">${card._escape(s.label)}</span>
-          </div>`
+
+  const homeEnabled = card._config.home_enabled !== false;
+  homeItem.style.display = homeEnabled ? "" : "none";
+  headerHomeItem.style.display = homeEnabled ? "" : "none";
+
+  const tabs = buildNavTabs(card);
+  const html = tabs
+    .map((t, i) =>
+      navItemHtml(card, t, `nav-item nav-item-dynamic${i >= MOBILE_VISIBLE_SECTION_CAP ? " nav-item-overflow" : ""}`)
     )
     .join("");
   /* No overflow cap here - the desktop strip has no "more" sheet to spill into, every
-     section stays reachable by scrolling the strip (see wireHeaderNav's arrows). */
-  const headerHtml = sections
-    .map(
-      (s) => `
-          <div class="nav-item header-nav-item header-nav-item-dynamic" data-view="section-${s.key}" tabindex="0">
-            <span class="nav-icon">${iconForLibraryLabel(s.label)}</span>
-            <span class="nav-label">${card._escape(s.label)}</span>
-          </div>`
-    )
-    .join("");
+     tab stays reachable by scrolling the strip (see wireHeaderNav's arrows). */
+  const headerHtml = tabs.map((t) => navItemHtml(card, t, "nav-item header-nav-item header-nav-item-dynamic")).join("");
   if (html) homeItem.insertAdjacentHTML("afterend", html);
   if (headerHtml) headerHomeItem.insertAdjacentHTML("afterend", headerHtml);
   card._navItems = [...card.shadowRoot.querySelectorAll(".nav-item[data-view]")];
   card.shadowRoot.querySelectorAll(".nav-item-dynamic, .header-nav-item-dynamic").forEach((el) => wireNavItem(card, el));
-  if (card._currentView !== "home" && card._currentView !== "search" && !sections.some((s) => `section-${s.key}` === card._currentView)) {
-    card._currentView = "home";
+
+  const validViews = new Set(["search", ...tabs.map((t) => t.view)]);
+  if (homeEnabled) validViews.add("home");
+  if (!validViews.has(card._currentView)) {
+    card._currentView = homeEnabled ? "home" : tabs[0]?.view || "home";
   }
   card._navItems.forEach((n) => n.classList.toggle("active", n.dataset.view === card._currentView));
   card._centerActiveHeaderNav?.(false);

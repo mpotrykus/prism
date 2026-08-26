@@ -1,5 +1,6 @@
 import { wireLinearNav, focusAfterPaint, isControllerActive, registerNavHandler } from "./focus-nav.js";
 import { hasSecrets, loadSecrets, saveSecrets } from "./vault.js";
+import { discoverServers, resolveBestConnection } from "./plex-auth.js";
 import { isXboxDevice } from "./src/player/core/platform.js";
 import MODAL_STYLE from "./src/styles/settings-modal.css?inline";
 
@@ -15,6 +16,8 @@ const PLAIN_STORAGE_KEY = "prism.config";
 const DEFAULT_PLAIN_CONFIG = {
   plex_url: "",
   machine_id: "",
+  home_enabled: true,
+  servers: [],
   sections: [],
   ai_rows_cadence_ms: 7 * 24 * 60 * 60 * 1000,
   max_genre_rows: 12,
@@ -41,11 +44,16 @@ export function savePlain(config) {
   localStorage.setItem(PLAIN_STORAGE_KEY, JSON.stringify(config));
 }
 /* Full config = plain fields + decrypted secrets, merged - what the card's
-   setConfig()/refreshConfig() actually expects. */
+   setConfig()/refreshConfig() actually expects. Per-server access tokens are secrets
+   (server_tokens, keyed by clientIdentifier) but the servers they belong to are plain
+   metadata (name/url/owned/...) - merged back onto each server here rather than via the
+   flat {...plain, ...secrets} spread below, which would otherwise let a `servers` key on
+   `secrets` blow away plain's non-secret server list instead of extending it. */
 export async function loadFull() {
   const plain = loadPlain();
   const secrets = hasSecrets() ? await loadSecrets() : {};
-  return { ...plain, ...secrets };
+  const servers = (plain.servers || []).map((s) => ({ ...s, token: secrets.server_tokens?.[s.id] || "" }));
+  return { ...plain, ...secrets, servers };
 }
 export function isConfigured(fullConfig) {
   return !!(fullConfig && fullConfig.plex_url && fullConfig.plex_token);
@@ -62,6 +70,8 @@ class StreamingSettingsModal extends HTMLElement {
     if (this._built) return;
     this._built = true;
     this._sections = [];
+    this._servers = [];
+    this._homeEnabled = true;
     /* Reflected onto this host element, not read via a :root selector inside the shadow
        stylesheet below - see focus-nav.js's own comment on why :root never matches there. */
     this.toggleAttribute("controller-active", isControllerActive());
@@ -95,7 +105,8 @@ class StreamingSettingsModal extends HTMLElement {
 
               <section class="group">
                 <div class="group-title">Libraries</div>
-                <button type="button" class="btn btn-secondary btn-fetch-libraries">Fetch Libraries</button>
+                <button type="button" class="btn btn-secondary btn-fetch-libraries">Discover Libraries</button>
+                <div class="hint">Finds every server on your account, including ones friends have shared with you, and lists their libraries below.</div>
                 <div class="status fetch-status"></div>
                 <div class="section-list"></div>
               </section>
@@ -260,7 +271,8 @@ class StreamingSettingsModal extends HTMLElement {
        focus-nav.js. */
     wireLinearNav(
       this.shadowRoot,
-      ".modal-close, .tab-btn, .btn-reauth, .btn-fetch-libraries, .section-row .s-enabled, .section-row .s-label, " +
+      ".modal-close, .tab-btn, .btn-reauth, .btn-fetch-libraries, .home-enabled, .server-all-row .sv-enabled, " +
+        ".section-row .s-enabled, .section-row .s-label, " +
         ".f-trailers-enabled, .f-youtube-key, .f-ai-enabled, .f-openrouter-key, .f-subtitle-provider, " +
         ".f-opensubtitles-username, .f-opensubtitles-password, .f-opensubtitles-key, " +
         ".f-ai-cadence, .f-max-genre-rows, .f-row-size, .f-title-audio-enabled, .f-title-audio-volume, .f-xbox-hdr-always-on, " +
@@ -340,6 +352,11 @@ class StreamingSettingsModal extends HTMLElement {
     this._el(".f-row-size").value = config.row_size ?? 20;
     this._machineId = config.machine_id || "";
     this._sections = config.sections || [];
+    /* Tokens merged in below (after secrets are unlocked, further down this method) -
+       config here is loadPlain()'s output, which never carries them. Kept as plain
+       metadata until then so _renderSectionList() can still show something immediately. */
+    this._servers = config.servers || [];
+    this._homeEnabled = config.home_enabled !== false;
     this._el(".f-trailers-enabled").checked = config.trailers_enabled !== false;
     this._el(".f-ai-enabled").checked = config.ai_rows_enabled !== false;
     this._el(".f-title-audio-enabled").checked = config.title_audio_enabled !== false;
@@ -365,6 +382,7 @@ class StreamingSettingsModal extends HTMLElement {
        see/edit what's actually saved matters more, since a stale/wrong key otherwise
        only surfaces as an opaque failure later. */
     const secrets = await this._getEffectiveSecrets();
+    this._servers = this._servers.map((s) => ({ ...s, token: secrets.server_tokens?.[s.id] || "" }));
     this._el(".f-youtube-key").value = secrets.youtube_api_key || "";
     this._el(".f-openrouter-key").value = secrets.openrouter_api_key || "";
     this._el(".f-opensubtitles-username").value = secrets.opensubtitles_username || "";
@@ -406,37 +424,88 @@ class StreamingSettingsModal extends HTMLElement {
     this.dispatchEvent(new CustomEvent("request-plex-reauth", { bubbles: true, composed: true }));
   }
 
+  /* Discovers every server on the signed-in account - the owned one plus any a friend
+     has shared - not just the single server the app originally connected to (see
+     plex-auth.js's discoverServers, which already returns owned:false entries with
+     their own accessToken; this is the first place that keeps more than the one the
+     user picked at sign-in). Re-running this later re-probes connections and re-lists
+     libraries but preserves every existing enabled/label/all_enabled toggle, matched by
+     server clientIdentifier and library key - same "keep what's already set" merge the
+     single-server version did, just one level deeper now. */
   async _fetchLibraries() {
     const statusEl = this._el(".fetch-status");
-    const url = (this._plexUrl || "").replace(/\/$/, "");
-    const token = (await this._getEffectiveSecrets()).plex_token || "";
-    if (!url || !token) {
+    const accountToken = (await this._getEffectiveSecrets()).plex_account_token || "";
+    if (!accountToken) {
       statusEl.textContent = "Sign in with Plex first.";
       statusEl.className = "status fetch-status err";
       return;
     }
-    statusEl.textContent = "Fetching…";
+    statusEl.textContent = "Discovering servers…";
     statusEl.className = "status fetch-status";
     try {
-      const data = await this._plexGet(url, token, "/library/sections");
-      const dirs = data?.MediaContainer?.Directory || [];
-      const existingByKey = new Map(this._sections.map((s) => [String(s.key), s]));
-      this._sections = dirs
-        .filter((d) => SECTION_TYPE_MAP[d.type])
-        .map((d) => {
-          const prev = existingByKey.get(String(d.key));
-          return {
-            key: Number(d.key),
-            type: SECTION_TYPE_MAP[d.type],
-            label: prev?.label || d.title,
-            enabled: prev ? prev.enabled !== false : true,
-          };
-        });
+      const discovered = await discoverServers(accountToken);
+      const prevServersById = new Map((this._servers || []).map((s) => [s.id, s]));
+      const prevSectionsByServerKey = new Map((this._sections || []).map((s) => [`${s.server_id}:${s.key}`, s]));
+      const nextServers = [];
+      const nextSections = [];
+      let unreachableCount = 0;
+      for (const d of discovered) {
+        const id = d.clientIdentifier;
+        if (!id) continue;
+        const prevServer = prevServersById.get(id);
+        const uri = await resolveBestConnection(d);
+        if (!uri) {
+          unreachableCount++;
+          /* Keep whatever was already saved for it rather than dropping it - a friend's
+             server being briefly offline shouldn't wipe out every toggle the user set
+             for it, and data.js's own fetches already tolerate a stale/unreachable
+             server gracefully (empty results, not a hard error). */
+          if (prevServer) {
+            nextServers.push(prevServer);
+            nextSections.push(...(this._sections || []).filter((s) => s.server_id === id));
+          }
+          continue;
+        }
+        const server = {
+          id,
+          name: d.name,
+          owned: d.owned,
+          sourceTitle: d.sourceTitle || "",
+          url: uri,
+          token: d.accessToken,
+          /* Defaults to fully on for a newly-discovered server (confirmed with the user:
+             a friend sharing a library should show up right away, not require an opt-in
+             per library first). */
+          all_enabled: prevServer ? prevServer.all_enabled !== false : true,
+        };
+        nextServers.push(server);
+        try {
+          const data = await this._plexGet(uri, d.accessToken, "/library/sections");
+          const dirs = data?.MediaContainer?.Directory || [];
+          for (const dir of dirs) {
+            if (!SECTION_TYPE_MAP[dir.type]) continue;
+            const prev = prevSectionsByServerKey.get(`${id}:${dir.key}`);
+            nextSections.push({
+              key: Number(dir.key),
+              type: SECTION_TYPE_MAP[dir.type],
+              label: prev?.label || dir.title,
+              enabled: prev ? prev.enabled !== false : true,
+              server_id: id,
+            });
+          }
+        } catch (e) {
+          // couldn't list this server's libraries this pass - keep whatever was already saved for it
+          nextSections.push(...(this._sections || []).filter((s) => s.server_id === id));
+        }
+      }
+      this._servers = nextServers;
+      this._sections = nextSections;
       this._renderSectionList();
-      statusEl.textContent = `Found ${this._sections.length} library section(s).`;
+      const suffix = unreachableCount ? ` — ${unreachableCount} server(s) unreachable right now` : "";
+      statusEl.textContent = `Found ${nextSections.length} library section(s) across ${nextServers.length} server(s)${suffix}.`;
       statusEl.className = "status fetch-status ok";
     } catch (e) {
-      statusEl.textContent = `Couldn't fetch libraries: ${e.message}`;
+      statusEl.textContent = `Couldn't discover Plex servers: ${e.message}`;
       statusEl.className = "status fetch-status err";
     }
   }
@@ -449,26 +518,88 @@ class StreamingSettingsModal extends HTMLElement {
     return res.json();
   }
 
+  /* Renders, in order: a top "Home" toggle (everything, across every server - mirrors
+     nav.js's static Home tab), then one group per discovered server, each with its own
+     "All" toggle (everything on just that server, tab titled with the server's own
+     name) followed by that server's individual libraries, each subtitled with the
+     server it's from. All three levels are independent checkboxes, not a single picker -
+     see nav.js's renderNavSections for how each one turns into an actual nav tab. */
   _renderSectionList() {
     const list = this._el(".section-list");
-    if (!this._sections.length) {
+    if (!this._servers.length) {
       list.innerHTML = "";
       return;
     }
-    list.innerHTML = this._sections
-      .map(
-        (s, i) => `
-      <div class="section-row" data-index="${i}">
+    const sectionsByServer = new Map();
+    (this._sections || []).forEach((s, i) => {
+      if (!sectionsByServer.has(s.server_id)) sectionsByServer.set(s.server_id, []);
+      sectionsByServer.get(s.server_id).push(i);
+    });
+    const homeHtml = `
+      <div class="section-row home-row">
         <label class="switch">
-          <input type="checkbox" class="s-enabled" data-nav-group="section-row-${i}" ${s.enabled !== false ? "checked" : ""} />
+          <input type="checkbox" class="home-enabled" data-nav-group="home-row" ${this._homeEnabled !== false ? "checked" : ""} />
           <span class="switch-track"></span>
         </label>
-        <input type="text" class="s-label" data-nav-group="section-row-${i}" value="${this._escape(s.label)}" />
-        <span class="type-badge">${s.type === 1 ? "Movies" : "TV"}</span>
-      </div>`
-      )
+        <div class="section-row-main">
+          <span class="section-row-title">Home</span>
+          <span class="section-row-server">Everything, across every server</span>
+        </div>
+      </div>`;
+    const serverGroupsHtml = this._servers
+      .map((sv) => {
+        const indices = sectionsByServer.get(sv.id) || [];
+        const ownerHtml = sv.owned
+          ? ""
+          : ` <span class="server-group-shared">shared by ${this._escape(sv.sourceTitle || "a friend")}</span>`;
+        const rowsHtml = indices
+          .map((i) => {
+            const s = this._sections[i];
+            return `
+          <div class="section-row" data-index="${i}">
+            <label class="switch">
+              <input type="checkbox" class="s-enabled" data-nav-group="section-row-${i}" ${s.enabled !== false ? "checked" : ""} />
+              <span class="switch-track"></span>
+            </label>
+            <div class="section-row-main">
+              <input type="text" class="s-label" data-nav-group="section-row-${i}" value="${this._escape(s.label)}" />
+              <span class="section-row-server">${this._escape(sv.name)}</span>
+            </div>
+            <span class="type-badge">${s.type === 1 ? "Movies" : "TV"}</span>
+          </div>`;
+          })
+          .join("");
+        return `
+        <div class="server-group">
+          <div class="server-group-header">
+            <span class="server-group-name">${this._escape(sv.name)}</span>${ownerHtml}
+          </div>
+          <div class="section-row server-all-row" data-server="${this._escape(sv.id)}">
+            <label class="switch">
+              <input type="checkbox" class="sv-enabled" data-nav-group="server-row-${this._escape(sv.id)}" ${sv.all_enabled !== false ? "checked" : ""} />
+              <span class="switch-track"></span>
+            </label>
+            <div class="section-row-main">
+              <span class="section-row-title">${this._escape(sv.name)}</span>
+              <span class="section-row-server">All libraries on this server</span>
+            </div>
+          </div>
+          ${rowsHtml}
+        </div>`;
+      })
       .join("");
-    list.querySelectorAll(".section-row").forEach((row) => {
+    list.innerHTML = homeHtml + serverGroupsHtml;
+
+    list.querySelector(".home-enabled").addEventListener("change", (e) => {
+      this._homeEnabled = e.target.checked;
+    });
+    list.querySelectorAll(".server-all-row").forEach((row) => {
+      row.querySelector(".sv-enabled").addEventListener("change", (e) => {
+        const sv = this._servers.find((s) => s.id === row.dataset.server);
+        if (sv) sv.all_enabled = e.target.checked;
+      });
+    });
+    list.querySelectorAll(".section-row[data-index]").forEach((row) => {
       const i = Number(row.dataset.index);
       row.querySelector(".s-enabled").addEventListener("change", (e) => {
         this._sections[i].enabled = e.target.checked;
@@ -487,7 +618,12 @@ class StreamingSettingsModal extends HTMLElement {
     return {
       plex_url: (this._plexUrl || "").replace(/\/$/, ""),
       machine_id: this._machineId || "",
-      sections: (this._sections || []).filter((s) => s.enabled !== false).map((s) => ({ key: s.key, type: s.type, label: s.label })),
+      home_enabled: this._homeEnabled !== false,
+      /* Tokens live in secrets (see _collectSecrets' server_tokens below), not here. */
+      servers: (this._servers || []).map(({ token, ...rest }) => rest),
+      sections: (this._sections || [])
+        .filter((s) => s.enabled !== false)
+        .map((s) => ({ key: s.key, type: s.type, label: s.label, server_id: s.server_id })),
       ai_rows_cadence_ms: Number(this._el(".f-ai-cadence").value),
       max_genre_rows: Number(this._el(".f-max-genre-rows").value) || 12,
       row_size: Number(this._el(".f-row-size").value) || 20,
@@ -513,6 +649,7 @@ class StreamingSettingsModal extends HTMLElement {
       opensubtitles_username: this._el(".f-opensubtitles-username").value.trim(),
       opensubtitles_password: this._el(".f-opensubtitles-password").value.trim(),
       opensubtitles_api_key: this._el(".f-opensubtitles-key").value.trim(),
+      server_tokens: Object.fromEntries((this._servers || []).map((s) => [s.id, s.token || ""])),
     };
   }
 

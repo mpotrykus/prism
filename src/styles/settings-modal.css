@@ -141,12 +141,28 @@ input.nav-text-highlight {
   display: flex; align-items: center; gap: 10px;
   background: rgba(var(--color-fg-rgb), 0.05); border-radius: 8px; padding: 8px 10px;
 }
-.section-row input[type="text"] { flex: 1; padding: 6px 10px; }
+.section-row input[type="text"] { padding: 6px 10px; }
 .section-row .type-badge {
   flex: none; font-size: 10.5px; font-weight: 700; text-transform: uppercase;
   color: rgba(var(--color-fg-rgb), 0.5); border: 1px solid rgba(var(--color-fg-rgb), 0.15);
   border-radius: 5px; padding: 2px 6px;
 }
+/* Shared by every row's label column, whether it's an editable library-name input (with
+   a server-name caption below it) or a plain title+caption pair (Home/a server's own
+   "All" row, neither of which is user-renamable). */
+.section-row-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.section-row-title { font-size: 13px; font-weight: 700; }
+.section-row-server {
+  font-size: 10.5px; font-weight: 500; color: rgba(var(--color-fg-rgb), 0.5);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.home-row { background: rgba(var(--color-accent-rgb), 0.07); }
+.server-group { display: flex; flex-direction: column; gap: 8px; margin-top: 14px; }
+.server-group:first-of-type { margin-top: 12px; }
+.server-group-header { display: flex; align-items: baseline; gap: 8px; padding: 0 2px; }
+.server-group-name { font-size: 12px; font-weight: 700; color: rgba(var(--color-fg-rgb), 0.75); }
+.server-group-shared { font-size: 11px; color: rgba(var(--color-fg-rgb), 0.45); }
+.server-all-row { background: rgba(var(--color-fg-rgb), 0.08); }
 .row-2col { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .modal-footer {
   flex: none;

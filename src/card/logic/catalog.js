@@ -64,6 +64,11 @@ export function mapItem(m, withProgress, { plexImageUrl, plexThumbUrl = plexImag
     hasHistory: isShowLike ? (m.viewedLeafCount || 0) > 0 : (m.viewCount || 0) > 0,
     genres: m.Genre?.length ? m.Genre.map((g) => (g.tag || "").trim()).filter(Boolean) : m.type === "episode" ? episodeFallbackGenres || [] : [],
     studio: m.studio || (m.type === "episode" ? episodeFallbackStudio || "" : ""),
+    /* Which Plex server this item was fetched from - stamped on the raw item by
+       data.js's plexFetch (__server) whenever a server is passed to it. Downstream
+       playback/deep-link/scrobble code reads this instead of a single global
+       plex_url/plex_token now that more than one server can be browsed at once. */
+    server: m.__server || null,
   };
   if (withProgress && m.duration) {
     item.progress = Math.max(0, Math.min(1, (m.viewOffset || 0) / m.duration));
@@ -105,7 +110,7 @@ export function mergeGenreRows(sections, { genreBySection, mapItem: mapItemFn, s
          data.js's loadGenreDataBySection), so totalSize is the only signal of a bigger
          true total, and the actual expanded fetch has to happen at the network-calling
          layer (this module is deliberately network-free - see the file header). */
-      bucket.sectionGenreKeys.push({ key: s.key, type: s.type, genreKey: g.key });
+      bucket.sectionGenreKeys.push({ key: s.key, type: s.type, genreKey: g.key, server_id: s.server_id });
     }
   }
 

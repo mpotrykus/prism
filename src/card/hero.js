@@ -136,7 +136,12 @@ export class HeroController {
       const trailer = extras.find((e) => e.subtype === "trailer");
       const part = trailer?.Media?.[0]?.Part?.[0];
       if (part?.key) {
-        return { type: "plex", url: `${config.plex_url}${part.key}?X-Plex-Token=${config.plex_token}` };
+        /* item.__server is stamped by data.js's plexFetch on every raw item this hero
+           pool came from - falls back to the single global config for the rare case a
+           pool item somehow has none (shouldn't happen once every fetch tags its own
+           results, but this trailer URL has no other error handling to catch it). */
+        const s = item.__server || { url: config.plex_url, token: config.plex_token };
+        return { type: "plex", url: `${s.url}${part.key}?X-Plex-Token=${s.token}` };
       }
     } catch (e) {
       // fall through to the youtube fallback below

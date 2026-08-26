@@ -9,15 +9,45 @@ import { hasSecrets, loadSecrets, saveSecrets } from "../../vault.js";
    web-fallback.js use) since these all read this._config and write the handful of
    `_xRaw`/`_xBySection` fields the row-building logic (logic/catalog.js) consumes. */
 
-export async function plexFetch(card, path, params = {}) {
-  const url = new URL(card._config.plex_url + path);
+/* The server the app fell back to before multi-server support existed, and still the
+   fallback for anything that can't resolve a more specific one (a section saved before
+   this app tracked server_id, an item with no __server tag, etc.) - mirrors whichever
+   discovered server has owned:true, falling back further to the flat plex_url/plex_token/
+   machine_id fields for a config saved before `servers` existed at all. */
+export function primaryServer(card) {
+  const owned = (card._config.servers || []).find((s) => s.owned);
+  if (owned) return owned;
+  return { id: card._config.machine_id, url: card._config.plex_url, token: card._config.plex_token, name: "", owned: true };
+}
+
+export function serverById(card, id) {
+  return (card._config.servers || []).find((s) => s.id === id) || null;
+}
+
+export function serverForSection(card, section) {
+  return (section?.server_id && serverById(card, section.server_id)) || primaryServer(card);
+}
+
+/* A server contributes to Home/on-deck/history/playlists once the user has turned
+   anything on for it - its own "All" toggle, or at least one individual library. A
+   freshly-discovered, still-untouched server contributes nothing (though per the
+   default-on behavior in settings.js, that's a transient state, not the normal case). */
+export function activeServers(card) {
+  const servers = card._config.servers || [];
+  const sections = card._config.sections || [];
+  return servers.filter((sv) => sv.all_enabled || sections.some((s) => s.server_id === sv.id && s.enabled !== false));
+}
+
+export async function plexFetch(card, path, params = {}, server = null) {
+  const s = server || primaryServer(card);
+  const url = new URL(s.url + path);
   Object.entries(params).forEach(([k, v]) => {
     /* Plex ANDs repeated same-key filter params (e.g. two `genre=` keys) rather than
        ORing them - array values let AI-generated multi-genre rows use that. */
     if (Array.isArray(v)) v.forEach((vv) => url.searchParams.append(k, vv));
     else url.searchParams.set(k, v);
   });
-  url.searchParams.set("X-Plex-Token", card._config.plex_token);
+  url.searchParams.set("X-Plex-Token", s.token);
   const res = await fetch(url, { headers: { Accept: "application/json" } });
   if (!res.ok) throw new Error(`Plex ${path} -> HTTP ${res.status}`);
   /* Action endpoints like /:/scrobble and /:/unscrobble respond 200 with an empty body,
@@ -25,11 +55,23 @@ export async function plexFetch(card, path, params = {}) {
      which every caller's catch block then swallows as if the action itself had failed
      even though Plex already applied it server-side. */
   const text = await res.text();
-  return text ? JSON.parse(text) : null;
+  const data = text ? JSON.parse(text) : null;
+  /* Stamp every raw item this call returns with the server it came from - the one place
+     this needs to happen for the whole app to know "which server" a given item is from,
+     rather than every call site remembering to tag its own results. catalog.js's mapItem
+     reads this (as __server) to resolve per-item image/art URLs and to attach `server`
+     to the mapped item, which playback/deep-link/scrobble code then reads directly. */
+  const mc = data?.MediaContainer;
+  if (mc) {
+    (mc.Metadata || []).forEach((m) => { m.__server = s; });
+    (mc.Directory || []).forEach((d) => { d.__server = s; });
+  }
+  return data;
 }
 
-/* "home"/"search" (or any unrecognized view) fall through to null, meaning "no single
-   section" - callers treat that as "all sections". */
+/* "home"/"server-<id>"/"search" (or any unrecognized view) fall through to null, meaning
+   "no single section" - callers treat that as "some set of sections", see
+   sectionsForView. */
 export function sectionForView(card, view) {
   if (typeof view !== "string" || !view.startsWith("section-")) return null;
   const key = Number(view.slice("section-".length));
@@ -38,16 +80,26 @@ export function sectionForView(card, view) {
 
 export function sectionsForView(card, view) {
   const section = sectionForView(card, view);
-  return section ? [section] : card._config.sections;
+  if (section) return [section];
+  if (typeof view === "string" && view.startsWith("server-")) {
+    const id = view.slice("server-".length);
+    return (card._config.sections || []).filter((s) => s.server_id === id);
+  }
+  return card._config.sections;
 }
 
 export async function fetchOnDeckRaw(card) {
-  try {
-    const data = await plexFetch(card, "/library/onDeck");
-    return data?.MediaContainer?.Metadata || [];
-  } catch (e) {
-    return [];
-  }
+  const perServer = await Promise.all(
+    activeServers(card).map(async (sv) => {
+      try {
+        const data = await plexFetch(card, "/library/onDeck", {}, sv);
+        return data?.MediaContainer?.Metadata || [];
+      } catch (e) {
+        return [];
+      }
+    })
+  );
+  return perServer.flat();
 }
 
 export async function fetchWatchlistRaw(card) {
@@ -78,15 +130,22 @@ export async function fetchWatchlistRaw(card) {
 }
 
 async function fetchWatchHistoryRaw(card) {
-  try {
-    const data = await plexFetch(card, "/status/sessions/history/all", {
-      sort: "viewedAt:desc",
-      "X-Plex-Container-Size": 500,
-    });
-    return data?.MediaContainer?.Metadata || [];
-  } catch (e) {
-    return [];
-  }
+  const perServer = await Promise.all(
+    activeServers(card).map(async (sv) => {
+      try {
+        const data = await plexFetch(
+          card,
+          "/status/sessions/history/all",
+          { sort: "viewedAt:desc", "X-Plex-Container-Size": 500 },
+          sv
+        );
+        return data?.MediaContainer?.Metadata || [];
+      } catch (e) {
+        return [];
+      }
+    })
+  );
+  return perServer.flat();
 }
 
 async function fetchRecentlyAddedRaw(card) {
@@ -94,11 +153,12 @@ async function fetchRecentlyAddedRaw(card) {
   const perSection = await Promise.all(
     card._config.sections.map(async (s) => {
       try {
-        const data = await plexFetch(card, `/library/sections/${s.key}/all`, {
-          type: s.type,
-          sort: "addedAt:desc",
-          "X-Plex-Container-Size": rowSize,
-        });
+        const data = await plexFetch(
+          card,
+          `/library/sections/${s.key}/all`,
+          { type: s.type, sort: "addedAt:desc", "X-Plex-Container-Size": rowSize },
+          serverForSection(card, s)
+        );
         return data?.MediaContainer?.Metadata || [];
       } catch (e) {
         return [];
@@ -119,7 +179,7 @@ async function fetchCollectionsRaw(card) {
   const perSection = await Promise.all(
     card._config.sections.map(async (s) => {
       try {
-        const data = await plexFetch(card, `/library/sections/${s.key}/collections`);
+        const data = await plexFetch(card, `/library/sections/${s.key}/collections`, {}, serverForSection(card, s));
         return (data?.MediaContainer?.Metadata || []).map((d) => ({ ...d, section: s }));
       } catch (e) {
         return [];
@@ -143,7 +203,12 @@ async function fetchCollectionRowItems(card, picks) {
   const results = await Promise.all(
     picks.map(async (c) => {
       try {
-        const data = await plexFetch(card, `/library/collections/${c.ratingKey}/children`);
+        const data = await plexFetch(
+          card,
+          `/library/collections/${c.ratingKey}/children`,
+          {},
+          serverForSection(card, c.section)
+        );
         return { title: c.title, items: data?.MediaContainer?.Metadata || [] };
       } catch (e) {
         return { title: c.title, items: [] };
@@ -157,13 +222,20 @@ async function fetchPlaylistsRaw(card) {
   /* Server-wide endpoint, not per-section like collections - a playlist can span
      multiple libraries. Posters live under `composite`, not `thumb` (confirmed via raw
      JSON, unlike every other item type in this file). Filtered to playlistType "video"
-     since this dashboard has no audio/music sections configured. */
-  try {
-    const data = await plexFetch(card, "/playlists");
-    return (data?.MediaContainer?.Metadata || []).filter((p) => p.playlistType === "video");
-  } catch (e) {
-    return [];
-  }
+     since this dashboard has no audio/music sections configured. Fetched per active
+     server (see fetchOnDeckRaw above) rather than once - a playlist can't span servers,
+     so a playlist row is inherently scoped to whichever server it lives on. */
+  const perServer = await Promise.all(
+    activeServers(card).map(async (sv) => {
+      try {
+        const data = await plexFetch(card, "/playlists", {}, sv);
+        return (data?.MediaContainer?.Metadata || []).filter((p) => p.playlistType === "video");
+      } catch (e) {
+        return [];
+      }
+    })
+  );
+  return perServer.flat();
 }
 
 async function loadSearchFacets(card) {
@@ -171,14 +243,15 @@ async function loadSearchFacets(card) {
   const collections = [];
   await Promise.all(
     card._config.sections.map(async (s) => {
+      const server = serverForSection(card, s);
       try {
-        const data = await plexFetch(card, `/library/sections/${s.key}/studio`, { type: s.type });
+        const data = await plexFetch(card, `/library/sections/${s.key}/studio`, { type: s.type }, server);
         for (const d of data?.MediaContainer?.Directory || []) {
           studios.push({ title: d.title, key: d.key, section: s });
         }
       } catch (e) {}
       try {
-        const data = await plexFetch(card, `/library/sections/${s.key}/collection`, { type: s.type });
+        const data = await plexFetch(card, `/library/sections/${s.key}/collection`, { type: s.type }, server);
         for (const d of data?.MediaContainer?.Directory || []) {
           collections.push({ title: d.title, key: d.key, section: s });
         }
@@ -195,18 +268,19 @@ async function loadGenreDataBySection(card) {
 
   await Promise.all(
     sections.map(async (s) => {
+      const server = serverForSection(card, s);
       try {
-        const data = await plexFetch(card, `/library/sections/${s.key}/genre`, { type: s.type });
+        const data = await plexFetch(card, `/library/sections/${s.key}/genre`, { type: s.type }, server);
         const genres = data?.MediaContainer?.Directory || [];
         const perGenre = await Promise.all(
           genres.map(async (g) => {
             try {
-              const gdata = await plexFetch(card, `/library/sections/${s.key}/all`, {
-                type: s.type,
-                genre: g.key,
-                sort: "addedAt:desc",
-                "X-Plex-Container-Size": rowSize,
-              });
+              const gdata = await plexFetch(
+                card,
+                `/library/sections/${s.key}/all`,
+                { type: s.type, genre: g.key, sort: "addedAt:desc", "X-Plex-Container-Size": rowSize },
+                server
+              );
               const mc = gdata?.MediaContainer || {};
               return { title: g.title, key: g.key, items: mc.Metadata || [], totalSize: mc.totalSize ?? mc.size ?? 0 };
             } catch (e) {
@@ -277,12 +351,12 @@ async function fetchAiRowsRaw(card, ideas) {
           });
           if (keys.some((k) => !k)) return [];
           try {
-            const data = await plexFetch(card, `/library/sections/${s.key}/all`, {
-              type: s.type,
-              genre: keys,
-              sort: "addedAt:desc",
-              "X-Plex-Container-Size": rowSize,
-            });
+            const data = await plexFetch(
+              card,
+              `/library/sections/${s.key}/all`,
+              { type: s.type, genre: keys, sort: "addedAt:desc", "X-Plex-Container-Size": rowSize },
+              serverForSection(card, s)
+            );
             return data?.MediaContainer?.Metadata || [];
           } catch (e) {
             return [];
@@ -313,13 +387,45 @@ export async function loadAll(card) {
   }
   card._renderLoading();
   try {
-    const reachable = await StreamingPlexAuth.ensureReachable(card._config);
-    if (reachable.plex_url !== card._config.plex_url || reachable.plex_token !== card._config.plex_token) {
-      card._config.plex_url = reachable.plex_url;
-      card._config.plex_token = reachable.plex_token;
-      savePlain({ ...loadPlain(), plex_url: reachable.plex_url });
+    /* Re-probes every known server the same way the old single-server version probed
+       the one - a stale cached URL doesn't fail fast off-LAN (see ensureReachable's own
+       comment), so this has to run before any of the per-server fetches below. Only the
+       owned server being unreachable is fatal (throws out to the catch, same failure
+       mode as before this app knew about more than one server) - a friend's server
+       failing to resolve here just leaves its stored url/token as-is, and every
+       per-server fetch elsewhere already tolerates that failing gracefully (empty
+       results, not a thrown error the user sees). */
+    const servers = card._config.servers?.length ? card._config.servers : [primaryServer(card)];
+    await Promise.all(
+      servers.map(async (sv) => {
+        try {
+          const r = await StreamingPlexAuth.ensureReachable({
+            plex_url: sv.url,
+            plex_token: sv.token,
+            plex_account_token: card._config.plex_account_token,
+            machine_id: sv.id,
+          });
+          sv.url = r.plex_url;
+          sv.token = r.plex_token;
+        } catch (e) {
+          if (sv.owned) throw e;
+        }
+      })
+    );
+    if (card._config.servers?.length) {
+      const plain = loadPlain();
+      plain.servers = card._config.servers.map(({ token, ...rest }) => rest);
+      savePlain(plain);
       const secrets = hasSecrets() ? await loadSecrets() : {};
-      await saveSecrets({ ...secrets, plex_token: reachable.plex_token });
+      secrets.server_tokens = Object.fromEntries(card._config.servers.map((sv) => [sv.id, sv.token]));
+      await saveSecrets(secrets);
+    } else {
+      const [primary] = servers;
+      card._config.plex_url = primary.url;
+      card._config.plex_token = primary.token;
+      savePlain({ ...loadPlain(), plex_url: primary.url });
+      const secrets = hasSecrets() ? await loadSecrets() : {};
+      await saveSecrets({ ...secrets, plex_token: primary.token });
     }
   } catch (e) {
     card._renderMessage(`Couldn't reach your Plex server: ${e.message}`);
