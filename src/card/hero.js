@@ -1,6 +1,7 @@
 import { paintWatchlistButton } from "./watchlist.js";
 import { pickHeroItem, pickHeroItemFromPool, heroArtUrl, heroSubtitleText, heroShouldPlay } from "./logic/hero.js";
 import { extractLogoUrl } from "./logic/catalog.js";
+import { resolveTrailerVideo } from "./logic/trailer.js";
 
 /* The hero banner: autoplay trailer resolution/crossfade, mute/play controls, and the
    focus/visibility/IntersectionObserver plumbing that decides whether it should
@@ -59,6 +60,7 @@ export class HeroController {
     this._pageVisible = true;
     this._advancing = false;
     this._pausedByPlayer = false;
+    this._pausedByTitleInfo = false;
 
     this._wire();
   }
@@ -130,77 +132,7 @@ export class HeroController {
     if (this._trailerResolveCount >= this._trailerResolveCap) return null;
     this._trailerResolveCount++;
     const config = this._ctx.getConfig();
-    try {
-      const data = await this._ctx.plexFetch(`/library/metadata/${item.ratingKey}/extras`);
-      const extras = data?.MediaContainer?.Metadata || [];
-      const trailer = extras.find((e) => e.subtype === "trailer");
-      const part = trailer?.Media?.[0]?.Part?.[0];
-      if (part?.key) {
-        /* item.__server is stamped by data.js's plexFetch on every raw item this hero
-           pool came from - falls back to the single global config for the rare case a
-           pool item somehow has none (shouldn't happen once every fetch tags its own
-           results, but this trailer URL has no other error handling to catch it). */
-        const s = item.__server || { url: config.plex_url, token: config.plex_token };
-        return { type: "plex", url: `${s.url}${part.key}?X-Plex-Token=${s.token}` };
-      }
-    } catch (e) {
-      // fall through to the youtube fallback below
-    }
-    if (!config.trailers_enabled || !config.youtube_api_key) return null;
-    const title = item.title || item.grandparentTitle || "";
-    const query = `${title} ${item.year || ""} trailer`.trim();
-    try {
-      const url = new URL("https://www.googleapis.com/youtube/v3/search");
-      url.searchParams.set("part", "snippet");
-      url.searchParams.set("type", "video");
-      url.searchParams.set("maxResults", "5");
-      url.searchParams.set("q", query);
-      url.searchParams.set("key", config.youtube_api_key);
-      const res = await fetch(url);
-      if (!res.ok) return null;
-      const data = await res.json();
-      const videoIds = (data?.items || []).map((it) => it?.id?.videoId).filter(Boolean);
-      if (!videoIds.length) return null;
-      const videoId = await this._pickEmbeddableVideo(videoIds, config.youtube_api_key);
-      if (!videoId) return null;
-      /* enablejsapi=1 is required for the postMessage mute/unMute commands used by the
-         mute button; embedding a specific known videoId (vs. the old listType=search
-         trick) is fully supported and doesn't hit YouTube's "Error 153". */
-      return {
-        type: "youtube",
-        embedUrl: `https://www.youtube.com/embed/${videoId}?autoplay=1&mute=1&controls=0&modestbranding=1&rel=0&enablejsapi=1`,
-      };
-    } catch (e) {
-      return null;
-    }
-  }
-
-  /* Age-restricted videos refuse to actually play in an embedded iframe - YouTube
-     shows a "Sign in to confirm your age" wall instead, and the embed just sits there
-     dead with no error we were previously listening for. Filter those (and
-     embedding-disabled videos) out via videos.list's status/contentDetails before
-     picking one, rather than discovering it after the hero is already stuck. */
-  async _pickEmbeddableVideo(videoIds, apiKey) {
-    try {
-      const url = new URL("https://www.googleapis.com/youtube/v3/videos");
-      url.searchParams.set("part", "status,contentDetails");
-      url.searchParams.set("id", videoIds.join(","));
-      url.searchParams.set("key", apiKey);
-      const res = await fetch(url);
-      if (!res.ok) return videoIds[0];
-      const data = await res.json();
-      const byId = new Map((data?.items || []).map((it) => [it.id, it]));
-      for (const id of videoIds) {
-        const info = byId.get(id);
-        if (!info) continue;
-        if (info.status?.embeddable === false) continue;
-        if (info.contentDetails?.contentRating?.ytRating === "ytAgeRestricted") continue;
-        return id;
-      }
-      return null;
-    } catch (e) {
-      return videoIds[0];
-    }
+    return resolveTrailerVideo(item, { plexFetch: this._ctx.plexFetch, config, youtubeEnabled: !!config.trailers_enabled });
   }
 
   /* Genre-listing/on-deck/watchlist raw items (see pickHeroItem/pickHeroItemFromPool)
@@ -286,6 +218,11 @@ export class HeroController {
     this._muteBtn.style.display = this._video ? "" : "none";
     this._playBtn.style.display = this._video ? "" : "none";
     this._heroEl.style.cursor = this._video ? "pointer" : "";
+    /* Tracks whichever iframe is currently "ours" so the global "message" listener below
+       (shared with title-info.js's own YouTube trailer, both raw postMessage handlers
+       with no other way to tell embeds apart) can ignore a stale/foreign iframe's
+       end-of-video event instead of acting on it. */
+    this._ytIframeEl = null;
     if (this._video?.type === "plex") {
       incoming.innerHTML = `<video src="${this._video.url}" autoplay muted playsinline></video>`;
       const heroVideoEl = incoming.querySelector("video");
@@ -307,6 +244,7 @@ export class HeroController {
          and to re-applying an unmuted preference, since the embed URL always starts
          muted regardless of the user's prior choice. */
       const ytIframe = incoming.querySelector("iframe");
+      this._ytIframeEl = ytIframe;
       ytIframe.addEventListener("load", () => {
         ytIframe.contentWindow?.postMessage(JSON.stringify({ event: "listening", id: "heroPlayer" }), "*");
         if (!this._muted) {
@@ -521,11 +459,39 @@ export class HeroController {
         this.updatePlayback();
       }
     });
+    /* Same decoupling problem as streaming-player-open/-close just above, but for the
+       title-info modal (title-info.js) instead of full-screen playback - it sits on top
+       of, not instead of, the hero (same relationship noted in the message listener
+       below), so without this the hero trailer just keeps autoplaying underneath it. A
+       separate flag from _pausedByPlayer rather than reusing it: opening title-info then
+       launching playback from inside it fires streaming-player-open too, but the
+       !this._userPaused guard on that listener is already false by then, so
+       _pausedByPlayer stays false and its own -close listener correctly leaves the hero
+       paused (title-info is still open) instead of resuming it. */
+    window.addEventListener("streaming-title-info-open", () => {
+      if (!this._userPaused) {
+        this._userPaused = true;
+        this._pausedByTitleInfo = true;
+        this.updatePlayback();
+      }
+    });
+    window.addEventListener("streaming-title-info-close", () => {
+      if (this._pausedByTitleInfo) {
+        this._pausedByTitleInfo = false;
+        this._userPaused = false;
+        this.updatePlayback();
+      }
+    });
     /* YouTube's embed only starts posting "infoDelivery" state updates (playerState 0 =
        ended) after it receives a "listening" handshake - sent once the iframe loads,
        see show() above. No official iframe_api script is loaded, so this raw
        postMessage protocol is the only way to detect trailer-end without it. */
     window.addEventListener("message", (e) => {
+      /* title-info.js's own trailer can also have a YouTube iframe live at the same time
+         (its modal sits on top of, not instead of, the hero) - both listeners see every
+         message on the window, so without this source check a title-info trailer ending
+         would wrongly advance the hero too, and vice versa. */
+      if (e.source !== this._ytIframeEl?.contentWindow) return;
       if (typeof e.data !== "string") return;
       let data;
       try {

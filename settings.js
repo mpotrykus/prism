@@ -25,6 +25,7 @@ const DEFAULT_PLAIN_CONFIG = {
   row_size: 20,
   subtitle_provider: "plex",
   trailers_enabled: true,
+  title_trailers_enabled: true,
   ai_rows_enabled: true,
   xbox_hdr_always_on: false,
   title_audio_enabled: true,
@@ -115,10 +116,18 @@ class StreamingSettingsModal extends HTMLElement {
 
             <div class="tab-panel" data-tab="integrations">
               <section class="group">
-                <div class="group-title-row">
-                  <div class="group-title">Trailers</div>
+                <div class="group-title">Trailers</div>
+                <div class="subtoggle-row">
+                  <span class="subtoggle-label">Home Screen</span>
                   <label class="switch">
                     <input type="checkbox" class="f-trailers-enabled" />
+                    <span class="switch-track"></span>
+                  </label>
+                </div>
+                <div class="subtoggle-row">
+                  <span class="subtoggle-label">Title Info</span>
+                  <label class="switch">
+                    <input type="checkbox" class="f-title-trailers-enabled" />
                     <span class="switch-track"></span>
                   </label>
                 </div>
@@ -250,6 +259,7 @@ class StreamingSettingsModal extends HTMLElement {
     this._el(".btn-save").addEventListener("click", () => this._save());
     this._el(".f-subtitle-provider").addEventListener("change", () => this._syncSubtitleProviderFields());
     this._el(".f-trailers-enabled").addEventListener("change", () => this._syncIntegrationToggleFields());
+    this._el(".f-title-trailers-enabled").addEventListener("change", () => this._syncIntegrationToggleFields());
     this._el(".f-ai-enabled").addEventListener("change", () => this._syncIntegrationToggleFields());
     this._el(".f-title-audio-enabled").addEventListener("change", () => this._syncTitleAudioFields());
     this._el(".f-title-audio-volume").addEventListener("input", () => this._updateTitleAudioVolumeLabel());
@@ -280,7 +290,7 @@ class StreamingSettingsModal extends HTMLElement {
       this.shadowRoot,
       ".modal-close, .tab-btn, .btn-reauth, .btn-fetch-libraries, .home-enabled, .server-all-row .sv-enabled, " +
         ".section-row .s-enabled, .section-row .s-label, .section-row .default-view-radio, " +
-        ".f-trailers-enabled, .f-youtube-key, .f-ai-enabled, .f-openrouter-key, .f-subtitle-provider, " +
+        ".f-trailers-enabled, .f-title-trailers-enabled, .f-youtube-key, .f-ai-enabled, .f-openrouter-key, .f-subtitle-provider, " +
         ".f-opensubtitles-username, .f-opensubtitles-password, .f-opensubtitles-key, " +
         ".f-ai-cadence, .f-max-genre-rows, .f-row-size, .f-title-audio-enabled, .f-title-audio-volume, .f-xbox-hdr-always-on, " +
         ".btn-cancel, .btn-save",
@@ -322,10 +332,12 @@ class StreamingSettingsModal extends HTMLElement {
   /* Toggling Trailers/AI Rows off only hides their input fields - it doesn't clear the
      underlying secret, so flipping back on later still has the credential in place (see
      _collectSecrets below, which reads the field values directly rather than clearing
-     them on toggle-off). */
+     them on toggle-off). The YouTube key is shared by both trailer toggles (home hero,
+     title info) - shown as long as either one might use it as a fallback, not just the
+     home hero one. */
   _syncIntegrationToggleFields() {
     this.shadowRoot.querySelectorAll(".trailers-fields").forEach((el) => {
-      el.style.display = this._el(".f-trailers-enabled").checked ? "" : "none";
+      el.style.display = this._el(".f-trailers-enabled").checked || this._el(".f-title-trailers-enabled").checked ? "" : "none";
     });
     this.shadowRoot.querySelectorAll(".ai-fields").forEach((el) => {
       el.style.display = this._el(".f-ai-enabled").checked ? "" : "none";
@@ -366,6 +378,7 @@ class StreamingSettingsModal extends HTMLElement {
     this._servers = config.servers || [];
     this._homeEnabled = config.home_enabled !== false;
     this._el(".f-trailers-enabled").checked = config.trailers_enabled !== false;
+    this._el(".f-title-trailers-enabled").checked = config.title_trailers_enabled !== false;
     this._el(".f-ai-enabled").checked = config.ai_rows_enabled !== false;
     this._el(".f-title-audio-enabled").checked = config.title_audio_enabled !== false;
     this._el(".f-title-audio-volume").value = String(Math.round((config.title_audio_volume ?? 0.65) * 100));
@@ -685,6 +698,7 @@ class StreamingSettingsModal extends HTMLElement {
       row_size: Number(this._el(".f-row-size").value) || 20,
       subtitle_provider: this._el(".f-subtitle-provider").value || "plex",
       trailers_enabled: this._el(".f-trailers-enabled").checked,
+      title_trailers_enabled: this._el(".f-title-trailers-enabled").checked,
       ai_rows_enabled: this._el(".f-ai-enabled").checked,
       xbox_hdr_always_on: this._el(".f-xbox-hdr-always-on").checked,
       title_audio_enabled: this._el(".f-title-audio-enabled").checked,

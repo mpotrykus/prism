@@ -105,6 +105,12 @@ export function mountPlayerChrome(controller, mediaEl, { gpuPipelines }) {
            belongs behind this same gpuPipelines gate rather than the stats overlay's
            unconditional call below. */
         controller._updateAudioLevelingPipeline();
+        /* Same reasoning - controller._autoCropEnabled was set from storedAutoCropEnabled()
+           in play(), but unlike the flags above there's no remembered per-video state to
+           resume here: detection itself (not just spinning up an existing pipeline) only
+           starts once this call runs, since it needs the real <video> element to sample a
+           frame from. */
+        controller._updateAutoCropPipeline();
     }
     /* Same reasoning - controller._statsOverlayEnabled was set from storedStatsOverlayEnabled() in
        play(). Reads the facade, so it works on either backend. */

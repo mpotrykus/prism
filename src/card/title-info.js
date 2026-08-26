@@ -5,6 +5,7 @@ import { WATCHED_ICON_SVG, wireArrowVisibility } from "./rows.js";
 import { PROFILE_ICON_SVG } from "./profile.js";
 import { pickNextEpisode, extractLogoUrl } from "./logic/catalog.js";
 import { createRowScroll } from "./row-scroll.js";
+import { resolveTrailerVideo } from "./logic/trailer.js";
 
 const THEME_AUDIO_FADE_MS = 900;
 const THEME_AUDIO_DEFAULT_VOLUME = 0.65;
@@ -294,6 +295,8 @@ export class TitleInfoController {
     this._closeBtn = shadowRoot.querySelector(".title-info-close");
     this._artEl = shadowRoot.querySelector(".title-info-art");
     this._artImgEl = shadowRoot.querySelector(".title-info-art-img");
+    this._trailerPlayBtn = shadowRoot.querySelector(".title-info-trailer-play-btn");
+    this._trailerMuteBtn = shadowRoot.querySelector(".title-info-trailer-mute-btn");
     this._progressEl = shadowRoot.querySelector(".title-info-progress");
     this._progressBar = this._progressEl.querySelector(".bar");
     this._titleEl = shadowRoot.querySelector(".title-info-title");
@@ -334,6 +337,21 @@ export class TitleInfoController {
     this._themeAudioEl = null;
     this._themeUrl = null;
     this._themePausedByVisibility = false;
+    this._themePausedByTrailer = false;
+    this._currentArtUrl = "";
+    this._trailerVideo = null;
+    this._trailerMuted = false;
+    this._trailerUserPaused = false;
+    this._trailerPausedByVisibility = false;
+    this._trailerPausedByPlayer = false;
+    this._ytIframeEl = null;
+    /* Same reasoning as hero.js's own trailerResolveCap - the YouTube search endpoint is
+       quota-limited (100/day), so this caps how many lookups a single modal session (not
+       just one item - every "More Like This"/episode/collection click that reopens this
+       same overlay for a different item reuses the same controller) will actually
+       attempt before just leaving later items on their static backdrop. */
+    this._trailerResolveCap = 8;
+    this._trailerResolveCount = 0;
 
     this._wire();
   }
@@ -358,6 +376,11 @@ export class TitleInfoController {
     if (!this.isOpen()) return;
     unlockScroll();
     this._stopThemeAudio();
+    this._stopTrailer();
+    /* Mirrors streaming-player-open/-close (see the listener in _wire below) - the hero
+       banner behind this modal has no idea it's been covered, so without this its own
+       trailer keeps autoplaying (audio and all) underneath the whole time this is open. */
+    window.dispatchEvent(new CustomEvent("streaming-title-info-close"));
     /* "open" (drives isOpen(), read by the reentrancy checks above and elsewhere) comes off
        immediately - only the visual fade lags behind, via "closing" (keeps display:block
        while the opacity transition below plays out) and dropping "visible" (see open(),
@@ -472,6 +495,153 @@ export class TitleInfoController {
       .catch(() => {});
   }
 
+  /* Same Ken-Burns drift as hero.js's own _applyHeroPan, applied to this modal's art
+     layer instead - see that function's own comment for the overflow-based duration math
+     shared verbatim here. Skips straight out (no-op) once a trailer is already showing
+     (checked via this._trailerVideo) - _showTrailer removes these same classes itself
+     when a trailer starts, but a slow-loading probe image landing after that point would
+     otherwise still stomp them back on. */
+  _applyArtPan(url) {
+    if (!url) return;
+    const expected = this._artImgEl.style.backgroundImage;
+    const probe = new Image();
+    probe.onload = () => {
+      if (this._artImgEl.style.backgroundImage !== expected) return;
+      if (this._trailerVideo) return;
+      const artW = this._artEl.clientWidth;
+      const artH = this._artEl.clientHeight;
+      const artAspect = artW / artH;
+      const imgAspect = probe.naturalWidth / probe.naturalHeight;
+      const horizontal = imgAspect > artAspect;
+      const scale = Math.max(artW / probe.naturalWidth, artH / probe.naturalHeight);
+      const overflowPx = horizontal ? probe.naturalWidth * scale - artW : probe.naturalHeight * scale - artH;
+      const PAN_SPAN_FRACTION = 0.4;
+      const MAX_PAN_SPEED_PX_PER_SEC = 30;
+      const duration = Math.max(9, (overflowPx * PAN_SPAN_FRACTION) / MAX_PAN_SPEED_PX_PER_SEC);
+      this._artImgEl.style.setProperty("--title-info-pan-duration", `${duration}s`);
+      this._artImgEl.classList.remove("pan-vertical", "pan-horizontal");
+      void this._artImgEl.offsetWidth;
+      this._artImgEl.classList.add(horizontal ? "pan-horizontal" : "pan-vertical");
+    };
+    probe.src = url;
+  }
+
+  /* Kicks off trailer resolution for whichever item this modal is currently showing -
+     fire-and-forget from open() (see that call site's own comment), so it runs alongside
+     the metadata fetch instead of blocking on it. Gated on title_trailers_enabled (see
+     settings.js) - a separate opt-out from the home hero's own trailers_enabled, since
+     someone might want the hero autoplaying trailers on Home without one starting every
+     time they open a title's info panel. Skips the lookup entirely when disabled, rather
+     than just gating the youtube fallback the way hero.js's own toggle does - "off" here
+     means no trailer at all in this modal, Plex extras included. */
+  async _resolveAndShowTrailer(item) {
+    const config = this._ctx.getConfig?.() || {};
+    if (config.title_trailers_enabled === false) return;
+    if (this._trailerResolveCount >= this._trailerResolveCap) return;
+    this._trailerResolveCount++;
+    const video = await resolveTrailerVideo(item, { plexFetch: this._ctx.plexFetch, config, youtubeEnabled: true });
+    if (this._item !== item || !video) return;
+    this._showTrailer(video);
+  }
+
+  /* Swaps the static art for an autoplaying trailer - same video/youtube-embed shapes
+     resolveTrailerVideo returns for the home hero (hero.js's own show()), rendered here
+     as a child of .title-info-art-img instead of a second crossfading layer, since this
+     modal only ever shows one item at a time (no auto-advance to cross-fade toward). The
+     title's own theme song (see _playThemeAudio) is paused rather than stopped while
+     this plays - _stopTrailer resumes it once the trailer ends or this modal moves on. */
+  _showTrailer(video) {
+    this._trailerVideo = video;
+    this._trailerUserPaused = false;
+    this._trailerMuted = false;
+    this._trailerMuteBtn.textContent = "🔊";
+    this._trailerPlayBtn.textContent = "⏸";
+    this._trailerPlayBtn.hidden = false;
+    this._trailerMuteBtn.hidden = false;
+    this._artEl.style.cursor = "pointer";
+    this._artImgEl.classList.remove("pan-vertical", "pan-horizontal");
+    if (this._themeAudioEl && !this._themeAudioEl.paused) {
+      this._themeAudioEl.pause();
+      this._themePausedByTrailer = true;
+    }
+    if (video.type === "plex") {
+      const videoEl = document.createElement("video");
+      videoEl.src = video.url;
+      videoEl.autoplay = true;
+      videoEl.playsInline = true;
+      videoEl.muted = this._trailerMuted;
+      videoEl.addEventListener("ended", () => this._endTrailer());
+      this._artImgEl.appendChild(videoEl);
+    } else if (video.type === "youtube") {
+      /* Same raw-postMessage handshake/highres-quality retry as hero.js's own YouTube
+         branch - see that file's comments for why (age-restriction filtering already
+         happened in resolveTrailerVideo, the pauseVideo-too-early stuck-embed trap, the
+         setPlaybackQuality retry loop). referrerpolicy is required for the same reason
+         documented there. */
+      const wrap = document.createElement("div");
+      wrap.className = "hero-yt-wrap";
+      wrap.innerHTML = `<iframe src="${video.embedUrl}" referrerpolicy="strict-origin-when-cross-origin" allow="autoplay; encrypted-media" allowfullscreen></iframe>`;
+      this._artImgEl.appendChild(wrap);
+      const ytIframe = wrap.querySelector("iframe");
+      this._ytIframeEl = ytIframe;
+      ytIframe.addEventListener("load", () => {
+        ytIframe.contentWindow?.postMessage(JSON.stringify({ event: "listening", id: "titleInfoTrailerPlayer" }), "*");
+        if (!this._trailerMuted) {
+          ytIframe.contentWindow?.postMessage(JSON.stringify({ event: "command", func: "unMute", args: [] }), "*");
+        }
+        for (let i = 0; i < 8; i++) {
+          setTimeout(() => {
+            ytIframe.contentWindow?.postMessage(JSON.stringify({ event: "command", func: "setPlaybackQuality", args: ["highres"] }), "*");
+          }, i * 250);
+        }
+      });
+    }
+  }
+
+  /* Tears down whatever trailer media is currently showing (video/iframe + buttons) and
+     resumes the theme song if this is what paused it - used on close, on opening a
+     different item, and (via _endTrailer below) once a trailer plays through to its own
+     end. Deliberately doesn't repaint the static backdrop's pan itself - open() already
+     does that for a fresh item, and _endTrailer (the only caller where the modal stays
+     open on the same still-showing art) does it explicitly right after calling this. */
+  _stopTrailer() {
+    this._trailerVideo = null;
+    this._ytIframeEl = null;
+    this._trailerUserPaused = false;
+    this._trailerPausedByVisibility = false;
+    this._trailerPausedByPlayer = false;
+    this._trailerPlayBtn.hidden = true;
+    this._trailerMuteBtn.hidden = true;
+    this._artImgEl.querySelectorAll("video, .hero-yt-wrap").forEach((el) => el.remove());
+    this._artEl.style.cursor = "";
+    if (this._themePausedByTrailer) {
+      this._themePausedByTrailer = false;
+      this._themeAudioEl?.play().catch(() => {});
+    }
+  }
+
+  /* Trailer reached its own natural end (Plex <video>'s "ended" event, or YouTube's
+     infoDelivery playerState 0 - see the message listener in _wire) - reverts to the
+     static backdrop with its pan resumed, rather than looping or closing the modal. */
+  _endTrailer() {
+    this._stopTrailer();
+    this._applyArtPan(this._currentArtUrl);
+  }
+
+  _updateTrailerPlayback() {
+    const playing = !this._trailerUserPaused && !this._trailerPausedByVisibility && !this._trailerPausedByPlayer;
+    this._trailerPlayBtn.textContent = playing ? "⏸" : "▶";
+    const videoEl = this._artImgEl.querySelector("video");
+    if (videoEl) {
+      if (playing) videoEl.play().catch(() => {});
+      else videoEl.pause();
+    }
+    if (this._ytIframeEl) {
+      const func = playing ? "playVideo" : "pauseVideo";
+      this._ytIframeEl.contentWindow?.postMessage(JSON.stringify({ event: "command", func, args: [] }), "*");
+    }
+  }
+
   /* The optimistic paint in open() (Play/Restart/Watched labels and visibility) is only
      a guess from the row/hero item's already-truncated fields - the real detail fetch can
      flip Restart/Watched from hidden to shown or change Play's label between that paint
@@ -552,6 +722,7 @@ export class TitleInfoController {
        the new track (if any) fades in once _renderDetail lands, overlapping with this
        fade-out into a crossfade. A fresh open (nothing playing yet) is a no-op. */
     this._playThemeAudio(null);
+    this._stopTrailer();
     this._resumeEpisodeKey = null;
     this._flatQueueContext = flatQueueContext;
     this._item = item;
@@ -566,9 +737,17 @@ export class TitleInfoController {
     this._progressBar.style.width = `${Math.round((item.progress || 0) * 100)}%`;
     this._updatePlayHistoryUI(!!(item.progress > 0 || item.hasHistory), null, !!(item.progress > 0));
     const art = item.art || item.image || "";
+    this._currentArtUrl = art;
     this._artImgEl.style.backgroundImage = art ? `url('${art}')` : "none";
     this._modal.style.setProperty("--title-info-bg", art ? `url('${art}')` : "none");
     this._updateArtParallax();
+    /* Restarts the pan animation fresh for this item rather than continuing mid-cycle -
+       same remove+reflow+re-add trick as hero.js's own _applyHeroPan, since this element
+       is long-lived (reused across every open()) rather than fresh per item. Skipped
+       entirely once a trailer actually starts (see _showTrailer) - that already has its
+       own motion. */
+    this._artImgEl.classList.remove("pan-vertical", "pan-horizontal");
+    if (art) this._applyArtPan(art);
     this._loadingOverlayEl.classList.remove("ready");
     const artReady = waitForImageLoad(art);
     this._titleEl.textContent = item.title || "";
@@ -603,6 +782,9 @@ export class TitleInfoController {
          a "More Like This" card) must keep pointing back at the original main-page element,
          not whatever was focused inside this modal a moment ago. */
       this._returnFocusEl = this._shadowRoot.activeElement;
+      /* Only fired on the closed->open transition too - a reopen for a different item
+         while already open (see above) shouldn't re-pause the hero, it's already paused. */
+      window.dispatchEvent(new CustomEvent("streaming-title-info-open"));
     }
     this._overlay.classList.remove("closing");
     this._overlay.classList.add("open");
@@ -647,6 +829,11 @@ export class TitleInfoController {
       this._revealWhenReady(item, artReady);
       return;
     }
+    /* Fire-and-forget, same as _revealWhenReady/_playThemeAudio - runs alongside the
+       metadata fetch below rather than blocking on it. _resolveAndShowTrailer re-checks
+       this._item itself before acting, so a stale resolution from an abandoned open()
+       call can't paint over a newer item. */
+    this._resolveAndShowTrailer(item);
     /* Playlists aren't part of library metadata (see the card's _fetchPlaylistsRaw) -
        their detail lives under /playlists/{ratingKey}, not /library/metadata/{ratingKey}
        like every other item type here. */
@@ -1328,11 +1515,23 @@ export class TitleInfoController {
        once playback ends and this modal is still showing the same item. */
     window.addEventListener("streaming-player-open", () => {
       this._themeAudioEl?.pause();
+      /* Same decoupling problem as the theme audio just above, for the trailer video/
+         iframe instead - it has no idea full-screen playback just started on top of it.
+         Guarded on !_trailerUserPaused so this never flips a trailer the user already
+         paused themselves back to "playing" once the player closes. */
+      if (this._trailerVideo && !this._trailerUserPaused && !this._trailerPausedByPlayer) {
+        this._trailerPausedByPlayer = true;
+        this._updateTrailerPlayback();
+      }
     });
     window.addEventListener("streaming-player-close", () => {
       this._refreshAfterPlayback();
       if (this.isOpen() && isControllerActive()) focusAfterPaint(this._playBtn);
       if (this._themeAudioEl?.paused) this._themeAudioEl.play().catch(() => {});
+      if (this._trailerPausedByPlayer) {
+        this._trailerPausedByPlayer = false;
+        this._updateTrailerPlayback();
+      }
     });
     /* The theme audio otherwise keeps playing after the user leaves the app or locks the
        phone (see hero.js's own visibilitychange handler for the same problem on the hero) -
@@ -1341,19 +1540,79 @@ export class TitleInfoController {
        switching to another app window on desktop does. _themePausedByVisibility (rather
        than unconditionally resuming on show) keeps this from fighting the player-open/close
        pause above - only resumes what visibility itself paused, never a track the player is
-       still covering. */
+       still covering. Same reasoning applied to the trailer video/iframe below. */
     document.addEventListener("visibilitychange", () => {
       const audio = this._themeAudioEl;
-      if (!audio) return;
-      if (document.hidden) {
-        if (!audio.paused) {
-          audio.pause();
-          this._themePausedByVisibility = true;
+      if (audio) {
+        if (document.hidden) {
+          if (!audio.paused) {
+            audio.pause();
+            this._themePausedByVisibility = true;
+          }
+        } else if (this._themePausedByVisibility) {
+          this._themePausedByVisibility = false;
+          audio.play().catch(() => {});
         }
-      } else if (this._themePausedByVisibility) {
-        this._themePausedByVisibility = false;
-        audio.play().catch(() => {});
       }
+      if (this._trailerVideo) {
+        if (document.hidden) {
+          if (!this._trailerUserPaused && !this._trailerPausedByPlayer && !this._trailerPausedByVisibility) {
+            this._trailerPausedByVisibility = true;
+            this._updateTrailerPlayback();
+          }
+        } else if (this._trailerPausedByVisibility) {
+          this._trailerPausedByVisibility = false;
+          this._updateTrailerPlayback();
+        }
+      }
+    });
+    /* Mirrors hero.js's own YouTube "infoDelivery" end-of-video listener - see that
+       file's comment for why this raw postMessage protocol (no official iframe_api) is
+       the only way to detect trailer-end. The e.source check is required now that two
+       independent YouTube embeds can exist on the page at once (this modal sits on top
+       of, not instead of, the hero) - without it, either trailer ending would wrongly
+       end the other one too, since both listeners otherwise see every "message" event
+       on the window with no other way to tell the embeds apart. */
+    window.addEventListener("message", (e) => {
+      if (e.source !== this._ytIframeEl?.contentWindow) return;
+      if (typeof e.data !== "string") return;
+      let data;
+      try {
+        data = JSON.parse(e.data);
+      } catch (err) {
+        return;
+      }
+      if (data.event === "infoDelivery" && data.info && data.info.playerState === 0) {
+        this._endTrailer();
+      }
+      const errorCode = data.event === "onError" ? data.info : data.info?.errorCode;
+      if (errorCode !== undefined) {
+        this._endTrailer();
+      }
+    });
+    this._trailerPlayBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      this._trailerUserPaused = !this._trailerUserPaused;
+      this._updateTrailerPlayback();
+    });
+    this._trailerMuteBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      this._trailerMuted = !this._trailerMuted;
+      this._trailerMuteBtn.textContent = this._trailerMuted ? "🔇" : "🔊";
+      const videoEl = this._artImgEl.querySelector("video");
+      if (videoEl) videoEl.muted = this._trailerMuted;
+      if (this._ytIframeEl) {
+        const func = this._trailerMuted ? "mute" : "unMute";
+        this._ytIframeEl.contentWindow?.postMessage(JSON.stringify({ event: "command", func, args: [] }), "*");
+      }
+    });
+    /* Clicking anywhere else over the trailer (not the mute/play buttons themselves)
+       toggles play/pause too, same as hero.js's own click-to-toggle on .hero. */
+    this._artEl.addEventListener("click", (e) => {
+      if (!this._trailerVideo) return;
+      if (e.target.closest(".title-info-trailer-play-btn, .title-info-trailer-mute-btn")) return;
+      this._trailerUserPaused = !this._trailerUserPaused;
+      this._updateTrailerPlayback();
     });
     this._closeBtn.addEventListener("click", () => this.close());
     this._overlay.addEventListener("click", (e) => {

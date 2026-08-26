@@ -177,6 +177,7 @@ export const AUTO_PLAY_STORAGE_KEY = "prism_player_auto_play_enabled";
 export const AUTO_QUALITY_STORAGE_KEY = "prism_player_auto_quality_enabled";
 export const AUTO_SKIP_INTRO_CREDITS_STORAGE_KEY = "prism_player_auto_skip_intro_credits_enabled";
 export const AUDIO_LEVELING_STORAGE_KEY = "prism_player_audio_leveling_enabled";
+export const AUTO_CROP_STORAGE_KEY = "prism_player_auto_crop_enabled";
 
 export function storedVolume() {
     const raw = Number(localStorage.getItem(VOLUME_STORAGE_KEY));
@@ -316,6 +317,16 @@ export function storedAutoSkipIntroCreditsEnabled() {
    never-touched user gets normalized volume from their first session. */
 export function storedAudioLevelingEnabled() {
     const stored = localStorage.getItem(AUDIO_LEVELING_STORAGE_KEY);
+    return stored === null ? true : stored === "1";
+}
+
+/* Same `stored === null` default-on reasoning as storedAutoPlayEnabled/
+   storedAudioLevelingEnabled above - unlike the quality/effect toggles, a never-touched
+   user should get baked-in black bars cropped automatically rather than opt in, since
+   a title with a matted-in border is otherwise wrapped in two stacked sets of bars (see
+   auto-crop.js's own header comment). */
+export function storedAutoCropEnabled() {
+    const stored = localStorage.getItem(AUTO_CROP_STORAGE_KEY);
     return stored === null ? true : stored === "1";
 }
 
@@ -512,4 +523,15 @@ export function audioLevelingIconMarkup() {
 
 export function sleepIconMarkup() {
     return '<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path d="M20 14.5A8.5 8.5 0 1 1 9.5 4a7 7 0 0 0 10.5 10.5z"/></svg>';
+}
+
+/* Standard two-L-bracket crop-tool glyph, not a magnifier/zoom icon - "Auto-Crop" removes
+   baked-in black bars (a crop), it doesn't magnify the picture, even though the on-screen
+   effect is a zoom (see auto-crop.js's own header comment for why cropping a border
+   necessarily renders as one). */
+export function autoCropIconMarkup() {
+    return `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <path d="M6 2v14a2 2 0 0 0 2 2h14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M18 22V8a2 2 0 0 0-2-2H2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>`;
 }

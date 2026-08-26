@@ -1,8 +1,10 @@
 import { media } from "../core/media-facade.js";
 import { postAspectMode } from "../xbox-bridge.js";
+import { applyAutoCropGeometry } from "../auto-crop.js";
 import {
     skipIconMarkup,
     audioLevelingIconMarkup,
+    autoCropIconMarkup,
     PLAYBACK_RATES,
     SLEEP_TIMER_PRESETS_MIN,
     FIT_MODES,
@@ -83,8 +85,15 @@ function renderAspectSection(controller, content, { setValue, collapse }) {
 
 /* "fit"/"cover"/"stretch" -> CSS object-fit's own keywords, except "stretch" itself
    (object-fit has no "stretch" value - "fill" is the one that ignores aspect ratio and
-   distorts the picture to exactly cover the box, which is what "Stretch" means here). */
-function cssObjectFitFor(mode) {
+   distorts the picture to exactly cover the box, which is what "Stretch" means here).
+   Exported for auto-crop.js's applyAutoCropGeometry, which needs to restore the correct
+   object-fit itself when a crop clears (Auto-Crop turned off, or detection found nothing
+   this title) - circular with that module (which this file already imports
+   applyAutoCropGeometry from above), safe for the same reason every other cycle in this
+   directory is: each side only reaches into the other from inside a function body
+   (applyAutoCropGeometry's own, here; applyFitMode's, there), never at module-evaluation
+   time. */
+export function cssObjectFitFor(mode) {
     return mode === "cover" ? "cover" : mode === "stretch" ? "fill" : "contain";
 }
 
@@ -110,6 +119,13 @@ export function applyFitMode(controller, mode) {
            a freshly-created canvas this same treatment for whatever mode is already
            current. */
         if (controller._shaderCanvas) controller._shaderCanvas.style.objectFit = cssFit;
+        /* Re-lands the crop (if Auto-Crop found one) on the new mode's own box - also
+           the one call site that covers a freshly-created shader canvas (ensureShaderPipeline
+           calls back into this function right after building it), so a crop already
+           detected before AI Upscaling/Sharpening/Color Boost got turned on still applies
+           to the canvas the moment it exists, not just the video underneath it. A no-op
+           when Auto-Crop is off or found nothing on this title. */
+        applyAutoCropGeometry(controller);
     } else {
         postAspectMode(mode);
     }
@@ -181,6 +197,24 @@ export function renderOptionsList(controller, list, onBack, setGoBack) {
             checked: controller._autoSkipIntroCreditsEnabled,
             onChange: (checked) => {
                 controller._setAutoSkipIntroCreditsEnabled(checked);
+                return checked ? "On" : null;
+            },
+        },
+    });
+    buildAccordionRow(list, state, {
+        key: "autoCrop",
+        label: "Auto-Crop Black Bars",
+        /* See auto-crop.js's own header comment - this only removes borders baked into the
+           source frame itself, never the legitimate outer letterbox/pillarbox Fit mode adds
+           for a genuine aspect-ratio mismatch against the viewport. On by default (see
+           storedAutoCropEnabled) - a title with a matted-in border looks wrapped in two
+           stacked sets of bars until this runs, not a look anyone would want to opt into. */
+        icon: autoCropIconMarkup(),
+        getValue: () => (controller._autoCropEnabled ? "On" : null),
+        toggle: {
+            checked: controller._autoCropEnabled,
+            onChange: (checked) => {
+                controller._setAutoCropEnabled(checked);
                 return checked ? "On" : null;
             },
         },

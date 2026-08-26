@@ -109,6 +109,7 @@ class PlexNetflixCard extends HTMLElement {
       landscape_every_nth: 4,
       ai_rows_cadence_ms: 7 * 24 * 60 * 60 * 1000,
       trailers_enabled: true,
+      title_trailers_enabled: true,
       ai_rows_enabled: true,
       ...config,
     };
@@ -291,7 +292,11 @@ class PlexNetflixCard extends HTMLElement {
       <div class="title-info-overlay" tabindex="-1">
         <div class="title-info-modal">
           <button type="button" class="title-info-close" aria-label="Close">‹</button>
-          <div class="title-info-art"><div class="title-info-art-img"></div></div>
+          <div class="title-info-art">
+            <div class="title-info-art-img"></div>
+          </div>
+          <button type="button" class="title-info-trailer-play-btn" aria-label="Play/pause trailer" hidden>⏸</button>
+          <button type="button" class="title-info-trailer-mute-btn" aria-label="Toggle trailer sound" hidden>🔊</button>
           <div class="title-info-progress" hidden><div class="bar"></div></div>
           <div class="title-info-body">
             <div class="title-info-header">

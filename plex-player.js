@@ -34,6 +34,7 @@ import { setShaderStrength, setColorBoostSaturationStrength, setColorBoostContra
 import { setAmbientEnabled, setAmbientOpacity, updateAmbientPipeline, stopAmbientLoop } from "./src/player/ambient-pipeline.js";
 import { setStatsOverlayEnabled, updateStatsOverlayPipeline } from "./src/player/stats-overlay.js";
 import { setAudioLevelingEnabled, updateAudioLevelingPipeline } from "./src/player/audio-leveling.js";
+import { setAutoCropEnabled, updateAutoCropPipeline } from "./src/player/auto-crop.js";
 import {
     storedAmbientEnabled,
     storedAmbientOpacity,
@@ -52,6 +53,7 @@ import {
     storedAutoQualityEnabled,
     storedAutoSkipIntroCreditsEnabled,
     storedAudioLevelingEnabled,
+    storedAutoCropEnabled,
     AUTO_PLAY_STORAGE_KEY,
     AUTO_SKIP_INTRO_CREDITS_STORAGE_KEY,
 } from "./src/player/ui/shared.js";
@@ -198,6 +200,11 @@ class StreamingPlayerController {
         this._statsOverlayEl = null;
         this._statsOverlayIntervalId = null;
         this._audioLevelingEnabled = false;
+        this._autoCropEnabled = false;
+        this._autoCropInsets = null;
+        this._autoCropResizeHandler = null;
+        this._autoCropDetectScheduled = false;
+        this._autoCropBackdropEl = null;
         this._autoPlayEnabled = false;
         this._autoSkipIntroCreditsEnabled = false;
         this._autoQualityEnabled = false;
@@ -522,6 +529,12 @@ class StreamingPlayerController {
         /* No per-video/genre concern to resolve either - same immediate-persistence model
            as ambient/color boost/stats overlay above (see audio-leveling.js). */
         this._audioLevelingEnabled = storedAudioLevelingEnabled();
+        /* Unlike the flag above, _autoCropInsets IS a per-video concern - a baked-in border
+           is a property of this title's own source file, not a global setting, so it's
+           reset to null here and re-detected fresh every title (see auto-crop.js's
+           updateAutoCropPipeline, called once playback actually starts). */
+        this._autoCropEnabled = storedAutoCropEnabled();
+        this._autoCropInsets = null;
         this._autoPlayEnabled = storedAutoPlayEnabled();
         this._autoSkipIntroCreditsEnabled = storedAutoSkipIntroCreditsEnabled();
         /* No per-video/genre concern to resolve either - see core/abr.js. Reset every
@@ -907,6 +920,14 @@ class StreamingPlayerController {
 
     _updateAudioLevelingPipeline() {
         return updateAudioLevelingPipeline(this);
+    }
+
+    _setAutoCropEnabled(enabled) {
+        return setAutoCropEnabled(this, enabled);
+    }
+
+    _updateAutoCropPipeline() {
+        return updateAutoCropPipeline(this);
     }
 
     /* Same "toggle IS the persisted setting" immediate-persistence model as

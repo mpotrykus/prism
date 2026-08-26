@@ -100,6 +100,35 @@
   top: -12%; height: 124%;
   background-size: cover; background-position: center;
 }
+/* Same Ken-Burns drift as the home hero's .hero-media (hero.css), applied to this art
+   layer instead - reuses hero.css's own keyframes rather than redefining them, since
+   both files land in the same merged shadow-root stylesheet (see
+   plex-netflix-card.js's STYLE array). Only runs while showing a static backdrop -
+   title-info.js removes these classes the moment a trailer starts playing, same as the
+   hero does. */
+.title-info-art-img.pan-vertical { animation: hero-pan-vertical var(--title-info-pan-duration, 9s) ease-in-out infinite alternate; }
+.title-info-art-img.pan-horizontal { animation: hero-pan-horizontal var(--title-info-pan-duration, 9s) ease-in-out infinite alternate; }
+.title-info-art-img video { width: 100%; height: 100%; object-fit: cover; display: block; }
+/* .hero-yt-wrap (hero.css) is reused as-is for the YouTube-fallback trailer embed here -
+   same centered/oversized iframe sizing trick, no title-info-specific version needed. */
+/* Mirrors .hero-mute-btn/.hero-play-btn (hero.css), bottom-right over the art like the hero -
+   but, like .title-info-progress below, these have to live as siblings of .title-info-art
+   rather than children of it: .title-info-art has a mask fading it to transparent near its own
+   bottom edge, and a bottom-right button living inside that box would fade away right along
+   with the image instead of staying solid and legible. Positioned off .title-info-modal's
+   shared --title-info-art-h var for the same reason .title-info-progress is, sitting just
+   above that progress bar (top: art-h - 24px) rather than overlapping it. */
+.title-info-trailer-mute-btn, .title-info-trailer-play-btn {
+  position: absolute; top: calc(var(--title-info-art-h) - 90px); z-index: 2;
+  width: 40px; height: 40px; border-radius: 50%;
+  border: 1.5px solid rgba(var(--color-fg-rgb), 0.6);
+  background: rgba(var(--color-panel-rgb), 0.5);
+  color: var(--color-fg); font-size: 17px; cursor: pointer;
+}
+.title-info-trailer-mute-btn:hover, .title-info-trailer-play-btn:hover { background: rgba(var(--color-panel-rgb), 0.8); }
+.title-info-trailer-mute-btn[hidden], .title-info-trailer-play-btn[hidden] { display: none; }
+.title-info-trailer-mute-btn { right: 32px; }
+.title-info-trailer-play-btn { right: 82px; }
 /* Darkening scrim only now - the fade-to-transparent job moved to the mask above. Left-side
    scrim for text legibility over whatever the image looks like there, plus a gentler bottom
    darkening (capped well short of fully opaque) so the title/meta text overlaid lower down still

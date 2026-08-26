@@ -1,6 +1,7 @@
 import { AMBIENT_STORAGE_KEY, AMBIENT_OPACITY_STORAGE_KEY } from "./ui/shared.js";
 import { hasNativePlayer, platformTag } from "./core/platform.js";
 import { media } from "./core/media-facade.js";
+import { cropAdjustedAspectRatio } from "./auto-crop.js";
 /* Circular with xbox-bridge.js (which imports applyXboxAmbientColors/teardownAmbient from this
    file, while this file imports postAmbientLighting from it) - safe for the same reason as the
    other cycles in src/player/: postAmbientLighting is only referenced inside updateAmbientPipeline's
@@ -83,16 +84,21 @@ const AMBIENT_BRIGHTNESS_BOOST = 1.3;
    smoothing entirely (each sample fully replaces the last); lower values damp harder at
    the cost of lagging further behind real scene changes. */
 const AMBIENT_SMOOTHING_FACTOR = 0.3;
-/* Fixed reach (not scaled to the actual letterbox/pillarbox gap size) - lets the glow's
-   own falloff distance stay constant regardless of how large or small a given video's
-   gap happens to be, rather than always spanning exactly picture-edge-to-viewport-edge.
-   A gap narrower than this only shows the falloff curve's early, still-bright portion
-   instead of squeezing a full fade into a tiny span; a gap wider than this lets the glow
-   fully fade to black before reaching the true viewport edge, leaving a plain black band
-   beyond its own reach - both intentional, matching how a real light source's glow
-   doesn't stretch to always exactly reach the far wall. CSS gradient stop positions
-   support raw px (not just %), so this works as a literal, viewport-size-independent
-   distance the same way AMBIENT_BLUR_PX's own blur radius above already is. */
+/* Baseline reach, not a hard cap - lets the glow's own falloff distance stay constant for
+   an ordinary gap rather than always spanning exactly picture-edge-to-viewport-edge (a gap
+   narrower than this only shows the falloff curve's early, still-bright portion instead of
+   squeezing a full fade into a tiny span, which is the intended look for a normal
+   letterbox). layoutGlowPanels' own `setReach` stretches this UP (never down) to at least
+   the real gap size on a per-edge basis, so a gap wider than this constant still fades all
+   the way to the true viewport edge instead of holding the last stop's (fully transparent)
+   color for whatever's left beyond it - real symptom this fixed: a title cropped down to a
+   narrower effective aspect ratio than before (see auto-crop.js) can leave a residual
+   letterbox gap wider than this baseline on one axis, and a bare fixed reach left a plain
+   black band across the rest of it even with ambient lighting on, which read as "the crop
+   didn't work" even though the crop itself was working correctly - see this feature's own
+   memory entry for the full diagnosis. CSS gradient stop positions support raw px (not just
+   %), so this works as a literal, viewport-size-independent distance the same way
+   AMBIENT_BLUR_PX's own blur radius above already is. */
 const AMBIENT_GLOW_REACH_PX = 240;
 /* Sampled points along a cosine ease (0.5*(1+cos(pi*t))) rather than a flat-hold-then-
    linear-drop - continuously eases from full opacity to fully transparent with no kink
@@ -318,7 +324,11 @@ function computePictureRect(controller) {
        native's own loadedMetadata event. */
     const video = controller._videoEl || media(controller);
     const viewportAR = vw / vh;
-    const videoAR = video && video.videoWidth && video.videoHeight ? video.videoWidth / video.videoHeight : viewportAR;
+    const rawAR = video && video.videoWidth && video.videoHeight ? video.videoWidth / video.videoHeight : viewportAR;
+    /* Auto-Crop is web-only (see auto-crop.js's own header comment) - cropAdjustedAspectRatio
+       itself already no-ops correctly on Xbox (controller._autoCropInsets is never set
+       there), so this needs no separate platform check of its own. */
+    const videoAR = cropAdjustedAspectRatio(controller, rawAR);
     let w;
     let h;
     if (videoAR > viewportAR) {
@@ -361,6 +371,21 @@ function layoutGlowPanels(controller) {
     const bottomGap = Math.max(0, vh - bottom);
     const leftGap = Math.max(0, rect.left);
     const rightGap = Math.max(0, vw - right);
+
+    /* Never shorter than the baseline (preserves the normal-gap look exactly), never
+       shorter than the real gap either (see AMBIENT_GLOW_REACH_PX's own comment) - stashed
+       on each edge's zones for glowGradient (via applyZoneColors) to read, since the color-
+       sampling loop that actually builds each zone's gradient runs on its own throttled
+       cadence (see AMBIENT_SAMPLE_INTERVAL_MS), not every tick the way this layout pass
+       does, and has no other route back to this frame's own gap measurements. */
+    const setReach = (edge, gap) => {
+        const reach = String(Math.max(AMBIENT_GLOW_REACH_PX, gap));
+        panels[edge].zones.forEach((zone) => { zone.dataset.glowReach = reach; });
+    };
+    setReach("top", topGap);
+    setReach("bottom", bottomGap);
+    setReach("left", leftGap);
+    setReach("right", rightGap);
 
     /* clip is sized to the TRUE gap only, in viewport coordinates - never overscan, and never more
        than the real gap. When a side has no gap at all, clip collapses to 0 and hides its wrapper
@@ -472,7 +497,11 @@ function smoothZones(prevZones, rawZones) {
 
 function applyZoneColors(edgePanel, colors) {
     edgePanel.zones.forEach((zone, i) => {
-        zone.style.background = glowGradient(zone.dataset.gradientDir, colors[i]);
+        /* Falls back to the baseline if layoutGlowPanels hasn't stamped a reach onto this
+           zone yet - startAmbientLoop always runs a layout pass before the first color
+           sample, so this only ever matters for a defensive first call. */
+        const reach = Number(zone.dataset.glowReach) || AMBIENT_GLOW_REACH_PX;
+        zone.style.background = glowGradient(zone.dataset.gradientDir, colors[i], reach);
     });
 }
 
@@ -498,23 +527,25 @@ function sampleZones(data, stride, axisLen, thickness, isHorizontalEdge, atStart
 }
 
 /* Explicit px stop positions (not %, unlike a plain 0%-100% fade) so the fade's own
-   distance is fixed at AMBIENT_GLOW_REACH_PX regardless of the panel's own box size -
-   see that constant's own comment. Each stop's alpha follows a cosine ease rather than
-   the old flat-hold-then-linear-drop shape. Beyond the last stop's own position, the
-   gradient holds that stop's (fully transparent) color automatically - CSS's normal
-   behavior for any point past a gradient's final explicit stop - which is exactly the
-   "plain black beyond the glow's own reach" effect when the panel's box is larger than
-   AMBIENT_GLOW_REACH_PX. All positions are offset by AMBIENT_BLUR_PX to match
+   distance is fixed regardless of the panel's own box size - `reach` is layoutGlowPanels'
+   own per-edge value (at least AMBIENT_GLOW_REACH_PX, stretched further for a wider real
+   gap - see that constant's own comment), not the bare constant, so the fade always
+   actually reaches this edge's true gap width instead of potentially falling short of it.
+   Each stop's alpha follows a cosine ease rather than the old flat-hold-then-linear-drop
+   shape. Beyond the last stop's own position, the gradient holds that stop's (fully
+   transparent) color automatically - CSS's normal behavior for any point past a
+   gradient's final explicit stop - which no longer leaves a visible black band for any
+   gap `reach` already covers. All positions are offset by AMBIENT_BLUR_PX to match
    layoutGlowPanels' own overscan - CSS holds the *first* stop's color for anything
    before its own position too, so this doesn't shift where full-opacity visually starts
    (still the true picture edge), it just gives that same full-opacity color real,
    non-transparent margin for AMBIENT_BLUR_PX worth of blur to sample from. */
-function glowGradient(direction, [r, g, b]) {
+function glowGradient(direction, [r, g, b], reach) {
     const stops = [];
     for (let i = 0; i < AMBIENT_FALLOFF_STEPS; i++) {
         const t = i / (AMBIENT_FALLOFF_STEPS - 1);
         const alpha = 0.5 * (1 + Math.cos(Math.PI * t));
-        const pos = AMBIENT_BLUR_PX + t * AMBIENT_GLOW_REACH_PX;
+        const pos = AMBIENT_BLUR_PX + t * reach;
         stops.push(`rgba(${r}, ${g}, ${b}, ${alpha.toFixed(3)}) ${pos.toFixed(1)}px`);
     }
     return `linear-gradient(${direction}, ${stops.join(", ")})`;
