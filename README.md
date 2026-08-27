@@ -49,7 +49,7 @@ fill them from titles you actually own.
 
 ### Per-library views
 
-Each Plex library gets its own tab down the left side, named however you named it in Plex.
+Each Plex library gets its own tab in the top nav, named however you named it in Plex.
 
 ![Movies library](docs/media/library.jpg)
 
@@ -137,7 +137,7 @@ Everything else is optional:
 | **Subtitle provider** | Where subtitle searches come from |
 
 If you share a Plex server with family, Prism also picks up your **Plex Home profiles** — switch
-between them from the sidebar, with a PIN prompt for the profiles that have one.
+between them from the account menu, with a PIN prompt for the profiles that have one.
 
 ---
 
