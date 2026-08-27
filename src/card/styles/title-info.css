@@ -325,6 +325,28 @@
     color: rgba(var(--color-fg-rgb), 0.3);
 }
 
+/* "Available on" tag - only shown when title-info.js resolves more than one source
+   server for this item (see catalog.js's mapItem `sources`), so this stays hidden for the
+   common single-server case. */
+.title-info-sources {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    margin: -8px 0 20px;
+}
+
+.title-info-source-chip {
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    color: rgba(var(--color-fg-rgb), 0.75);
+    background: rgba(var(--color-fg-rgb), 0.1);
+    border: 1px solid rgba(var(--color-fg-rgb), 0.14);
+    border-radius: 999px;
+    padding: 3px 10px;
+}
+
 .title-info-actions {
     display: flex;
     align-items: center;

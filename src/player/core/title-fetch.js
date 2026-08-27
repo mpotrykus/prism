@@ -26,7 +26,14 @@ export async function fetchQueuedTitle(plexUrl, plexToken, ratingKey) {
         durationMs: meta.duration || 0,
         markers: meta.Marker || [],
         chapters: meta.Chapter || [],
-        mediaVersions: extractMediaVersions(meta.Media),
+        /* Wrapped as a single group even though this fetch is always same-server (a
+           queue - see this function's own header comment - never spans servers) so
+           session.mediaVersions stays one consistent shape everywhere it's read - see
+           title-info.js's buildCrossServerVersions for the multi-group case and
+           chrome-menu.js's renderVersionSection for the reader. `server: null` is fine
+           here: renderVersionSection only shows a server-name header when there's more
+           than one group, which a queue jump's own single group never is. */
+        mediaVersions: [{ server: null, ratingKey: meta.ratingKey, key: meta.key, plexUrl, plexToken, versions: extractMediaVersions(meta.Media) }],
         audioStreams: extractAudioStreams(meta.Media, 0),
         isHdr: isHdrVideo(meta.Media, 0),
         bifIndexPath: bifIndexPath(meta.Media, 0),

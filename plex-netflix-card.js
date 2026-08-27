@@ -315,6 +315,7 @@ class PlexNetflixCard extends HTMLElement {
             <div class="title-info-header">
               <div class="title-info-title"></div>
               <div class="title-info-meta"></div>
+              <div class="title-info-sources" hidden></div>
             </div>
             <div class="title-info-actions">
               <button type="button" class="title-info-play">▶ Play</button>

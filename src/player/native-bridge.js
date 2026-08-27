@@ -346,13 +346,22 @@ export function buildPlaybackPayload(controller, streamUrl, startOffsetMs) {
            wraps the MediaSource in a MediaPlaybackItem (needed for AudioTracks local
            switching) when it's true - see PlayerBridge.cs's "play"/"switchTitle" cases. */
         isDirectPlay: !!controller._session.isDirectPlay,
-        /* {mediaIndex, label} per Plex Media[] entry (see title-info.js's
-           extractMediaVersions) plus the currently-selected index/cap - PlayerUiHelper's
-           Video Quality menu rebuilds the transcode URL itself when the user picks one
-           (see PlayerActivity.switchMediaVersion/switchQualityCap), it never needs the
-           raw Plex Media shape, just enough to list options and checkmark the current
+        /* {mediaIndex, label} per Plex Media[] entry, CURRENT SERVER'S GROUP ONLY - see
+           title-info.js's buildCrossServerVersions, session.mediaVersions is now one
+           group per source server, but PlayerActivity.switchMediaVersion only ever
+           rewrites currentUrl's own query params in place (see its own comment - it has
+           no notion of a different server/ratingKey to switch to at all). Sending it
+           another server's group would let the user pick an entry that silently reloads
+           the WRONG server's file under the current one's URL. Cross-server switching is
+           web-only for now (see chrome-menu.js's renderVersionSection) - a native grouped
+           picker + a real PlayerActivity title-switch call is a reasonable fast-follow,
+           not blocking. PlayerUiHelper's Video Quality menu never needs the raw Plex
+           Media shape either way, just enough to list options and checkmark the current
            one, same split as audioStreams above. */
-        mediaVersions: (controller._session.mediaVersions || []).map((v) => ({
+        mediaVersions: (
+            controller._session.mediaVersions?.find((g) => String(g.ratingKey) === String(controller._session.ratingKey))
+                ?.versions || []
+        ).map((v) => ({
             mediaIndex: v.mediaIndex,
             label: v.label,
         })),

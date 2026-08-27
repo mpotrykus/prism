@@ -4,6 +4,7 @@ import { paintWatchlistButton } from "./watchlist.js";
 import { WATCHED_ICON_SVG, wireArrowVisibility } from "./rows.js";
 import { PROFILE_ICON_SVG } from "./profile.js";
 import { pickNextEpisode, extractLogoUrl } from "./logic/catalog.js";
+import { matchEpisodesAcrossServers, dedupeSourcesByServer } from "./logic/cross-server.js";
 import { createRowScroll } from "./row-scroll.js";
 import { resolveTrailerVideo } from "./logic/trailer.js";
 
@@ -116,6 +117,56 @@ export function extractMediaVersions(media) {
     if (m.bitrate) parts.push(`${(m.bitrate / 1000).toFixed(1)} Mbps`);
     return { mediaIndex: i, label: parts.join(" · ") || `Version ${i + 1}` };
   });
+}
+
+/* Builds the player's server-grouped Version menu data (see chrome-menu.js's
+   renderVersionSection) for an item that might exist on more than one server - see
+   src/card/logic/cross-server.js. The current server's own versions come from `media`
+   (already-fetched metadata, no extra request) and always sort first, since a
+   single-source item - by far the common case - costs nothing extra here. Only when
+   `item.sources` actually lists more than one server does this fetch each OTHER source
+   server's own full metadata (parallel, same best-effort-per-item idiom as
+   title-fetch.js's fetchQueueItemsMetadata) to list its versions too; a failed/
+   unreachable other server just drops that server's group rather than failing the whole
+   menu, same tolerance every other per-server fetch in this app has (see
+   src/card/data.js's fetchOnDeckRaw). */
+export async function buildCrossServerVersions(item, media) {
+  const ownServer = item.server || null;
+  const ownGroup = {
+    server: ownServer,
+    ratingKey: item.ratingKey,
+    key: item.key,
+    plexUrl: ownServer?.url,
+    plexToken: ownServer?.token,
+    versions: extractMediaVersions(media),
+  };
+  const otherSources = dedupeSourcesByServer(item.sources || []).filter((s) => s.server?.id && s.server.id !== ownServer?.id);
+  if (!otherSources.length) return [ownGroup];
+
+  const otherGroups = await Promise.all(
+    otherSources.map(async (s) => {
+      try {
+        const url = new URL(`${s.server.url}/library/metadata/${s.ratingKey}`);
+        url.searchParams.set("X-Plex-Token", s.server.token);
+        const res = await fetch(url, { headers: { Accept: "application/json" } });
+        if (!res.ok) return null;
+        const data = await res.json();
+        const otherMeta = data?.MediaContainer?.Metadata?.[0];
+        if (!otherMeta) return null;
+        return {
+          server: s.server,
+          ratingKey: otherMeta.ratingKey,
+          key: otherMeta.key,
+          plexUrl: s.server.url,
+          plexToken: s.server.token,
+          versions: extractMediaVersions(otherMeta.Media),
+        };
+      } catch (e) {
+        return null;
+      }
+    })
+  );
+  return [ownGroup, ...otherGroups.filter(Boolean)];
 }
 
 /* Plex's Media[].Part[].Indexes carries the BIF trickplay index path (used for the
@@ -301,6 +352,7 @@ export class TitleInfoController {
     this._progressBar = this._progressEl.querySelector(".bar");
     this._titleEl = shadowRoot.querySelector(".title-info-title");
     this._metaEl = shadowRoot.querySelector(".title-info-meta");
+    this._sourcesEl = shadowRoot.querySelector(".title-info-sources");
     this._playBtn = shadowRoot.querySelector(".title-info-play");
     this._restartBtn = shadowRoot.querySelector(".title-info-restart-btn");
     this._watchedBtn = shadowRoot.querySelector(".title-info-watched-btn");
@@ -327,6 +379,11 @@ export class TitleInfoController {
     this._chapters = [];
     this._media = [];
     this._flatItems = null;
+    /* Per-episode cross-server source matches for the currently-open show, resolved
+       async and non-blocking by _loadSeasons (see _getEpisodeSourceMatches) - reset here
+       so a stale match from whatever show was open before doesn't leak onto this one
+       before its own fetch resolves. */
+    this._episodeSourceMatches = null;
     this._pendingEpisodeFocus = null;
     this._resumeEpisodeKey = null;
     this._flatQueueContext = null;
@@ -687,6 +744,10 @@ export class TitleInfoController {
          silently fetching the wrong server's metadata whenever the episode that led here
          (e.g. a Continue Watching row) lives on a shared, non-owned server. */
       server: item.server || null,
+      /* Approximate but reasonable: this episode being collapsed cross-server (see
+         catalog.js's mapItem) implies its show is too. Actual show-level source
+         resolution doesn't exist yet - see cross-server.js's own header comment. */
+      sources: item.sources || null,
     };
     await this.open(showItem, source);
     if (this._item === showItem) {
@@ -733,6 +794,11 @@ export class TitleInfoController {
     this._chapters = [];
     this._media = [];
     this._flatItems = null;
+    /* Per-episode cross-server source matches for the currently-open show, resolved
+       async and non-blocking by _loadSeasons (see _getEpisodeSourceMatches) - reset here
+       so a stale match from whatever show was open before doesn't leak onto this one
+       before its own fetch resolves. */
+    this._episodeSourceMatches = null;
     this._progressEl.hidden = !(item.progress > 0);
     this._progressBar.style.width = `${Math.round((item.progress || 0) * 100)}%`;
     this._updatePlayHistoryUI(!!(item.progress > 0 || item.hasHistory), null, !!(item.progress > 0));
@@ -752,6 +818,14 @@ export class TitleInfoController {
     const artReady = waitForImageLoad(art);
     this._titleEl.textContent = item.title || "";
     this._metaEl.innerHTML = item.subtitle ? `<span>${this._ctx.escape(item.subtitle)}</span>` : "";
+    /* Already known from the row-clicked item's own mapItem shape (see catalog.js's
+       mapItem `sources`, populated by cross-server.js's collapseByGuid at row-build time)
+       - no detail fetch needed to show this, unlike most of the rest of this modal. Items
+       reached via a structurally single-server endpoint (a show's own /related "Similar"
+       fetch, a deep link) just carry their own one source, which correctly shows no tag
+       rather than a stale/guessed one. */
+    this._sources = item.sources || [];
+    this._renderSourcesTag();
     this._summaryEl.textContent = "";
     this._episodesEl.innerHTML = "";
     this._episodesEl.classList.remove("title-info-row-wrap");
@@ -850,6 +924,27 @@ export class TitleInfoController {
     this._revealWhenReady(item, artReady);
   }
 
+  /* "Available on ServerA, ServerB" pill row - hidden only when this item's sole source
+     is the user's own (owned) server, since "available on PotrykusPlex" isn't
+     information for someone who only browses PotrykusPlex. Every other case shows it:
+     a single REMOTE-only source (own server doesn't even have it) is just as worth
+     surfacing as a multi-server one. dedupeSourcesByServer is a defensive second pass -
+     see that function's own comment - resolveSources (cross-server.js) is the real fix
+     for the same server showing up more than once here. */
+  _renderSourcesTag() {
+    const sources = dedupeSourcesByServer(this._sources || []);
+    const onlyMyServer = sources.length === 1 && !!sources[0].server?.owned;
+    if (!sources.length || onlyMyServer) {
+      this._sourcesEl.hidden = true;
+      this._sourcesEl.innerHTML = "";
+      return;
+    }
+    this._sourcesEl.hidden = false;
+    this._sourcesEl.innerHTML = sources
+      .map((s) => `<span class="title-info-source-chip">${this._ctx.escape(s.server?.name || "Server")}</span>`)
+      .join("");
+  }
+
   _renderDetail(meta) {
     this._duration = meta.duration || null;
     this._viewOffset = meta.viewOffset || 0;
@@ -942,12 +1037,50 @@ export class TitleInfoController {
     this._seasonNav.focusFirst();
   }
 
+  /* Resolves per-episode cross-server source matches for this show (see
+     matchEpisodesAcrossServers), fire-and-forget from _loadSeasons - never gates the
+     season/episode UI on it. Only fetches at all when the show itself is already known to
+     be cross-server (this._sources, set in open() from the row-clicked item - see
+     catalog.js's mapItem `sources`); a single-source show costs nothing extra here, same
+     "zero cost in the common case" rule buildCrossServerVersions follows for movies. */
+  async _fetchEpisodeSourceMatches(showRatingKey) {
+    const ownServer = this._item?.server || null;
+    const otherShowSources = dedupeSourcesByServer(this._sources || []).filter((s) => s.server?.id && s.server.id !== ownServer?.id);
+    if (!otherShowSources.length) return new Map();
+    try {
+      const [ownData, otherLeaves] = await Promise.all([
+        this._ctx.plexFetch(`/library/metadata/${showRatingKey}/allLeaves`),
+        Promise.all(
+          otherShowSources.map(async (s) => {
+            try {
+              const url = new URL(`${s.server.url}/library/metadata/${s.ratingKey}/allLeaves`);
+              url.searchParams.set("X-Plex-Token", s.server.token);
+              const res = await fetch(url, { headers: { Accept: "application/json" } });
+              if (!res.ok) return { server: s.server, episodes: [] };
+              const data = await res.json();
+              return { server: s.server, episodes: data?.MediaContainer?.Metadata || [] };
+            } catch (e) {
+              return { server: s.server, episodes: [] };
+            }
+          })
+        ),
+      ]);
+      const ownEpisodes = ownData?.MediaContainer?.Metadata || [];
+      return matchEpisodesAcrossServers(ownEpisodes, ownServer, otherLeaves);
+    } catch (e) {
+      return new Map();
+    }
+  }
+
   async _loadSeasons(showRatingKey) {
     try {
       const data = await this._ctx.plexFetch(`/library/metadata/${showRatingKey}/children`);
       const seasons = (data?.MediaContainer?.Metadata || []).filter((s) => s.index != null);
       if (!seasons.length || this._item?.ratingKey !== showRatingKey) return;
 
+      this._fetchEpisodeSourceMatches(showRatingKey).then((matches) => {
+        if (this._item?.ratingKey === showRatingKey) this._episodeSourceMatches = matches;
+      });
       this._episodesEl.innerHTML = "";
       const seasonLabel = (s) => s.title || `Season ${s.index}`;
       let trigger = null;
@@ -1151,7 +1284,7 @@ export class TitleInfoController {
       markers: this._markers,
       chapters: this._chapters,
       mediaIndex,
-      mediaVersions: extractMediaVersions(this._media),
+      mediaVersions: await buildCrossServerVersions(item, this._media),
       audioStreams: extractAudioStreams(this._media, mediaIndex),
       isHdr: isHdrVideo(this._media, mediaIndex),
       subtitleTracks: extractSubtitleTracks(this._media, mediaIndex),
@@ -1246,13 +1379,20 @@ export class TitleInfoController {
       const meta = data?.MediaContainer?.Metadata?.[0];
       if (!meta) return;
       const queueIndex = queueRatingKeys.findIndex((k) => String(k) === String(meta.ratingKey));
-      await this._ctx.onPlayItem(this._ctx.mapItem(meta, true), {
+      const mappedEpisode = this._ctx.mapItem(meta, true);
+      /* Overrides mapItem's own single-entry default when _loadSeasons' fire-and-forget
+         match has resolved by now (see _fetchEpisodeSourceMatches) - a fast click before
+         it resolves just falls back to that default, same best-effort tolerance as the
+         match fetch itself. */
+      const episodeSources = this._episodeSourceMatches?.get(String(mappedEpisode.ratingKey));
+      if (episodeSources) mappedEpisode.sources = episodeSources;
+      await this._ctx.onPlayItem(mappedEpisode, {
         durationMs: meta.duration || null,
         startOffsetMs: restart ? 0 : meta.viewOffset || 0,
         source: "local",
         markers: meta.Marker || [],
         chapters: meta.Chapter || [],
-        mediaVersions: extractMediaVersions(meta.Media),
+        mediaVersions: await buildCrossServerVersions(mappedEpisode, meta.Media),
         audioStreams: extractAudioStreams(meta.Media, 0),
         isHdr: isHdrVideo(meta.Media, 0),
         subtitleTracks: extractSubtitleTracks(meta.Media, 0),
@@ -1283,13 +1423,14 @@ export class TitleInfoController {
       const data = await this._ctx.plexFetch(`/library/metadata/${rawItems[index].ratingKey}`, { includeChapters: 1, includeMarkers: 1 });
       const meta = data?.MediaContainer?.Metadata?.[0];
       if (!meta || this._item?.ratingKey !== ratingKey) return;
-      await this._ctx.onPlayItem(this._ctx.mapItem(meta, true), {
+      const mappedFlatItem = this._ctx.mapItem(meta, true);
+      await this._ctx.onPlayItem(mappedFlatItem, {
         durationMs: meta.duration || null,
         startOffsetMs: meta.viewOffset || 0,
         source: this._source,
         markers: meta.Marker || [],
         chapters: meta.Chapter || [],
-        mediaVersions: extractMediaVersions(meta.Media),
+        mediaVersions: await buildCrossServerVersions(mappedFlatItem, meta.Media),
         audioStreams: extractAudioStreams(meta.Media, 0),
         isHdr: isHdrVideo(meta.Media, 0),
         subtitleTracks: extractSubtitleTracks(meta.Media, 0),

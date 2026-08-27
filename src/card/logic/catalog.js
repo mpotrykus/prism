@@ -4,6 +4,8 @@
    collaborators each function needs (config lookups, mapItem, shuffle) explicitly
    rather than this module reaching into card state itself. */
 
+import { collapseByGuid } from "./cross-server.js";
+
 export function shuffle(array) {
   const arr = [...array];
   for (let i = arr.length - 1; i > 0; i--) {
@@ -49,6 +51,13 @@ export function mapItem(m, withProgress, { plexImageUrl, plexThumbUrl = plexImag
     ratingKey: m.ratingKey,
     key: m.key,
     type: m.type,
+    /* Plex's agent-matched external id (e.g. "plex://movie/5d776..." for the new agent,
+       "com.plexapp.agents.themoviedb://..." for legacy ones) - the cross-server identity
+       key src/card/logic/cross-server.js groups on to detect the same title living on more
+       than one server. Format/presence unverified against a real multi-server account -
+       confirm before trusting it blindly, same discipline this project applies to every
+       other Plex response shape (see this repo's CLAUDE.md). */
+    guid: m.guid || null,
     title,
     subtitle,
     image,
@@ -69,6 +78,14 @@ export function mapItem(m, withProgress, { plexImageUrl, plexThumbUrl = plexImag
        playback/deep-link/scrobble code reads this instead of a single global
        plex_url/plex_token now that more than one server can be browsed at once. */
     server: m.__server || null,
+    /* Every server this same title (by guid) was found on this session - a lone-source
+       item still gets a one-entry array rather than being left undefined, so downstream
+       code (the info modal's "available on" tag, the player's server-grouped quality
+       menu) can check `sources.length > 1` without a null guard. Set by
+       cross-server.js's collapseByGuid when it merges more than one server's copy into
+       this item before mapItem ever sees it (m.__sources); otherwise this is just the
+       item's own single server. */
+    sources: m.__sources || [{ server: m.__server || null, ratingKey: m.ratingKey, key: m.key }],
   };
   if (withProgress && m.duration) {
     item.progress = Math.max(0, Math.min(1, (m.viewOffset || 0) / m.duration));
@@ -116,7 +133,10 @@ export function mergeGenreRows(sections, { genreBySection, mapItem: mapItemFn, s
 
   const eligible = Array.from(merged.values())
     .map((g) => {
-      const items = [...g.items].sort((a, b) => (b.addedAt || 0) - (a.addedAt || 0)).slice(0, rowSize);
+      /* Collapsed BEFORE the slice below, not after - a genre bucket that pooled the same
+         title from two servers should spend one row slot on it, not two, and the slice
+         should still fill the row with rowSize distinct titles. */
+      const items = collapseByGuid([...g.items].sort((a, b) => (b.addedAt || 0) - (a.addedAt || 0))).slice(0, rowSize);
       return {
         title: g.title,
         source: "local",
@@ -136,13 +156,18 @@ export function mergeGenreRows(sections, { genreBySection, mapItem: mapItemFn, s
    watched items count for more. Pure local-PMS data (history + genre listings already
    fetched elsewhere) - no Plex cloud/Discover dependency, unlike the watchlist fetch. */
 export function buildRecommendedRaw(historyRaw, { genreBySection, onDeckRaw }) {
-  const pool = new Map();
+  /* Flattened across every section/server before collapsing, not per-bucket - each genre
+     bucket only ever holds one section's (so one server's) own items, so a title present
+     on two servers would never actually collide until the pool spans every server's
+     buckets together. ratingKey alone (this Map's key below) isn't globally unique across
+     servers either, which is the other half of why this has to run before pool.set. */
+  const allItems = [];
   for (const entries of genreBySection.values()) {
-    for (const g of entries) {
-      for (const m of g.items) {
-        if (m.ratingKey && !pool.has(m.ratingKey)) pool.set(m.ratingKey, m);
-      }
-    }
+    for (const g of entries) allItems.push(...g.items);
+  }
+  const pool = new Map();
+  for (const m of collapseByGuid(allItems)) {
+    if (m.ratingKey && !pool.has(m.ratingKey)) pool.set(m.ratingKey, m);
   }
 
   const excluded = new Set((onDeckRaw || []).map((m) => m.grandparentRatingKey || m.ratingKey));
@@ -182,13 +207,15 @@ export function buildRecommendedRaw(historyRaw, { genreBySection, onDeckRaw }) {
    release year, so "recent" is relative to what's actually in the library, not calendar
    time; weighted 50/50 with rating, adjust freely. */
 export function buildPopularRaw({ genreBySection }) {
-  const pool = new Map();
+  /* Same "flatten across every section/server before collapsing" reasoning as
+     buildRecommendedRaw above. */
+  const allItems = [];
   for (const entries of genreBySection.values()) {
-    for (const g of entries) {
-      for (const m of g.items) {
-        if (m.ratingKey && !pool.has(m.ratingKey)) pool.set(m.ratingKey, m);
-      }
-    }
+    for (const g of entries) allItems.push(...g.items);
+  }
+  const pool = new Map();
+  for (const m of collapseByGuid(allItems)) {
+    if (m.ratingKey && !pool.has(m.ratingKey)) pool.set(m.ratingKey, m);
   }
   const eligible = Array.from(pool.values()).filter((m) => typeof m.year === "number" && typeof m.audienceRating === "number");
   if (!eligible.length) return [];
@@ -212,7 +239,13 @@ export function buildPopularRaw({ genreBySection }) {
 export function buildCollectionRows(collectionRowsRaw, typeFilter, { mapItem: mapItemFn, rowSize }) {
   return (collectionRowsRaw || [])
     .map((r) => {
-      const filtered = r.items.filter(typeFilter);
+      /* r.items is one specific Collection object's own children, always from a single
+         server (data.js's fetchCollectionRowItems never merges two servers' same-named
+         collections into one row) - this guards the same "don't lose a row slot to a raw
+         duplicate" case the other row builders get, not cross-server collapsing, which a
+         same-named collection curated separately on two servers would need row-level
+         merging (like mergeGenreRows above) to actually achieve; out of scope here. */
+      const filtered = collapseByGuid(r.items.filter(typeFilter));
       const items = filtered.slice(0, rowSize);
       return {
         title: r.title,
@@ -232,7 +265,10 @@ export function buildCollectionRows(collectionRowsRaw, typeFilter, { mapItem: ma
 export function buildAiRows(aiRowsRaw, typeFilter, { mapItem: mapItemFn, rowSize }) {
   return (aiRowsRaw || [])
     .map((r) => {
-      const filtered = r.items.filter(typeFilter).sort((a, b) => (b.addedAt || 0) - (a.addedAt || 0));
+      /* r.items already spans every section/server for this idea (data.js's
+         fetchAiRowsRaw flattens per-section results together), so a title on two servers
+         can legitimately show up twice here - collapsed before the slice below. */
+      const filtered = collapseByGuid(r.items.filter(typeFilter).sort((a, b) => (b.addedAt || 0) - (a.addedAt || 0)));
       const items = filtered.slice(0, rowSize);
       return {
         title: r.label,

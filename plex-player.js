@@ -80,6 +80,7 @@ import {
     updateTransportBarInfo,
 } from "./src/player/ui/chrome.js";
 import { openEpisodeListOverlay, closeEpisodeListOverlay } from "./src/player/ui/episode-list.js";
+import { fetchQueuedTitle } from "./src/player/core/title-fetch.js";
 
 /* native-bridge.js keeps its own local copy of this value (NATIVE_TIMELINE_PING_MS) for
    its "progress"-listener piggyback ping rather than importing it from here - see that
@@ -342,6 +343,38 @@ class StreamingPlayerController {
         this._pingTimer = setInterval(() => this._reportTimeline(this._session?.state || "playing"), TIMELINE_PING_MS);
     }
 
+    /* Switching the Version menu's selection to a group on a DIFFERENT server (see
+       chrome-menu.js's renderVersionSection) - a same-server version change stays on
+       _reloadSource, which reuses the live transcode session; this one is a genuinely
+       different file on a different server, so it reuses _switchTitle instead, the same
+       "tear down and start this other item" path title-prev/next and queue-list jumps
+       already use (see _switchTitle's own comment) rather than new plumbing.
+       fetchQueuedTitle resolves the target server's own fresh metadata (markers/chapters/
+       audioStreams/etc for THAT file, not this one) the same way a queue jump does.
+       `group`/`version` come straight from a session.mediaVersions entry - see
+       title-info.js's buildCrossServerVersions for that shape. */
+    async _switchToSource(group, version) {
+        const startOffsetMs = Math.round((media(this)?.currentTime || 0) * 1000);
+        const fetched = await fetchQueuedTitle(group.plexUrl, group.plexToken, group.ratingKey);
+        if (!fetched) return;
+        await this._switchTitle({
+            ...fetched,
+            plexUrl: group.plexUrl,
+            plexToken: group.plexToken,
+            mediaIndex: version.mediaIndex,
+            /* Best-effort - two servers' encodes of "the same" title aren't guaranteed
+               frame/duration-identical, so this can land a few frames off on a real
+               runtime mismatch rather than the exact same moment. */
+            startOffsetMs,
+            /* The cross-server group list itself doesn't change just because a different
+               server's copy is now playing - keeps every group (including the one just
+               left) selectable again in the menu, so switching back and forth stays
+               possible, rather than collapsing back down to fetched's own single-server
+               list. */
+            mediaVersions: this._session?.mediaVersions || fetched.mediaVersions,
+        });
+    }
+
     async _beginSession(item) {
         const { streamUrl, startOffsetMs } = await this._prepareSession(item);
         if (hasNativePlayer()) {
@@ -440,10 +473,11 @@ class StreamingPlayerController {
             episodeNumber: item.episodeNumber ?? null,
             mediaIndex: item.mediaIndex || 0,
             qualityCapKbps: item.qualityCapKbps ?? null,
-            /* {mediaIndex, label} per Plex Media[] entry (see title-info.js's
-               extractMediaVersions) - feeds chrome.js's in-player "Video Quality"
-               menu's Version submenu, only shown there when this has more than one
-               entry. */
+            /* One group per source server - {server, ratingKey, key, plexUrl, plexToken,
+               versions: [{mediaIndex, label}]} - see title-info.js's
+               buildCrossServerVersions. Feeds chrome-menu.js's in-player "Video Quality"
+               menu's Version submenu, which groups by server and stays hidden entirely
+               when there's only one group with only one version. */
             mediaVersions: item.mediaVersions || [],
             audioStreams,
             audioStreamId: audioStreams.find((s) => s.selected)?.id ?? null,

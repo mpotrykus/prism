@@ -49,6 +49,25 @@ const INLINE_MENU_CLASS = "streaming-player-inline-menu";
 
 export function renderPickerList(content, items, { rowGap = 0 } = {}) {
     items.forEach((item, index) => {
+        /* A plain, non-interactive section label (chrome-menu.js's server-grouped Version
+           list is the only caller today) - a <div>, deliberately NOT one of this list's
+           <button> rows, so it never becomes a focusable dead-end for D-pad/gamepad nav
+           (wireLinearNav's selector for this sheet only matches `button`, see
+           openHamburgerMenu's own comment on why every row here needs a real onSelect). */
+        if (item.header) {
+            const headerEl = document.createElement("div");
+            headerEl.textContent = item.label;
+            Object.assign(headerEl.style, {
+                padding: "10px 16px 4px",
+                fontSize: "11px",
+                fontWeight: "700",
+                letterSpacing: "0.04em",
+                textTransform: "uppercase",
+                color: "rgba(255,255,255,0.5)",
+            });
+            content.appendChild(headerEl);
+            return;
+        }
         const row = document.createElement("button");
         row.type = "button";
         row.classList.add(PLAYER_FOCUSABLE_CLASS, PLAYER_MENU_ROW_CLASS);
@@ -472,16 +491,18 @@ export function openHamburgerMenu(controller, anchor) {
         });
     }
     /* Version and Quality Cap used to live one level deeper, behind a "Video Quality"
-       row - flattened to their own top-level rows (Version only shown when this item
-       actually has more than one Media[] entry, same "never an empty/dead affordance"
-       rule Audio Track/Chapters follow) so changing either is one fewer tap. Quality
-       Cap is always shown since it always has at least "Original" to show. */
-    if (session?.mediaVersions?.length > 1) {
+       row - flattened to their own top-level rows (Version only shown when there's an
+       actual choice to make: more than one group/server, or one group with more than one
+       Media[] entry - same "never an empty/dead affordance" rule Audio Track/Chapters
+       follow) so changing either is one fewer tap. Quality Cap is always shown since it
+       always has at least "Original" to show. */
+    const versionGroups = session?.mediaVersions || [];
+    if (versionGroups.length > 1 || versionGroups.some((g) => g.versions?.length > 1)) {
         sections.push({
             key: "version",
             label: "Version",
             icon: versionIconMarkup(),
-            getValue: () => session.mediaVersions.find((v) => v.mediaIndex === session.mediaIndex)?.label || null,
+            getValue: () => currentVersionLabel(session),
             render: (content, helpers) => renderVersionSection(controller, content, helpers),
         });
     }
@@ -601,17 +622,55 @@ function qualityCapMenuLabel(controller) {
     return controller._autoQualityEnabled ? `Auto (${label})` : label;
 }
 
+/* The current group is whichever one's server/ratingKey match the live session - not
+   necessarily the first group in the list, since _switchToSource (plex-player.js) keeps
+   every group in session.mediaVersions selectable even after switching away from one. */
+function currentVersionGroup(session) {
+    const groups = session?.mediaVersions || [];
+    return groups.find((g) => String(g.ratingKey) === String(session.ratingKey)) || groups[0] || null;
+}
+
+function currentVersionLabel(session) {
+    const group = currentVersionGroup(session);
+    return group?.versions?.find((v) => v.mediaIndex === session.mediaIndex)?.label || null;
+}
+
+/* Server-grouped picker - a plain (unselectable) server-name header per group, its own
+   versions listed beneath, e.g.:
+     PotrykusPlex
+       1080p
+       480p
+     LookingGlass
+       3840p
+   Only rendered as headers when there's more than one group - a single-server item's
+   Version list looks exactly like it always has, no server name intruding on it. */
 function renderVersionSection(controller, content, { setValue, collapse }) {
     const session = controller._session;
-    const versions = session?.mediaVersions || [];
-    renderPickerList(content, versions.map((v) => ({
-        label: `${v.label}${v.mediaIndex === session.mediaIndex ? "  ✓" : ""}`,
-        onSelect: () => {
-            controller._reloadSource({ mediaIndex: v.mediaIndex });
-            setValue(v.label);
-            collapse();
-        },
-    })));
+    const groups = session?.mediaVersions || [];
+    const activeGroup = currentVersionGroup(session);
+    const multiServer = groups.length > 1;
+    const items = groups.flatMap((group) => {
+        const header = multiServer
+            ? [{ label: group.server?.name || "Server", header: true }]
+            : [];
+        const versionRows = (group.versions || []).map((v) => {
+            const isCurrent = group === activeGroup && v.mediaIndex === session.mediaIndex;
+            return {
+                label: `${v.label}${isCurrent ? "  ✓" : ""}`,
+                onSelect: () => {
+                    if (group === activeGroup) {
+                        controller._reloadSource({ mediaIndex: v.mediaIndex });
+                    } else {
+                        controller._switchToSource(group, v);
+                    }
+                    setValue(currentVersionLabel(controller._session) || v.label);
+                    collapse();
+                },
+            };
+        });
+        return [...header, ...versionRows];
+    });
+    renderPickerList(content, items);
 }
 
 function renderQualityCapSection(controller, content, { setValue, collapse }) {

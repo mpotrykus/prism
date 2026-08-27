@@ -1,5 +1,6 @@
 import { parseYearQuery, buildGenreMatchHubs, buildReasonMatchHubs, SEARCH_REASON_LABELS } from "./logic/search.js";
 import { plexFetch, activeServers, serverForSection, isFromEnabledSection } from "./data.js";
+import { collapseByGuid } from "./logic/cross-server.js";
 import { releasePosterImgClaims } from "./rows.js";
 import { updateNavActiveState } from "./nav.js";
 
@@ -96,7 +97,10 @@ async function fetchSearchHubs(card, q, hubLimit) {
       if (items.length >= hubLimit) entry.hasMore = true;
     }
   }
-  return Array.from(merged.values());
+  /* A search match on two servers for the same title (e.g. "Movies") should read as one
+     result, not two - collapsed per merged hub, same title-identity rule every other row
+     builder now follows. */
+  return Array.from(merged.values()).map((h) => ({ ...h, Metadata: collapseByGuid(h.Metadata) }));
 }
 
 /* Shared by both the normal (capped) search page and "See All" section expansion - the

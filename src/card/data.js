@@ -1,4 +1,5 @@
 import { parseAiSectionIdeas } from "./logic/catalog.js";
+import { collapseByGuid } from "./logic/cross-server.js";
 import * as StreamingPlexAuth from "../../plex-auth.js";
 import { loadPlain, savePlain } from "../../settings.js";
 import { hasSecrets, loadSecrets, saveSecrets } from "../../vault.js";
@@ -155,7 +156,10 @@ export async function fetchOnDeckRaw(card) {
       }
     })
   );
-  return perServer.flat().filter((m) => isFromEnabledSection(card, m));
+  /* Collapsed before the enabled-section filter below - on deck genuinely spans every
+     active server (unlike, say, playlists), so the same in-progress title on two servers
+     is a real case, not just a defensive no-op. */
+  return collapseByGuid(perServer.flat()).filter((m) => isFromEnabledSection(card, m));
 }
 
 export async function fetchWatchlistRaw(card) {
@@ -227,7 +231,10 @@ async function fetchRecentlyAddedRaw(card) {
       }
     })
   );
-  return perSection.flat();
+  /* perSection spans every section on every server, so a title recently added on two
+     servers independently is a real case here (unlike fetchCollectionsRaw/
+     fetchPlaylistsRaw below, which are inherently single-server per entry). */
+  return collapseByGuid(perSection.flat());
 }
 
 async function fetchCollectionsRaw(card) {
