@@ -381,9 +381,8 @@
     letter-spacing: 0.02em;
     color: rgba(var(--color-fg-rgb), 0.75);
     background: rgba(var(--color-fg-rgb), 0.1);
-    border: 1px solid rgba(var(--color-fg-rgb), 0.14);
     border-radius: 999px;
-    padding: 3px 10px;
+    padding: 5px 12px;
 }
 
 .title-info-actions {
