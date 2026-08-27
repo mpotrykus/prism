@@ -87,6 +87,10 @@
     transition: opacity 0.3s ease;
 }
 
+:host-context([data-platform="uwp"]:not([data-xbox-device="true"])) .header::before {
+    bottom: -20px;
+}
+
 .header.header-at-top::before {
     opacity: 0;
 }

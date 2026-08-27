@@ -123,18 +123,21 @@ export function ensurePlayerFocusStyle() {
         }
         /* B/Escape already backs every one of these overlays out for a controller user - the
            "X" is a redundant, unreachable-by-D-pad dead end for them. Two separate gates,
-           not one: [data-platform="uwp"] (core/platform.js) is script-injected by the UWP
-           shell itself, so it's unconditionally true on real Xbox hardware (and PC) from first
-           paint regardless of what the page's own input heuristics conclude - input-mode.js's
+           not one: [data-xbox-device="true"] (core/platform.js) is script-injected by the UWP
+           shell itself, so it's unconditionally true on real Xbox hardware from first paint
+           regardless of what the page's own input heuristics conclude - input-mode.js's
            [data-input-mode="keyboard"] (UA/pointer-based sniffing) turned out not to
            reliably catch Xbox's actual WebView2 UA/pointer capabilities on real hardware.
-           The input-mode gate stays alongside it for Fire TV and any keyboard/gamepad-driven
-           desktop-web session, which platform.js has no marker for. !important because
-           both closeBtn elements (chrome-menu.js/chrome-subtitles.js) set display:"flex" as
-           an inline style directly on the element - same trap as PLAYER_MENU_ROW_CLASS's
-           background above, an inline style always wins over any stylesheet selector here
-           regardless of specificity. */
-        html[data-platform="uwp"] .${OVERLAY_CLOSE_BTN_CLASS},
+           Deliberately narrower than [data-platform="uwp"], which is also true on the PC UWP
+           shell target where a real mouse exists and the "X" is not a dead end (see
+           platform.js's own isXboxDevice()/usesGamepadChrome() comments). The input-mode
+           gate stays alongside it for Fire TV and any keyboard/gamepad-driven desktop-web
+           session, which platform.js has no marker for. !important because both closeBtn
+           elements (chrome-menu.js/chrome-subtitles.js) set display:"flex" as an inline
+           style directly on the element - same trap as PLAYER_MENU_ROW_CLASS's background
+           above, an inline style always wins over any stylesheet selector here regardless
+           of specificity. */
+        html[data-xbox-device="true"] .${OVERLAY_CLOSE_BTN_CLASS},
         html[data-input-mode="keyboard"] .${OVERLAY_CLOSE_BTN_CLASS} {
             display: none !important;
         }
