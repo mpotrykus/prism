@@ -28,9 +28,11 @@
        actually need the clearance. */
         padding-top: 12px;
     }
-     :host-context([data-platform="android"]) .header,
-     :host-context([data-platform="uwp"]:not([data-xbox-device="true"])) .header {
+     :host-context([data-platform="android"]) .header {
         padding-top: calc(12px + var(--safe-top));
+    }
+     :host-context([data-platform="uwp"]:not([data-xbox-device="true"])) .header {
+        padding-top: 12px;
     }
     /* Xbox has no title bar and --safe-top is always 0 there (see MainPage.xaml.cs), so it
      needs its own clearance rather than piggybacking on the android/PC rule above - and

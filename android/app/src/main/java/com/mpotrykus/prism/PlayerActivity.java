@@ -337,9 +337,9 @@ public class PlayerActivity extends AppCompatActivity {
        other toggle here, the actual install target is a native AudioProcessor rebuilt
        fresh every createPlayer() call (see that method) rather than a View/GL pipeline
        this Activity owns directly - audioLevelingProcessor below is that instance,
-       re-created and re-applied to this flag each time. Defaults to true - see
+       re-created and re-applied to this flag each time. Defaults to false - see
        shared.js's storedAudioLevelingEnabled for why. */
-    boolean audioLevelingEnabled = true;
+    boolean audioLevelingEnabled = false;
     AudioLevelingProcessor audioLevelingProcessor;
     /* Same immediate-persistence model as statsOverlayEnabled above - see
        setAutoPlayEnabled. Read by the STATE_ENDED handler below to decide whether to
@@ -603,7 +603,7 @@ public class PlayerActivity extends AppCompatActivity {
             BifIndex.load(bifUrl, index -> bifIndex = index);
         }
         autoDetectedShaderType = parseShaderType(getIntent().getStringExtra(EXTRA_SHADER_TYPE));
-        shaderFamilyOverride = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getString(PREF_SHADER_FAMILY_OVERRIDE, "auto");
+        resetShaderFamilyOverride();
         detectedShaderType = resolveEffectiveShaderFamily();
         autoCropEnabled = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(PREF_AUTO_CROP_ENABLED, true);
         upscaleStrength = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getFloat(PREF_UPSCALE_STRENGTH, 0.65f);
@@ -623,8 +623,8 @@ public class PlayerActivity extends AppCompatActivity {
         colorBoostSaturationAuto = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(PREF_COLOR_BOOST_SATURATION_AUTO, false);
         colorBoostContrastAuto = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(PREF_COLOR_BOOST_CONTRAST_AUTO, false);
         statsOverlayEnabled = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(PREF_STATS_OVERLAY_ENABLED, false);
-        /* Defaults to on - see shared.js's storedAudioLevelingEnabled for why. */
-        audioLevelingEnabled = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(PREF_AUDIO_LEVELING_ENABLED, true);
+        /* Defaults to off - see shared.js's storedAudioLevelingEnabled for why. */
+        audioLevelingEnabled = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(PREF_AUDIO_LEVELING_ENABLED, false);
         /* Defaults to on (unlike every other toggle here, which defaults off) - see
            shared.js's storedAutoPlayEnabled for why. */
         autoPlayEnabled = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(PREF_AUTO_PLAY_ENABLED, true);
@@ -1366,6 +1366,18 @@ public class PlayerActivity extends AppCompatActivity {
         detectedShaderType = resolveEffectiveShaderFamily();
         shaderType = resolveShaderType();
         applyVideoEffects();
+    }
+
+    /* Unlike upscaleEnabled/upscaleStrength/upscaleAuto (which deliberately carry the
+       in-player menu's last value forward across titles), the family override is meant to fix
+       a single title's wrong auto-detection, not become a standing preference - mirrors
+       shader-pipeline.js's resetShaderFamilyOverride exactly. Called from both onCreate and
+       applyTitleSwitch, before shaderFamilyOverride is read for that title's own
+       resolveEffectiveShaderFamily call, so Content Type always starts back on Auto for a
+       fresh play instead of carrying a manual override forward forever. */
+    private void resetShaderFamilyOverride() {
+        shaderFamilyOverride = "auto";
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().remove(PREF_SHADER_FAMILY_OVERRIDE).apply();
     }
 
     /* Same "toggle IS the persisted setting" immediate-persistence model as setAmbientEnabled -
@@ -2468,6 +2480,7 @@ public class PlayerActivity extends AppCompatActivity {
             BifIndex.load(bifUrl, index -> bifIndex = index);
         }
         autoDetectedShaderType = parseShaderType(shaderTypeName);
+        resetShaderFamilyOverride();
         detectedShaderType = resolveEffectiveShaderFamily();
         shaderType = resolveShaderType();
         /* Unlike createPlayer's fresh-instance path, activeAiUpscaleProgram survives an

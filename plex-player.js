@@ -30,7 +30,7 @@ import { deriveChapterMarkers } from "./src/player/core/chapter-markers.js";
 import { playNative, switchNative, stopNative, pauseNative, resumeNative, buildPlaybackPayload } from "./src/player/native-bridge.js";
 import { playXbox, switchXbox, stopXbox, pauseXbox, resumeXbox, reloadXboxSource } from "./src/player/xbox-bridge.js";
 import { playWeb, attachSource, reloadWebSource, teardownWeb } from "./src/player/web-fallback.js";
-import { setShaderStrength, setColorBoostSaturationStrength, setColorBoostContrastStrength, setAiUpscalingEnabled, updateShaderPipeline, ensureShaderPipeline, stopShaderLoop, resolveShaderFamily } from "./src/player/shader-pipeline.js";
+import { setShaderStrength, setColorBoostSaturationStrength, setColorBoostContrastStrength, setAiUpscalingEnabled, updateShaderPipeline, ensureShaderPipeline, stopShaderLoop, resolveShaderFamily, resetShaderFamilyOverride } from "./src/player/shader-pipeline.js";
 import { setAmbientEnabled, setAmbientOpacity, updateAmbientPipeline, stopAmbientLoop } from "./src/player/ambient-pipeline.js";
 import { setStatsOverlayEnabled, updateStatsOverlayPipeline } from "./src/player/stats-overlay.js";
 import { setAudioLevelingEnabled, updateAudioLevelingPipeline } from "./src/player/audio-leveling.js";
@@ -490,7 +490,12 @@ class StreamingPlayerController {
            upscaleAuto below follow the same immediate-persistence model as colorBoostEnabled/
            colorBoostStrength/colorBoostAuto just below - whatever the in-player menu was
            last set to (see shader-pipeline.js's setUpscaleMode/setColorBoostMode), not a
-           Settings-modal default reset every video. */
+           Settings-modal default reset every video. The family override is the one exception -
+           resetShaderFamilyOverride wipes any Animation/Live-Action pin left over from a
+           previous title before resolveShaderFamily reads it below, so Content Type always
+           starts back on Auto for a fresh play rather than carrying a manual override forward
+           forever. */
+        resetShaderFamilyOverride();
         this._shaderGenres = item.genres || [];
         this._shaderStudio = item.studio || "";
         this._shaderAutoType = resolveShaderFamily(this._shaderGenres, this._shaderStudio);

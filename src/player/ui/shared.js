@@ -290,8 +290,8 @@ export function storedStatsOverlayEnabled() {
 
 /* Same immediate-persistence model as storedStatsOverlayEnabled - no per-video/genre
    concern, whatever this was last toggled to is what every subsequent session starts
-   from. Defaults to on (like storedAudioLevelingEnabled below, unlike the quality/effect
-   toggles, and unlike storedAutoSkipIntroCreditsEnabled which defaults off) for a user
+   from. Defaults to on (unlike the quality/effect toggles, and unlike
+   storedAutoSkipIntroCreditsEnabled/storedAudioLevelingEnabled which default off) for a user
    who's never touched this setting at all - a bare-missing key, not an explicit "0". */
 export function storedAutoPlayEnabled() {
     const stored = localStorage.getItem(AUTO_PLAY_STORAGE_KEY);
@@ -313,18 +313,18 @@ export function storedAutoSkipIntroCreditsEnabled() {
     return localStorage.getItem(AUTO_SKIP_INTRO_CREDITS_STORAGE_KEY) === "1";
 }
 
-/* Same `stored === null` default-on reasoning as storedAutoPlayEnabled above - a
-   never-touched user gets normalized volume from their first session. */
+/* Defaults OFF for a never-touched user - same reasoning as storedAutoQualityEnabled above:
+   normalizing volume changes the audio itself (compression/gain), which shouldn't be sprung
+   on a fresh install without the user opting in. Once they do touch it, their choice
+   (on or off) persists across sessions like every other stored toggle. */
 export function storedAudioLevelingEnabled() {
-    const stored = localStorage.getItem(AUDIO_LEVELING_STORAGE_KEY);
-    return stored === null ? true : stored === "1";
+    return localStorage.getItem(AUDIO_LEVELING_STORAGE_KEY) === "1";
 }
 
-/* Same `stored === null` default-on reasoning as storedAutoPlayEnabled/
-   storedAudioLevelingEnabled above - unlike the quality/effect toggles, a never-touched
-   user should get baked-in black bars cropped automatically rather than opt in, since
-   a title with a matted-in border is otherwise wrapped in two stacked sets of bars (see
-   auto-crop.js's own header comment). */
+/* Same `stored === null` default-on reasoning as storedAutoPlayEnabled above - unlike the
+   quality/effect toggles, a never-touched user should get baked-in black bars cropped
+   automatically rather than opt in, since a title with a matted-in border is otherwise
+   wrapped in two stacked sets of bars (see auto-crop.js's own header comment). */
 export function storedAutoCropEnabled() {
     const stored = localStorage.getItem(AUTO_CROP_STORAGE_KEY);
     return stored === null ? true : stored === "1";

@@ -1092,6 +1092,15 @@ class PlexNetflixCard extends HTMLElement {
      ratingKey, which player.play rejects by design. Shared by the title-info modal's
      Play button and the episode list's direct-play rows. */
   async _playItem(item, { durationMs = null, startOffsetMs = 0, source, markers = [], chapters = [], mediaIndex = 0, mediaVersions = [], audioStreams = [], isHdr = false, bifIndexPath = null, partId = null, partKey = null, queueRatingKeys = null, queueIndex = null } = {}) {
+    /* Hitting Play (from search -> title info -> play) reads as the user having found
+       what they were looking for - leave them back on their normal view, not still
+       sitting in search results, once playback closes. Mirrors the Escape-key exit path
+       above minus the blur/focus-restore, since focus is about to move to the player. */
+    if (this._currentView === "search") {
+      this._clearSearchInput();
+      this._exitSearch();
+      this._searchWrap.classList.remove("expanded");
+    }
     const server = item.server || primaryServer(this);
     try {
       await player.play({

@@ -115,6 +115,16 @@ export function storedShaderFamilyOverride() {
     return stored === "anime4k" || stored === "live_action" ? stored : "auto";
 }
 
+/* Unlike storedShaderEnabled/storedShaderStrength/storedUpscaleAuto (which deliberately carry
+   the in-player menu's last value forward, see plex-player.js's per-video reset block), the
+   family override is meant to fix a single title's wrong auto-detection, not become a
+   standing preference - so plex-player.js calls this at the start of every new video to wipe
+   any override left over from whatever was last played, before storedShaderFamilyOverride is
+   read for that fresh resolveShaderFamily call. */
+export function resetShaderFamilyOverride() {
+    localStorage.removeItem(SHADER_FAMILY_OVERRIDE_STORAGE_KEY);
+}
+
 /* The one place _shaderAutoType is ever computed - both plex-player.js's per-video reset
    and setShaderFamilyOverride below call this rather than either duplicating the override
    check or calling detectShaderType directly, so there's exactly one spot that has to know
