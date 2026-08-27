@@ -1013,7 +1013,11 @@ export class TitleInfoController {
      see that function's own comment - resolveSources (cross-server.js) is the real fix
      for the same server showing up more than once here. */
   _renderSourcesTag() {
-    const sources = dedupeSourcesByServer(this._sources || []);
+    /* A watchlist ("My List") item comes from account-level Discover, not any one
+       server (see data.js's fetchWatchlistRaw), so its `sources` entry has no `server`
+       at all - filtered out here rather than falling back to a literal "Server" chip,
+       which told the user nothing. */
+    const sources = dedupeSourcesByServer(this._sources || []).filter((s) => s.server);
     const onlyMyServer = sources.length === 1 && !!sources[0].server?.owned;
     if (!sources.length || onlyMyServer) {
       this._sourcesEl.hidden = true;
@@ -1022,7 +1026,7 @@ export class TitleInfoController {
     }
     this._sourcesEl.hidden = false;
     this._sourcesEl.innerHTML = sources
-      .map((s) => `<span class="title-info-source-chip">${this._ctx.escape(s.server?.name || "Server")}</span>`)
+      .map((s) => `<span class="title-info-source-chip">${this._ctx.escape(s.server.name)}</span>`)
       .join("");
   }
 
