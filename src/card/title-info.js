@@ -7,6 +7,7 @@ import { pickNextEpisode, extractLogoUrl } from "./logic/catalog.js";
 import { matchEpisodesAcrossServers, dedupeSourcesByServer } from "./logic/cross-server.js";
 import { createRowScroll } from "./row-scroll.js";
 import { resolveTrailerVideo } from "./logic/trailer.js";
+import { renderMediaBadge } from "./media-badges.js";
 
 const THEME_AUDIO_FADE_MS = 900;
 const THEME_AUDIO_DEFAULT_VOLUME = 0.65;
@@ -223,6 +224,81 @@ export function formatResolution(res) {
   return `${r}p`;
 }
 
+/* Distinguishes which flavor of HDR a video stream carries, for the info modal's format
+   badge row - built on the same Stream fields isHdrVideo above already reads (colorTrc/
+   colorSpace), plus DOVIPresent (Dolby Vision's own documented Plex field) checked first
+   since a DV stream's colorTrc still reads as smpte2084 underneath. Deliberately does NOT
+   attempt to detect HDR10+ - Plex has no equivalent dedicated field for it that's been
+   verified against a real HDR10+ source, so guessing would risk mislabeling a plain HDR10
+   stream. Returns null for SDR (isHdrVideo false) or when there's no video stream at all. */
+export function hdrVariantLabel(media, mediaIndex) {
+  const streams = media?.[mediaIndex]?.Part?.[0]?.Stream || [];
+  const video = streams.find((s) => s.streamType === 1);
+  if (!video) return null;
+  if (video.DOVIPresent) return "Dolby Vision";
+  const trc = String(video.colorTrc || "").toLowerCase();
+  if (trc === "smpte2084") return "HDR10";
+  if (trc === "arib-std-b67") return "HLG";
+  if (String(video.colorSpace || "").toLowerCase().startsWith("bt2020")) return "HDR";
+  return null;
+}
+
+/* Plex's Media[].audioCodec is a bare codec id, not the human-readable format name shown
+   elsewhere in Plex's own UI - mapped here the same way. `dca` is Plex/ffmpeg's codec id
+   for every DTS variant; audioProfile ("dts_hd_ma", "dts_hd_hra", ...) is what actually
+   distinguishes plain DTS from DTS-HD, unverified against a real DTS-HD source though, so
+   treat that split with the same caution as extractMediaVersions' own codec-field comment
+   above. Atmos has no dedicated boolean either - detected the same way the Plex/Jellyfin
+   community does it, by matching "atmos" in the audio stream's own display title. */
+export function audioFormatLabel(media, mediaIndex) {
+  const m = media?.[mediaIndex];
+  const codec = String(m?.audioCodec || "").toLowerCase();
+  const streams = m?.Part?.[0]?.Stream || [];
+  const audio = streams.find((s) => s.streamType === 2 && !!s.selected) || streams.find((s) => s.streamType === 2);
+  const titleText = `${audio?.extendedDisplayTitle || ""} ${audio?.displayTitle || ""}`.toLowerCase();
+  if (titleText.includes("atmos")) return "Dolby Atmos";
+  if (codec === "truehd") return "Dolby TrueHD";
+  if (codec === "eac3") return "Dolby Digital Plus";
+  if (codec === "ac3") return "Dolby Digital";
+  if (codec === "dca" || codec === "dts") {
+    const profile = String(audio?.audioProfile || "").toLowerCase();
+    if (titleText.includes("dts:x") || titleText.includes("dts-x")) return "DTS:X";
+    if (profile.includes("hd") || titleText.includes("dts-hd")) return "DTS-HD";
+    return "DTS";
+  }
+  if (codec === "aac") return "AAC";
+  if (codec === "flac") return "FLAC";
+  if (codec === "mp3") return "MP3";
+  if (codec === "opus" || codec === "vorbis") return "Opus";
+  if (codec.startsWith("pcm")) return "PCM";
+  return "";
+}
+
+const CHANNEL_LAYOUT_LABELS = { 1: "Mono", 2: "Stereo", 3: "2.1", 4: "4.0", 6: "5.1", 7: "6.1", 8: "7.1" };
+
+export function channelLayoutLabel(media, mediaIndex) {
+  return CHANNEL_LAYOUT_LABELS[Number(media?.[mediaIndex]?.audioChannels)] || "";
+}
+
+const VIDEO_CODEC_LABELS = {
+  hevc: "HEVC",
+  h265: "HEVC",
+  h264: "H.264",
+  avc: "H.264",
+  av1: "AV1",
+  vp9: "VP9",
+  vc1: "VC-1",
+  mpeg2video: "MPEG-2",
+  mpeg2: "MPEG-2",
+};
+
+export function videoCodecLabel(media, mediaIndex) {
+  const codec = String(media?.[mediaIndex]?.videoCodec || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+  return VIDEO_CODEC_LABELS[codec] || "";
+}
+
 /* Raw-meta equivalents of logic/catalog.js's mapItem watched/hasHistory fields, for the
    detail fetches here that hand this a raw Plex response object rather than an
    already-mapped item - a show/season has no viewOffset/viewCount of its own the way a
@@ -352,6 +428,7 @@ export class TitleInfoController {
     this._progressBar = this._progressEl.querySelector(".bar");
     this._titleEl = shadowRoot.querySelector(".title-info-title");
     this._metaEl = shadowRoot.querySelector(".title-info-meta");
+    this._badgesEl = shadowRoot.querySelector(".title-info-badges");
     this._sourcesEl = shadowRoot.querySelector(".title-info-sources");
     this._playBtn = shadowRoot.querySelector(".title-info-play");
     this._restartBtn = shadowRoot.querySelector(".title-info-restart-btn");
@@ -818,6 +895,10 @@ export class TitleInfoController {
     const artReady = waitForImageLoad(art);
     this._titleEl.textContent = item.title || "";
     this._metaEl.innerHTML = item.subtitle ? `<span>${this._ctx.escape(item.subtitle)}</span>` : "";
+    if (this._badgesEl) {
+      this._badgesEl.innerHTML = "";
+      this._badgesEl.hidden = true;
+    }
     /* Already known from the row-clicked item's own mapItem shape (see catalog.js's
        mapItem `sources`, populated by cross-server.js's collapseByGuid at row-build time)
        - no detail fetch needed to show this, unlike most of the rest of this modal. Items
@@ -990,12 +1071,29 @@ export class TitleInfoController {
     if (meta.contentRating) metaParts.push(meta.contentRating);
     if (meta.year) metaParts.push(String(meta.year));
     if (meta.duration) metaParts.push(formatRuntime(meta.duration));
-    const resolution = meta.Media?.[0]?.videoResolution;
-    if (resolution) metaParts.push(formatResolution(resolution));
     const rating = meta.audienceRating || meta.rating;
     if (rating) metaParts.push(`★ ${Number(rating).toFixed(1)}`);
     if (meta.Genre?.length) metaParts.push(meta.Genre.slice(0, 3).map((g) => g.tag).join(", "));
     this._metaEl.innerHTML = metaParts.map((p) => `<span>${this._ctx.escape(p)}</span>`).join("");
+
+    /* Format badge row - resolution/HDR/codec/audio pulled from Media[0], same "first
+       version" convention the meta line's old resolution field used, since this modal has
+       no version picker of its own (that lives in the player's Quality menu instead). */
+    const badgeLabels = [];
+    const resolutionLabel = formatResolution(meta.Media?.[0]?.videoResolution);
+    if (resolutionLabel) badgeLabels.push(resolutionLabel);
+    const hdrLabel = hdrVariantLabel(this._media, 0);
+    if (hdrLabel) badgeLabels.push(hdrLabel);
+    const codecLabel = videoCodecLabel(this._media, 0);
+    if (codecLabel) badgeLabels.push(codecLabel);
+    const audioLabel = audioFormatLabel(this._media, 0);
+    if (audioLabel) badgeLabels.push(audioLabel);
+    const channelLabel = channelLayoutLabel(this._media, 0);
+    if (channelLabel) badgeLabels.push(channelLabel);
+    if (this._badgesEl) {
+      this._badgesEl.innerHTML = badgeLabels.map(renderMediaBadge).join("");
+      this._badgesEl.hidden = !badgeLabels.length;
+    }
 
     const cast = (meta.Role || []).slice(0, 12);
     this._castWrap.hidden = !cast.length;

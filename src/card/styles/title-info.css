@@ -325,6 +325,42 @@
     color: rgba(var(--color-fg-rgb), 0.3);
 }
 
+/* Format badge row (resolution/HDR/codec/audio - see media-badges.js) - kept as its own
+   row rather than folded into .title-info-meta's bullet-separated text, since a chip full
+   of icons reads poorly wedged between plain text spans and wrapping mid-sentence on
+   mobile would be worse than wrapping between chips here. */
+.title-info-badges {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    margin: -10px 0 20px;
+}
+
+.title-info-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 4px 9px;
+    border-radius: 5px;
+    border: 1px solid rgba(var(--color-fg-rgb), 0.25);
+    background: rgba(var(--color-fg-rgb), 0.08);
+    color: rgba(var(--color-fg-rgb), 0.85);
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    white-space: nowrap;
+}
+
+.title-info-badge-icon {
+    display: inline-flex;
+}
+
+.title-info-badge-icon svg {
+    width: 18px;
+    height: 18px;
+}
+
 /* "Available on" tag - only shown when title-info.js resolves more than one source
    server for this item (see catalog.js's mapItem `sources`), so this stays hidden for the
    common single-server case. */

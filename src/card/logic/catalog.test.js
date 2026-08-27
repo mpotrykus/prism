@@ -209,6 +209,25 @@ describe("buildAiRows", () => {
     });
     expect(rows.map((r) => r.title)).toEqual(["Sci-Fi Comedy"]);
   });
+
+  it("doesn't flag hasMore from a capped section of a type this view doesn't show", () => {
+    const rowSize = 6;
+    const movieSection = Array(5).fill({ type: "movie", addedAt: 1 }); // under the cap
+    const cappedShowSection = Array(6).fill({ type: "show", addedAt: 1 }); // hit the cap
+    const raw = [
+      {
+        label: "Sci-Fi Comedy",
+        genres: ["Sci-Fi", "Comedy"],
+        items: [...movieSection, ...cappedShowSection],
+        sections: [movieSection, cappedShowSection],
+      },
+    ];
+    const movieView = buildAiRows(raw, (m) => m.type === "movie", { mapItem: identityMapItem, rowSize });
+    expect(movieView[0].hasMore).toBe(false);
+
+    const showView = buildAiRows(raw, (m) => m.type === "show", { mapItem: identityMapItem, rowSize });
+    expect(showView[0].hasMore).toBe(true);
+  });
 });
 
 describe("parseAiSectionIdeas", () => {

@@ -270,11 +270,16 @@ export function buildAiRows(aiRowsRaw, typeFilter, { mapItem: mapItemFn, rowSize
          can legitimately show up twice here - collapsed before the slice below. */
       const filtered = collapseByGuid(r.items.filter(typeFilter).sort((a, b) => (b.addedAt || 0) - (a.addedAt || 0)));
       const items = filtered.slice(0, rowSize);
+      /* Only a section that (a) hit the fetch cap and (b) actually contains items of
+         this view's own type counts toward hasMore - a section is homogeneous in type
+         (movie-library sections return movies, show-library ones return shows), so
+         checking one item is enough to know which view it belongs to. */
+      const hasMore = (r.sections || []).some((sectionItems) => sectionItems.length >= rowSize && sectionItems.some(typeFilter));
       return {
         title: r.label,
         source: "ai",
         items: items.map((m) => mapItemFn(m, false)),
-        hasMore: !!r.hasMore,
+        hasMore,
         genres: r.genres,
       };
     })

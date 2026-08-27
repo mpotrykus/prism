@@ -446,12 +446,17 @@ async function fetchAiRowsRaw(card, ideas) {
         })
       );
       /* Same hit-the-cap heuristic as fetchRecentlyAddedRaw above - this per-section
-         query has no totalSize to check precisely either. */
+         query has no totalSize to check precisely either. Kept ungrouped (not just
+         flattened into items below) so catalog.js's buildAiRows can check the cap only
+         against sections whose own type matches the row's own already-filtered items -
+         a movie view row must not turn on "See More" just because a show section
+         (irrelevant to that view) happened to hit the cap; that combination previously
+         showed a "See More" tile whose actual re-fetch surfaced nothing new. */
       return {
         label: idea.label,
         genres: idea.genres,
         items: perSection.flat(),
-        hasMore: perSection.some((items) => items.length >= rowSize),
+        sections: perSection,
       };
     })
   );
