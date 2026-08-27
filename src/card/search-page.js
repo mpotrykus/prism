@@ -1,4 +1,4 @@
-import { parseYearQuery, buildGenreMatchHubs, buildReasonMatchHubs, SEARCH_REASON_LABELS } from "./logic/search.js";
+import { parseYearQuery, parseMetaTagQuery, buildGenreMatchHubs, buildReasonMatchHubs, SEARCH_REASON_LABELS } from "./logic/search.js";
 import { plexFetch, activeServers, serverForSection, isFromEnabledSection } from "./data.js";
 import { collapseByGuid } from "./logic/cross-server.js";
 import { releasePosterImgClaims } from "./rows.js";
@@ -125,8 +125,9 @@ async function buildSearchHubs(card, q, hubLimit, rowLimit) {
     genreBySection: card._genreBySection,
   });
   const yearHubs = await buildYearMatchHubs(card, q, rowLimit);
+  const metaTagHubs = await buildMetaTagMatchHubs(card, q, rowLimit);
   const facetHubs = await buildFacetMatchHubs(card, q, rowLimit);
-  return [...otherHubs, ...reasonHubs, ...genreHubs, ...yearHubs, ...facetHubs];
+  return [...otherHubs, ...reasonHubs, ...genreHubs, ...yearHubs, ...metaTagHubs, ...facetHubs];
 }
 
 async function expandSearchSection(card, title) {
@@ -180,6 +181,32 @@ async function buildYearMatchHubs(card, query, limit) {
      the full matching set here, so `items.length` is the true total, not just what got
      requested, and the slice below is the only thing actually capping this row. */
   return [{ title, Metadata: items.slice(0, limit), hasMore: items.length > limit }];
+}
+
+/* Meta-tag search ("hdr", "4k", "5.1", ...) - same per-section filtered-fetch-and-merge
+   shape as buildYearMatchHubs above, just with parseMetaTagQuery's Plex advanced-filter
+   param+value in place of a year range. */
+async function buildMetaTagMatchHubs(card, query, limit) {
+  const meta = parseMetaTagQuery(query);
+  if (!meta) return [];
+  const perSection = await Promise.all(
+    card._config.sections.map(async (s) => {
+      try {
+        const data = await plexFetch(
+          card,
+          `/library/sections/${s.key}/all`,
+          { type: s.type, "X-Plex-Container-Size": limit, [meta.param]: meta.value },
+          serverForSection(card, s)
+        );
+        return data?.MediaContainer?.Metadata || [];
+      } catch (e) {
+        return [];
+      }
+    })
+  );
+  const items = perSection.flat();
+  if (!items.length) return [];
+  return [{ title: meta.title, Metadata: items.slice(0, limit), hasMore: items.length > limit }];
 }
 
 async function buildFacetMatchHubs(card, query, limit) {

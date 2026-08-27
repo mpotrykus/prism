@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseYearQuery, buildGenreMatchHubs, buildReasonMatchHubs } from "./search.js";
+import { parseYearQuery, parseMetaTagQuery, buildGenreMatchHubs, buildReasonMatchHubs } from "./search.js";
 
 describe("parseYearQuery", () => {
   it("parses a single year", () => {
@@ -12,6 +12,31 @@ describe("parseYearQuery", () => {
   it("returns null for non-year queries", () => {
     expect(parseYearQuery("dune")).toBeNull();
     expect(parseYearQuery("1850")).toBeNull();
+  });
+});
+
+describe("parseMetaTagQuery", () => {
+  it("maps resolution keywords to Plex's resolution filter, case-insensitively", () => {
+    expect(parseMetaTagQuery("4K")).toEqual({ title: 'Resolution "4K"', param: "resolution", value: "4k" });
+    expect(parseMetaTagQuery(" 1080p ")).toEqual({ title: 'Resolution "1080p"', param: "resolution", value: "1080" });
+    expect(parseMetaTagQuery("1080")).toEqual({ title: 'Resolution "1080p"', param: "resolution", value: "1080" });
+    expect(parseMetaTagQuery("sd")).toEqual({ title: 'Resolution "SD"', param: "resolution", value: "sd" });
+  });
+
+  it("maps HDR/Dolby keywords to their boolean filters", () => {
+    expect(parseMetaTagQuery("HDR")).toEqual({ title: 'Format "HDR"', param: "hdr", value: "1" });
+    expect(parseMetaTagQuery("dovi")).toEqual({ title: 'Format "Dolby Vision"', param: "dovi", value: "1" });
+    expect(parseMetaTagQuery("dolby atmos")).toEqual({ title: 'Format "Dolby Atmos"', param: "atmos", value: "1" });
+  });
+
+  it("maps channel-layout keywords to the audioLayout filter", () => {
+    expect(parseMetaTagQuery("5.1")).toEqual({ title: 'Audio "5.1"', param: "audioLayout", value: "5.1" });
+    expect(parseMetaTagQuery("stereo")).toEqual({ title: 'Audio "Stereo"', param: "audioLayout", value: "stereo" });
+  });
+
+  it("returns null for anything not an exact meta-tag match", () => {
+    expect(parseMetaTagQuery("dune")).toBeNull();
+    expect(parseMetaTagQuery("the 1080 club")).toBeNull();
   });
 });
 
