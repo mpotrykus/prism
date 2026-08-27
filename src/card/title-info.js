@@ -1052,6 +1052,13 @@ export class TitleInfoController {
     const title = meta.title || this._item?.title || "";
     if (logoUrl) {
       this._titleEl.innerHTML = `<img class="title-info-logo" src="${this._ctx.escape(logoUrl)}" alt="${this._ctx.escape(title)}" referrerpolicy="no-referrer" />`;
+      /* Some Plex clearLogo assets are SVGs served with a Content-Type: image/jpeg
+         header (a PMS quirk, not a Prism bug) - browsers refuse to render those through
+         an <img>, unlike a mislabeled PNG/JPEG which they'll sniff and render fine. Fall
+         back to the plain-text title rather than leaving a broken-image icon up. */
+      this._titleEl.querySelector("img").addEventListener("error", () => {
+        this._titleEl.textContent = title;
+      });
     } else {
       this._titleEl.textContent = title;
     }

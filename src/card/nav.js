@@ -166,12 +166,38 @@ export function wireHeaderNav(card) {
     rowScroll.scrollBy(scroller.clientWidth * 0.9, { animate: true });
   });
   wireArrowVisibility(rowScroll, leftArrow, rightArrow);
+  /* Fades the scroller's own overflow:hidden clip via a mask instead of a hard edge -
+     scoped to header-nav locally rather than folded into wireArrowVisibility above, since
+     that helper is shared with poster rows/episode lists that don't want this. Mirrors the
+     same offset/max thresholds wireArrowVisibility uses for the arrows' own hidden class,
+     so a side only fades when there's actually more content clipped that way - otherwise
+     the first/last pill would fade for no reason once fully scrolled to an end. */
+  rowScroll.onChange((offset, max) => {
+    scroller.classList.toggle("can-scroll-left", offset > 0);
+    scroller.classList.toggle("can-scroll-right", max > 0 && offset < max);
+  });
 
   card._centerActiveHeaderNav = (animate = true) => {
     const el = track.querySelector(".header-nav-item.active");
     if (el) rowScroll.scrollIntoView(el, { inline: "center", animate });
   };
   requestAnimationFrame(() => card._centerActiveHeaderNav(false));
+
+  /* Centers whatever pill actually has focus, not just the active one - a single
+     focusin listener here (rather than threading a helper through every place
+     wireHomeNav/wireSearchNav can land focus on a nav item: Left/Right, Tab, the
+     hero's "up", search's row-exit fallback...) covers all of them at once, including
+     plain Tab focus, which none of those call sites handle specially anyway. Needed at
+     all because this scroller's track is transform-driven (row-scroll.js), not native
+     overflow - a bare .focus() brings nothing into view the way it would in a real
+     scrollport, so without this a focused pill could sit clipped behind the fade mask
+     or off the edge entirely. animate:true mirrors focusPoster's own rowScroll
+     centering (nav.js) - a held D-pad repeat re-triggers this transform-based
+     transition cleanly every step, unlike native smooth-scroll's interrupt issue noted
+     elsewhere in this file. */
+  track.addEventListener("focusin", (e) => {
+    rowScroll.scrollIntoView(e.target, { inline: "center", animate: true });
+  });
 }
 
 /* Shared "no better target" fallback for every place that drops focus out of the search

@@ -76,6 +76,22 @@
         overflow: hidden;
         min-width: 0;
     }
+    /* nav.js's wireHeaderNav toggles these based on the scroller's actual clamped
+     offset/max (same thresholds as the arrows' own hidden class) - only fades a side that
+     genuinely has more pills clipped behind it, so a fully-scrolled-to-one-end strip
+     doesn't fade its own first/last pill for no reason. */
+    .header-nav-scroller.can-scroll-left {
+        -webkit-mask-image: linear-gradient(to right, transparent, black 24px, black 100%);
+        mask-image: linear-gradient(to right, transparent, black 24px, black 100%);
+    }
+    .header-nav-scroller.can-scroll-right {
+        -webkit-mask-image: linear-gradient(to left, transparent, black 24px, black 100%);
+        mask-image: linear-gradient(to left, transparent, black 24px, black 100%);
+    }
+    .header-nav-scroller.can-scroll-left.can-scroll-right {
+        -webkit-mask-image: linear-gradient(to right, transparent, black 24px, black calc(100% - 24px), transparent);
+        mask-image: linear-gradient(to right, transparent, black 24px, black calc(100% - 24px), transparent);
+    }
     .header-nav-track {
         display: flex;
         align-items: center;
@@ -120,7 +136,6 @@
         text-overflow: ellipsis;
     }
     .header-nav-item:has(.nav-label-wrap) {
-        height: 44px;
         padding: 5px 14px;
     }
     /* sidenav.css's ::before highlight bar is sized for the vertical rail's own 130px
@@ -138,6 +153,22 @@
         opacity: 1;
         color: var(--color-accent);
         background: rgba(var(--color-accent-rgb), 0.14);
+    }
+    /* header-search.css's ::before backdrop fades to nothing at scrollTop 0 (.header-at-top)
+     so the pills sit directly on the hero art - the permanent drop-shadow on .header-nav-item
+     (header-search.css) isn't enough contrast against bright/busy hero images by itself, so
+     give each pill its own scrim background here rather than only on hover/active. */
+    .header.header-at-top .header-nav-item {
+        opacity: 0.85;
+        background: rgba(var(--color-bg-rgb), 0.25);
+    }
+    .header.header-at-top .header-nav-item:hover,
+    .header.header-at-top .header-nav-item:focus-visible {
+        opacity: 1;
+        background: rgba(var(--color-bg-rgb), 0.6);
+    }
+    .header.header-at-top .header-nav-item.active {
+        background: rgba(var(--color-accent-rgb), 0.3);
     }
     .header-nav-arrow {
         flex: none;
