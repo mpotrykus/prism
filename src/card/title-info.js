@@ -361,7 +361,7 @@ function episodeCardHtml(ctx, ep) {
   return `
     <div class="title-info-episode" data-rating-key="${ep.ratingKey}" tabindex="0">
       <div class="title-info-episode-thumb">
-        <img loading="lazy" src="${ctx.escape(ctx.plexThumbUrl(ep.thumb, 320, 180))}" alt="" />
+        <img loading="lazy" src="${ctx.escape(ctx.plexThumbUrl(ep.thumb, 320, 180))}" alt="" referrerpolicy="no-referrer" />
         ${watched ? `<div class="title-info-episode-watched">${WATCHED_ICON_SVG}</div>` : ""}
         ${
           progress > 0
@@ -388,7 +388,7 @@ function flatItemCardHtml(ctx, mapped, rawSummary) {
   return `
     <div class="title-info-episode" data-rating-key="${mapped.ratingKey}" tabindex="0">
       <div class="title-info-episode-thumb">
-        <img loading="lazy" src="${ctx.escape(mapped.art || mapped.image)}" alt="" />
+        <img loading="lazy" src="${ctx.escape(mapped.art || mapped.image)}" alt="" referrerpolicy="no-referrer" />
         ${watched ? `<div class="title-info-episode-watched">${WATCHED_ICON_SVG}</div>` : ""}
         ${
           mapped.progress > 0
@@ -701,6 +701,7 @@ export class TitleInfoController {
     if (video.type === "plex") {
       const videoEl = document.createElement("video");
       videoEl.src = video.url;
+      videoEl.referrerPolicy = "no-referrer";
       videoEl.autoplay = true;
       videoEl.playsInline = true;
       videoEl.muted = this._trailerMuted;
@@ -1050,7 +1051,7 @@ export class TitleInfoController {
     const logoUrl = extractLogoUrl(meta, this._ctx.plexImageUrl);
     const title = meta.title || this._item?.title || "";
     if (logoUrl) {
-      this._titleEl.innerHTML = `<img class="title-info-logo" src="${this._ctx.escape(logoUrl)}" alt="${this._ctx.escape(title)}" />`;
+      this._titleEl.innerHTML = `<img class="title-info-logo" src="${this._ctx.escape(logoUrl)}" alt="${this._ctx.escape(title)}" referrerpolicy="no-referrer" />`;
     } else {
       this._titleEl.textContent = title;
     }
@@ -1105,7 +1106,7 @@ export class TitleInfoController {
       .map((r) => {
         const fallback = `<div class="title-info-cast-avatar-fallback">${PROFILE_ICON_SVG}</div>`;
         const avatar = r.thumb
-          ? `<img src="${this._ctx.escape(this._ctx.plexThumbUrl(r.thumb, 160, 160))}" alt="" loading="lazy" onerror="this.style.display='none';this.nextElementSibling.style.display='flex';" />
+          ? `<img src="${this._ctx.escape(this._ctx.plexThumbUrl(r.thumb, 160, 160))}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.style.display='none';this.nextElementSibling.style.display='flex';" />
              <div class="title-info-cast-avatar-fallback" style="display:none">${PROFILE_ICON_SVG}</div>`
           : fallback;
         const role = r.role ? `<div class="title-info-cast-role">${this._ctx.escape(r.role)}</div>` : "";
@@ -1327,7 +1328,7 @@ export class TitleInfoController {
           const mapped = this._ctx.mapItem(m, false);
           return `
           <div class="title-info-similar-item" data-rating-key="${mapped.ratingKey}" tabindex="0">
-            <img loading="lazy" src="${this._ctx.escape(mapped.image)}" alt="" />
+            <img loading="lazy" src="${this._ctx.escape(mapped.image)}" alt="" referrerpolicy="no-referrer" />
             <div class="t">${this._ctx.escape(mapped.title)}</div>
           </div>`;
         })

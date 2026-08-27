@@ -187,7 +187,7 @@ export class HeroController {
     this._rowsEl.classList.add("overlap-hero");
     const heroTitle = this._item.title || this._item.grandparentTitle || "";
     if (this._logo) {
-      this._titleEl.innerHTML = `<img class="hero-logo" src="${this._ctx.escape(this._logo)}" alt="${this._ctx.escape(heroTitle)}" />`;
+      this._titleEl.innerHTML = `<img class="hero-logo" src="${this._ctx.escape(this._logo)}" alt="${this._ctx.escape(heroTitle)}" referrerpolicy="no-referrer" />`;
     } else {
       this._titleEl.textContent = heroTitle;
     }
@@ -224,7 +224,7 @@ export class HeroController {
        end-of-video event instead of acting on it. */
     this._ytIframeEl = null;
     if (this._video?.type === "plex") {
-      incoming.innerHTML = `<video src="${this._video.url}" autoplay muted playsinline></video>`;
+      incoming.innerHTML = `<video src="${this._video.url}" autoplay muted playsinline referrerpolicy="no-referrer"></video>`;
       const heroVideoEl = incoming.querySelector("video");
       heroVideoEl.muted = this._muted;
       heroVideoEl.addEventListener("ended", () => this.advance());

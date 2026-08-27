@@ -1,6 +1,6 @@
 {
   "appId": "com.mpotrykus.prism",
-  "appName": "Streaming",
+  "appName": "Prism",
   "webDir": "dist",
   "plugins": {
     "SystemBars": {

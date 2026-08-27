@@ -509,6 +509,7 @@ function buildChapterCard(session, chapter, isCurrent, onSelect) {
     const img = document.createElement("img");
     img.loading = "lazy";
     img.alt = "";
+    img.referrerPolicy = "no-referrer";
     Object.assign(img.style, { width: "100%", height: "100%", objectFit: "cover", display: "block" });
     const thumbUrl = plexAssetUrl(session, chapter.thumb);
     if (thumbUrl) img.src = thumbUrl;
@@ -620,6 +621,7 @@ function buildEpisodeCard(item, onSelect) {
     const img = document.createElement("img");
     img.loading = "lazy";
     img.alt = "";
+    img.referrerPolicy = "no-referrer";
     Object.assign(img.style, { width: "100%", height: "100%", objectFit: "cover", display: "block" });
     if (item.thumbUrl) img.src = item.thumbUrl;
     thumbWrap.appendChild(img);

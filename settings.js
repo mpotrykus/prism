@@ -228,6 +228,12 @@ class StreamingSettingsModal extends HTMLElement {
                 </div>
                 <div class="hint">Plays everything in HDR10 mode, including SDR titles, instead of switching per-title - avoids the TV renegotiating between back-to-back titles (e.g. auto-playing the next episode). The display still returns to SDR whenever playback stops - this does not affect the dashboard.</div>
               </section>
+
+              <section class="group">
+                <div class="group-title">About</div>
+                <div class="hint">Prism is an independent app and is not affiliated with, endorsed by, or sponsored by Plex, Inc.</div>
+                <a class="about-privacy-link" href="https://mpotrykus.github.io/prism/privacy" target="_blank" rel="noopener noreferrer">Privacy Policy</a>
+              </section>
             </div>
           </div>
           <div class="status save-status"></div>
@@ -291,7 +297,7 @@ class StreamingSettingsModal extends HTMLElement {
         ".f-trailers-enabled, .f-title-trailers-enabled, .f-youtube-key, .f-ai-enabled, .f-openrouter-key, .f-subtitle-provider, " +
         ".f-opensubtitles-username, .f-opensubtitles-password, .f-opensubtitles-key, " +
         ".f-ai-cadence, .f-max-genre-rows, .f-row-size, .f-title-audio-enabled, .f-title-audio-volume, .f-xbox-hdr-always-on, " +
-        ".btn-cancel, .btn-save",
+        ".about-privacy-link, .btn-cancel, .btn-save",
       { orientation: "vertical", onBack: () => this.close() }
     );
     /* LB/RB (see focus-nav.js's chapterPrev/chapterNext) switch tabs directly regardless of

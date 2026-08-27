@@ -336,6 +336,7 @@ export function renderSearchPage(card, hubs, { expanded = false, onBack = null, 
       const img = document.createElement("img");
       img.className = "search-page-group-image";
       img.loading = "lazy";
+      img.referrerPolicy = "no-referrer";
       img.src = hub.image;
       img.alt = "";
       titleWrap.appendChild(img);

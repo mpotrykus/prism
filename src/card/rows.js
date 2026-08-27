@@ -47,6 +47,7 @@ function getPosterImg(src, alt) {
   if (!img) {
     img = document.createElement("img");
     img.loading = "lazy";
+    img.referrerPolicy = "no-referrer";
     img.src = src;
     posterImgCache.set(src, img);
   } else if (claimedImgs.has(img)) {

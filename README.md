@@ -180,6 +180,10 @@ tested on real remote hardware yet.
 
 ---
 
+## Privacy
+
+[Privacy Policy](https://mpotrykus.github.io/prism/privacy)
+
 ## License
 
 [MIT](LICENSE)
