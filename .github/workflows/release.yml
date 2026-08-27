@@ -1,0 +1,133 @@
+name: Release
+
+# Tag pushes (v1.2.3) build all platforms and publish a GitHub Release.
+# workflow_dispatch lets you run the same builds by hand at any time - if you pick an
+# existing tag as the "Use workflow from" ref, github.ref is still refs/tags/<tag>, so the
+# release job fires the same way manual runs against a plain branch just build artifacts
+# for download/testing without publishing a release (no version to tag it with).
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch: {}
+
+jobs:
+  android:
+    name: Android APK
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      # webDir (dist/) has to exist before `cap sync` copies it into
+      # android/app/src/main/assets/public - see CLAUDE.md's Vite build note.
+      - run: npm run build
+
+      - run: node scripts/android-sync-shaders.mjs
+      - run: npx cap sync android
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+
+      # compileSdk/targetSdk track android/variables.gradle - installed explicitly rather
+      # than relying on whatever happens to be preinstalled on the runner image.
+      - name: Install Android SDK components
+        run: |
+          yes | sdkmanager --licenses > /dev/null || true
+          sdkmanager "platforms;android-36" "build-tools;36.0.0"
+
+      - name: Build debug APK
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug
+
+      - name: Locate APK
+        id: apk
+        run: |
+          apk=$(find android/app/build/outputs/apk -name "*.apk" | head -n1)
+          if [ -z "$apk" ]; then echo "no APK found" >&2; exit 1; fi
+          echo "path=$apk" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: prism-android-apk
+          path: ${{ steps.apk.outputs.path }}
+
+  windows:
+    name: Xbox/PC MSIX
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      # Restores NuGet + builds the signed sideload .msixbundle via MSBuild (vswhere-located,
+      # windows-latest ships VS2022 Enterprise with the UWP workload already installed).
+      # Same shell for Xbox and PC - see CLAUDE.md - so one build covers both targets.
+      - run: npm run xbox:build
+
+      - name: Package sideload bundles
+        id: bundle
+        shell: pwsh
+        run: |
+          $dir = Get-ChildItem -Path "uwp/PrismUwp/AppPackages" -Directory |
+            Where-Object { $_.Name -notlike "*_Debug_*" } |
+            Sort-Object LastWriteTime -Descending |
+            Select-Object -First 1
+          if (-not $dir) { throw "No release AppPackages folder found under uwp/PrismUwp/AppPackages" }
+          Compress-Archive -Path "$($dir.FullName)\*" -DestinationPath "prism-xbox-sideload.zip" -Force
+          Copy-Item "prism-xbox-sideload.zip" "prism-pc-sideload.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: prism-xbox-msixbundle
+          path: prism-xbox-sideload.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: prism-pc-msixbundle
+          path: prism-pc-sideload.zip
+
+  release:
+    name: Publish GitHub Release
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [android, windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create or update release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          files=(
+            artifacts/prism-android-apk/*.apk
+            artifacts/prism-xbox-msixbundle/prism-xbox-sideload.zip
+            artifacts/prism-pc-msixbundle/prism-pc-sideload.zip
+          )
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "${files[@]}" --clobber
+          else
+            gh release create "$TAG" "${files[@]}" --title "$TAG" --generate-notes
+          fi
