@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { normalizeTitle, isInWatchlist } from "./watchlist-match.js";
+import { normalizeTitle, isInWatchlist, findLocalMatch } from "./watchlist-match.js";
 
 describe("normalizeTitle", () => {
   it("strips punctuation and lowercases", () => {
@@ -31,5 +31,24 @@ describe("isInWatchlist", () => {
 
   it("handles an empty/undefined watchlist", () => {
     expect(isInWatchlist({ title: "Arrival" }, undefined)).toBe(false);
+  });
+});
+
+describe("findLocalMatch", () => {
+  const pool = [
+    { title: "Dune: Part Two", year: 2024, __server: { id: "srv1" } },
+    { title: "Arrival", year: 2016, __server: { id: "srv2" } },
+  ];
+
+  it("returns the matching pool item so its stamps (e.g. __server) can be borrowed", () => {
+    expect(findLocalMatch({ title: "Dune Part Two", year: 2024 }, pool)).toBe(pool[0]);
+  });
+
+  it("returns undefined when nothing matches", () => {
+    expect(findLocalMatch({ title: "Not In Pool" }, pool)).toBeUndefined();
+  });
+
+  it("returns undefined for an empty/undefined pool", () => {
+    expect(findLocalMatch({ title: "Arrival" }, undefined)).toBeUndefined();
   });
 });

@@ -23,6 +23,7 @@ import { media, setMediaFacade, NativeMediaFacade } from "./core/media-facade.js
 import { notifyStall, notifyReload, setStallDrivenAbr, updateAbrMonitor } from "./core/abr.js";
 import { reloadTranscodeSession } from "./core/session-reload.js";
 import { mountPlayerChrome, unmountPlayerChrome } from "./ui/player-chrome.js";
+import { showPlaybackErrorModal } from "./ui/error-modal.js";
 /* Circular with shader-pipeline.js/content-analysis.js/ambient-pipeline.js (each imports a "post"
    helper from this file; this file imports their "update"/"apply" functions back) - safe for the
    same "function-body-only reference" reason documented in each of those files' own import
@@ -453,7 +454,7 @@ function handleMessage(controller, message) {
             break;
         case "error":
             console.error("StreamingPlayer: native player error -", params.message);
-            controller.stop();
+            showPlaybackErrorModal(controller, params.message);
             break;
         case "stopped":
             controller.stop();

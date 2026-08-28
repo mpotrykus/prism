@@ -6,6 +6,7 @@ import * as StreamingSubtitles from "./core/subtitle-provider.js";
 import * as subtitleStore from "./core/subtitle-store.js";
 import { reloadTranscodeSession } from "./core/session-reload.js";
 import { upNextSkipAtMs } from "./ui/chrome-skip.js";
+import { showPlaybackErrorModal } from "./ui/error-modal.js";
 
 const NativePlayer = registerPlugin("NativePlayer");
 /* Deliberately a local copy of plex-player.js's own TIMELINE_PING_MS, not a shared
@@ -147,7 +148,7 @@ export async function playNative(controller, streamUrl, startOffsetMs) {
     controller._nativeListenerHandles.push(
         await NativePlayer.addListener("error", ({ message }) => {
             console.error("StreamingPlayer: native playback error -", message);
-            controller.stop();
+            showPlaybackErrorModal(controller, message);
         })
     );
     controller._nativeListenerHandles.push(

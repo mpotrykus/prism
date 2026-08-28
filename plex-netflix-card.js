@@ -2,7 +2,8 @@ import { wireLinearNav, isControllerActive } from "./focus-nav.js";
 import { App } from "@capacitor/app";
 import { player } from "./plex-player.js";
 import { tapUrl } from "./src/card/logic/deep-link.js";
-import { normalizeTitle, isInWatchlist } from "./src/card/logic/watchlist-match.js";
+import { normalizeTitle, isInWatchlist, findLocalMatch } from "./src/card/logic/watchlist-match.js";
+import { dedupeSourcesByServer } from "./src/card/logic/cross-server.js";
 import {
   shuffle,
   mapItem,
@@ -29,7 +30,7 @@ import { renderMoreSheet } from "./src/card/more-sheet.js";
 import { fetchHomeProfiles, renderProfileNav, renderProfileList, switchToUser } from "./src/card/profile.js";
 import { TitleInfoController } from "./src/card/title-info.js";
 import { HeroController } from "./src/card/hero.js";
-import { plexFetch, loadAll, sectionForView, sectionsForView, fetchWatchlistRaw, fetchOnDeckRaw, primaryServer, serverForSection } from "./src/card/data.js";
+import { plexFetch, loadAll, sectionForView, sectionsForView, fetchWatchlistRaw, fetchOnDeckRaw, primaryServer, serverForSection, activeServers } from "./src/card/data.js";
 import { onSearchInput, exitSearch, renderSearchPage, openRowSeeMore } from "./src/card/search-page.js";
 import {
   wireNavItem,
@@ -435,6 +436,7 @@ class PlexNetflixCard extends HTMLElement {
       mapItem: (m, withProgress) => this._mapItem(m, withProgress),
       isInWatchlist: (item) => this._isInWatchlist(item),
       resolveLocalRatingKey: (item) => this._resolveLocalRatingKey(item),
+      resolveItemSources: (item) => this._resolveItemSources(item),
       onAddToWatchlist: (item, btnEl) => this._addToWatchlist(item, btnEl),
       onRemoveFromWatchlist: (item, btnEl) => this._removeFromWatchlist(item, btnEl),
       onPlayItem: (item, opts) => this._playItem(item, opts),
@@ -710,6 +712,41 @@ class PlexNetflixCard extends HTMLElement {
     return fetchWatchlistRaw(this);
   }
 
+  /* Watchlist items come from plex.tv's account-level Discover API (fetchWatchlistRaw),
+     not any local server's plexFetch - unlike every other raw source in this file, they
+     never get a __server/__section stamp, so _serverFilterForView can never match them
+     directly against a server/library tab. This is the only other place these items'
+     server/section identity is checked, so the fallback pool is built fresh from
+     whatever local raw data is already in memory (recentlyAdded/onDeck/per-genre
+     pools - all properly stamped) rather than requiring a dedicated fetch. */
+  _watchlistLocalPool() {
+    const pool = [...(this._recentlyAddedRaw || []), ...(this._onDeckRaw || [])];
+    if (this._genreBySection) {
+      for (const entries of this._genreBySection.values()) {
+        for (const g of entries) pool.push(...g.items);
+      }
+    }
+    return pool;
+  }
+
+  /* Same shape as _serverFilterForView composed with a type filter, but for watchlist
+     items specifically - matches by normalized title(+year) against _watchlistLocalPool
+     to borrow a local item's __server/__section stamp instead of trusting the watchlist
+     item's own (nonexistent) one. Falls back to checking the raw watchlist item itself
+     when no local match is found, which preserves the old (always-empty-on-a-specific-
+     tab) behavior for a title that isn't actually on this server, and is a no-op on
+     home/search where the underlying serverFilter is already `() => true`. */
+  _watchlistFilterForView(view) {
+    const sectionFilters = SECTION_TYPE_FILTERS[this._sectionForView(view)?.type];
+    const serverFilter = this._serverFilterForView(view);
+    const pool = this._watchlistLocalPool();
+    return (m) => {
+      if (sectionFilters && m.type !== sectionFilters.other) return false;
+      const local = findLocalMatch(m, pool);
+      return local ? serverFilter(local) : serverFilter(m);
+    };
+  }
+
   _shuffle(array) {
     return shuffle(array);
   }
@@ -766,7 +803,7 @@ class PlexNetflixCard extends HTMLElement {
     const serverFilter = this._serverFilterForView(view);
     const onDeckFilter = (m) => (sectionFilters ? m.type === sectionFilters.onDeck : true) && serverFilter(m);
     const otherFilter = (m) => (sectionFilters ? m.type === sectionFilters.other : true) && serverFilter(m);
-    const watchlistFilter = otherFilter;
+    const watchlistFilter = this._watchlistFilterForView(view);
     const recentlyAddedFilter = otherFilter;
     const recommendedFilter = otherFilter;
     const popularFilter = otherFilter;
@@ -837,9 +874,7 @@ class PlexNetflixCard extends HTMLElement {
      an unrelated poster's watchlist button elsewhere on the page. */
   _refreshWatchlistRow() {
     const view = this._currentView || "home";
-    const sectionFilters = SECTION_TYPE_FILTERS[this._sectionForView(view)?.type];
-    const serverFilter = this._serverFilterForView(view);
-    const watchlistFilter = (m) => (sectionFilters ? m.type === sectionFilters.other : true) && serverFilter(m);
+    const watchlistFilter = this._watchlistFilterForView(view);
     const watchlistFull = (this._watchlistRaw || []).filter(watchlistFilter);
     const watchlist = watchlistFull.slice(0, this._config.row_size).map((m) => this._mapItem(m, false));
 
@@ -1221,7 +1256,7 @@ class PlexNetflixCard extends HTMLElement {
     const filter = this._typeFilterForView(view);
     return [
       ...(this._onDeckRaw || []).filter(filter),
-      ...(this._watchlistRaw || []).filter(filter),
+      ...(this._watchlistRaw || []).filter(this._watchlistFilterForView(view)),
       ...(this._recentlyAddedRaw || []).filter(filter),
     ];
   }
@@ -1408,20 +1443,85 @@ class PlexNetflixCard extends HTMLElement {
      space than this server's /library/metadata - using it directly there 404s. Resolve
      the local ratingKey (if the title is actually in this server's library) via
      /hubs/search before fetching detail. */
+  /* Searches every active server, not just the primary/owned one - a watchlist item's
+     title may only live on a shared/remote server, and a hub search scoped to just the
+     primary server silently finds nothing for those, leaving the title-info modal with
+     no detail fetch at all (see open()'s "no ratingKey" bail-out). Prefers a match on
+     the primary server when more than one server happens to have the title, matching
+     this function's old (single-server) behavior for the common case. Returns the
+     matching server alongside the ratingKey - open() needs both, since every downstream
+     ctx.plexFetch call for this item defaults to whatever server gets stamped there. */
   async _resolveLocalRatingKey(item) {
-    try {
-      const data = await this._plexFetch("/hubs/search", { query: item.title, limit: 10 });
-      const results = (data?.MediaContainer?.Hub || [])
-        .filter((h) => h.type === item.type)
-        .flatMap((h) => h.Metadata || []);
-      const norm = this._normalizeTitle(item.title);
-      const exact = results.find(
-        (m) => this._normalizeTitle(m.title) === norm && (!item.year || m.year === item.year)
-      );
-      return (exact || results[0])?.ratingKey || null;
-    } catch (e) {
-      return null;
-    }
+    const norm = this._normalizeTitle(item.title);
+    const attempts = await Promise.all(
+      activeServers(this).map(async (server) => {
+        try {
+          const data = await this._plexFetch("/hubs/search", { query: item.title, limit: 10 }, server);
+          const results = (data?.MediaContainer?.Hub || [])
+            .filter((h) => h.type === item.type)
+            .flatMap((h) => h.Metadata || []);
+          const exact = results.find(
+            (m) => this._normalizeTitle(m.title) === norm && (!item.year || m.year === item.year)
+          );
+          const match = exact || results[0];
+          return match?.ratingKey ? { ratingKey: match.ratingKey, server } : null;
+        } catch (e) {
+          return null;
+        }
+      })
+    );
+    const primary = primaryServer(this);
+    return attempts.find((a) => a?.server?.id === primary.id) || attempts.find(Boolean) || null;
+  }
+
+  /* An item's own cross-server "sources" list, for the two title-info cases whose
+     `sources` can't be trusted to already reflect every server:
+       - an on-deck episode redirect (title-info.js's openForEpisode) - the episode's own
+         `sources` (collapseByGuid, run on the raw on-deck episode) only reflects a
+         cross-server match when both servers happen to have the SAME episode currently
+         on-deck. Each server tracks its own watch progress independently, so two
+         different current episodes (the common case) never collapse together, even
+         though the show itself really is on both.
+       - a watchlist ("My List") item - Plex's account-level Discover API never stamps a
+         server on these at all (see mapItem's comment), so `sources` starts out as a
+         single null-server entry regardless of type, filtered out entirely by
+         _renderSourcesTag.
+     Keeps the item's already-known server/ratingKey for its own entry rather than
+     re-searching for it (that search could only ever confirm what's already known), and
+     only searches every OTHER active server for additional copies - same hub-search-by-
+     title approach as _resolveLocalRatingKey above, just fanned out to every source
+     instead of stopping at the first. Filtered by item.type so this works for a movie
+     watchlist item too, not just shows. Returns null only when there's truly nothing to
+     tell a caller (no own server known AND no other server has a copy either) - a
+     genuinely single-source item still gets its one real entry back (not null), since a
+     watchlist caller's own fallback is a useless null-server placeholder, not a valid
+     single entry the way an episode-redirect caller's already is. */
+  async _resolveItemSources(item) {
+    const ownServer = item.server || null;
+    const ownEntry = ownServer ? [{ server: ownServer, ratingKey: item.ratingKey, key: item.key }] : [];
+    const others = activeServers(this).filter((s) => s.id !== ownServer?.id);
+    if (!others.length) return ownEntry.length ? ownEntry : null;
+    const norm = this._normalizeTitle(item.title);
+    const found = await Promise.all(
+      others.map(async (server) => {
+        try {
+          const data = await this._plexFetch("/hubs/search", { query: item.title, limit: 10 }, server);
+          const results = (data?.MediaContainer?.Hub || [])
+            .filter((h) => h.type === item.type)
+            .flatMap((h) => h.Metadata || []);
+          const exact = results.find(
+            (m) => this._normalizeTitle(m.title) === norm && (!item.year || m.year === item.year)
+          );
+          const match = exact || results[0];
+          return match ? { server, ratingKey: match.ratingKey, key: match.key } : null;
+        } catch (e) {
+          return null;
+        }
+      })
+    );
+    const extra = found.filter(Boolean);
+    if (!extra.length && !ownEntry.length) return null;
+    return dedupeSourcesByServer([...ownEntry, ...extra]);
   }
 
   async _onWatchlistMutated() {

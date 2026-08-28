@@ -2,6 +2,7 @@ import Hls from "hls.js";
 import { storedVolume } from "./ui/shared.js";
 import { releaseBifIndex } from "./core/bif.js";
 import { setMediaFacade } from "./core/media-facade.js";
+import { showPlaybackErrorModal } from "./ui/error-modal.js";
 import { closeEpisodeListOverlay, closeChapterListOverlay } from "./ui/episode-list.js";
 import { updateAbrMonitor, stopAbrLoop, notifyStall, setBandwidthSource } from "./core/abr.js";
 import { reloadTranscodeSession } from "./core/session-reload.js";
@@ -33,6 +34,37 @@ import { closeAudioSubtitlesOverlay, stopSubtitleLoop } from "./ui/chrome.js";
    can fire asynchronously on an element that's already been superseded, and that
    stray event must not reach back into the controller for a title/switch it's no
    longer about. */
+/* MediaError only gives a numeric code (MEDIA_ERR_ABORTED=1..MEDIA_ERR_SRC_NOT_SUPPORTED=4) and
+   an optional, often browser-internal `message` not fit to show a viewer - this is what
+   showPlaybackErrorModal actually displays instead. */
+function describeVideoError(err) {
+    switch (err?.code) {
+        case 2:
+            return "A network error interrupted playback. Check your connection and try again.";
+        case 3:
+            return "The video could not be decoded. It may be corrupt or use an unsupported codec.";
+        case 4:
+            return "This video format isn't supported by this player.";
+        default:
+            return "Playback stopped unexpectedly.";
+    }
+}
+
+/* Same "translate to a viewer-safe sentence" job as describeVideoError above, for hls.js's own
+   fatal errors (data.type/data.details - see Hls.ErrorTypes/ErrorDetails) - the transcode/HLS
+   path most Plex playback actually takes, distinct from (and not routed through) the plain
+   <video> "error" event describeVideoError handles. */
+function describeHlsError(data) {
+    switch (data?.type) {
+        case Hls.ErrorTypes.NETWORK_ERROR:
+            return "A network error interrupted playback. The server may be unavailable - check your connection and try again.";
+        case Hls.ErrorTypes.MEDIA_ERROR:
+            return "The video could not be decoded. It may be corrupt or use an unsupported codec.";
+        default:
+            return "Playback stopped unexpectedly.";
+    }
+}
+
 function createVideoElement(controller) {
     const video = document.createElement("video");
     video.className = "streaming-player-video";
@@ -80,7 +112,7 @@ function createVideoElement(controller) {
         if (controller._videoEl !== video) return;
         const err = video.error;
         console.error("StreamingPlayer: <video> error -", err?.code, err?.message);
-        controller.stop();
+        showPlaybackErrorModal(controller, describeVideoError(err));
     });
     video.volume = storedVolume();
 
@@ -158,11 +190,12 @@ export function attachSource(controller, video, streamUrl) {
         const hls = new Hls();
         hls.on(Hls.Events.ERROR, (event, data) => {
             console.error("StreamingPlayer: hls.js error -", data.type, data.details, data.fatal ? "(fatal)" : "");
-            if (data.fatal) controller.stop();
+            if (data.fatal) showPlaybackErrorModal(controller, describeHlsError(data));
             /* Non-fatal buffer-stall - the Auto Quality signal that the current cap is
                too high for the real connection right now (see core/abr.js's notifyStall).
-               Fatal errors above already stop() the whole session, so this branch only
-               ever matters for the non-fatal case. */
+               A fatal error above already ends the session (via the error modal's own
+               dismiss - see error-modal.js), so this branch only ever matters for the
+               non-fatal case. */
             else if (data.details === Hls.ErrorDetails.BUFFER_STALLED_ERROR) notifyStall(controller);
         });
         /* hls.js's own bandwidthEstimate starts at a synthetic default before any real

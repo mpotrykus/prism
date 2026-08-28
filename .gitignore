@@ -15,6 +15,13 @@ android/captures/
 android/*.iml
 android/.idea/
 
+# Play Store release signing key - never commit. Losing both this file and
+# android/keystore.properties means losing the ability to publish updates under this
+# signing identity. Back both up somewhere safe (password manager / offline copy).
+android/*.jks
+android/*.keystore
+android/keystore.properties
+
 # UWP shell (Xbox + PC, shared WebView2 host - see CLAUDE.md)
 uwp/PrismUwp/.vs/
 uwp/PrismUwp/*.csproj.user

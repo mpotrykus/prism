@@ -308,8 +308,16 @@ function isFullyWatched(meta) {
   if (meta.type === "show" || meta.type === "season") return meta.leafCount > 0 && meta.viewedLeafCount === meta.leafCount;
   return (meta.viewCount || 0) > 0;
 }
+/* viewedLeafCount alone misses a show/season where the very first episode has been
+   started but not yet finished (viewOffset > 0, viewCount still 0 - so viewedLeafCount
+   never ticks up) - confirmed live against a real account: a show on-deck for its own
+   Pilot came back {leafCount:7, viewedLeafCount:0, lastViewedAt:<real timestamp>}, which
+   left this false and skipped _loadShowResumeLabel's fetch entirely, silently leaving
+   the show's Play button on a bare "Play" instead of "Resume S1 E1". lastViewedAt is
+   Plex's own container-level "has anything under this ever been played" timestamp -
+   set the moment a leaf's viewOffset starts moving, not just once one is completed. */
 function hasAnyHistory(meta) {
-  if (meta.type === "show" || meta.type === "season") return (meta.viewedLeafCount || 0) > 0;
+  if (meta.type === "show" || meta.type === "season") return (meta.viewedLeafCount || 0) > 0 || !!meta.lastViewedAt;
   return (meta.viewOffset || 0) > 0 || (meta.viewCount || 0) > 0;
 }
 /* "Has an actual mid-title resume position" - distinct from hasAnyHistory above, which
@@ -822,13 +830,19 @@ export class TitleInfoController {
          silently fetching the wrong server's metadata whenever the episode that led here
          (e.g. a Continue Watching row) lives on a shared, non-owned server. */
       server: item.server || null,
-      /* Approximate but reasonable: this episode being collapsed cross-server (see
-         catalog.js's mapItem) implies its show is too. Actual show-level source
-         resolution doesn't exist yet - see cross-server.js's own header comment. */
+      /* Best-effort starting guess, painted immediately by open() below: this episode
+         being collapsed cross-server (see catalog.js's mapItem) implies its show probably
+         is too. Only a guess, though - collapseByGuid ran on the raw on-deck EPISODE, which
+         only merges across servers when both happen to have the SAME episode currently on
+         deck. Two servers independently progressing through different episodes of the same
+         show (the common case) never collapse, even though the show itself really is on
+         both - _resolveShowSourcesForEpisode below resolves the real, show-level answer
+         right after and overwrites this guess once it lands. */
       sources: item.sources || null,
     };
     await this.open(showItem, source);
     if (this._item === showItem) {
+      this._resolveShowSourcesForEpisode(showItem);
       this._resumeEpisodeKey = item.ratingKey;
       /* The show container's own meta has no viewOffset (see _playEpisodeByRatingKey's
          comment) - use the resumed episode's own progress/hasHistory, already known from
@@ -841,6 +855,35 @@ export class TitleInfoController {
          actually targets once _resumeEpisodeKey is set. */
       if (!this._watchedBtn.hidden) this._updateWatchedUI(!!item.watched);
     }
+  }
+
+  /* Fire-and-forget, same pattern as _resolveAndShowTrailer - runs alongside whatever
+     open() already kicked off rather than blocking on it, and only overwrites the
+     episode-derived guess open() painted (see openForEpisode's own comment) once a real
+     show-level result comes back. ctx.resolveShowSources returns null rather than a
+     single-entry array when no other server has a copy, so a genuinely single-source show
+     correctly leaves the guess (also single-source) in place instead of re-rendering the
+     identical tag. */
+  async _resolveShowSourcesForEpisode(showItem) {
+    const sources = await this._ctx.resolveItemSources(showItem);
+    if (!sources || this._item !== showItem) return;
+    this._sources = sources;
+    this._renderSourcesTag();
+  }
+
+  /* Same fire-and-forget resolution as _resolveShowSourcesForEpisode above, for the other
+     case _renderSourcesTag can't paint from `item.sources` alone: a watchlist item never
+     carries a server at all (see mapItem's comment), so open()'s early
+     `this._sources = item.sources || []` is always a single null-server entry here,
+     filtered out entirely - "My List" showed no tag whether or not the title turned out
+     to be single- or multi-server. Runs after open()'s own watchlist branch has resolved
+     `item.server`, so ctx.resolveItemSources has a real server to search everyone else
+     against. */
+  async _resolveWatchlistSources(item) {
+    const sources = await this._ctx.resolveItemSources(item);
+    if (!sources || this._item !== item) return;
+    this._sources = sources;
+    this._renderSourcesTag();
   }
 
   /* Opens instantly from whatever's already known about the item (title/image, via the
@@ -968,8 +1011,9 @@ export class TitleInfoController {
 
     let ratingKey = item.ratingKey;
     if (source === "watchlist") {
-      ratingKey = await this._ctx.resolveLocalRatingKey(item);
+      const resolved = await this._ctx.resolveLocalRatingKey(item);
       if (this._item !== item) return;
+      ratingKey = resolved?.ratingKey || null;
       /* Swap the item's Discover-scoped ratingKey (and key) for the resolved local ones
          so downstream staleness checks (_loadSimilar/_loadSeasons compare against
          this._item.ratingKey) and Play's native playback request both key off the ID
@@ -979,6 +1023,15 @@ export class TitleInfoController {
          playback requests at a path that doesn't exist on this server. */
       item.ratingKey = ratingKey;
       item.key = ratingKey ? `/library/metadata/${ratingKey}` : item.key;
+      /* A watchlist item never carries its own __server stamp (see mapItem's comment) -
+         resolveLocalRatingKey may have found this title on a non-primary server, and
+         every ctx.plexFetch call below (plus Play, via plex-netflix-card.js's
+         _playItem) needs that server, not whatever the default falls back to. */
+      if (resolved?.server) item.server = resolved.server;
+      /* Fire-and-forget, same pattern as _resolveAndShowTrailer below - a watchlist item
+         never carries a server on its own `sources` (see _resolveWatchlistSources' own
+         comment), so this is the only path that can ever paint a real tag for one. */
+      this._resolveWatchlistSources(item);
     }
     if (!ratingKey) {
       this._setButtonsLoading(false);
@@ -1029,6 +1082,26 @@ export class TitleInfoController {
     this._sourcesEl.innerHTML = sources
       .map((s) => `<span class="title-info-source-chip">${this._ctx.escape(s.server.name)}</span>`)
       .join("");
+  }
+
+  /* Shared by _renderDetail (movies/episodes, off the item's own Media[]) and
+     _loadShowFormatBadges below (shows, off a representative episode's Media[] instead -
+     see that method's own comment for why). */
+  _renderFormatBadges(media) {
+    if (!this._badgesEl) return;
+    const badgeLabels = [];
+    const resolutionLabel = formatResolution(media?.[0]?.videoResolution);
+    if (resolutionLabel) badgeLabels.push(resolutionLabel);
+    const hdrLabel = hdrVariantLabel(media, 0);
+    if (hdrLabel) badgeLabels.push(hdrLabel);
+    const codecLabel = videoCodecLabel(media, 0);
+    if (codecLabel) badgeLabels.push(codecLabel);
+    const audioLabel = audioFormatLabel(media, 0);
+    if (audioLabel) badgeLabels.push(audioLabel);
+    const channelLabel = channelLayoutLabel(media, 0);
+    if (channelLabel) badgeLabels.push(channelLabel);
+    this._badgesEl.innerHTML = badgeLabels.map(renderMediaBadge).join("");
+    this._badgesEl.hidden = !badgeLabels.length;
   }
 
   _renderDetail(meta) {
@@ -1090,22 +1163,10 @@ export class TitleInfoController {
 
     /* Format badge row - resolution/HDR/codec/audio pulled from Media[0], same "first
        version" convention the meta line's old resolution field used, since this modal has
-       no version picker of its own (that lives in the player's Quality menu instead). */
-    const badgeLabels = [];
-    const resolutionLabel = formatResolution(meta.Media?.[0]?.videoResolution);
-    if (resolutionLabel) badgeLabels.push(resolutionLabel);
-    const hdrLabel = hdrVariantLabel(this._media, 0);
-    if (hdrLabel) badgeLabels.push(hdrLabel);
-    const codecLabel = videoCodecLabel(this._media, 0);
-    if (codecLabel) badgeLabels.push(codecLabel);
-    const audioLabel = audioFormatLabel(this._media, 0);
-    if (audioLabel) badgeLabels.push(audioLabel);
-    const channelLabel = channelLayoutLabel(this._media, 0);
-    if (channelLabel) badgeLabels.push(channelLabel);
-    if (this._badgesEl) {
-      this._badgesEl.innerHTML = badgeLabels.map(renderMediaBadge).join("");
-      this._badgesEl.hidden = !badgeLabels.length;
-    }
+       no version picker of its own (that lives in the player's Quality menu instead). A
+       show has no Media[] of its own (only its episodes do) - handled separately by
+       _loadShowFormatBadges below, off whichever episode Play would actually start. */
+    this._renderFormatBadges(this._media);
 
     const cast = (meta.Role || []).slice(0, 12);
     this._castWrap.hidden = !cast.length;
@@ -1124,6 +1185,7 @@ export class TitleInfoController {
     if (meta.type === "show") {
       this._loadSeasons(meta.ratingKey);
       this._loadShowResumeLabel(meta);
+      this._loadShowFormatBadges(meta);
     } else if (meta.type === "collection") this._loadCollectionItems(meta.ratingKey);
     else if (meta.type === "playlist") this._loadPlaylistItems(meta.ratingKey);
     this._loadSimilar(meta.ratingKey);
@@ -1451,6 +1513,20 @@ export class TitleInfoController {
     if (!episode || this._item?.ratingKey !== showRatingKey) return;
     const resumeEpisode = episode.parentIndex != null && episode.index != null ? { season: episode.parentIndex, episode: episode.index } : null;
     this._updatePlayHistoryUI(true, resumeEpisode, false, true);
+  }
+
+  /* A show has no Media[] of its own (only its episodes carry a file) - resolution/HDR/
+     codec/audio badges for a show pull from whichever episode _getNextEpisode resolves,
+     the same one the show's own Play button would actually start (shared cache, so this
+     costs nothing extra beyond what _loadShowResumeLabel already fetches when there's
+     history). Episode metadata off /allLeaves carries Media[] the same shape a movie's
+     own /library/metadata fetch does - unverified against a real multi-version episode,
+     but every single-version episode checked so far has it. */
+  async _loadShowFormatBadges(meta) {
+    const showRatingKey = meta.ratingKey;
+    const episode = await this._getNextEpisode(showRatingKey);
+    if (!episode || this._item?.ratingKey !== showRatingKey) return;
+    this._renderFormatBadges(episode.Media || []);
   }
 
   /* Full show-wide episode order (every season flattened, ratingKeys only) so the

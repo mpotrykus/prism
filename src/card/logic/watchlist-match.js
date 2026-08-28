@@ -9,7 +9,15 @@ export function normalizeTitle(t) {
   return (t || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
 }
 
-export function isInWatchlist(item, watchlistRaw) {
+/* Same normalized-title(+year) comparison as isInWatchlist, but returns the matched pool
+   item itself rather than a boolean - lets a caller borrow that item's own __server/
+   __section stamp (which a watchlist item never has - see the note above) to decide
+   whether the watchlist item belongs to a given server/library tab. */
+export function findLocalMatch(item, pool) {
   const norm = normalizeTitle(item.title);
-  return (watchlistRaw || []).some((w) => normalizeTitle(w.title) === norm && (!item.year || w.year === item.year));
+  return (pool || []).find((w) => normalizeTitle(w.title) === norm && (!item.year || w.year === item.year));
+}
+
+export function isInWatchlist(item, watchlistRaw) {
+  return !!findLocalMatch(item, watchlistRaw);
 }
