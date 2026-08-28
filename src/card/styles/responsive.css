@@ -51,6 +51,11 @@
   .hero-title { font-size: 24px; }
   .hero-subtitle { font-size: 13px; }
   .hero-summary { display: none; }
+  /* Trailer play/pause + mute buttons collide with other hero/title-info elements at
+     phone width - just hidden here rather than repositioned, same treatment on the home
+     hero and the title-info overlay's own mirrored buttons (title-info.css). */
+  .hero-play-btn, .hero-mute-btn { display: none; }
+  .title-info-trailer-play-btn, .title-info-trailer-mute-btn { display: none; }
   .sidenav {
     position: fixed;
     top: auto;

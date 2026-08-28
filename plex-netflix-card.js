@@ -31,7 +31,7 @@ import { PinEntry } from "./src/card/pin.js";
 import { renderMoreSheet } from "./src/card/more-sheet.js";
 import { fetchHomeProfiles, renderProfileNav, renderProfileList, switchToUser, PROFILE_ICON_SVG } from "./src/card/profile.js";
 import { TitleInfoController } from "./src/card/title-info.js";
-import { HeroController } from "./src/card/hero.js";
+import { HeroController, PAUSE_ICON_SVG } from "./src/card/hero.js";
 import { plexFetch, loadAll, sectionForView, sectionsForView, fetchWatchlistRaw, fetchOnDeckRaw, primaryServer, serverForSection, activeServers } from "./src/card/data.js";
 import { onSearchInput, exitSearch, renderSearchPage, openRowSeeMore } from "./src/card/search-page.js";
 import {
@@ -256,7 +256,7 @@ class PlexNetflixCard extends HTMLElement {
                   <button type="button" class="hero-watchlist-btn" aria-label="Add to My List">+</button>
                 </div>
               </div>
-              <button type="button" class="hero-play-btn" aria-label="Play/pause">⏸</button>
+              <button type="button" class="hero-play-btn" aria-label="Play/pause">${PAUSE_ICON_SVG}</button>
               <button type="button" class="hero-mute-btn" aria-label="Toggle sound">🔊</button>
             </div>
             <div class="rows"></div>
@@ -863,14 +863,15 @@ class PlexNetflixCard extends HTMLElement {
     const playlistsRow = this._getPlaylistsRowForView(view);
 
     const rows = [];
-    if (onDeck.length) rows.push({ title: "Continue Watching", items: onDeck, source: "local", landscape: true });
-    if (recentlyAdded.length)
+    if (onDeck.length && this._config.row_continue_watching_enabled !== false)
+      rows.push({ title: "Continue Watching", items: onDeck, source: "local", landscape: true });
+    if (recentlyAdded.length && this._config.row_recently_added_enabled !== false)
       rows.push({
         title: "Recently Added",
         items: recentlyAdded,
         source: "local",
       });
-    if (watchlist.length)
+    if (watchlist.length && this._config.row_watchlist_enabled !== false)
       rows.push({
         title: "My List",
         items: watchlist,
@@ -878,14 +879,14 @@ class PlexNetflixCard extends HTMLElement {
         hasMore: watchlist.length < watchlistFull.length,
         loadMore: () => watchlistFull,
       });
-    if (recommended.length)
+    if (recommended.length && this._config.row_recommended_enabled !== false)
       rows.push({
         title: "Recommended for You",
         items: recommended,
         source: "local",
         landscape: true,
       });
-    if (popular.length)
+    if (popular.length && this._config.row_popular_enabled !== false)
       rows.push({
         title: "What's Popular",
         items: popular,
@@ -893,8 +894,8 @@ class PlexNetflixCard extends HTMLElement {
         rankNumbers: true,
       });
     rows.push(...genreRows);
-    if (collectionsRow) rows.push(collectionsRow);
-    if (playlistsRow) rows.push(playlistsRow);
+    if (collectionsRow && this._config.row_collections_enabled !== false) rows.push(collectionsRow);
+    if (playlistsRow && this._config.row_playlists_enabled !== false) rows.push(playlistsRow);
     /* showHero:false always means "background data streaming in after first paint" (see
        data.js's loadBackgroundData) - merge the newly-available rows in without
        disturbing what's already rendered, for the same reason showHero itself is
@@ -911,7 +912,10 @@ class PlexNetflixCard extends HTMLElement {
     const view = this._currentView || "home";
     const watchlistFilter = this._watchlistFilterForView(view);
     const watchlistFull = (this._watchlistRaw || []).filter(watchlistFilter);
-    const watchlist = watchlistFull.slice(0, this._config.row_size).map((m) => this._mapItem(m, false));
+    const watchlist =
+      this._config.row_watchlist_enabled === false
+        ? []
+        : watchlistFull.slice(0, this._config.row_size).map((m) => this._mapItem(m, false));
 
     const existing = this._rowsEl.querySelector('[data-row-key="watchlist"]');
     if (!watchlist.length) {
@@ -955,9 +959,10 @@ class PlexNetflixCard extends HTMLElement {
     const sectionFilters = SECTION_TYPE_FILTERS[this._sectionForView(view)?.type];
     const serverFilter = this._serverFilterForView(view);
     const onDeckFilter = (m) => (sectionFilters ? m.type === sectionFilters.onDeck : true) && serverFilter(m);
-    const onDeck = (this._onDeckRaw || [])
-      .filter(onDeckFilter)
-      .map((m) => this._mapItem(m, true));
+    const onDeck =
+      this._config.row_continue_watching_enabled === false
+        ? []
+        : (this._onDeckRaw || []).filter(onDeckFilter).map((m) => this._mapItem(m, true));
 
     const existing = this._rowsEl.querySelector('[data-row-key="on-deck"]');
     if (!onDeck.length) {

@@ -3,6 +3,12 @@ import { pickHeroItem, pickHeroItemFromPool, heroArtUrl, heroSubtitleText, heroS
 import { extractLogoUrl } from "./logic/catalog.js";
 import { resolveTrailerVideo } from "./logic/trailer.js";
 
+/* Plain glyphs (⏸/▶) render via Android's emoji font as a colored, boxed icon instead of a
+   flat monochrome symbol - these SVGs give a crisp currentColor icon on every platform. */
+export const PAUSE_ICON_SVG =
+  '<svg viewBox="0 0 24 24"><rect x="6" y="5" width="4" height="14" rx="1" fill="currentColor"/><rect x="14" y="5" width="4" height="14" rx="1" fill="currentColor"/></svg>';
+export const PLAY_ICON_SVG = '<svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z" fill="currentColor"/></svg>';
+
 /* The hero banner: autoplay trailer resolution/crossfade, mute/play controls, and the
    focus/visibility/IntersectionObserver plumbing that decides whether it should
    currently be playing at all. Kept as one stateful controller (like pin.js's
@@ -162,7 +168,7 @@ export class HeroController {
 
   updatePlayback() {
     const playing = this.shouldPlay();
-    this._playBtn.textContent = playing ? "⏸" : "▶";
+    this._playBtn.innerHTML = playing ? PAUSE_ICON_SVG : PLAY_ICON_SVG;
     const activeMedia = this._mediaLayers[this._activeLayer];
     const video = activeMedia.querySelector("video");
     if (video) {

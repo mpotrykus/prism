@@ -2,6 +2,7 @@ import { wireLinearNav, focusAfterPaint, isControllerActive, registerNavHandler 
 import { hasSecrets, loadSecrets, saveSecrets } from "./vault.js";
 import { discoverLibraries } from "./plex-auth.js";
 import { isXboxDevice } from "./src/player/core/platform.js";
+import { getImageCacheTtlDays, setImageCacheTtlDays, clearImageCache } from "./image-cache.js";
 import MODAL_STYLE from "./src/styles/settings-modal.css?inline";
 
 /* Only non-sensitive fields live here in plain localStorage. plex_token,
@@ -32,6 +33,13 @@ const DEFAULT_PLAIN_CONFIG = {
     xbox_hdr_always_on: false,
     title_audio_enabled: true,
     title_audio_volume: 0.65,
+    row_continue_watching_enabled: true,
+    row_recently_added_enabled: true,
+    row_watchlist_enabled: true,
+    row_recommended_enabled: true,
+    row_popular_enabled: true,
+    row_collections_enabled: true,
+    row_playlists_enabled: true,
 };
 
 export function loadPlain() {
@@ -80,7 +88,22 @@ const ICONS = {
     display: '<svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2" fill="none" stroke="currentColor" stroke-width="1.6"/><line x1="3" y1="10" x2="21" y2="10" stroke="currentColor" stroke-width="1.6"/><line x1="9" y1="10" x2="9" y2="20" stroke="currentColor" stroke-width="1.6"/></svg>',
     speaker: '<svg viewBox="0 0 24 24"><path d="M4 9v6h4l5 4V5L8 9H4z" fill="currentColor"/><path d="M16.5 9a4 4 0 010 6" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round"/><path d="M19 7a7.5 7.5 0 010 10" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round"/></svg>',
     hdr: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4.5" fill="none" stroke="currentColor" stroke-width="1.6"/><line x1="12" y1="2" x2="12" y2="5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><line x1="12" y1="19" x2="12" y2="22" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><line x1="2" y1="12" x2="5" y2="12" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><line x1="19" y1="12" x2="22" y2="12" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><line x1="4.9" y1="4.9" x2="7" y2="7" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><line x1="17" y1="17" x2="19.1" y2="19.1" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><line x1="4.9" y1="19.1" x2="7" y2="17" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><line x1="17" y1="7" x2="19.1" y2="4.9" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>',
+    cache: '<svg viewBox="0 0 24 24"><path d="M20 8a8 8 0 10-1.5 9" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><path d="M20 3v5h-5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+    rows: '<svg viewBox="0 0 24 24"><rect x="3" y="4.5" width="18" height="4" rx="1.2" fill="none" stroke="currentColor" stroke-width="1.6"/><rect x="3" y="10" width="18" height="4" rx="1.2" fill="none" stroke="currentColor" stroke-width="1.6"/><rect x="3" y="15.5" width="18" height="4" rx="1.2" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>',
 };
+
+/* Static (non-genre, non-AI) home rows a user can individually hide from Preferences ->
+   Home Rows. Genre rows are excluded on purpose - they're dynamic per-library, not a
+   fixed named row, and already have their own count/cadence controls above. */
+const STATIC_ROW_TOGGLES = [
+    { key: "continue_watching", label: "Continue Watching" },
+    { key: "recently_added", label: "Recently Added" },
+    { key: "watchlist", label: "My List" },
+    { key: "recommended", label: "Recommended for You" },
+    { key: "popular", label: "What's Popular" },
+    { key: "collections", label: "Collections" },
+    { key: "playlists", label: "Playlists" },
+];
 
 /* icon param is optional - the About tab's card has no icon/desc header. */
 function groupHead(icon, title, desc, switchHtml = "") {
@@ -163,20 +186,6 @@ class StreamingSettingsModal extends HTMLElement {
               </section>
 
               <section class="group">
-                ${groupHead(ICONS.display, "Display", "Tune how many rows and titles appear on the home screen")}
-                <div class="row-2col">
-                  <div class="field">
-                    <label>Max Genre Rows</label>
-                    <input type="number" class="f-max-genre-rows" min="0" max="40" data-nav-group="prefs-display" />
-                  </div>
-                  <div class="field">
-                    <label>Row Size</label>
-                    <input type="number" class="f-row-size" min="5" max="60" data-nav-group="prefs-display" />
-                  </div>
-                </div>
-              </section>
-
-              <section class="group">
                 ${groupHead(
                   ICONS.speaker,
                   "Title Audio",
@@ -190,6 +199,46 @@ class StreamingSettingsModal extends HTMLElement {
                     <span class="range-value title-audio-volume-value"></span>
                   </div>
                 </div>
+              </section>
+
+              <section class="group">
+                ${groupHead(ICONS.display, "Display", "Tune how many rows and titles appear on the home screen, and choose which rows show up")}
+                <div class="row-2col">
+                  <div class="field">
+                    <label>Max Genre Rows</label>
+                    <input type="number" class="f-max-genre-rows" min="0" max="40" data-nav-group="prefs-display" />
+                  </div>
+                  <div class="field">
+                    <label>Row Size</label>
+                    <input type="number" class="f-row-size" min="5" max="60" data-nav-group="prefs-display" />
+                  </div>
+                </div>
+                ${STATIC_ROW_TOGGLES.map(
+                  (r) => `
+                <div class="subtoggle-row">
+                  <span class="subtoggle-label">${r.label}</span>
+                  <label class="switch">
+                    <input type="checkbox" class="f-row-${r.key}-enabled" />
+                    <span class="switch-track"></span>
+                  </label>
+                </div>`
+                ).join("")}
+              </section>
+
+              <section class="group">
+                ${groupHead(ICONS.cache, "Image Cache", "How long poster/backdrop art stays cached before Prism checks Plex again for updated artwork")}
+                <div class="subtoggle-row image-cache-ttl-row">
+                  <div class="image-cache-ttl-left">
+                    <span class="subtoggle-label">Cache Lifespan</span>
+                    <div class="field-row">
+                      <input type="number" class="f-image-cache-ttl-days" min="1" max="90" />
+                      <span>days</span>
+                    </div>
+                  </div>
+                  <button type="button" class="btn btn-secondary btn-clear-image-cache">Clear Image Cache</button>
+                </div>
+                <div class="hint">Removes every cached poster/backdrop so titles re-fetch fresh artwork from Plex. Already-loaded posters on screen won't update until you reload.</div>
+                <div class="status image-cache-status"></div>
               </section>
 
               <section class="group xbox-only-group">
@@ -296,6 +345,7 @@ class StreamingSettingsModal extends HTMLElement {
     this._el(".f-ai-enabled").addEventListener("change", () => this._syncIntegrationToggleFields());
     this._el(".f-title-audio-enabled").addEventListener("change", () => this._syncTitleAudioFields());
     this._el(".f-title-audio-volume").addEventListener("input", () => this._updateTitleAudioVolumeLabel());
+    this._el(".btn-clear-image-cache").addEventListener("click", () => this._clearImageCache());
     /* Delegated on .section-list itself (not the individual radios) since those are
        torn down and rebuilt by every _renderSectionList() call - the container div is
        the one element in this area that survives across renders. */
@@ -325,7 +375,10 @@ class StreamingSettingsModal extends HTMLElement {
         ".section-row .s-enabled, .section-row .s-label, .section-row .default-view-radio, " +
         ".f-trailers-enabled, .f-title-trailers-enabled, .f-ai-enabled, .f-openrouter-key, .f-subtitle-provider, " +
         ".f-opensubtitles-username, .f-opensubtitles-password, .f-opensubtitles-key, " +
-        ".f-ai-cadence, .f-max-genre-rows, .f-row-size, .f-title-audio-enabled, .f-title-audio-volume, .f-xbox-hdr-always-on, " +
+        ".f-ai-cadence, .f-max-genre-rows, .f-row-size, " +
+        STATIC_ROW_TOGGLES.map((r) => `.f-row-${r.key}-enabled`).join(", ") +
+        ", .f-image-cache-ttl-days, .btn-clear-image-cache, " +
+        ".f-title-audio-enabled, .f-title-audio-volume, .f-xbox-hdr-always-on, " +
         ".about-privacy-link, .btn-cancel, .btn-save",
       { orientation: "vertical", onBack: () => this.close() }
     );
@@ -384,6 +437,24 @@ class StreamingSettingsModal extends HTMLElement {
     this._el(".title-audio-volume-value").textContent = `${this._el(".f-title-audio-volume").value}%`;
   }
 
+  /* Cache lifespan lives in Cache Storage, not the plain/secret config this modal
+     otherwise saves (see image-cache.js) - written immediately on click rather than
+     deferred to _save(), so it isn't lost if the user clears the cache then cancels
+     out of the rest of the form. */
+  async _clearImageCache() {
+    const statusEl = this._el(".image-cache-status");
+    statusEl.textContent = "Clearing…";
+    statusEl.className = "status image-cache-status";
+    try {
+      await clearImageCache();
+      statusEl.textContent = "Image cache cleared.";
+      statusEl.className = "status image-cache-status ok";
+    } catch (e) {
+      statusEl.textContent = `Couldn't clear image cache: ${e.message}`;
+      statusEl.className = "status image-cache-status err";
+    }
+  }
+
   _switchTab(key) {
     this.shadowRoot.querySelectorAll(".tab-btn").forEach((btn) => btn.classList.toggle("active", btn.dataset.tab === key));
     this.shadowRoot.querySelectorAll(".tab-panel").forEach((panel) => panel.classList.toggle("active", panel.dataset.tab === key));
@@ -398,6 +469,12 @@ class StreamingSettingsModal extends HTMLElement {
     this._defaultView = config.default_view || "home";
     this._el(".f-max-genre-rows").value = config.max_genre_rows ?? 12;
     this._el(".f-row-size").value = config.row_size ?? 20;
+    STATIC_ROW_TOGGLES.forEach((r) => {
+      this._el(`.f-row-${r.key}-enabled`).checked = config[`row_${r.key}_enabled`] !== false;
+    });
+    this._el(".f-image-cache-ttl-days").value = await getImageCacheTtlDays();
+    this._el(".image-cache-status").textContent = "";
+    this._el(".image-cache-status").className = "status image-cache-status";
     this._machineId = config.machine_id || "";
     this._sections = config.sections || [];
     /* Tokens merged in below (after secrets are unlocked, further down this method) -
@@ -661,6 +738,9 @@ class StreamingSettingsModal extends HTMLElement {
       ai_rows_cadence_ms: Number(this._el(".f-ai-cadence").value),
       max_genre_rows: Number(this._el(".f-max-genre-rows").value) || 12,
       row_size: Number(this._el(".f-row-size").value) || 20,
+      ...Object.fromEntries(
+        STATIC_ROW_TOGGLES.map((r) => [`row_${r.key}_enabled`, this._el(`.f-row-${r.key}-enabled`).checked])
+      ),
       subtitle_provider: this._el(".f-subtitle-provider").value || "plex",
       trailers_enabled: this._el(".f-trailers-enabled").checked,
       title_trailers_enabled: this._el(".f-title-trailers-enabled").checked,
@@ -698,6 +778,7 @@ class StreamingSettingsModal extends HTMLElement {
       const secrets = await this._collectSecrets();
       await saveSecrets(secrets);
       savePlain(plain);
+      await setImageCacheTtlDays(this._el(".f-image-cache-ttl-days").value);
       /* Same server+token merge as loadFull() - plain.servers has no token field (see
          _collectPlainConfig's comment) and secrets only carries the id-keyed
          server_tokens map, so naively spreading both here would hand refreshConfig()

@@ -262,8 +262,15 @@
     border: 1.5px solid rgba(var(--color-fg-rgb), 0.6);
     background: rgba(var(--color-panel-rgb), 0.5);
     color: var(--color-fg);
-    font-size: 18px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
     cursor: pointer;
+}
+
+.hero-play-btn svg {
+    width: 20px;
+    height: 20px;
 }
 
 .hero-play-btn:hover {

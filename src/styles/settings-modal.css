@@ -272,6 +272,35 @@ input[type="range"] {
     accent-color: var(--color-accent);
 }
 
+.image-cache-ttl-left {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.image-cache-ttl-row input[type="number"] {
+    width: 70px;
+    flex: none;
+}
+
+.image-cache-ttl-row .field-row {
+    color: rgba(var(--color-fg-rgb), 0.7);
+    font-size: 12.5px;
+}
+
+.image-cache-ttl-row .btn {
+    white-space: nowrap;
+}
+
+@media (max-width: 700px) {
+    .image-cache-ttl-row {
+        flex-wrap: wrap;
+    }
+    .image-cache-ttl-row .btn-clear-image-cache {
+        flex: 1 0 100%;
+    }
+}
+
 .range-value {
     flex: none;
     min-width: 34px;
