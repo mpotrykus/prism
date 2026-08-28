@@ -30,10 +30,19 @@ function writeCache(cache) {
    own content - not the black bars YouTube pads a non-16:9 upload with - actually fills
    the frame, cropping the overflow via the same ancestor overflow:hidden the base 16:9
    case already relies on. 1 (a no-op) whenever the video is already ~wrapRatio, and safe
-   against a missing/malformed ratio rather than producing NaN/Infinity. */
-export function computeCoverScale(videoRatio, wrapRatio = 16 / 9) {
+   against a missing/malformed ratio rather than producing NaN/Infinity.
+
+   `tolerance` absorbs oEmbed's own imprecision, not just genuine near-16:9 videos -
+   oEmbed only ever returns tiny integer pixel dimensions (200x113, 356x200, ...), so a
+   truly-exact 16:9 video can still come back a percent or two off from quantization alone
+   (confirmed against a real title: Avengers: Endgame's actual trailer reported 1.0044
+   without this, a meaningless micro-zoom). Real non-16:9 containers (4:3 is ~33% off,
+   even the mildest theatrical ratios are several percent off) are nowhere near this
+   threshold, so nothing genuine gets missed by ignoring noise this small. */
+export function computeCoverScale(videoRatio, wrapRatio = 16 / 9, tolerance = 0.02) {
   if (!videoRatio || !isFinite(videoRatio) || videoRatio <= 0) return 1;
-  return Math.max(wrapRatio, videoRatio) / Math.min(wrapRatio, videoRatio);
+  const scale = Math.max(wrapRatio, videoRatio) / Math.min(wrapRatio, videoRatio);
+  return scale <= 1 + tolerance ? 1 : scale;
 }
 
 /* Resolves (and caches) a YouTube video's native width/height ratio via oEmbed. Never

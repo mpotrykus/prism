@@ -28,6 +28,24 @@ describe("computeCoverScale", () => {
   it("respects a custom wrapRatio", () => {
     expect(computeCoverScale(4 / 3, 4 / 3)).toBe(1);
   });
+
+  /* Regression test for the real Avengers: Endgame trailer, whose oEmbed dimensions
+     (356x200) come back to a ~1.0044 raw scale despite the video genuinely being 16:9 -
+     just quantization noise from oEmbed's tiny integer pixel dimensions, not a real signal. */
+  it("treats a near-16:9 ratio within tolerance as no correction needed", () => {
+    expect(computeCoverScale(356 / 200)).toBe(1);
+    expect(computeCoverScale((16 / 9) * 1.01)).toBe(1);
+  });
+
+  it("still corrects a ratio just outside the default tolerance", () => {
+    const ratio = (16 / 9) * 1.03;
+    expect(computeCoverScale(ratio)).toBeCloseTo(ratio / (16 / 9), 5);
+  });
+
+  it("respects a custom tolerance", () => {
+    const ratio = (16 / 9) * 1.01;
+    expect(computeCoverScale(ratio, 16 / 9, 0)).toBeCloseTo(1.01, 5);
+  });
 });
 
 describe("getYoutubeAspectRatio", () => {

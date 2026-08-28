@@ -63,8 +63,8 @@ export function isConfigured(fullConfig) {
 
 const TABS = [
     { key: "plex", label: "Plex" },
-    { key: "integrations", label: "Integrations" },
     { key: "preferences", label: "Preferences" },
+    { key: "integrations", label: "Integrations" },
     { key: "about", label: "About" },
 ];
 
@@ -142,7 +142,7 @@ class StreamingSettingsModal extends HTMLElement {
               </section>
             </div>
 
-            <div class="tab-panel" data-tab="integrations">
+            <div class="tab-panel" data-tab="preferences">
               <section class="group">
                 ${groupHead(ICONS.play, "Trailers", "Show trailer previews on the home screen and in each title's info panel")}
                 <div class="subtoggle-row">
@@ -162,6 +162,47 @@ class StreamingSettingsModal extends HTMLElement {
                 <div class="hint">Falls back to a trailer looked up on TMDB when Plex doesn't have one.</div>
               </section>
 
+              <section class="group">
+                ${groupHead(ICONS.display, "Display", "Tune how many rows and titles appear on the home screen")}
+                <div class="row-2col">
+                  <div class="field">
+                    <label>Max Genre Rows</label>
+                    <input type="number" class="f-max-genre-rows" min="0" max="40" data-nav-group="prefs-display" />
+                  </div>
+                  <div class="field">
+                    <label>Row Size</label>
+                    <input type="number" class="f-row-size" min="5" max="60" data-nav-group="prefs-display" />
+                  </div>
+                </div>
+              </section>
+
+              <section class="group">
+                ${groupHead(
+                  ICONS.speaker,
+                  "Title Audio",
+                  "Fades in a title's theme song when its info panel opens, and fades it out when you close it or move on",
+                  `<label class="switch"><input type="checkbox" class="f-title-audio-enabled" /><span class="switch-track"></span></label>`
+                )}
+                <div class="field title-audio-fields">
+                  <label>Volume</label>
+                  <div class="field-row">
+                    <input type="range" class="f-title-audio-volume" min="0" max="100" step="5" />
+                    <span class="range-value title-audio-volume-value"></span>
+                  </div>
+                </div>
+              </section>
+
+              <section class="group xbox-only-group">
+                ${groupHead(
+                  ICONS.hdr,
+                  "HDR — Stay On During Playback",
+                  "Plays everything in HDR10, including SDR titles, instead of switching per-title. Avoids the TV renegotiating between back-to-back titles. Returns to SDR once playback stops.",
+                  `<label class="switch"><input type="checkbox" class="f-xbox-hdr-always-on" /><span class="switch-track"></span></label>`
+                )}
+              </section>
+            </div>
+
+            <div class="tab-panel" data-tab="integrations">
               <section class="group">
                 ${groupHead(
                   ICONS.sparkle,
@@ -209,47 +250,6 @@ class StreamingSettingsModal extends HTMLElement {
                 </div>
               </section>
 
-            </div>
-
-            <div class="tab-panel" data-tab="preferences">
-              <section class="group">
-                ${groupHead(ICONS.display, "Display", "Tune how many rows and titles appear on the home screen")}
-                <div class="row-2col">
-                  <div class="field">
-                    <label>Max Genre Rows</label>
-                    <input type="number" class="f-max-genre-rows" min="0" max="40" data-nav-group="prefs-display" />
-                  </div>
-                  <div class="field">
-                    <label>Row Size</label>
-                    <input type="number" class="f-row-size" min="5" max="60" data-nav-group="prefs-display" />
-                  </div>
-                </div>
-              </section>
-
-              <section class="group">
-                ${groupHead(
-                  ICONS.speaker,
-                  "Title Audio",
-                  "Fades in a title's theme song when its info panel opens, and fades it out when you close it or move on",
-                  `<label class="switch"><input type="checkbox" class="f-title-audio-enabled" /><span class="switch-track"></span></label>`
-                )}
-                <div class="field title-audio-fields">
-                  <label>Volume</label>
-                  <div class="field-row">
-                    <input type="range" class="f-title-audio-volume" min="0" max="100" step="5" />
-                    <span class="range-value title-audio-volume-value"></span>
-                  </div>
-                </div>
-              </section>
-
-              <section class="group xbox-only-group">
-                ${groupHead(
-                  ICONS.hdr,
-                  "HDR — Stay On During Playback",
-                  "Plays everything in HDR10, including SDR titles, instead of switching per-title. Avoids the TV renegotiating between back-to-back titles. Returns to SDR once playback stops.",
-                  `<label class="switch"><input type="checkbox" class="f-xbox-hdr-always-on" /><span class="switch-track"></span></label>`
-                )}
-              </section>
             </div>
 
             <div class="tab-panel" data-tab="about">
