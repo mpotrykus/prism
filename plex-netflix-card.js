@@ -1,4 +1,4 @@
-import { wireLinearNav, isControllerActive } from "./focus-nav.js";
+import { wireLinearNav, isControllerActive, focusAfterPaint } from "./focus-nav.js";
 import { App } from "@capacitor/app";
 import { player } from "./plex-player.js";
 import { tapUrl } from "./src/card/logic/deep-link.js";
@@ -24,10 +24,12 @@ import {
   renderRows,
   buildRowSection,
   buildPoster,
+  wireArrowVisibility,
 } from "./src/card/rows.js";
+import { createRowScroll } from "./src/card/row-scroll.js";
 import { PinEntry } from "./src/card/pin.js";
 import { renderMoreSheet } from "./src/card/more-sheet.js";
-import { fetchHomeProfiles, renderProfileNav, renderProfileList, switchToUser } from "./src/card/profile.js";
+import { fetchHomeProfiles, renderProfileNav, renderProfileList, switchToUser, PROFILE_ICON_SVG } from "./src/card/profile.js";
 import { TitleInfoController } from "./src/card/title-info.js";
 import { HeroController } from "./src/card/hero.js";
 import { plexFetch, loadAll, sectionForView, sectionsForView, fetchWatchlistRaw, fetchOnDeckRaw, primaryServer, serverForSection, activeServers } from "./src/card/data.js";
@@ -234,7 +236,7 @@ class PlexNetflixCard extends HTMLElement {
               </div>
               <div class="profile-menu-wrap">
                 <div class="nav-item nav-profile" title="Account" tabindex="0">
-                  <span class="nav-icon nav-profile-icon"></span>
+                  <span class="nav-icon nav-profile-icon">${PROFILE_ICON_SVG}</span>
                   <span class="nav-label nav-profile-label">Profile</span>
                 </div>
               </div>
@@ -287,10 +289,22 @@ class PlexNetflixCard extends HTMLElement {
         </div>
       </div>
       <div class="profile-overlay" tabindex="-1">
-        <div class="profile-modal">
+        <button type="button" class="profile-close" aria-label="Close">
+          <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M6.4 5 5 6.4 10.6 12 5 17.6 6.4 19 12 13.4 17.6 19 19 17.6 13.4 12 19 6.4 17.6 5 12 10.6z"/></svg>
+        </button>
+        <div class="profile-panel">
           <div class="profile-title">Switch Profile</div>
-          <div class="profile-list"></div>
-          <button type="button" class="profile-cancel">Cancel</button>
+          <div class="profile-badges-wrap">
+            <button type="button" class="profile-arrow profile-arrow-left" aria-label="Scroll left">
+              <svg viewBox="0 0 24 24" width="28" height="28"><path fill="currentColor" d="M15.4 7.4 14 6l-6 6 6 6 1.4-1.4L10.8 12z"/></svg>
+            </button>
+            <div class="profile-badges-scroll">
+              <div class="profile-list"></div>
+            </div>
+            <button type="button" class="profile-arrow profile-arrow-right" aria-label="Scroll right">
+              <svg viewBox="0 0 24 24" width="28" height="28"><path fill="currentColor" d="M8.6 7.4 10 6l6 6-6 6-1.4-1.4L13.2 12z"/></svg>
+            </button>
+          </div>
         </div>
       </div>
       <div class="profile-dropdown" hidden>
@@ -411,7 +425,10 @@ class PlexNetflixCard extends HTMLElement {
     this._profileDropdownSettingsBtn = this.shadowRoot.querySelector(".profile-dropdown-settings");
     this._profileOverlay = this.shadowRoot.querySelector(".profile-overlay");
     this._profileListEl = this.shadowRoot.querySelector(".profile-list");
-    this._profileCancelBtn = this.shadowRoot.querySelector(".profile-cancel");
+    this._profileScroll = this.shadowRoot.querySelector(".profile-badges-scroll");
+    this._profileCloseBtn = this.shadowRoot.querySelector(".profile-close");
+    this._profileArrowLeft = this.shadowRoot.querySelector(".profile-arrow-left");
+    this._profileArrowRight = this.shadowRoot.querySelector(".profile-arrow-right");
     this._moreBtn = this.shadowRoot.querySelector(".nav-more");
     this._moreOverlay = this.shadowRoot.querySelector(".more-overlay");
     this._moreListEl = this.shadowRoot.querySelector(".more-sheet-list");
@@ -495,12 +512,30 @@ class PlexNetflixCard extends HTMLElement {
         this._closeProfileDropdown();
       }
     });
-    this._profileCancelBtn.addEventListener("click", () => this._closeProfileOverlay());
+    this._profileCloseBtn.addEventListener("click", () => this._closeProfileOverlay());
     this._profileOverlay.addEventListener("click", (e) => {
       if (e.target === this._profileOverlay) this._closeProfileOverlay();
     });
-    this._profileNav = wireLinearNav(this.shadowRoot, ".profile-switch-btn, .profile-cancel", {
-      orientation: "vertical",
+    /* Same transform-driven track as rows.js's poster rows (see row-scroll.js's own header
+       comment) rather than native overflow scroll - keeps this badge row immune to Xbox
+       WebView2's built-in gamepad-to-scroll hijack, same reasoning as episode-list.js's
+       queue row. */
+    this._profileRowScroll = createRowScroll(this._profileScroll, this._profileListEl);
+    wireArrowVisibility(this._profileRowScroll, this._profileArrowLeft, this._profileArrowRight);
+    this._profileArrowLeft.addEventListener("click", () => {
+      this._profileRowScroll.scrollBy(-this._profileScroll.clientWidth * 0.9, { animate: true });
+    });
+    this._profileArrowRight.addEventListener("click", () => {
+      this._profileRowScroll.scrollBy(this._profileScroll.clientWidth * 0.9, { animate: true });
+    });
+    /* Mirrors episode-list.js's own focusin listener - wireLinearNav's plain scrollIntoView
+       has nothing to act on now that .profile-list is a transform-driven track instead of a
+       native scroll container. */
+    this._profileOverlay.addEventListener("focusin", (e) => {
+      if (this._profileListEl.contains(e.target)) this._profileRowScroll.scrollIntoView(e.target, { inline: "center", animate: true });
+    });
+    this._profileNav = wireLinearNav(this.shadowRoot, ".profile-badge, .profile-close", {
+      orientation: "horizontal",
       onBack: () => this._closeProfileOverlay(),
     });
 
@@ -1025,7 +1060,12 @@ class PlexNetflixCard extends HTMLElement {
   _openProfileOverlay() {
     this._renderProfileList();
     this._profileOverlay.classList.add("open");
-    this._profileNav.focusFirst();
+    /* Lands D-pad/keyboard nav (and the badge row's own centering, see the focusin listener
+       above) on the current profile rather than always the leftmost one - the whole point of
+       "keep the currently selected centered" on open, not just once the user first moves. */
+    const activeBadge = this._profileListEl.querySelector(".profile-badge.active");
+    if (activeBadge) focusAfterPaint(activeBadge);
+    else this._profileNav.focusFirst();
   }
 
   /* Entry point for nav.js's wireProfileButton (gamepad Back/Select). Guarded the same
@@ -1101,7 +1141,7 @@ class PlexNetflixCard extends HTMLElement {
   }
 
   _renderProfileList() {
-    renderProfileList(this._profileListEl, this._homeUsers || [], this._activeUserId, (s) => this._escape(s), (user, rowEl) => this._switchToUser(user, rowEl));
+    renderProfileList(this._profileListEl, this._homeUsers || [], this._activeUserId, (s) => this._escape(s), (user, badgeEl) => this._switchToUser(user, badgeEl));
   }
 
   /* Redirects an episode click to the parent show's info modal, landing on the season/
@@ -1191,8 +1231,8 @@ class PlexNetflixCard extends HTMLElement {
      app, not two. A wrong entry here isn't retried automatically: only Plex can say
      whether it was right, so a rejected PIN just reports the error and leaves the
      user to press "Switch" again. */
-  _switchToUser(user, rowEl) {
-    return switchToUser(user, rowEl, {
+  _switchToUser(user, badgeEl) {
+    return switchToUser(user, badgeEl, {
       promptForDigits: (length, title) => this._promptForDigits(length, title),
       accountToken: this._config.plex_account_token,
       machineId: this._config.machine_id,

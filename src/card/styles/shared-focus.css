@@ -14,8 +14,7 @@
 .title-info-restart-btn:focus-visible,
 .title-info-watched-btn:focus-visible,
 .title-info-watchlist-btn:focus-visible,
-.profile-switch-btn:focus-visible,
-.profile-cancel:focus-visible,
+.profile-close:focus-visible,
 .hero-info-btn:focus-visible,
 .hero-watchlist-btn:focus-visible,
 .hero-mute-btn:focus-visible,
@@ -31,8 +30,8 @@
 .title-info-restart-btn,
 .title-info-watched-btn,
 .title-info-watchlist-btn,
-.profile-switch-btn,
-.profile-cancel,
+.profile-badge,
+.profile-close,
 .hero-info-btn,
 .hero-watchlist-btn,
 .hero-mute-btn,
@@ -52,6 +51,7 @@
 .more-sheet-item:focus-visible,
 .more-sheet-cancel:focus-visible,
 .profile-dropdown-item:focus-visible,
+.profile-arrow:focus-visible,
 .header-nav-arrow:focus-visible {
     outline: none;
 }

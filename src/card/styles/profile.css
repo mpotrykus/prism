@@ -9,6 +9,7 @@
     flex: none;
 }
 
+
 /* Rendered outside .header/.content (see plex-netflix-card.js's template) rather than
    anchored via position:absolute inside .profile-menu-wrap - .header has a mask-image
    (its own scroll-fade gradient) that clips any descendant box extending past .header's
@@ -17,6 +18,7 @@
    fixed here, with top/right set from the icon's real screen position each time it opens
    (plex-netflix-card.js's _openProfileDropdown) - it can't rely on a positioned ancestor
    for placement anymore. */
+
 .profile-dropdown {
     position: fixed;
     z-index: 40;
@@ -32,7 +34,10 @@
     padding: 6px;
     box-shadow: 0 20px 50px rgba(var(--color-shadow-rgb), 0.55);
 }
-.profile-dropdown[hidden] { display: none; }
+
+.profile-dropdown[hidden] {
+    display: none;
+}
 
 .profile-dropdown-item {
     display: flex;
@@ -48,7 +53,11 @@
     color: var(--color-fg);
     cursor: pointer;
 }
-.profile-dropdown-item[hidden] { display: none; }
+
+.profile-dropdown-item[hidden] {
+    display: none;
+}
+
 .profile-dropdown-icon {
     width: 18px;
     height: 18px;
@@ -56,8 +65,14 @@
     display: flex;
     color: rgba(var(--color-fg-rgb), 0.75);
 }
-.profile-dropdown-icon svg { width: 100%; height: 100%; }
-.profile-dropdown-item:hover, .profile-dropdown-item:focus-visible {
+
+.profile-dropdown-icon svg {
+    width: 100%;
+    height: 100%;
+}
+
+.profile-dropdown-item:hover,
+.profile-dropdown-item:focus-visible {
     background: rgba(var(--color-fg-rgb), 0.08);
 }
 
@@ -99,59 +114,130 @@
     display: flex;
 }
 
-.profile-modal {
-    width: 360px;
-    max-width: 88vw;
-    max-height: 80vh;
-    overflow-y: auto;
-    scrollbar-width: none;
-    /* Shared frosted-glass panel look - see colors.css's --glass-panel-bg/-blur. */
-    background: var(--glass-panel-bg);
-    backdrop-filter: var(--glass-panel-blur);
-    -webkit-backdrop-filter: var(--glass-panel-blur);
-    border: 1px solid rgba(var(--color-fg-rgb), 0.08);
-    border-radius: 16px;
-    padding: 24px;
-    box-shadow: 0 24px 70px rgba(var(--color-shadow-rgb), 0.6);
+
+/* No modal box any more - just the shared dark blurred .profile-overlay backdrop behind a
+   plain centering column, full width up to the overlay's own edges (minus this padding) -
+   .profile-list's own justify-content:center (below) is what keeps the actual badges
+   centered rather than spread edge-to-edge on a wide screen. */
+
+.profile-panel {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 40px;
+    width: 100%;
+    box-sizing: border-box;
 }
-.profile-modal::-webkit-scrollbar { display: none; width: 0; height: 0; }
 
 .profile-title {
-    font-size: 15px;
+    font-size: 17px;
     font-weight: 700;
-    margin-bottom: 16px;
     text-align: center;
+    text-shadow: 0 1px 4px rgba(var(--color-shadow-rgb), 0.85);
 }
+
+
+/* Top-right "X", same close affordance/placement idea as title-info.css's own close
+   button. Hidden for controller users (see the :host([controller-active]) rule below) -
+   Back/Escape already closes this overlay for them, so a click target is a dead end, same
+   reasoning as .profile-arrow just below. */
+
+.profile-close {
+    /* absolute, not fixed - .profile-overlay is itself position:fixed/inset:0, so this
+       still anchors to the viewport corner, but stays a real offsetParent-having element
+       (a position:fixed element's own offsetParent is always null per spec) so
+       wireLinearNav's items() filter - which excludes anything with offsetParent === null,
+       the same check it uses to skip display:none elements - doesn't also skip this one. */
+    position: absolute;
+    top: 24px;
+    right: 28px;
+    z-index: 10;
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    border: none;
+    background: transparent;
+    color: var(--color-fg);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.profile-close:hover,
+.profile-close:focus-visible {
+    background: rgba(var(--color-fg-rgb), 0.12);
+}
+
+
+/* Reserves room on either side for the arrows (see rows.js's own row/arrow layout) so
+   they overlay the badge row's own edges instead of shifting it. */
+
+.profile-badges-wrap {
+    position: relative;
+    width: 100%;
+}
+
+
+/* Extra bottom padding (vs. the 8px everywhere else) is deliberate headroom for a
+   .profile-badge-status error message, which sits absolutely-positioned below its badge
+   (see .profile-badge-status) - without it, this scroller's own overflow:hidden clips
+   that text off entirely instead of just cropping the row's natural whitespace. */
+
+.profile-badges-scroll {
+    overflow: hidden;
+    padding: 8px 54px 34px;
+}
+
+
+/* The horizontally-scrolling track itself (see row-scroll.js's createRowScroll, wired up
+   in plex-netflix-card.js) - centered when every badge fits without scrolling, since flex
+   justify-content only matters up to the track's own natural width. */
 
 .profile-list {
     display: flex;
-    flex-direction: column;
-    gap: 10px;
-    margin-bottom: 16px;
+    justify-content: center;
+    gap: 28px;
+    width: max-content;
+    min-width: 100%;
 }
 
-.profile-row {
+.profile-badge {
     display: flex;
+    flex-direction: column;
     align-items: center;
-    gap: 10px;
-    flex-wrap: wrap;
-    background: rgba(var(--color-fg-rgb), 0.05);
-    border-radius: 10px;
-    padding: 10px 12px;
+    gap: 20px;
+    flex: none;
+    border: none;
+    background: transparent;
+    border-radius: 14px;
+    padding: 20px 15px;
+    cursor: pointer;
+    position: relative;
 }
 
-.profile-row.active {
-    background: rgba(var(--color-accent-rgb), 0.12);
+.profile-badge:not(.active):hover,
+.profile-badge:not(.active):focus-visible {
+    background: rgba(var(--color-fg-rgb), 0.08);
 }
 
-.profile-row.busy {
+
+/* Highlighted background for the current profile - the whole pill, not just the avatar,
+   so it reads as "this one" even before the name text is scanned. */
+
+.profile-badge.active {
+    background: rgba(var(--color-accent-rgb), 0.16);
+    cursor: default;
+}
+
+.profile-badge.busy {
     opacity: 0.6;
     pointer-events: none;
 }
 
-.profile-avatar {
-    width: 34px;
-    height: 34px;
+.profile-badge-avatar {
+    width: 150px;
+    height: 150px;
     border-radius: 50%;
     overflow: hidden;
     flex: none;
@@ -162,65 +248,103 @@
     background: rgba(var(--color-fg-rgb), 0.08);
 }
 
-.profile-avatar svg {
-    width: 20px;
-    height: 20px;
+.profile-badge.active .profile-badge-avatar {
+    box-shadow: 0 0 0 3px var(--color-accent);
 }
 
-.profile-avatar img {
+.profile-badge-avatar svg {
+    width: 44px;
+    height: 44px;
+}
+
+.profile-badge-avatar img {
     width: 100%;
     height: 100%;
     object-fit: cover;
     display: block;
 }
 
-.profile-name {
+.profile-badge-name {
     font-size: 14px;
     font-weight: 600;
-    flex: 1 1 auto;
-    min-width: 0;
-}
-
-.profile-switch-btn {
-    border: none;
-    border-radius: 8px;
-    padding: 7px 14px;
-    font-size: 12.5px;
-    font-weight: 700;
-    cursor: pointer;
-    background: rgba(var(--color-fg-rgb), 0.1);
-    color: var(--color-fg);
+    color: white;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
     white-space: nowrap;
 }
 
-.profile-switch-btn:hover {
-    background: rgba(var(--color-fg-rgb), 0.18);
-}
 
-.profile-switch-btn:disabled {
-    opacity: 0.5;
-    cursor: default;
-}
+/* Absolutely positioned rather than in flow - an error message on one badge (a rejected
+   PIN) shouldn't push that badge's own height out and misalign it against its neighbors. */
 
-.profile-row-status {
-    flex: 1 0 100%;
+.profile-badge-status {
+    position: absolute;
+    top: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 140px;
+    margin-top: 4px;
     color: var(--color-danger);
-    font-size: 11.5px;
+    font-size: 11px;
     font-weight: 600;
+    text-align: center;
 }
 
-.profile-cancel {
-    width: 100%;
-    padding: 10px;
-    border-radius: 8px;
+
+/* Empty except while a switch is in flight (see profile.js's switchToUser) - without this,
+   the mobile list below (responsive.css) turns it into a real in-flow flex item via its own
+   position:static override, and an empty inline span still claims a full line-height of
+   vertical space even with no text in it, visibly bloating every row's height. */
+
+.profile-badge-status:empty {
+    display: none;
+}
+
+
+/* Same fade-edge scroll-arrow idea as rows.js's buildScrollArrow/episode-list.js's
+   buildQueueScrollArrow - click-only, so hidden for controller users below (Left/Right
+   already moves between badges for them). */
+
+.profile-arrow {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 44px;
     border: none;
-    background: transparent;
-    color: rgba(var(--color-fg-rgb), 0.55);
-    font-size: 13px;
-    font-weight: 600;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--color-fg);
     cursor: pointer;
+    z-index: 1;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.15s ease;
 }
 
-.profile-cancel:hover {
-    color: var(--color-fg);
+.profile-arrow-left {
+    left: 0;
+    background: linear-gradient(90deg, rgba(var(--color-shadow-rgb), 0.55), transparent);
+}
+
+.profile-arrow-right {
+    right: 0;
+    background: linear-gradient(270deg, rgba(var(--color-shadow-rgb), 0.55), transparent);
+}
+
+.profile-arrow:not(.hidden) {
+    opacity: 1;
+    pointer-events: auto;
+}
+
+
+/* B/Escape (or the D-pad's own Left/Right) already covers what the "X"/arrows are for -
+   see focus-nav.js's controller-active-change comment and title-info.css's own
+   :host([controller-active]) .title-info-close rule for the same reasoning. */
+
+:host([controller-active]) .profile-close,
+:host([controller-active]) .profile-arrow {
+    display: none;
 }

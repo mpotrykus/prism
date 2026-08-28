@@ -665,7 +665,7 @@
 }
 
 
-/* Same centered-card overlay pattern as .profile-overlay/.profile-modal (see profile.css) -
+/* Same centered dark-blurred-backdrop overlay pattern as .profile-overlay (see profile.css) -
    z-index above .title-info-overlay's own 200 since this opens on top of an already-open
    title-info modal rather than the page behind it. */
 

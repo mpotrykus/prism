@@ -81,6 +81,45 @@
      touch-target size. */
   .nav-profile, .nav-settings, .nav-item-dynamic { display: none; }
   .nav-more, .nav-libraries { display: flex; }
+  /* Mobile keeps the old boxed, vertically-stacked profile list instead of the desktop
+     badge carousel (see profile.css's own .profile-badge rules) - a horizontally-scrolling
+     row of 150px circular avatars doesn't fit a phone-width screen, and the original boxed
+     list already worked fine here. Same markup as desktop (profile.js's renderProfileList),
+     just re-flowed by CSS - same idea as this file's own .title-info-episode rules above. */
+  .profile-badges-wrap {
+    /* Shared frosted-glass panel look - see colors.css's --glass-panel-bg/-blur. */
+    background: var(--glass-panel-bg);
+    backdrop-filter: var(--glass-panel-blur);
+    -webkit-backdrop-filter: var(--glass-panel-blur);
+    border: 1px solid rgba(var(--color-fg-rgb), 0.08);
+    border-radius: 16px;
+    box-shadow: 0 24px 70px rgba(var(--color-shadow-rgb), 0.6);
+    width: 88vw;
+    max-width: 360px;
+  }
+  .profile-badges-scroll {
+    overflow: hidden auto;
+    max-height: 70vh;
+    padding: 10px;
+    scrollbar-width: none;
+  }
+  .profile-badges-scroll::-webkit-scrollbar { display: none; width: 0; height: 0; }
+  .profile-list { flex-direction: column; justify-content: flex-start; width: 100%; min-width: 0; gap: 6px; }
+  .profile-arrow { display: none; }
+  .profile-badge {
+    flex-direction: row;
+    align-items: center;
+    justify-content: flex-start;
+    flex-wrap: wrap;
+    width: 100%;
+    gap: 12px;
+    padding: 10px 12px;
+    border-radius: 10px;
+  }
+  .profile-badge-avatar { width: 34px; height: 34px; }
+  .profile-badge-avatar svg { width: 20px; height: 20px; }
+  .profile-badge-name { flex: 1 1 auto; text-align: left; }
+  .profile-badge-status { position: static; transform: none; width: auto; flex: 1 0 100%; text-align: left; margin-top: 0; }
   .main { padding-bottom: calc(56px + var(--safe-bottom)); }
   .row-title { padding-left: 24px; }
   .row-scroller { padding-left: 24px; }
