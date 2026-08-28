@@ -72,7 +72,7 @@
     <header>
       <img class="logo" src="./assets/prism-logo.svg" alt="Prism" />
       <h1>Privacy Policy</h1>
-      <p class="updated">Last updated: August 27, 2026</p>
+      <p class="updated">Last updated: August 28, 2026</p>
     </header>
 
     <main>
@@ -95,8 +95,12 @@
         <ul>
           <li><strong>Plex</strong> — your Plex sign-in and server/library data, to browse and
           play your own library. Required for the app to function.</li>
-          <li><strong>YouTube Data API</strong> (optional) — used only if you add your own
-          YouTube API key, to look up trailers for titles Plex doesn't already have one for.</li>
+          <li><strong>TMDB</strong> — used to look up trailer info (a YouTube video id) for
+          titles Plex doesn't already have a trailer for, using an API key built into the app
+          itself, not one you provide.</li>
+          <li><strong>YouTube</strong> — only when a trailer is found (via a Plex extra or the
+          TMDB lookup above), its video is played back through YouTube's own embedded player.
+          No API key or account of yours is involved in this.</li>
           <li><strong>OpenRouter</strong> (optional) — used only if you add your own OpenRouter
           API key, to generate AI-written themed rows (e.g. "Sci-Fi Comedies") from titles in
           your library.</li>
@@ -121,7 +125,8 @@
         <h2>Third-party privacy policies</h2>
         <ul>
           <li><a href="https://www.plex.tv/about/privacy-legal/" target="_blank" rel="noopener noreferrer">Plex Privacy Policy</a></li>
-          <li><a href="https://policies.google.com/privacy" target="_blank" rel="noopener noreferrer">Google Privacy Policy</a> (covers the YouTube Data API)</li>
+          <li><a href="https://www.themoviedb.org/privacy-policy" target="_blank" rel="noopener noreferrer">TMDB Privacy Policy</a></li>
+          <li><a href="https://policies.google.com/privacy" target="_blank" rel="noopener noreferrer">Google Privacy Policy</a> (covers YouTube's embedded player)</li>
           <li><a href="https://openrouter.ai/privacy" target="_blank" rel="noopener noreferrer">OpenRouter Privacy Policy</a></li>
           <li><a href="https://www.opensubtitles.com/en/privacy" target="_blank" rel="noopener noreferrer">OpenSubtitles Privacy Policy</a></li>
         </ul>
@@ -147,7 +152,8 @@
     </main>
 
     <p class="disclaimer">Prism is an independent app and is not affiliated with, endorsed
-    by, or sponsored by Plex, Inc.</p>
+    by, or sponsored by Plex, Inc. This product uses the TMDB API but is not endorsed or
+    certified by TMDB.</p>
 
     <footer>
       <a class="back-link" href="https://github.com/mpotrykus/prism">← Back to Prism on GitHub</a>

@@ -39,12 +39,15 @@ older or lower-resolution files.
 Requires a Plex Media Server you control. Sign in with your Plex account the same way you
 would in any Plex app, and Prism finds your server and libraries automatically.
 
+Trailers for titles Plex doesn't already have one for are looked up automatically via TMDB —
+no API key needed. The trailer itself still plays through YouTube's own embedded player.
+
 Optional integrations (each needs your own API key/account, entered in Settings):
-• YouTube — trailers for titles Plex doesn't already have one for
 • OpenRouter — AI-generated themed rows built from titles in your library
 • OpenSubtitles — subtitle search and download
 
 Prism is an independent app and is not affiliated with, endorsed by, or sponsored by Plex, Inc.
+This product uses the TMDB API but is not endorsed or certified by TMDB.
 
 ## Keywords / tags
 

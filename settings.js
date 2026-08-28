@@ -5,8 +5,10 @@ import { isXboxDevice } from "./src/player/core/platform.js";
 import MODAL_STYLE from "./src/styles/settings-modal.css?inline";
 
 /* Only non-sensitive fields live here in plain localStorage. plex_token,
-   youtube_api_key, openrouter_api_key, and plex_account_token go through vault.js
-   instead - see there for why (encrypted at rest, not plaintext).
+   openrouter_api_key, and plex_account_token go through vault.js instead - see there for
+   why (encrypted at rest, not plaintext). Trailer discovery uses a TMDB API key bundled
+   with the app itself (see src/card/logic/tmdb.js) rather than a user-supplied secret, so
+   there's no youtube/tmdb key stored here at all anymore.
    plex_account_token is the Plex.tv account token from the Sign in with Plex flow
    (plex-auth.js) - kept separately from plex_token (the per-server access token the
    card actually uses) so "refresh servers" can re-run discovery later without a
@@ -14,34 +16,34 @@ import MODAL_STYLE from "./src/styles/settings-modal.css?inline";
 const PLAIN_STORAGE_KEY = "prism.config";
 
 const DEFAULT_PLAIN_CONFIG = {
-  plex_url: "",
-  machine_id: "",
-  home_enabled: true,
-  servers: [],
-  sections: [],
-  default_view: "home",
-  ai_rows_cadence_ms: 7 * 24 * 60 * 60 * 1000,
-  max_genre_rows: 12,
-  row_size: 20,
-  subtitle_provider: "plex",
-  trailers_enabled: true,
-  title_trailers_enabled: true,
-  ai_rows_enabled: true,
-  xbox_hdr_always_on: false,
-  title_audio_enabled: true,
-  title_audio_volume: 0.65,
+    plex_url: "",
+    machine_id: "",
+    home_enabled: true,
+    servers: [],
+    sections: [],
+    default_view: "home",
+    ai_rows_cadence_ms: 7 * 24 * 60 * 60 * 1000,
+    max_genre_rows: 12,
+    row_size: 20,
+    subtitle_provider: "plex",
+    trailers_enabled: true,
+    title_trailers_enabled: true,
+    ai_rows_enabled: true,
+    xbox_hdr_always_on: false,
+    title_audio_enabled: true,
+    title_audio_volume: 0.65,
 };
 
 export function loadPlain() {
-  try {
-    const raw = JSON.parse(localStorage.getItem(PLAIN_STORAGE_KEY) || "null") || {};
-    return { ...DEFAULT_PLAIN_CONFIG, ...raw };
-  } catch (e) {
-    return { ...DEFAULT_PLAIN_CONFIG };
-  }
+    try {
+        const raw = JSON.parse(localStorage.getItem(PLAIN_STORAGE_KEY) || "null") || {};
+        return {...DEFAULT_PLAIN_CONFIG, ...raw };
+    } catch (e) {
+        return {...DEFAULT_PLAIN_CONFIG };
+    }
 }
 export function savePlain(config) {
-  localStorage.setItem(PLAIN_STORAGE_KEY, JSON.stringify(config));
+    localStorage.setItem(PLAIN_STORAGE_KEY, JSON.stringify(config));
 }
 /* Full config = plain fields + decrypted secrets, merged - what the card's
    setConfig()/refreshConfig() actually expects. Per-server access tokens are secrets
@@ -50,47 +52,39 @@ export function savePlain(config) {
    flat {...plain, ...secrets} spread below, which would otherwise let a `servers` key on
    `secrets` blow away plain's non-secret server list instead of extending it. */
 export async function loadFull() {
-  const plain = loadPlain();
-  const secrets = hasSecrets() ? await loadSecrets() : {};
-  const servers = (plain.servers || []).map((s) => ({ ...s, token: secrets.server_tokens?.[s.id] || "" }));
-  return { ...plain, ...secrets, servers };
+    const plain = loadPlain();
+    const secrets = hasSecrets() ? await loadSecrets() : {};
+    const servers = (plain.servers || []).map((s) => ({...s, token: secrets.server_tokens?.[s.id] || "" }));
+    return {...plain, ...secrets, servers };
 }
 export function isConfigured(fullConfig) {
-  return !!(fullConfig && fullConfig.plex_url && fullConfig.plex_token);
+    return !!(fullConfig && fullConfig.plex_url && fullConfig.plex_token);
 }
 
 const TABS = [
-  { key: "plex", label: "Plex" },
-  { key: "integrations", label: "Integrations" },
-  { key: "preferences", label: "Preferences" },
-  { key: "about", label: "About" },
+    { key: "plex", label: "Plex" },
+    { key: "integrations", label: "Integrations" },
+    { key: "preferences", label: "Preferences" },
+    { key: "about", label: "About" },
 ];
 
 /* Same hand-drawn inline-SVG style as nav.js's sidenav icons (24x24 viewBox,
    stroke-width 1.6, currentColor) - kept here rather than shared since these are
    settings-specific and nav.js's are library-type-specific. */
 const ICONS = {
-  server:
-    '<svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="7" rx="1.6" fill="none" stroke="currentColor" stroke-width="1.6"/><rect x="3" y="13" width="18" height="7" rx="1.6" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="7" cy="7.5" r="1" fill="currentColor"/><circle cx="7" cy="16.5" r="1" fill="currentColor"/></svg>',
-  libraries:
-    '<svg viewBox="0 0 24 24"><rect x="3" y="3" width="8" height="8" rx="1.4" fill="none" stroke="currentColor" stroke-width="1.6"/><rect x="13" y="3" width="8" height="8" rx="1.4" fill="none" stroke="currentColor" stroke-width="1.6"/><rect x="3" y="13" width="8" height="8" rx="1.4" fill="none" stroke="currentColor" stroke-width="1.6"/><rect x="13" y="13" width="8" height="8" rx="1.4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>',
-  play:
-    '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M10 8.3l6 3.7-6 3.7z" fill="currentColor"/></svg>',
-  sparkle:
-    '<svg viewBox="0 0 24 24"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z" fill="currentColor"/><path d="M19 15l.9 2.1L22 18l-2.1.9L19 21l-.9-2.1L16 18l2.1-.9z" fill="currentColor"/></svg>',
-  captions:
-    '<svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2" fill="none" stroke="currentColor" stroke-width="1.6"/><rect x="6" y="10.1" width="5" height="1.8" rx="0.9" fill="currentColor"/><rect x="6" y="13.3" width="7" height="1.8" rx="0.9" fill="currentColor"/><rect x="13" y="10.1" width="5" height="1.8" rx="0.9" fill="currentColor"/></svg>',
-  display:
-    '<svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2" fill="none" stroke="currentColor" stroke-width="1.6"/><line x1="3" y1="10" x2="21" y2="10" stroke="currentColor" stroke-width="1.6"/><line x1="9" y1="10" x2="9" y2="20" stroke="currentColor" stroke-width="1.6"/></svg>',
-  speaker:
-    '<svg viewBox="0 0 24 24"><path d="M4 9v6h4l5 4V5L8 9H4z" fill="currentColor"/><path d="M16.5 9a4 4 0 010 6" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round"/><path d="M19 7a7.5 7.5 0 010 10" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round"/></svg>',
-  hdr:
-    '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4.5" fill="none" stroke="currentColor" stroke-width="1.6"/><line x1="12" y1="2" x2="12" y2="5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><line x1="12" y1="19" x2="12" y2="22" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><line x1="2" y1="12" x2="5" y2="12" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><line x1="19" y1="12" x2="22" y2="12" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><line x1="4.9" y1="4.9" x2="7" y2="7" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><line x1="17" y1="17" x2="19.1" y2="19.1" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><line x1="4.9" y1="19.1" x2="7" y2="17" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><line x1="17" y1="7" x2="19.1" y2="4.9" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>',
+    server: '<svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="7" rx="1.6" fill="none" stroke="currentColor" stroke-width="1.6"/><rect x="3" y="13" width="18" height="7" rx="1.6" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="7" cy="7.5" r="1" fill="currentColor"/><circle cx="7" cy="16.5" r="1" fill="currentColor"/></svg>',
+    libraries: '<svg viewBox="0 0 24 24"><rect x="3" y="3" width="8" height="8" rx="1.4" fill="none" stroke="currentColor" stroke-width="1.6"/><rect x="13" y="3" width="8" height="8" rx="1.4" fill="none" stroke="currentColor" stroke-width="1.6"/><rect x="3" y="13" width="8" height="8" rx="1.4" fill="none" stroke="currentColor" stroke-width="1.6"/><rect x="13" y="13" width="8" height="8" rx="1.4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>',
+    play: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M10 8.3l6 3.7-6 3.7z" fill="currentColor"/></svg>',
+    sparkle: '<svg viewBox="0 0 24 24"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z" fill="currentColor"/><path d="M19 15l.9 2.1L22 18l-2.1.9L19 21l-.9-2.1L16 18l2.1-.9z" fill="currentColor"/></svg>',
+    captions: '<svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2" fill="none" stroke="currentColor" stroke-width="1.6"/><rect x="6" y="10.1" width="5" height="1.8" rx="0.9" fill="currentColor"/><rect x="6" y="13.3" width="7" height="1.8" rx="0.9" fill="currentColor"/><rect x="13" y="10.1" width="5" height="1.8" rx="0.9" fill="currentColor"/></svg>',
+    display: '<svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2" fill="none" stroke="currentColor" stroke-width="1.6"/><line x1="3" y1="10" x2="21" y2="10" stroke="currentColor" stroke-width="1.6"/><line x1="9" y1="10" x2="9" y2="20" stroke="currentColor" stroke-width="1.6"/></svg>',
+    speaker: '<svg viewBox="0 0 24 24"><path d="M4 9v6h4l5 4V5L8 9H4z" fill="currentColor"/><path d="M16.5 9a4 4 0 010 6" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round"/><path d="M19 7a7.5 7.5 0 010 10" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round"/></svg>',
+    hdr: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4.5" fill="none" stroke="currentColor" stroke-width="1.6"/><line x1="12" y1="2" x2="12" y2="5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><line x1="12" y1="19" x2="12" y2="22" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><line x1="2" y1="12" x2="5" y2="12" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><line x1="19" y1="12" x2="22" y2="12" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><line x1="4.9" y1="4.9" x2="7" y2="7" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><line x1="17" y1="17" x2="19.1" y2="19.1" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><line x1="4.9" y1="19.1" x2="7" y2="17" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><line x1="17" y1="7" x2="19.1" y2="4.9" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>',
 };
 
 /* icon param is optional - the About tab's card has no icon/desc header. */
 function groupHead(icon, title, desc, switchHtml = "") {
-  return `
+    return `
     <div class="group-head">
       ${icon ? `<div class="group-icon">${icon}</div>` : ""}
       <div class="group-head-text">
@@ -165,10 +159,7 @@ class StreamingSettingsModal extends HTMLElement {
                     <span class="switch-track"></span>
                   </label>
                 </div>
-                <div class="field trailers-fields">
-                  <label>YouTube Data API Key</label>
-                  <input type="password" class="f-youtube-key" placeholder="Used as a fallback when Plex has no trailer" />
-                </div>
+                <div class="hint">Falls back to a trailer looked up on TMDB when Plex doesn't have one.</div>
               </section>
 
               <section class="group">
@@ -265,10 +256,13 @@ class StreamingSettingsModal extends HTMLElement {
               <section class="group about-group">
                 <img class="about-logo" src="./assets/prism-logo.svg" alt="Prism" />
                 <div class="hint">Prism is an independent app and is not affiliated with, endorsed by, or sponsored by Plex, Inc.</div>
+                <div class="hint">This product uses the TMDB API but is not endorsed or certified by TMDB.</div>
                 <div class="about-links">
                   <a class="about-privacy-link" href="https://mpotrykus.github.io/prism/privacy" target="_blank" rel="noopener noreferrer">Privacy Policy</a>
                   <span class="about-links-sep">·</span>
                   <a class="about-privacy-link" href="https://github.com/mpotrykus/prism" target="_blank" rel="noopener noreferrer">GitHub</a>
+                  <span class="about-links-sep">·</span>
+                  <a class="about-privacy-link" href="https://www.themoviedb.org/" target="_blank" rel="noopener noreferrer">TMDB</a>
                 </div>
               </section>
             </div>
@@ -299,8 +293,6 @@ class StreamingSettingsModal extends HTMLElement {
     this._el(".btn-fetch-libraries").addEventListener("click", () => this._fetchLibraries());
     this._el(".btn-save").addEventListener("click", () => this._save());
     this._el(".f-subtitle-provider").addEventListener("change", () => this._syncSubtitleProviderFields());
-    this._el(".f-trailers-enabled").addEventListener("change", () => this._syncIntegrationToggleFields());
-    this._el(".f-title-trailers-enabled").addEventListener("change", () => this._syncIntegrationToggleFields());
     this._el(".f-ai-enabled").addEventListener("change", () => this._syncIntegrationToggleFields());
     this._el(".f-title-audio-enabled").addEventListener("change", () => this._syncTitleAudioFields());
     this._el(".f-title-audio-volume").addEventListener("input", () => this._updateTitleAudioVolumeLabel());
@@ -331,7 +323,7 @@ class StreamingSettingsModal extends HTMLElement {
       this.shadowRoot,
       ".modal-close, .tab-btn, .btn-reauth, .btn-fetch-libraries, .home-enabled, .server-all-row .sv-enabled, " +
         ".section-row .s-enabled, .section-row .s-label, .section-row .default-view-radio, " +
-        ".f-trailers-enabled, .f-title-trailers-enabled, .f-youtube-key, .f-ai-enabled, .f-openrouter-key, .f-subtitle-provider, " +
+        ".f-trailers-enabled, .f-title-trailers-enabled, .f-ai-enabled, .f-openrouter-key, .f-subtitle-provider, " +
         ".f-opensubtitles-username, .f-opensubtitles-password, .f-opensubtitles-key, " +
         ".f-ai-cadence, .f-max-genre-rows, .f-row-size, .f-title-audio-enabled, .f-title-audio-volume, .f-xbox-hdr-always-on, " +
         ".about-privacy-link, .btn-cancel, .btn-save",
@@ -370,16 +362,11 @@ class StreamingSettingsModal extends HTMLElement {
     });
   }
 
-  /* Toggling Trailers/AI Rows off only hides their input fields - it doesn't clear the
-     underlying secret, so flipping back on later still has the credential in place (see
+  /* Toggling AI Rows off only hides its input fields - it doesn't clear the underlying
+     secret, so flipping back on later still has the credential in place (see
      _collectSecrets below, which reads the field values directly rather than clearing
-     them on toggle-off). The YouTube key is shared by both trailer toggles (home hero,
-     title info) - shown as long as either one might use it as a fallback, not just the
-     home hero one. */
+     them on toggle-off). */
   _syncIntegrationToggleFields() {
-    this.shadowRoot.querySelectorAll(".trailers-fields").forEach((el) => {
-      el.style.display = this._el(".f-trailers-enabled").checked || this._el(".f-title-trailers-enabled").checked ? "" : "none";
-    });
     this.shadowRoot.querySelectorAll(".ai-fields").forEach((el) => {
       el.style.display = this._el(".f-ai-enabled").checked ? "" : "none";
     });
@@ -445,7 +432,6 @@ class StreamingSettingsModal extends HTMLElement {
        only surfaces as an opaque failure later. */
     const secrets = await this._getEffectiveSecrets();
     this._servers = this._servers.map((s) => ({ ...s, token: secrets.server_tokens?.[s.id] || "" }));
-    this._el(".f-youtube-key").value = secrets.youtube_api_key || "";
     this._el(".f-openrouter-key").value = secrets.openrouter_api_key || "";
     this._el(".f-opensubtitles-username").value = secrets.opensubtitles_username || "";
     this._el(".f-opensubtitles-password").value = secrets.opensubtitles_password || "";
@@ -692,7 +678,6 @@ class StreamingSettingsModal extends HTMLElement {
     const existing = await this._getEffectiveSecrets();
     return {
       plex_token: existing.plex_token || "",
-      youtube_api_key: this._el(".f-youtube-key").value.trim(),
       openrouter_api_key: this._el(".f-openrouter-key").value.trim(),
       plex_account_token: existing.plex_account_token || "",
       opensubtitles_username: this._el(".f-opensubtitles-username").value.trim(),

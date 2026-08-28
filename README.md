@@ -126,13 +126,13 @@ remote — and Prism finds your server and libraries for you.
 
 ![Plex connection settings](docs/media/settings-plex.png)
 
-Everything else is optional:
+Trailers for titles where Plex doesn't have one are looked up automatically via TMDB — no
+API key or account of yours required. Everything else is optional:
 
 ![Integration settings](docs/media/settings-integrations.png)
 
 | Optional | What it adds |
 |---|---|
-| **YouTube API key** | Trailers for titles where Plex doesn't have one |
 | **OpenRouter API key** | AI-generated themed rows, refreshed weekly |
 | **Subtitle provider** | Where subtitle searches come from |
 
@@ -163,7 +163,9 @@ tested on real remote hardware yet.
 >
 > If you're a developer and want to build it yourself in the meantime, the short version is
 > `npm install` then `npm run dev` for the browser, `npm run android` for Android, and
-> `npm run xbox:build` for Xbox. Everything else lives in `CLAUDE.md`.
+> `npm run xbox:build` for Xbox. Copy `.env.example` to `.env` and fill in a free TMDB API key
+> (from https://www.themoviedb.org/settings/api) if you want the TMDB trailer fallback working
+> in your own build — everything else works without it. Everything else lives in `CLAUDE.md`.
 
 ---
 
@@ -175,6 +177,7 @@ tested on real remote hardware yet.
   nothing about your library leaves your network except what you explicitly enable (trailer
   lookups, AI rows, subtitle searches).
 - **It is not affiliated with Plex Inc.** It's an independent app that uses Plex's public API.
+- **This product uses the TMDB API but is not endorsed or certified by TMDB.**
 - **It's a personal project**, built and tested against one real library on real hardware. It
   works well there; expect rough edges elsewhere.
 

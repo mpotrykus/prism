@@ -183,8 +183,18 @@
 }
 
 
-/* .hero-yt-wrap (hero.css) is reused as-is for the YouTube-fallback trailer embed here -
-   same centered/oversized iframe sizing trick, no title-info-specific version needed. */
+/* .hero-yt-wrap (hero.css) is reused for the YouTube-fallback trailer embed here, but its
+   width/height need overriding - hero.css's own version keys them off --hero-h (≈100vh,
+   the home hero's real container height), which is wrong here: this modal's art panel is
+   --title-info-art-h (clamp(480px, 72vh, 860px) - see .title-info-modal above), nowhere
+   close to 100vh on most screens. Left as-is, the mismatch made the outer box far wider
+   than 16:9, so YouTube's own embedded player letterboxed the video to preserve its real
+   aspect ratio instead of actually covering the panel. min-width/min-height (vw-based) are
+   still correct as inherited from hero.css - this panel's WIDTH really is ~100vw either way. */
+.title-info-art .hero-yt-wrap {
+    width: calc(var(--title-info-art-h) * 16 / 9);
+    height: var(--title-info-art-h);
+}
 
 
 /* Mirrors .hero-mute-btn/.hero-play-btn (hero.css), bottom-right over the art like the hero -

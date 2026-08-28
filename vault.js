@@ -1,6 +1,6 @@
-/* Secrets (plex_token, youtube_api_key, openrouter_api_key, plex_account_token) are
-   encrypted at rest with a non-extractable AES key stored in IndexedDB, instead of
-   plaintext localStorage - but deliberately without any WebAuthn/biometric gate.
+/* Secrets (plex_token, openrouter_api_key, plex_account_token) are encrypted at rest with
+   a non-extractable AES key stored in IndexedDB, instead of plaintext localStorage - but
+   deliberately without any WebAuthn/biometric gate.
    plex_token now comes from Plex's own PIN-based sign-in (plex-signin.js) rather than
    being hand-typed, so there's no local secret-entry step left that justifies prompting
    Windows Hello/Android biometrics on every save and load. */

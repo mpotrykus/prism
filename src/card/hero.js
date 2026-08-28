@@ -242,7 +242,7 @@ export class HeroController {
          "embedder.identity.missing.referrer" and never issues a single googlevideo.com
          request, confirmed via the network log). Setting it on the iframe itself
          overrides the page-level policy for just this element. */
-      incoming.innerHTML = `<div class="hero-yt-wrap"><iframe src="${this._video.embedUrl}" referrerpolicy="strict-origin-when-cross-origin" allow="autoplay; encrypted-media" allowfullscreen></iframe></div>`;
+      incoming.innerHTML = `<div class="hero-yt-wrap" style="--yt-cover-scale:${this._video.coverScale ?? 1}"><iframe src="${this._video.embedUrl}" referrerpolicy="strict-origin-when-cross-origin" allow="autoplay; encrypted-media" allowfullscreen></iframe></div>`;
       /* setPlaybackQuality("highres") is advisory only (YouTube can still downgrade for
          bandwidth), but without it the embed defaults to a lower auto-selected quality.
          The player's postMessage API isn't ready the instant the iframe fires "load", so
@@ -274,9 +274,9 @@ export class HeroController {
         }
       });
     } else {
-      /* No trailer at all (no youtube_api_key, no Plex extra, quota exhausted, etc.) -
-         still advance off the static backdrop after a fixed dwell so Home doesn't just
-         sit on one item forever when video resolution fails. */
+      /* No trailer at all (no Plex extra, no TMDB match, etc.) - still advance off the
+         static backdrop after a fixed dwell so Home doesn't just sit on one item forever
+         when video resolution fails. */
       this._staticTimer = setTimeout(() => this.advance(), 10000);
     }
 
@@ -509,11 +509,11 @@ export class HeroController {
       if (data.event === "infoDelivery" && data.info && data.info.playerState === 0) {
         this.advance();
       }
-      /* Belt-and-suspenders for the age-restriction/embedding-disabled case the
-         videos.list filter in _resolveVideo should already keep us from picking: if one
-         still slips through (e.g. a video that gets age-restricted after being cached),
-         YouTube posts an error here instead of ever reaching playerState - without this,
-         the hero was just stuck on a dead, silent embed. */
+      /* The only safeguard left against an age-restricted or embedding-disabled video (TMDB's
+         videos endpoint - see tmdb.js - doesn't expose either flag, unlike the old YouTube
+         Data API videos.list call this replaced, which let _resolveVideo pre-filter those
+         out): YouTube posts an error here instead of ever reaching playerState - without
+         this, the hero was just stuck on a dead, silent embed. */
       const errorCode = data.event === "onError" ? data.info : data.info?.errorCode;
       if (errorCode !== undefined) {
         this.advance();

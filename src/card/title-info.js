@@ -723,6 +723,7 @@ export class TitleInfoController {
          documented there. */
       const wrap = document.createElement("div");
       wrap.className = "hero-yt-wrap";
+      wrap.style.setProperty("--yt-cover-scale", video.coverScale ?? 1);
       wrap.innerHTML = `<iframe src="${video.embedUrl}" referrerpolicy="strict-origin-when-cross-origin" allow="autoplay; encrypted-media" allowfullscreen></iframe>`;
       this._artImgEl.appendChild(wrap);
       const ytIframe = wrap.querySelector("iframe");

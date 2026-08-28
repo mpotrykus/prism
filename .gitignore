@@ -6,6 +6,16 @@ dist/
 
 .claude/
 
+# Bundled TMDB API key (see src/card/logic/tmdb.js) - a real key still shouldn't sit in
+# git history even though it ends up in the shipped client bundle either way. .env.example
+# stays tracked as the template. .env.test is also tracked - Vite/Vitest load it for every
+# test run regardless of whether a real .env exists, so it holds a fake key that makes
+# tmdb.test.js's TMDB-fetch behavior deterministic across machines/CI - see that file.
+.env
+.env.*
+!.env.example
+!.env.test
+
 # Capacitor / Android
 android/app/build/
 android/build/

@@ -76,22 +76,35 @@
     display: block;
 }
 
+/* width/height are keyed off --hero-h (the real, non-oversized container height), not a
+   percentage of this element's immediate parent - .hero-media (this wrap's actual parent)
+   is itself oversized to 124%/top:-12% for the Ken-Burns pan (see .hero-media above), so a
+   plain height:100% here would cover 124% of the real box, not 100% of it, throwing off
+   the 16:9 math below and letterboxing the embedded YouTube player. min-width/min-height
+   stay percentage/vw-based since .hero-media's WIDTH (unlike its height) isn't oversized -
+   it already matches .hero's real width exactly. */
 .hero-yt-wrap {
     position: absolute;
     top: 50%;
     left: 50%;
-    width: 177.78vh;
-    height: 100%;
+    width: calc(var(--hero-h) * 16 / 9);
+    height: var(--hero-h);
     min-width: 100%;
     min-height: 56.25vw;
     transform: translate(-50%, -50%);
 }
 
+/* --yt-cover-scale is set inline (hero.js/title-info.js) from trailer.js's resolved
+   coverScale - a corrective zoom for a non-16:9 upload, cropping via this element's own
+   ancestor overflow:hidden the same way the base 16:9 sizing above already does. Defaults
+   to 1 (no-op) for the overwhelming majority of trailers, which are already ~16:9. */
 .hero-yt-wrap iframe {
     width: 100%;
     height: 100%;
     border: 0;
     pointer-events: none;
+    transform: scale(var(--yt-cover-scale, 1));
+    transform-origin: center;
 }
 
 .hero::before {

@@ -21,9 +21,10 @@ copy lives in `store-listing.md`, privacy policy in `privacy.md`.
    `https://mpotrykus.github.io/prism/privacy.html`.
 3. Create the app in Play Console, upload `app-release.aab` to Internal testing first (fastest
    path to confirm the listing works before wider release).
-4. Data safety form — answer based on `privacy.md`: no data collected or shared by the developer;
-   optional third-party services (Plex, YouTube, OpenRouter, OpenSubtitles) are contacted
-   directly by the user's own credentials, not proxied.
+4. Data safety form — answer based on `privacy.md`: no data collected or shared by the developer.
+   Plex, OpenRouter, and OpenSubtitles are contacted directly using the user's own credentials,
+   not proxied; TMDB (trailer lookups) and YouTube (trailer/embedded playback) are contacted
+   directly too, but using the app's own bundled TMDB API key rather than anything user-supplied.
 5. Content rating questionnaire, target audience (not for children), app category, contact
    email, paste store listing copy from `store-listing.md`, upload screenshots from `media/`
    (resize/crop to Play's required aspect ratios — phone screenshots need min 320px, feature
