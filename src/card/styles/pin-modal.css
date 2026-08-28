@@ -15,7 +15,10 @@
 .pin-modal {
   width: 300px;
   max-width: 88vw;
-  background: var(--color-surface);
+  /* Shared frosted-glass panel look - see colors.css's --glass-panel-bg/-blur. */
+  background: var(--glass-panel-bg);
+  backdrop-filter: var(--glass-panel-blur);
+  -webkit-backdrop-filter: var(--glass-panel-blur);
   border: 1px solid rgba(var(--color-fg-rgb), 0.08);
   border-radius: 16px;
   padding: 28px 28px 20px;

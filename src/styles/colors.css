@@ -2,27 +2,31 @@
    inside any component's shadow-scoped CSS, since custom properties inherit across
    shadow boundaries but plex-netflix-card/streaming-settings-modal/streaming-plex-signin-modal
    are three separate shadow roots with no other common style ancestor. */
+
 :root {
-  --color-accent-rgb: 229, 160, 13;
-  --color-accent: rgb(var(--color-accent-rgb));
-  --color-accent-hover: #f0ad1a;
-
-  --color-fg-rgb: 255, 255, 255;
-  --color-fg: rgb(var(--color-fg-rgb));
-
-  --color-bg-rgb: 10, 10, 12;
-  --color-bg: rgb(var(--color-bg-rgb));
-
-  --color-shadow-rgb: 0, 0, 0;
-
-  --color-panel-rgb: 20, 20, 24;
-
-  --color-surface: #161619;
-  --color-surface-raised: #1c1c20;
-  --color-surface-selected: #3a3a40;
-
-  --color-danger-rgb: 255, 107, 107;
-  --color-danger: rgb(var(--color-danger-rgb));
-  --color-success-rgb: 76, 175, 125;
-  --color-success: rgb(var(--color-success-rgb));
+    --color-accent-rgb: 229, 160, 13;
+    --color-accent: rgb(var(--color-accent-rgb));
+    --color-accent-hover: #f0ad1a;
+    --color-fg-rgb: 255, 255, 255;
+    --color-fg: rgb(var(--color-fg-rgb));
+    --color-bg-rgb: 10, 10, 12;
+    --color-bg: rgb(var(--color-bg-rgb));
+    --color-shadow-rgb: 0, 0, 0;
+    --color-panel-rgb: 20, 20, 24;
+    --color-surface: #161619;
+    --color-surface-raised: #1c1c20;
+    --color-surface-selected: #3a3a40;
+    --color-danger-rgb: 255, 107, 107;
+    --color-danger: rgb(var(--color-danger-rgb));
+    --color-success-rgb: 76, 175, 125;
+    --color-success: rgb(var(--color-success-rgb));
+    /* Single source of truth for the "frosted black glass" panel look shared by every
+     modal/sheet (settings, sign-in, PIN, profile switcher, mobile more-sheet, title-info
+     season picker, player error modal) - tweak brightness/tint/blur here once instead of
+     hunting down each panel's own copy. A lighter-than-black fill plus backdrop-filter's
+     own brightness() (which lightens whatever's actually behind the blur, not just the
+     tint) is what keeps this readable over a dark hero image instead of just looking like
+     a plain dark box. */
+    --glass-panel-bg: rgba(35, 35, 40, 0.5);
+    --glass-panel-blur: blur(20px) saturate(1.6) brightness(1.3);
 }

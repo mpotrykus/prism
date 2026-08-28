@@ -691,11 +691,10 @@
     max-height: 80vh;
     overflow-y: auto;
     scrollbar-width: none;
-    /* --color-shadow-rgb (literal 0,0,0) rather than --color-bg-rgb - stays reliably black
-     even if a light theme is ever added, unlike --color-bg-rgb. */
-    background: rgba(var(--color-shadow-rgb), 0.6);
-    backdrop-filter: blur(20px) saturate(1.6);
-    -webkit-backdrop-filter: blur(20px) saturate(1.6);
+    /* Shared frosted-glass panel look - see colors.css's --glass-panel-bg/-blur. */
+    background: var(--glass-panel-bg);
+    backdrop-filter: var(--glass-panel-blur);
+    -webkit-backdrop-filter: var(--glass-panel-blur);
     border: 1px solid rgba(var(--color-fg-rgb), 0.08);
     border-radius: 16px;
     padding: 24px;

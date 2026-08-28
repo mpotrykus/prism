@@ -29,7 +29,11 @@ export function showPlaybackErrorModal(controller, message) {
     const panel = document.createElement("div");
     Object.assign(panel.style, {
         width: "min(420px, 90vw)",
-        background: "#181818",
+        // Shared frosted-glass panel look - see colors.css's --glass-panel-bg/-blur.
+        background: "var(--glass-panel-bg)",
+        backdropFilter: "var(--glass-panel-blur)",
+        WebkitBackdropFilter: "var(--glass-panel-blur)",
+        border: "1px solid rgba(255,255,255,0.08)",
         borderRadius: "12px",
         padding: "28px 24px 20px",
         boxShadow: "0 20px 60px rgba(0,0,0,0.6)",

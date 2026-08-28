@@ -21,7 +21,10 @@
   max-height: 70vh;
   overflow-y: auto;
   scrollbar-width: none;
-  background: var(--color-surface);
+  /* Shared frosted-glass panel look - see colors.css's --glass-panel-bg/-blur. */
+  background: var(--glass-panel-bg);
+  backdrop-filter: var(--glass-panel-blur);
+  -webkit-backdrop-filter: var(--glass-panel-blur);
   border: 1px solid rgba(var(--color-fg-rgb), 0.08);
   border-bottom: none;
   border-radius: 16px 16px 0 0;

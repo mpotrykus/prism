@@ -63,6 +63,7 @@ const TABS = [
   { key: "plex", label: "Plex" },
   { key: "integrations", label: "Integrations" },
   { key: "preferences", label: "Preferences" },
+  { key: "about", label: "About" },
 ];
 
 class StreamingSettingsModal extends HTMLElement {
@@ -228,11 +229,17 @@ class StreamingSettingsModal extends HTMLElement {
                 </div>
                 <div class="hint">Plays everything in HDR10 mode, including SDR titles, instead of switching per-title - avoids the TV renegotiating between back-to-back titles (e.g. auto-playing the next episode). The display still returns to SDR whenever playback stops - this does not affect the dashboard.</div>
               </section>
+            </div>
 
-              <section class="group">
-                <div class="group-title">About</div>
+            <div class="tab-panel" data-tab="about">
+              <section class="group about-group">
+                <img class="about-logo" src="./assets/prism-logo.svg" alt="Prism" />
                 <div class="hint">Prism is an independent app and is not affiliated with, endorsed by, or sponsored by Plex, Inc.</div>
-                <a class="about-privacy-link" href="https://mpotrykus.github.io/prism/privacy" target="_blank" rel="noopener noreferrer">Privacy Policy</a>
+                <div class="about-links">
+                  <a class="about-privacy-link" href="https://mpotrykus.github.io/prism/privacy" target="_blank" rel="noopener noreferrer">Privacy Policy</a>
+                  <span class="about-links-sep">·</span>
+                  <a class="about-privacy-link" href="https://github.com/mpotrykus/prism" target="_blank" rel="noopener noreferrer">GitHub</a>
+                </div>
               </section>
             </div>
           </div>

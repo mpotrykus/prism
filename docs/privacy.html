@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="theme-color" content="#0a0a0c" />
+<title>Prism — Privacy Policy</title>
+<link rel="icon" href="./assets/favicon.ico" sizes="32x32" />
+<link rel="icon" type="image/svg+xml" href="./assets/prism-logo.svg" />
+<style>
+  :root {
+    --color-accent-rgb: 229, 160, 13;
+    --color-accent: rgb(var(--color-accent-rgb));
+    --color-accent-hover: #f0ad1a;
+    --color-fg-rgb: 255, 255, 255;
+    --color-fg: rgb(var(--color-fg-rgb));
+    --color-bg-rgb: 10, 10, 12;
+    --color-bg: rgb(var(--color-bg-rgb));
+    --color-surface: #161619;
+    --color-surface-raised: #1c1c20;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0;
+    background: var(--color-bg);
+    color: var(--color-fg);
+    font-family: "Roboto", system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  body {
+    min-height: 100vh;
+    display: flex; flex-direction: column; align-items: center;
+    padding: 48px 20px 64px;
+  }
+  .page { width: 100%; max-width: 720px; }
+  header { display: flex; flex-direction: column; align-items: center; margin-bottom: 36px; }
+  .logo { height: 34px; width: auto; margin-bottom: 22px; }
+  h1 { font-size: 22px; font-weight: 700; margin: 0 0 6px; text-align: center; }
+  .updated { font-size: 12.5px; color: rgba(var(--color-fg-rgb), 0.5); margin: 0; }
+  main {
+    background: var(--color-surface);
+    border: 1px solid rgba(var(--color-fg-rgb), 0.08);
+    border-radius: 16px;
+    padding: 8px 32px 12px;
+    box-shadow: 0 24px 70px rgba(0, 0, 0, 0.45);
+  }
+  section { padding: 22px 0; border-top: 1px solid rgba(var(--color-fg-rgb), 0.08); }
+  section:first-child { border-top: none; }
+  h2 {
+    font-size: 12px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.06em; color: rgba(var(--color-fg-rgb), 0.5);
+    margin: 0 0 12px;
+  }
+  p { font-size: 14.5px; line-height: 1.6; margin: 0 0 12px; color: rgba(var(--color-fg-rgb), 0.85); }
+  p:last-child { margin-bottom: 0; }
+  strong { color: var(--color-fg); }
+  ul { margin: 0; padding-left: 20px; }
+  li { font-size: 14.5px; line-height: 1.6; color: rgba(var(--color-fg-rgb), 0.85); margin-bottom: 8px; }
+  li:last-child { margin-bottom: 0; }
+  a { color: var(--color-accent); text-decoration: none; font-weight: 600; }
+  a:hover { text-decoration: underline; color: var(--color-accent-hover); }
+  .disclaimer {
+    margin-top: 28px; text-align: center; font-size: 12px; line-height: 1.6;
+    color: rgba(var(--color-fg-rgb), 0.4); max-width: 560px;
+  }
+  footer { margin-top: 28px; text-align: center; }
+  .back-link { font-size: 12.5px; font-weight: 600; color: rgba(var(--color-fg-rgb), 0.45); }
+  .back-link:hover { color: var(--color-accent); }
+</style>
+</head>
+<body>
+  <div class="page">
+    <header>
+      <img class="logo" src="./assets/prism-logo.svg" alt="Prism" />
+      <h1>Privacy Policy</h1>
+      <p class="updated">Last updated: August 27, 2026</p>
+    </header>
+
+    <main>
+      <section>
+        <p>Prism is a media browsing front end for a Plex Media Server you already own and run.
+        It has no server, no backend, and no account system of its own.</p>
+      </section>
+
+      <section>
+        <h2>What Prism collects</h2>
+        <p><strong>Nothing.</strong> The developer of Prism does not operate any server that
+        Prism talks to, and does not receive, store, or have access to any of your data,
+        credentials, or viewing activity.</p>
+      </section>
+
+      <section>
+        <h2>What Prism sends, and to whom</h2>
+        <p>Prism runs entirely on your device and talks directly to services <strong>you</strong>
+        choose to connect it to, using credentials <strong>you</strong> provide:</p>
+        <ul>
+          <li><strong>Plex</strong> — your Plex sign-in and server/library data, to browse and
+          play your own library. Required for the app to function.</li>
+          <li><strong>YouTube Data API</strong> (optional) — used only if you add your own
+          YouTube API key, to look up trailers for titles Plex doesn't already have one for.</li>
+          <li><strong>OpenRouter</strong> (optional) — used only if you add your own OpenRouter
+          API key, to generate AI-written themed rows (e.g. "Sci-Fi Comedies") from titles in
+          your library.</li>
+          <li><strong>OpenSubtitles</strong> (optional) — used only if you configure a subtitle
+          provider, to search for and download subtitles.</li>
+        </ul>
+        <p style="margin-top: 12px;">Each of these is a direct connection from your device to
+        that service's own servers, under that service's own terms and privacy policy. Prism
+        does not proxy, log, or see any of this traffic — it simply makes the request on your
+        behalf, the same way a browser would.</p>
+      </section>
+
+      <section>
+        <h2>Where your credentials are stored</h2>
+        <p>Your Plex token and any optional API keys/credentials are stored only on your
+        device, encrypted at rest with a device-local encryption key that never leaves the
+        device. They are never sent to the developer or to any server other than the service
+        they're for.</p>
+      </section>
+
+      <section>
+        <h2>Third-party privacy policies</h2>
+        <ul>
+          <li><a href="https://www.plex.tv/about/privacy-legal/" target="_blank" rel="noopener noreferrer">Plex Privacy Policy</a></li>
+          <li><a href="https://policies.google.com/privacy" target="_blank" rel="noopener noreferrer">Google Privacy Policy</a> (covers the YouTube Data API)</li>
+          <li><a href="https://openrouter.ai/privacy" target="_blank" rel="noopener noreferrer">OpenRouter Privacy Policy</a></li>
+          <li><a href="https://www.opensubtitles.com/en/privacy" target="_blank" rel="noopener noreferrer">OpenSubtitles Privacy Policy</a></li>
+        </ul>
+      </section>
+
+      <section>
+        <h2>Children's privacy</h2>
+        <p>Prism is not directed at children and does not knowingly collect information from
+        anyone, including children, because it does not collect information from anyone.</p>
+      </section>
+
+      <section>
+        <h2>Changes to this policy</h2>
+        <p>If this policy changes, the updated version will be posted at this same URL with a
+        new "last updated" date.</p>
+      </section>
+
+      <section>
+        <h2>Contact</h2>
+        <p>Questions about this policy can be raised via
+        <a href="https://github.com/mpotrykus/prism/issues" target="_blank" rel="noopener noreferrer">issues on the Prism GitHub repository</a>.</p>
+      </section>
+    </main>
+
+    <p class="disclaimer">Prism is an independent app and is not affiliated with, endorsed
+    by, or sponsored by Plex, Inc.</p>
+
+    <footer>
+      <a class="back-link" href="https://github.com/mpotrykus/prism">← Back to Prism on GitHub</a>
+    </footer>
+  </div>
+</body>
+</html>
