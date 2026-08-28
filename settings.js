@@ -66,6 +66,41 @@ const TABS = [
   { key: "about", label: "About" },
 ];
 
+/* Same hand-drawn inline-SVG style as nav.js's sidenav icons (24x24 viewBox,
+   stroke-width 1.6, currentColor) - kept here rather than shared since these are
+   settings-specific and nav.js's are library-type-specific. */
+const ICONS = {
+  server:
+    '<svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="7" rx="1.6" fill="none" stroke="currentColor" stroke-width="1.6"/><rect x="3" y="13" width="18" height="7" rx="1.6" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="7" cy="7.5" r="1" fill="currentColor"/><circle cx="7" cy="16.5" r="1" fill="currentColor"/></svg>',
+  libraries:
+    '<svg viewBox="0 0 24 24"><rect x="3" y="3" width="8" height="8" rx="1.4" fill="none" stroke="currentColor" stroke-width="1.6"/><rect x="13" y="3" width="8" height="8" rx="1.4" fill="none" stroke="currentColor" stroke-width="1.6"/><rect x="3" y="13" width="8" height="8" rx="1.4" fill="none" stroke="currentColor" stroke-width="1.6"/><rect x="13" y="13" width="8" height="8" rx="1.4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>',
+  play:
+    '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M10 8.3l6 3.7-6 3.7z" fill="currentColor"/></svg>',
+  sparkle:
+    '<svg viewBox="0 0 24 24"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z" fill="currentColor"/><path d="M19 15l.9 2.1L22 18l-2.1.9L19 21l-.9-2.1L16 18l2.1-.9z" fill="currentColor"/></svg>',
+  captions:
+    '<svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2" fill="none" stroke="currentColor" stroke-width="1.6"/><rect x="6" y="10.1" width="5" height="1.8" rx="0.9" fill="currentColor"/><rect x="6" y="13.3" width="7" height="1.8" rx="0.9" fill="currentColor"/><rect x="13" y="10.1" width="5" height="1.8" rx="0.9" fill="currentColor"/></svg>',
+  display:
+    '<svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2" fill="none" stroke="currentColor" stroke-width="1.6"/><line x1="3" y1="10" x2="21" y2="10" stroke="currentColor" stroke-width="1.6"/><line x1="9" y1="10" x2="9" y2="20" stroke="currentColor" stroke-width="1.6"/></svg>',
+  speaker:
+    '<svg viewBox="0 0 24 24"><path d="M4 9v6h4l5 4V5L8 9H4z" fill="currentColor"/><path d="M16.5 9a4 4 0 010 6" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round"/><path d="M19 7a7.5 7.5 0 010 10" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round"/></svg>',
+  hdr:
+    '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4.5" fill="none" stroke="currentColor" stroke-width="1.6"/><line x1="12" y1="2" x2="12" y2="5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><line x1="12" y1="19" x2="12" y2="22" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><line x1="2" y1="12" x2="5" y2="12" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><line x1="19" y1="12" x2="22" y2="12" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><line x1="4.9" y1="4.9" x2="7" y2="7" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><line x1="17" y1="17" x2="19.1" y2="19.1" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><line x1="4.9" y1="19.1" x2="7" y2="17" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><line x1="17" y1="7" x2="19.1" y2="4.9" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>',
+};
+
+/* icon param is optional - the About tab's card has no icon/desc header. */
+function groupHead(icon, title, desc, switchHtml = "") {
+  return `
+    <div class="group-head">
+      ${icon ? `<div class="group-icon">${icon}</div>` : ""}
+      <div class="group-head-text">
+        <div class="group-title">${title}</div>
+        ${desc ? `<div class="group-desc">${desc}</div>` : ""}
+      </div>
+      ${switchHtml}
+    </div>`;
+}
+
 class StreamingSettingsModal extends HTMLElement {
   connectedCallback() {
     if (this._built) return;
@@ -94,7 +129,7 @@ class StreamingSettingsModal extends HTMLElement {
           <div class="modal-body">
             <div class="tab-panel" data-tab="plex">
               <section class="group">
-                <div class="group-title">Plex Server</div>
+                ${groupHead(ICONS.server, "Plex Server", "The server this app is signed in to")}
                 <div class="plex-server-card">
                   <div class="plex-server-info">
                     <span class="plex-server-dot"></span>
@@ -105,7 +140,7 @@ class StreamingSettingsModal extends HTMLElement {
               </section>
 
               <section class="group">
-                <div class="group-title">Libraries</div>
+                ${groupHead(ICONS.libraries, "Libraries", "Choose which libraries show up as browsing tabs, and pick your default screen")}
                 <button type="button" class="btn btn-secondary btn-fetch-libraries">Discover Libraries</button>
                 <div class="hint">Finds every server on your account, including ones friends have shared with you, and lists their libraries below.</div>
                 <div class="status fetch-status"></div>
@@ -115,7 +150,7 @@ class StreamingSettingsModal extends HTMLElement {
 
             <div class="tab-panel" data-tab="integrations">
               <section class="group">
-                <div class="group-title">Trailers</div>
+                ${groupHead(ICONS.play, "Trailers", "Show trailer previews on the home screen and in each title's info panel")}
                 <div class="subtoggle-row">
                   <span class="subtoggle-label">Home Screen</span>
                   <label class="switch">
@@ -137,13 +172,12 @@ class StreamingSettingsModal extends HTMLElement {
               </section>
 
               <section class="group">
-                <div class="group-title-row">
-                  <div class="group-title">AI Rows</div>
-                  <label class="switch">
-                    <input type="checkbox" class="f-ai-enabled" />
-                    <span class="switch-track"></span>
-                  </label>
-                </div>
+                ${groupHead(
+                  ICONS.sparkle,
+                  "AI Rows",
+                  "Personalized genre rows generated from your library on a schedule",
+                  `<label class="switch"><input type="checkbox" class="f-ai-enabled" /><span class="switch-track"></span></label>`
+                )}
                 <div class="row-2col ai-fields">
                   <div class="field">
                     <label>OpenRouter API Key</label>
@@ -160,7 +194,7 @@ class StreamingSettingsModal extends HTMLElement {
               </section>
 
               <section class="group">
-                <div class="group-title">Subtitles</div>
+                ${groupHead(ICONS.captions, "Subtitles", "Choose where subtitle search and downloads come from")}
                 <div class="field">
                   <label>Subtitle Provider</label>
                   <select class="f-subtitle-provider">
@@ -188,7 +222,7 @@ class StreamingSettingsModal extends HTMLElement {
 
             <div class="tab-panel" data-tab="preferences">
               <section class="group">
-                <div class="group-title">Display</div>
+                ${groupHead(ICONS.display, "Display", "Tune how many rows and titles appear on the home screen")}
                 <div class="row-2col">
                   <div class="field">
                     <label>Max Genre Rows</label>
@@ -202,14 +236,12 @@ class StreamingSettingsModal extends HTMLElement {
               </section>
 
               <section class="group">
-                <div class="group-title-row">
-                  <div class="group-title">Title Audio</div>
-                  <label class="switch">
-                    <input type="checkbox" class="f-title-audio-enabled" />
-                    <span class="switch-track"></span>
-                  </label>
-                </div>
-                <div class="hint">Fades in a title's theme song when its info panel opens, and fades it out when the panel closes or you move to another title.</div>
+                ${groupHead(
+                  ICONS.speaker,
+                  "Title Audio",
+                  "Fades in a title's theme song when its info panel opens, and fades it out when you close it or move on",
+                  `<label class="switch"><input type="checkbox" class="f-title-audio-enabled" /><span class="switch-track"></span></label>`
+                )}
                 <div class="field title-audio-fields">
                   <label>Volume</label>
                   <div class="field-row">
@@ -220,14 +252,12 @@ class StreamingSettingsModal extends HTMLElement {
               </section>
 
               <section class="group xbox-only-group">
-                <div class="group-title-row">
-                  <div class="group-title">HDR - Stay On During Playback</div>
-                  <label class="switch">
-                    <input type="checkbox" class="f-xbox-hdr-always-on" />
-                    <span class="switch-track"></span>
-                  </label>
-                </div>
-                <div class="hint">Plays everything in HDR10 mode, including SDR titles, instead of switching per-title - avoids the TV renegotiating between back-to-back titles (e.g. auto-playing the next episode). The display still returns to SDR whenever playback stops - this does not affect the dashboard.</div>
+                ${groupHead(
+                  ICONS.hdr,
+                  "HDR — Stay On During Playback",
+                  "Plays everything in HDR10, including SDR titles, instead of switching per-title. Avoids the TV renegotiating between back-to-back titles. Returns to SDR once playback stops.",
+                  `<label class="switch"><input type="checkbox" class="f-xbox-hdr-always-on" /><span class="switch-track"></span></label>`
+                )}
               </section>
             </div>
 
