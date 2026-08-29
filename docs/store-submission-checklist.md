@@ -27,8 +27,8 @@ copy lives in `store-listing.md`, privacy policy in `privacy.md`.
    directly too, but using the app's own bundled TMDB API key rather than anything user-supplied.
 5. Content rating questionnaire, target audience (not for children), app category, contact
    email, paste store listing copy from `store-listing.md`, upload screenshots from `media/`
-   (resize/crop to Play's required aspect ratios — phone screenshots need min 320px, feature
-   graphic is 1024x500, which doesn't exist yet).
+   (resize/crop to Play's required aspect ratios — phone screenshots need min 320px) and the
+   feature graphic (`media/feature-graphic.png`, 1024x500, already rendered).
 6. **Back up `android/prism-upload-key.jks` and `android/keystore.properties` somewhere safe
    off this machine.** Losing both means losing the ability to publish updates under this
    signing identity (Play App Signing can recover from a lost *upload* key via support, but

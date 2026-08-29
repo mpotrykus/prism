@@ -724,10 +724,14 @@ export class TitleInfoController {
       const wrap = document.createElement("div");
       wrap.className = "hero-yt-wrap";
       wrap.style.setProperty("--yt-cover-scale", video.coverScale ?? 1);
-      wrap.innerHTML = `<iframe src="${video.embedUrl}" referrerpolicy="strict-origin-when-cross-origin" allow="autoplay; encrypted-media" allowfullscreen></iframe>`;
+      wrap.innerHTML = `<iframe src="${video.embedUrl}" referrerpolicy="strict-origin-when-cross-origin" allow="autoplay; encrypted-media" allowfullscreen></iframe><div class="hero-yt-title-mask"></div>`;
       this._artImgEl.appendChild(wrap);
       const ytIframe = wrap.querySelector("iframe");
       this._ytIframeEl = ytIframe;
+      /* Same title-overlay mask as hero.js's own YouTube branch - see that file's comment
+         for why (no URL param suppresses YouTube's own title/channel overlay anymore). */
+      this._ytTitleMaskEl = wrap.querySelector(".hero-yt-title-mask");
+      setTimeout(() => this._ytTitleMaskEl?.classList.add("hero-yt-title-mask--hidden"), 3000);
       ytIframe.addEventListener("load", () => {
         ytIframe.contentWindow?.postMessage(JSON.stringify({ event: "listening", id: "titleInfoTrailerPlayer" }), "*");
         if (!this._trailerMuted) {
@@ -751,6 +755,7 @@ export class TitleInfoController {
   _stopTrailer() {
     this._trailerVideo = null;
     this._ytIframeEl = null;
+    this._ytTitleMaskEl = null;
     this._trailerUserPaused = false;
     this._trailerPausedByVisibility = false;
     this._trailerPausedByPlayer = false;
@@ -1912,6 +1917,9 @@ export class TitleInfoController {
       }
       if (data.event === "infoDelivery" && data.info && data.info.playerState === 0) {
         this._endTrailer();
+      }
+      if (data.event === "infoDelivery" && data.info && data.info.playerState === 1) {
+        this._ytTitleMaskEl?.classList.add("hero-yt-title-mask--hidden");
       }
       const errorCode = data.event === "onError" ? data.info : data.info?.errorCode;
       if (errorCode !== undefined) {

@@ -18,8 +18,8 @@
     <ProjectTypeGuids>{A5A43C5B-DE2A-4C0C-9213-0A381AF9435A};{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}</ProjectTypeGuids>
     <WindowsXamlEnableOverview>true</WindowsXamlEnableOverview>
     <AppxPackageSigningEnabled>true</AppxPackageSigningEnabled>
-    <PackageCertificateKeyFile>PrismUwp_TemporaryKey.pfx</PackageCertificateKeyFile>
-    <PackageCertificateThumbprint>974AA96552DCFBB5A5C5FC459A0F6E3FE8061570</PackageCertificateThumbprint>
+    <PackageCertificateKeyFile>PrismUwp_StoreKey.pfx</PackageCertificateKeyFile>
+    <PackageCertificateThumbprint>A9806BED5BA2DEE765C6DC451870ECF9BC5F3C24</PackageCertificateThumbprint>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Debug|x64'">
     <DebugSymbols>true</DebugSymbols>
@@ -110,6 +110,12 @@
     -->
     <PackageReference Include="Microsoft.NETCore.UniversalWindowsPlatform">
       <Version>6.2.15</Version>
+    </PackageReference>
+    <!-- Pinned below the UWP SDK's default-resolved compiler version: that version's
+         .NET Native Framework/Runtime redistributable (2.3.60521.0) is newer than what
+         Microsoft Store ingestion currently accepts (max 2.3.60518.0 as of 2026-08-29). -->
+    <PackageReference Include="Microsoft.Net.Native.Compiler">
+      <Version>2.2.12-rel-33220-00</Version>
     </PackageReference>
     <PackageReference Include="Microsoft.UI.Xaml">
       <Version>2.8.7</Version>

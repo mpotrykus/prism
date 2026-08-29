@@ -236,6 +236,7 @@ export class HeroController {
        with no other way to tell embeds apart) can ignore a stale/foreign iframe's
        end-of-video event instead of acting on it. */
     this._ytIframeEl = null;
+    this._ytTitleMaskEl = null;
     if (this._video?.type === "plex") {
       incoming.innerHTML = `<video src="${this._video.url}" autoplay muted playsinline referrerpolicy="no-referrer"></video>`;
       const heroVideoEl = incoming.querySelector("video");
@@ -248,7 +249,7 @@ export class HeroController {
          "embedder.identity.missing.referrer" and never issues a single googlevideo.com
          request, confirmed via the network log). Setting it on the iframe itself
          overrides the page-level policy for just this element. */
-      incoming.innerHTML = `<div class="hero-yt-wrap" style="--yt-cover-scale:${this._video.coverScale ?? 1}"><iframe src="${this._video.embedUrl}" referrerpolicy="strict-origin-when-cross-origin" allow="autoplay; encrypted-media" allowfullscreen></iframe></div>`;
+      incoming.innerHTML = `<div class="hero-yt-wrap" style="--yt-cover-scale:${this._video.coverScale ?? 1}"><iframe src="${this._video.embedUrl}" referrerpolicy="strict-origin-when-cross-origin" allow="autoplay; encrypted-media" allowfullscreen></iframe><div class="hero-yt-title-mask"></div></div>`;
       /* setPlaybackQuality("highres") is advisory only (YouTube can still downgrade for
          bandwidth), but without it the embed defaults to a lower auto-selected quality.
          The player's postMessage API isn't ready the instant the iframe fires "load", so
@@ -258,6 +259,13 @@ export class HeroController {
          muted regardless of the user's prior choice. */
       const ytIframe = incoming.querySelector("iframe");
       this._ytIframeEl = ytIframe;
+      /* Covers YouTube's own title/channel-name overlay, which the embed draws briefly
+         over the video at the very start of autoplay regardless of controls=0 - there's
+         no URL param for it anymore (showinfo=0 was removed). Hidden for real once the
+         message listener below sees playerState 1 (actually playing); this timeout is
+         just a fallback in case that event is ever missed. */
+      this._ytTitleMaskEl = incoming.querySelector(".hero-yt-title-mask");
+      setTimeout(() => this._ytTitleMaskEl?.classList.add("hero-yt-title-mask--hidden"), 3000);
       ytIframe.addEventListener("load", () => {
         ytIframe.contentWindow?.postMessage(JSON.stringify({ event: "listening", id: "heroPlayer" }), "*");
         if (!this._muted) {
@@ -514,6 +522,9 @@ export class HeroController {
       }
       if (data.event === "infoDelivery" && data.info && data.info.playerState === 0) {
         this.advance();
+      }
+      if (data.event === "infoDelivery" && data.info && data.info.playerState === 1) {
+        this._ytTitleMaskEl?.classList.add("hero-yt-title-mask--hidden");
       }
       /* The only safeguard left against an age-restricted or embedding-disabled video (TMDB's
          videos endpoint - see tmdb.js - doesn't expose either flag, unlike the old YouTube

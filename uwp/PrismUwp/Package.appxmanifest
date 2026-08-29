@@ -8,8 +8,8 @@
   IgnorableNamespaces="uap mp rescap">
 
   <Identity
-    Name="com.mpotrykus.prismuwp"
-    Publisher="CN=mpotrykus"
+    Name="Anlagen.PrismStreaming"
+    Publisher="CN=40EF70EC-D989-4D37-817C-C7E51E3BEBE6"
     Version="1.0.0.0" />
 
   <!--
@@ -22,8 +22,8 @@
   <mp:PhoneIdentity PhoneProductId="a62934b7-8569-4975-b7bc-d573885807ed" PhonePublisherId="00000000-0000-0000-0000-000000000000"/>
 
   <Properties>
-    <DisplayName>Prism</DisplayName>
-    <PublisherDisplayName>mpotrykus</PublisherDisplayName>
+    <DisplayName>Prism Streaming</DisplayName>
+    <PublisherDisplayName>Anlagen</PublisherDisplayName>
     <Logo>Assets\StoreLogo.png</Logo>
   </Properties>
 

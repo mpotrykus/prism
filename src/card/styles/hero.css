@@ -107,6 +107,26 @@
     transform-origin: center;
 }
 
+/* Covers YouTube's own title/channel-name overlay, which the embed draws over the video
+   briefly at the very start of autoplay regardless of controls=0 - YouTube removed the
+   showinfo=0 param years ago, so there's no URL-param way to suppress it anymore. Faded
+   out (hero.js/title-info.js) once their "infoDelivery" message listener reports
+   playerState 1 (actually playing), with a fixed-delay fallback in case that event is
+   ever missed. */
+.hero-yt-title-mask {
+    position: absolute;
+    inset: 0 0 auto 0;
+    height: 22%;
+    background: linear-gradient(rgba(0, 0, 0, 0.9), rgba(0, 0, 0, 0));
+    opacity: 1;
+    transition: opacity 0.4s ease;
+    pointer-events: none;
+}
+
+.hero-yt-title-mask.hero-yt-title-mask--hidden {
+    opacity: 0;
+}
+
 .hero::before {
     content: "";
     position: absolute;
