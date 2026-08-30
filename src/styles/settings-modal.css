@@ -342,15 +342,6 @@ select:focus {
     white-space: nowrap;
 }
 
-.btn-primary {
-    background: var(--color-accent);
-    color: var(--color-surface);
-}
-
-.btn-primary:hover {
-    background: var(--color-accent-hover);
-}
-
 .btn-secondary {
     background: rgba(var(--color-fg-rgb), 0.1);
     color: var(--color-fg);
@@ -666,15 +657,6 @@ input.nav-text-highlight {
     gap: 16px;
 }
 
-.modal-footer {
-    flex: none;
-    display: flex;
-    justify-content: flex-end;
-    align-items: center;
-    gap: 12px;
-    padding: 18px 28px 26px;
-}
-
 .tabs {
     flex: none;
     display: flex;
@@ -738,9 +720,6 @@ input.nav-text-highlight {
     .modal-body {
         overflow-y: visible;
     }
-    .modal-close {
-        display: none;
-    }
     .modal-header {
         padding: calc(20px + var(--safe-top)) 24px 20px;
     }
@@ -749,8 +728,5 @@ input.nav-text-highlight {
     }
     .tabs {
         padding: 0 24px;
-    }
-    .modal-footer {
-        padding: 16px 24px calc(22px + var(--safe-bottom));
     }
 }

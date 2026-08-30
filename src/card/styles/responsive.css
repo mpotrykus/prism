@@ -1,143 +1,314 @@
 @media (max-width: 700px) {
-  .title-info-overlay { padding: 0; }
-  .title-info-modal { width: 100%; max-width: 100%; min-height: 100dvh; border-radius: 0; border: none; --title-info-art-h: 280px; }
-  .title-info-close { display: none; }
-  .title-info-body { padding: 20px 20px calc(32px + var(--safe-bottom)); }
-  /* Mobile keeps the old stacked vertical list instead of the desktop card row (see
+    .title-info-overlay {
+        padding: 0;
+    }
+    .title-info-modal {
+        width: 100%;
+        max-width: 100%;
+        min-height: 100dvh;
+        border-radius: 0;
+        border: none;
+        --title-info-art-h: 280px;
+    }
+    .title-info-close {
+        display: none;
+    }
+    .title-info-body {
+        padding: 20px 20px calc(32px + var(--safe-bottom));
+    }
+    /* Mobile keeps the old stacked vertical list instead of the desktop card row (see
      title-info.css's own .title-info-episode/-row-* rules) - a horizontally-scrolling row
      of 240px cards doesn't fit a phone-width screen nearly as well as it does a desktop
      window, and the original design already worked fine here. Same markup as desktop
      (episodeCardHtml/flatItemCardHtml in title-info.js) throughout, just re-flowed by CSS -
      see .title-info-episode-text's own comment in that file for why the markup was shaped
      to allow this. */
-  .title-info-row-wrap { margin: 0; }
-  .title-info-row-scroller { overflow: visible; padding: 0; touch-action: auto; }
-  .title-info-row-track { display: block; }
-  .title-info-row-arrow { display: none; }
-  .title-info-episode {
-    flex-direction: row; width: 100%; gap: 12px;
-    padding: 10px 0; border-bottom: 1px solid rgba(var(--color-fg-rgb), 0.06);
-  }
-  .title-info-episode.current {
-    background: rgba(var(--color-accent-rgb), 0.08); border-radius: 8px;
-    padding-left: 8px; margin-left: -8px; padding-right: 8px; margin-right: -8px;
-  }
-  .title-info-episode:hover:not(.current), .title-info-episode:focus-visible:not(.current) {
-    background: rgba(var(--color-fg-rgb), 0.05); border-radius: 8px;
-    padding-left: 8px; margin-left: -8px; padding-right: 8px; margin-right: -8px;
-  }
-  .title-info-episode-thumb { width: 140px; height: 79px; border-radius: 6px; border: none; }
-  .title-info-episode.current .title-info-episode-thumb { border: none; }
-  .title-info-episode-text { flex: 1; min-width: 0; }
-  .title-info-episode-title { margin-bottom: 4px; white-space: normal; overflow: visible; text-overflow: clip; }
-  .title-info-episode-summary { display: block; -webkit-line-clamp: unset; overflow: visible; }
-  .title-info-header { left: 20px; right: 20px; padding-bottom: 16px; }
-  .title-info-title { font-size: 22px; }
-  .title-info-logo { max-height: 60px; }
-  .title-info-meta { display: flex; flex-wrap: wrap; row-gap: 6px; }
-  .title-info-meta span { white-space: nowrap; }
-  .title-info-actions { flex-wrap: wrap; row-gap: 10px; }
-  .title-info-play { flex: 1 1 100%; white-space: nowrap; }
-  .title-info-restart-btn, .title-info-watched-btn, .title-info-download-btn, .title-info-watchlist-btn { flex: 1 1 100%; }
-  /* Same icon+label markup as desktop (see title-info.css) - just reflowed from a stacked
-     column to a full-width row, same border treatment as .title-info-restart-btn above. */
-  .title-info-watched-btn, .title-info-download-btn, .title-info-watchlist-btn {
-    width: auto; flex-direction: row; padding: 10px 14px; border-radius: 8px;
-    border: 1px solid rgba(var(--color-fg-rgb), 0.3); gap: 8px;
-  }
-  .title-info-watched-btn.watched { border-color: rgba(var(--color-accent-rgb), 0.7); }
-  .title-info-action-label { font-size: 14px; }
-  .hero-info { left: 20px; max-width: calc(100% - 40px); }
-  .hero-title { font-size: 24px; }
-  .hero-subtitle { font-size: 13px; }
-  .hero-summary { display: none; }
-  /* Trailer play/pause + mute buttons collide with other hero/title-info elements at
+    .title-info-row-wrap {
+        margin: 0;
+    }
+    .title-info-row-scroller {
+        overflow: visible;
+        padding: 0;
+        touch-action: auto;
+    }
+    .title-info-row-track {
+        display: block;
+    }
+    .title-info-row-arrow {
+        display: none;
+    }
+    .title-info-episode {
+        flex-direction: row;
+        width: 100%;
+        gap: 12px;
+        padding: 10px 0;
+        border-bottom: 1px solid rgba(var(--color-fg-rgb), 0.06);
+    }
+    .title-info-episode.current {
+        background: rgba(var(--color-accent-rgb), 0.08);
+        border-radius: 8px;
+        padding-left: 8px;
+        margin-left: -8px;
+        padding-right: 8px;
+        margin-right: -8px;
+    }
+    .title-info-episode:hover:not(.current),
+    .title-info-episode:focus-visible:not(.current) {
+        background: rgba(var(--color-fg-rgb), 0.05);
+        border-radius: 8px;
+        padding-left: 8px;
+        margin-left: -8px;
+        padding-right: 8px;
+        margin-right: -8px;
+    }
+    .title-info-episode-thumb {
+        width: 140px;
+        height: 79px;
+        border-radius: 6px;
+        border: none;
+    }
+    .title-info-episode.current .title-info-episode-thumb {
+        border: none;
+    }
+    .title-info-episode-text {
+        flex: 1;
+        min-width: 0;
+    }
+    .title-info-episode-title {
+        margin-bottom: 4px;
+        white-space: normal;
+        overflow: visible;
+        text-overflow: clip;
+    }
+    .title-info-episode-summary {
+        display: block;
+        -webkit-line-clamp: unset;
+        overflow: visible;
+    }
+    .title-info-header {
+        left: 20px;
+        right: 20px;
+        padding-bottom: 16px;
+    }
+    .title-info-title {
+        font-size: 22px;
+    }
+    .title-info-logo {
+        max-height: 60px;
+    }
+    .title-info-meta {
+        display: flex;
+        flex-wrap: wrap;
+        row-gap: 6px;
+    }
+    .title-info-meta span {
+        white-space: nowrap;
+    }
+    .title-info-actions {
+        flex-wrap: wrap;
+        row-gap: 20px;
+        justify-content: center;
+        column-gap: 50px;
+    }
+    .title-info-play {
+        flex: 1 1 100%;
+        white-space: nowrap;
+    }
+    .title-info-restart-btn {
+        flex: 1 1 100%;
+    }
+    /* Watched/Download/Watchlist keep the exact desktop icon-over-label treatment (see
+     title-info.css) and fall onto their own shared line for free - .title-info-play and
+     .title-info-restart-btn above each force a 100%-wide flex line, so with flex-wrap on
+     these three (still their default auto width) are pushed onto the next line together. */
+    .hero-info {
+        left: 20px;
+        max-width: calc(100% - 40px);
+    }
+    .hero-title {
+        font-size: 24px;
+    }
+    .hero-subtitle {
+        font-size: 13px;
+    }
+    .hero-summary {
+        display: none;
+    }
+    /* Trailer play/pause + mute buttons collide with other hero/title-info elements at
      phone width - just hidden here rather than repositioned, same treatment on the home
      hero and the title-info overlay's own mirrored buttons (title-info.css). */
-  .hero-play-btn, .hero-mute-btn { display: none; }
-  .title-info-trailer-play-btn, .title-info-trailer-mute-btn { display: none; }
-  .sidenav {
-    position: fixed;
-    top: auto;
-    bottom: 0;
-    left: 0;
-    right: 0;
-    width: 100%;
-    height: calc(56px + var(--safe-bottom));
-    flex-direction: row;
-    align-items: center;
-    justify-content: space-evenly;
-    padding: 0;
-    padding-bottom: var(--safe-bottom);
-    gap: 0;
-    border-right: none;
-    border-top: 1px solid rgba(var(--color-fg-rgb), 0.08);
-    background: rgba(var(--color-bg-rgb), 0.97);
-    backdrop-filter: blur(10px);
-    z-index: 25;
-  }
-  .sidenav:hover { flex-basis: 100%; }
-  .nav-top, .nav-bottom { display: contents; }
-  .nav-item { width: 30px; height: 30px; padding: 0; justify-content: center; gap: 0; }
-  .nav-label { display: none; }
-  /* Profile/Settings move into the .more-sheet menu (lower-right), and every library
+    .hero-play-btn,
+    .hero-mute-btn {
+        display: none;
+    }
+    .title-info-trailer-play-btn,
+    .title-info-trailer-mute-btn {
+        display: none;
+    }
+    .sidenav {
+        position: fixed;
+        top: auto;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        width: 100%;
+        height: calc(56px + var(--safe-bottom));
+        flex-direction: row;
+        align-items: center;
+        justify-content: space-evenly;
+        padding: 0;
+        padding-bottom: var(--safe-bottom);
+        gap: 0;
+        border-right: none;
+        border-top: 1px solid rgba(var(--color-fg-rgb), 0.08);
+        background: rgba(var(--color-bg-rgb), 0.97);
+        backdrop-filter: blur(10px);
+        z-index: 25;
+    }
+    .sidenav:hover {
+        flex-basis: 100%;
+    }
+    .nav-top,
+    .nav-bottom {
+        display: contents;
+    }
+    .nav-item {
+        width: 30px;
+        height: 30px;
+        padding: 0;
+        justify-content: center;
+        gap: 0;
+    }
+    .nav-label {
+        display: none;
+    }
+    /* Profile/Settings move into the .more-sheet menu (lower-right), and every library
      tab moves into the .libraries-sheet menu (lower-left, see .nav-libraries) instead of
      appearing directly in the bar - a phone-width row has no room for 6+ icons at a real
      touch-target size. */
-  .nav-profile, .nav-settings, .nav-item-dynamic { display: none; }
-  .nav-more, .nav-libraries { display: flex; }
-  /* Mobile keeps the old boxed, vertically-stacked profile list instead of the desktop
+    .nav-profile,
+    .nav-settings,
+    .nav-item-dynamic {
+        display: none;
+    }
+    .nav-more,
+    .nav-libraries {
+        display: flex;
+    }
+    /* Mobile keeps the old boxed, vertically-stacked profile list instead of the desktop
      badge carousel (see profile.css's own .profile-badge rules) - a horizontally-scrolling
      row of 150px circular avatars doesn't fit a phone-width screen, and the original boxed
      list already worked fine here. Same markup as desktop (profile.js's renderProfileList),
      just re-flowed by CSS - same idea as this file's own .title-info-episode rules above. */
-  .profile-badges-wrap {
-    /* Shared frosted-glass panel look - see colors.css's --glass-panel-bg/-blur. */
-    background: var(--glass-panel-bg);
-    backdrop-filter: var(--glass-panel-blur);
-    -webkit-backdrop-filter: var(--glass-panel-blur);
-    border: 1px solid rgba(var(--color-fg-rgb), 0.08);
-    border-radius: 16px;
-    box-shadow: 0 24px 70px rgba(var(--color-shadow-rgb), 0.6);
-    width: 88vw;
-    max-width: 360px;
-  }
-  .profile-badges-scroll {
-    overflow: hidden auto;
-    max-height: 70vh;
-    padding: 10px;
-    scrollbar-width: none;
-  }
-  .profile-badges-scroll::-webkit-scrollbar { display: none; width: 0; height: 0; }
-  .profile-list { flex-direction: column; justify-content: flex-start; width: 100%; min-width: 0; gap: 6px; }
-  .profile-arrow { display: none; }
-  .profile-badge {
-    flex-direction: row;
-    align-items: center;
-    justify-content: flex-start;
-    flex-wrap: wrap;
-    width: 100%;
-    gap: 12px;
-    padding: 10px 12px;
-    border-radius: 10px;
-  }
-  .profile-badge-avatar { width: 34px; height: 34px; }
-  .profile-badge-avatar svg { width: 20px; height: 20px; }
-  .profile-badge-name { flex: 1 1 auto; text-align: left; }
-  .profile-badge-status { position: static; transform: none; width: auto; flex: 1 0 100%; text-align: left; margin-top: 0; }
-  .main { padding-bottom: calc(56px + var(--safe-bottom)); }
-  .row-title { padding-left: 24px; }
-  .row-scroller { padding-left: 24px; }
-  .row-track { gap: 17px; }
-  .poster { flex-basis: 112px; }
-  .poster .glow { inset: -10px; filter: blur(14px) saturate(1.2) brightness(0.7); border-radius: 15px; }
-  .poster .caption { padding: 88px 8px 8px; }
-  .poster.landscape { flex-basis: 224px; }
-  .poster.landscape .caption { padding: 42px 8px 8px; }
-  .rank-number { font-size: 160px; letter-spacing: -4px; left: -4px; }
-  .rank-item .poster { margin-left: 63px; }
-  .search-page-group { padding: 0 16px; }
-  .search-page-back { padding: 0 16px 20px; }
-  .search-page-grid { gap: 17px; }
-  .search-page-grid .poster { flex: 0 0 calc((100% - 34px) / 3); }
+    .profile-badges-wrap {
+        /* Shared frosted-glass panel look - see colors.css's --glass-panel-bg/-blur. */
+        background: var(--glass-panel-bg);
+        backdrop-filter: var(--glass-panel-blur);
+        -webkit-backdrop-filter: var(--glass-panel-blur);
+        border: 1px solid rgba(var(--color-fg-rgb), 0.08);
+        border-radius: 16px;
+        box-shadow: 0 24px 70px rgba(var(--color-shadow-rgb), 0.6);
+        width: 88vw;
+        max-width: 360px;
+    }
+    .profile-badges-scroll {
+        overflow: hidden auto;
+        max-height: 70vh;
+        padding: 10px;
+        scrollbar-width: none;
+    }
+    .profile-badges-scroll::-webkit-scrollbar {
+        display: none;
+        width: 0;
+        height: 0;
+    }
+    .profile-list {
+        flex-direction: column;
+        justify-content: flex-start;
+        width: 100%;
+        min-width: 0;
+        gap: 6px;
+    }
+    .profile-arrow {
+        display: none;
+    }
+    .profile-badge {
+        flex-direction: row;
+        align-items: center;
+        justify-content: flex-start;
+        flex-wrap: wrap;
+        width: 100%;
+        gap: 12px;
+        padding: 10px 12px;
+        border-radius: 10px;
+    }
+    .profile-badge-avatar {
+        width: 34px;
+        height: 34px;
+    }
+    .profile-badge-avatar svg {
+        width: 20px;
+        height: 20px;
+    }
+    .profile-badge-name {
+        flex: 1 1 auto;
+        text-align: left;
+    }
+    .profile-badge-status {
+        position: static;
+        transform: none;
+        width: auto;
+        flex: 1 0 100%;
+        text-align: left;
+        margin-top: 0;
+    }
+    .main {
+        padding-bottom: calc(56px + var(--safe-bottom));
+    }
+    .row-title {
+        padding-left: 24px;
+    }
+    .row-scroller {
+        padding-left: 24px;
+    }
+    .row-track {
+        gap: 17px;
+    }
+    .poster {
+        flex-basis: 112px;
+    }
+    .poster .glow {
+        inset: -10px;
+        filter: blur(14px) saturate(1.2) brightness(0.7);
+        border-radius: 15px;
+    }
+    .poster .caption {
+        padding: 88px 8px 8px;
+    }
+    .poster.landscape {
+        flex-basis: 224px;
+    }
+    .poster.landscape .caption {
+        padding: 42px 8px 8px;
+    }
+    .rank-number {
+        font-size: 160px;
+        letter-spacing: -4px;
+        left: -4px;
+    }
+    .rank-item .poster {
+        margin-left: 63px;
+    }
+    .search-page-group {
+        padding: 0 16px;
+    }
+    .search-page-back {
+        padding: 0 16px 20px;
+    }
+    .search-page-grid {
+        gap: 17px;
+    }
+    .search-page-grid .poster {
+        flex: 0 0 calc((100% - 34px) / 3);
+    }
 }

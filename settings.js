@@ -295,10 +295,6 @@ class StreamingSettingsModal extends HTMLElement {
             </div>
           </div>
           <div class="status save-status"></div>
-          <div class="modal-footer">
-            <button type="button" class="btn btn-secondary btn-cancel" data-nav-group="footer">Cancel</button>
-            <button type="button" class="btn btn-primary btn-save" data-nav-group="footer">Save</button>
-          </div>
         </div>
       </div>
     `;
@@ -312,23 +308,47 @@ class StreamingSettingsModal extends HTMLElement {
   _wire() {
     this._overlay = this._el(".overlay");
     this._el(".modal-close").addEventListener("click", () => this.close());
-    this._el(".btn-cancel").addEventListener("click", () => this.close());
     this._overlay.addEventListener("click", (e) => {
       if (e.target === this._overlay) this.close();
     });
     this._el(".btn-reauth").addEventListener("click", () => this._reauthenticate());
     this._el(".btn-fetch-libraries").addEventListener("click", () => this._fetchLibraries());
-    this._el(".btn-save").addEventListener("click", () => this._save());
-    this._el(".f-subtitle-provider").addEventListener("change", () => this._syncSubtitleProviderFields());
-    this._el(".f-ai-enabled").addEventListener("change", () => this._syncIntegrationToggleFields());
-    this._el(".f-title-audio-enabled").addEventListener("change", () => this._syncTitleAudioFields());
+    this._el(".f-subtitle-provider").addEventListener("change", () => {
+      this._syncSubtitleProviderFields();
+      this._scheduleSave();
+    });
+    this._el(".f-ai-enabled").addEventListener("change", () => {
+      this._syncIntegrationToggleFields();
+      this._scheduleSave();
+    });
+    this._el(".f-title-audio-enabled").addEventListener("change", () => {
+      this._syncTitleAudioFields();
+      this._scheduleSave();
+    });
     this._el(".f-title-audio-volume").addEventListener("input", () => this._updateTitleAudioVolumeLabel());
+    this._el(".f-title-audio-volume").addEventListener("change", () => this._scheduleSave());
     this._el(".btn-clear-image-cache").addEventListener("click", () => this._clearImageCache());
-    /* Delegated on .section-list itself (not the individual radios) since those are
-       torn down and rebuilt by every _renderSectionList() call - the container div is
-       the one element in this area that survives across renders. */
+    /* Discrete controls (checkbox/select/number) save immediately on "change"; free-text
+       credential fields debounce on "input" instead, so a save isn't fired on every
+       keystroke while typing a key/password (see _scheduleSave). */
+    [".f-trailers-enabled", ".f-title-trailers-enabled", ".f-ai-cadence", ".f-max-genre-rows", ".f-row-size",
+      ".f-image-cache-ttl-days", ".f-xbox-hdr-always-on",
+      ...STATIC_ROW_TOGGLES.map((r) => `.f-row-${r.key}-enabled`),
+    ].forEach((sel) => this._el(sel).addEventListener("change", () => this._scheduleSave()));
+    [".f-openrouter-key", ".f-opensubtitles-username", ".f-opensubtitles-password", ".f-opensubtitles-key"].forEach((sel) =>
+      this._el(sel).addEventListener("input", () => this._scheduleSave(true))
+    );
+    /* Delegated on .section-list itself (not the individual radios/checkboxes) since
+       those are torn down and rebuilt by every _renderSectionList() call - the container
+       div is the one element in this area that survives across renders. Covers every
+       control in that list (home/movies/tv toggles, per-server, per-section, default-view
+       radios, label text) with one listener rather than rewiring on each render. */
     this._el(".section-list").addEventListener("change", (e) => {
       if (e.target.classList.contains("default-view-radio")) this._defaultView = e.target.value;
+      this._scheduleSave();
+    });
+    this._el(".section-list").addEventListener("input", (e) => {
+      if (e.target.classList.contains("s-label")) this._scheduleSave(true);
     });
     this.shadowRoot.querySelectorAll(".tab-btn").forEach((btn) => {
       btn.addEventListener("click", () => this._switchTab(btn.dataset.tab));
@@ -341,8 +361,7 @@ class StreamingSettingsModal extends HTMLElement {
        individually the way the rest of this list works. Fields that sit side-by-side in a
        .row-2col share their own per-row data-nav-group for the same reason (Up/Down should
        skip the pair as one visual row, Left/Right moves within it), matching how they
-       actually appear on screen rather than raw DOM order. Cancel/Save share data-nav-
-       group="footer" for the same reason - they sit side by side in .modal-footer. A hidden tab panel's fields are
+       actually appear on screen rather than raw DOM order. A hidden tab panel's fields are
        automatically excluded already, since items() filters on offsetParent !== null and
        inactive .tab-panels are display:none. Text/password/number inputs don't take real
        focus (and so don't pop the on-screen keyboard) until an explicit "activate" - see
@@ -358,7 +377,7 @@ class StreamingSettingsModal extends HTMLElement {
         STATIC_ROW_TOGGLES.map((r) => `.f-row-${r.key}-enabled`).join(", ") +
         ", .f-image-cache-ttl-days, .btn-clear-image-cache, " +
         ".f-title-audio-enabled, .f-title-audio-volume, .f-xbox-hdr-always-on, " +
-        ".about-privacy-link, .btn-cancel, .btn-save",
+        ".about-privacy-link",
       { orientation: "vertical", onBack: () => this.close() }
     );
     /* LB/RB (see focus-nav.js's chapterPrev/chapterNext) switch tabs directly regardless of
@@ -417,9 +436,9 @@ class StreamingSettingsModal extends HTMLElement {
   }
 
   /* Cache lifespan lives in Cache Storage, not the plain/secret config this modal
-     otherwise saves (see image-cache.js) - written immediately on click rather than
-     deferred to _save(), so it isn't lost if the user clears the cache then cancels
-     out of the rest of the form. */
+     otherwise saves (see image-cache.js) - written immediately on click here rather
+     than only via _persist()'s own setImageCacheTtlDays call, since a cache-clear should
+     take effect right away regardless of whether the ttl field itself has changed. */
   async _clearImageCache() {
     const statusEl = this._el(".image-cache-status");
     statusEl.textContent = "Clearing…";
@@ -553,6 +572,7 @@ class StreamingSettingsModal extends HTMLElement {
       this._servers = servers;
       this._sections = sections;
       this._renderSectionList();
+      this._scheduleSave();
       const suffix = unreachableCount ? ` — ${unreachableCount} server(s) unreachable right now` : "";
       statusEl.textContent = `Found ${sections.length} library section(s) across ${servers.length} server(s)${suffix}.`;
       statusEl.className = "status fetch-status ok";
@@ -825,12 +845,21 @@ class StreamingSettingsModal extends HTMLElement {
     };
   }
 
-  async _save() {
+  /* Every field change (see _wire) routes through here rather than a Save button - a
+     discrete control (checkbox/select/number) calls this directly, a free-text
+     credential field passes debounce=true so rapid keystrokes collapse into one write
+     instead of hitting the vault on every character. */
+  _scheduleSave(debounce = false) {
+    clearTimeout(this._saveTimer);
+    if (!debounce) {
+      this._persist();
+      return;
+    }
+    this._saveTimer = setTimeout(() => this._persist(), 600);
+  }
+
+  async _persist() {
     const statusEl = this._el(".save-status");
-    const saveBtn = this._el(".btn-save");
-    statusEl.textContent = "Saving…";
-    statusEl.className = "status save-status";
-    saveBtn.disabled = true;
     try {
       const plain = this._collectPlainConfig();
       const secrets = await this._collectSecrets();
@@ -849,12 +878,16 @@ class StreamingSettingsModal extends HTMLElement {
       const servers = (plain.servers || []).map((s) => ({ ...s, token: secrets.server_tokens?.[s.id] || "" }));
       const fullConfig = { ...plain, ...secrets, servers };
       this.dispatchEvent(new CustomEvent(APP_EVENT.SETTINGS_SAVED, { bubbles: true, composed: true, detail: fullConfig }));
-      this.close();
+      statusEl.textContent = "Saved";
+      statusEl.className = "status save-status ok";
+      clearTimeout(this._savedMsgTimer);
+      this._savedMsgTimer = setTimeout(() => {
+        statusEl.textContent = "";
+        statusEl.className = "status save-status";
+      }, 1500);
     } catch (e) {
       statusEl.textContent = `Couldn't save: ${e.message}`;
       statusEl.className = "status save-status err";
-    } finally {
-      saveBtn.disabled = false;
     }
   }
 
