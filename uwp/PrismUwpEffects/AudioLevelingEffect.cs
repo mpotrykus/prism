@@ -55,14 +55,16 @@ namespace PrismUwpEffects
     /// </summary>
     public sealed class AudioLevelingEffect : IBasicAudioEffect
     {
-        // LoudnessEmaTauSeconds raised from an original 20s first guess to 90s - see
-        // audio-leveling.js's own comment on why 20s let the gain visibly chase a single
-        // scene's loudness instead of riding out a whole title.
+        // LoudnessEmaTauSeconds raised twice now: an original 20s first guess to 90s, then
+        // 90s to 300s - see audio-leveling.js's own comment on why 90s was still short
+        // enough (relative to a typical 30-60s scene) for the gain to visibly chase
+        // scene-to-scene loudness instead of riding out a whole title.
+        // GainRampTimeConstantSeconds raised from 2s to 8s for the same reason.
         private const double TargetDbfs = -20;
         private const double MaxGainDb = 15;
         private const double MinGainDb = -15;
-        private const double LoudnessEmaTauSeconds = 90;
-        private const double GainRampTimeConstantSeconds = 2;
+        private const double LoudnessEmaTauSeconds = 300;
+        private const double GainRampTimeConstantSeconds = 8;
         private const double SilenceFloorDbfs = -60;
 
         // The EMA-driven gain above tracks long-run average loudness, not peaks - a quiet-

@@ -22,19 +22,26 @@ namespace PrismUwpEffects
             public double Contrast;
         }
 
-        private static readonly SharpenTuning Anime4KMin = new SharpenTuning { Scale = 1.8, Sharpen = 1.8, Kernel = 1.5 };
+        /* min.Sharpen/Kernel are deliberately near-zero, not "the lightest visible tier" - both
+           used to sit at an already-visible sharpen (1.8/1.5 and 1.0/1.2) because LiveAction also
+           compressed the whole 0-100% slider into its first 15% via LiveActionRampToMaxAt, to
+           make "Strong" reachable without most of the slider feeling unchanged. That combination
+           meant even 1% strength landed almost exactly at that already-strong min, producing
+           visible jaggies right at the bottom of the slider - reported 2026-08-30. Fix: drop min
+           to near-zero for both families and use a plain linear ramp across the full 0-100%
+           range - 1% now lands close to min, genuinely subtle, climbing smoothly to the
+           unchanged max at 100%. */
+        private static readonly SharpenTuning Anime4KMin = new SharpenTuning { Scale = 1.8, Sharpen = 0.15, Kernel = 1.0 };
         private static readonly SharpenTuning Anime4KMax = new SharpenTuning { Scale = 2.4, Sharpen = 3.8, Kernel = 2.8 };
-        private static readonly SharpenTuning LiveActionMin = new SharpenTuning { Scale = 1.3, Sharpen = 1.0, Kernel = 1.2 };
+        private static readonly SharpenTuning LiveActionMin = new SharpenTuning { Scale = 1.3, Sharpen = 0.1, Kernel = 1.0 };
         private static readonly SharpenTuning LiveActionMax = new SharpenTuning { Scale = 1.6, Sharpen = 2.2, Kernel = 1.8 };
-        private const double LiveActionRampToMaxAt = 0.15;
 
         internal static SharpenTuning ShaderTuningAt(string shaderType, double strength)
         {
             bool isLiveAction = shaderType == "live_action";
             SharpenTuning min = isLiveAction ? LiveActionMin : Anime4KMin;
             SharpenTuning max = isLiveAction ? LiveActionMax : Anime4KMax;
-            double rampToMaxAt = isLiveAction ? LiveActionRampToMaxAt : 1.0;
-            double t = Clamp(strength / rampToMaxAt, 0, 1);
+            double t = Clamp(strength, 0, 1);
             return new SharpenTuning
             {
                 Scale = Lerp(min.Scale, max.Scale, t),

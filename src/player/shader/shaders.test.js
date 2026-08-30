@@ -52,11 +52,9 @@ describe("shaderTuningAt", () => {
     expect(tuning.scale).toBeCloseTo((1.8 + 2.4) / 2);
   });
 
-  it("reaches max tuning early for live_action's rampToMaxAt", () => {
-    const atRamp = shaderTuningAt("live_action", 0.15);
-    const beyondRamp = shaderTuningAt("live_action", 0.9);
-    expect(atRamp).toEqual(SHADER_TYPES.live_action.max);
-    expect(beyondRamp).toEqual(SHADER_TYPES.live_action.max);
+  it("interpolates linearly across the full range for live_action too", () => {
+    const tuning = shaderTuningAt("live_action", 0.5);
+    expect(tuning.scale).toBeCloseTo((SHADER_TYPES.live_action.min.scale + SHADER_TYPES.live_action.max.scale) / 2);
   });
 
   it("carries no saturation/contrast knobs - those moved to colorBoostAt", () => {

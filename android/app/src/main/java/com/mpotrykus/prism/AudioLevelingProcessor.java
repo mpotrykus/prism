@@ -26,14 +26,16 @@ import java.nio.ByteBuffer;
 final class AudioLevelingProcessor extends BaseAudioProcessor {
 
     /* Same constants as audio-leveling.js's web leg - kept numerically identical so all
-       platforms behave the same way. LOUDNESS_EMA_TAU_S raised from an original 20s first
-       guess to 90s - see that file's own comment on why 20s let the gain visibly chase a
-       single scene's loudness instead of riding out a whole title. */
+       platforms behave the same way. LOUDNESS_EMA_TAU_S raised twice now: an original 20s
+       first guess to 90s, then 90s to 300s - see that file's own comment on why 90s was
+       still short enough (relative to a typical 30-60s scene) for the gain to visibly chase
+       scene-to-scene loudness instead of riding out a whole title. GAIN_RAMP_TIME_CONSTANT_S
+       raised from 2s to 8s for the same "still audibly snapping" reason. */
     private static final double TARGET_DBFS = -20;
     private static final double MAX_GAIN_DB = 15;
     private static final double MIN_GAIN_DB = -15;
-    private static final double LOUDNESS_EMA_TAU_S = 90;
-    private static final double GAIN_RAMP_TIME_CONSTANT_S = 2;
+    private static final double LOUDNESS_EMA_TAU_S = 300;
+    private static final double GAIN_RAMP_TIME_CONSTANT_S = 8;
     private static final double SILENCE_FLOOR_DBFS = -60;
 
     /* The EMA-driven gain above tracks long-run average loudness, not peaks - a quiet-

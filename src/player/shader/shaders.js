@@ -76,7 +76,11 @@ export const SHADER_TYPES = {
     anime4k: {
         label: "Animation",
         useCas: false,
-        min: { scale: 1.8, sharpen: 1.8, kernel: 1.5 },
+        /* min.sharpen/kernel are deliberately near-zero, not "the lightest visible tier" -
+           1% strength must read as barely-there, not as an already-committed sharpen (see
+           live_action's own comment below for the full reasoning; both families were tuned
+           together, 2026-08-30). */
+        min: { scale: 1.8, sharpen: 0.15, kernel: 1.0 },
         max: { scale: 2.4, sharpen: 3.8, kernel: 2.8 },
         buildPasses: () => [{ name: "sharpen", frag: SHARPEN_ANIME_FRAG, inputs: [{ uniform: "uTex", from: SOURCE }] }],
         /* Rendered as anime4k_cnn instead wherever that chain builds (see shader-pipeline.js's
@@ -89,17 +93,22 @@ export const SHADER_TYPES = {
     live_action: {
         label: "Live-Action",
         useCas: true,
-        min: { scale: 1.3, sharpen: 1.0, kernel: 1.2 },
+        /* min used to sit at 1.0/1.2 (sharpen/kernel) - a real, already-visible sharpen, not
+           a true "barely on" floor - because an earlier fix (see the weight-gate comment
+           above) also compressed the whole 0-100% slider into just its first 15% via
+           rampToMaxAt, to make "Strong" reachable without most of the slider feeling
+           unchanged. That combination meant even 1% strength landed almost exactly at that
+           already-strong min, producing visible jaggies right at the bottom of the slider -
+           reported 2026-08-30. Fix: drop min to near-zero and go back to a plain linear ramp
+           across the full 0-100% range (no rampToMaxAt) - 1% now lands close to 0.1/1.0,
+           genuinely subtle, and the effect climbs smoothly the rest of the way to the
+           unchanged max (2.2/1.8) at 100%. */
+        min: { scale: 1.3, sharpen: 0.1, kernel: 1.0 },
         max: { scale: 1.6, sharpen: 2.2, kernel: 1.8 },
         buildPasses: () => [{ name: "sharpen", frag: SHARPEN_CAS_FRAG, inputs: [{ uniform: "uTex", from: SOURCE }] }],
         /* Rendered as live_action_fsr instead wherever that chain builds - same family-key-stays-
            stable reasoning as anime4k's upgradeTo above. */
         upgradeTo: "live_action_fsr",
-        /* CAS ramps to its max tuning by 15% strength instead of 100% - the old full
-           0-100% range made the slider's first ~2/3 barely perceptible (see the weight-gate
-           fix above), so the previous "100%" tuning now arrives at "Light" instead of only
-           at "Strong". Strength above 0.15 just stays at max, same as reaching 100% used to. */
-        rampToMaxAt: 0.15,
     },
 };
 

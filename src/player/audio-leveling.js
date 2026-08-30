@@ -45,19 +45,21 @@ const MEASURE_INTERVAL_MS = 300;
 /* Exponential-moving-average smoothing on the loudness estimate itself - large relative
    to MEASURE_INTERVAL_MS on purpose, so the estimate (and therefore the gain it drives)
    settles over minutes, not within a single scene. This, plus the gain ramp's own time
-   constant below, is what keeps this "leveling" rather than "compression". Raised from an
-   original 20s first guess - that was short enough for the gain to visibly chase a scene's
-   own average loudness (audible pumping across a scene change, still under- or over-shooting
-   within a loud/quiet scene rather than riding out a whole title), which is exactly what a
-   rolling per-title average is supposed to avoid; 90s keeps a typical scene from swinging the
-   average on its own while still adapting within a few minutes to a title that's genuinely
-   mixed differently throughout. */
-const LOUDNESS_EMA_TAU_S = 90;
+   constant below, is what keeps this "leveling" rather than "compression". Raised once
+   already from an original 20s first guess to 90s (see git history) for the same reason
+   it's raised again here: 90s was still short enough that the gain audibly chased ordinary
+   scene-to-scene loudness changes (a typical scene runs 30-60s, not much shorter than 90s
+   itself, so the EMA was never actually riding out a whole title) - confirmed by ear in
+   real playback, not just a theoretical concern. 300s (5 minutes) puts a full scene well
+   inside the flat part of the exponential response instead of a third of the way up it. */
+const LOUDNESS_EMA_TAU_S = 300;
 const LOUDNESS_EMA_ALPHA = (MEASURE_INTERVAL_MS / 1000) / LOUDNESS_EMA_TAU_S;
 /* How slowly gainNode.gain itself is allowed to move toward the newly-computed target -
    an audible jump between measurement ticks would read as pumping, exactly what this
-   feature is explicitly not supposed to do. */
-const GAIN_RAMP_TIME_CONSTANT_S = 2;
+   feature is explicitly not supposed to do. Raised from an original 2s first guess for the
+   same real-playback reason as the EMA tau above - even once the target itself barely
+   moves, a short ramp let the applied gain visibly snap to it. */
+const GAIN_RAMP_TIME_CONSTANT_S = 8;
 /* Floor for the instantaneous dBFS reading before it ever reaches the EMA - true silence
    (a paused video, a black-screen beat with no score) is -Infinity in dB, which would
    otherwise drag the running average toward "everything needs the max boost" the moment

@@ -17,19 +17,26 @@ package com.mpotrykus.prism;
    shader-upscale tuning made the crush worse than necessary). */
 enum ShaderType {
     OFF("Off", false, null, null, 1f),
+    /* min.sharpenStrength/kernelScale are deliberately near-zero, not "the lightest visible
+       tier" - see LIVE_ACTION's own comment below (both families tuned together, fixed
+       2026-08-30: 1% strength was landing at an already-strong, visibly jaggy sharpen). */
     ANIME4K("Animation", false,
-        new ShaderTuning(/* scaleFactor= */ 1.8f, /* sharpenStrength= */ 1.8f, /* kernelScale= */ 1.5f),
+        new ShaderTuning(/* scaleFactor= */ 1.8f, /* sharpenStrength= */ 0.15f, /* kernelScale= */ 1.0f),
         new ShaderTuning(/* scaleFactor= */ 2.4f, /* sharpenStrength= */ 3.8f, /* kernelScale= */ 2.8f),
         1f),
-    /* rampToMaxAt=0.15 - CAS ramps to its max tuning by 15% strength instead of 100%: the old
-       full 0-100% range made the slider's first ~2/3 barely perceptible (see
-       ShaderUpscaleShaderProgram's weight-gate fix), so the previous "100%" tuning now arrives
-       at "Light" instead of only at "Strong". Strength above 0.15 just stays at max, same as
-       reaching 100% used to. */
+    /* min used to sit at 1.0/1.2 (sharpen/kernel) - a real, already-visible sharpen, not a true
+       "barely on" floor - because an earlier fix (see ShaderUpscaleShaderProgram's weight-gate
+       fix) also compressed the whole 0-100% slider into just its first 15% via rampToMaxAt, to
+       make "Strong" reachable without most of the slider feeling unchanged. That combination
+       meant even 1% strength landed almost exactly at that already-strong min, producing
+       visible jaggies right at the bottom of the slider - reported 2026-08-30. Fix: drop min to
+       near-zero and go back to a plain linear ramp across the full 0-100% range (rampToMaxAt=1,
+       same as ANIME4K) - 1% now lands close to 0.1/1.0, genuinely subtle, climbing smoothly to
+       the unchanged max (2.2/1.8) at 100%. */
     LIVE_ACTION("Live-Action", true,
-        new ShaderTuning(/* scaleFactor= */ 1.3f, /* sharpenStrength= */ 1.0f, /* kernelScale= */ 1.2f),
+        new ShaderTuning(/* scaleFactor= */ 1.3f, /* sharpenStrength= */ 0.1f, /* kernelScale= */ 1.0f),
         new ShaderTuning(/* scaleFactor= */ 1.6f, /* sharpenStrength= */ 2.2f, /* kernelScale= */ 1.8f),
-        0.15f);
+        1f);
 
     /* Sharpening/upscale fully off - the "a program is needed to render through, but shader
        upscaling itself is disabled" case Color Boost alone hits (see ShaderUpscaleEffect's own
