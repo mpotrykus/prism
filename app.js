@@ -1,6 +1,7 @@
 import { loadFull, isConfigured } from "./settings.js";
-import { primeDecodeCapabilities, platformTag } from "./src/player/core/platform.js";
+import { primeDecodeCapabilities, platformTag, PLATFORM_TAG } from "./src/player/core/platform.js";
 import { postAlwaysOnHdr } from "./src/player/xbox-bridge.js";
+import { APP_EVENT } from "./constants.js";
 import "./input-mode.js";
 
 (async function () {
@@ -20,16 +21,16 @@ import "./input-mode.js";
      <plex-netflix-card> tag in index.html) mirrors how Home Assistant's own Lovelace
      always drove this same class. */
   const card = document.createElement("plex-netflix-card");
-  card.addEventListener("open-settings", () => modal.open());
-  modal.addEventListener("settings-saved", (e) => {
+  card.addEventListener(APP_EVENT.OPEN_SETTINGS, () => modal.open());
+  modal.addEventListener(APP_EVENT.SETTINGS_SAVED, (e) => {
     card.refreshConfig(e.detail);
-    if (platformTag() === "uwp") postAlwaysOnHdr(e.detail.xbox_hdr_always_on === true);
+    if (platformTag() === PLATFORM_TAG.UWP) postAlwaysOnHdr(e.detail.xbox_hdr_always_on === true);
   });
-  modal.addEventListener("request-plex-reauth", () => signinModal.open({ blocking: false }));
+  modal.addEventListener(APP_EVENT.REQUEST_PLEX_REAUTH, () => signinModal.open({ blocking: false }));
   /* Reopening Settings after a reauth (but not after the first-run gate, which had no
      Settings open to return to) lets the user see the freshly-discovered libraries
      without having to find the gear icon again. */
-  signinModal.addEventListener("plex-connected", (e) => {
+  signinModal.addEventListener(APP_EVENT.PLEX_CONNECTED, (e) => {
     card.refreshConfig(e.detail.config);
     if (!e.detail.wasBlocking) modal.open();
   });
@@ -42,7 +43,7 @@ import "./input-mode.js";
        it doesn't persist this natively across app restarts on its own. Only affects in-session
        title switches (see postAlwaysOnHdr's own comment), so it's safe to send here at boot,
        well before any playback session exists. */
-    if (platformTag() === "uwp") postAlwaysOnHdr(fullConfig.xbox_hdr_always_on === true);
+    if (platformTag() === PLATFORM_TAG.UWP) postAlwaysOnHdr(fullConfig.xbox_hdr_always_on === true);
   }
 
   boot(await loadFull());

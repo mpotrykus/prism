@@ -28,6 +28,8 @@ jobs:
       # webDir (dist/) has to exist before `cap sync` copies it into
       # android/app/src/main/assets/public - see CLAUDE.md's Vite build note.
       - run: npm run build
+        env:
+          VITE_TMDB_API_KEY: ${{ secrets.VITE_TMDB_API_KEY }}
 
       - run: node scripts/android-sync-shaders.mjs
       - run: npx cap sync android
@@ -81,6 +83,8 @@ jobs:
       # windows-latest ships VS2022 Enterprise with the UWP workload already installed).
       # Same shell for Xbox and PC - see CLAUDE.md - so one build covers both targets.
       - run: npm run xbox:build
+        env:
+          VITE_TMDB_API_KEY: ${{ secrets.VITE_TMDB_API_KEY }}
 
       - name: Package sideload bundles
         id: bundle

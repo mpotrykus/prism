@@ -5,11 +5,12 @@
    this server's /library/metadata, so it has to be re-resolved by normalized title
    match (see logic/watchlist-match.js) before either action can target it. */
 import { normalizeTitle } from "./logic/watchlist-match.js";
+import { WATCHLIST_ADDED_CLASS, MEDIA_TYPE } from "../../constants.js";
 
 /* Single paint routine for the watchlist button's "added" state - previously
    duplicated separately in the hero, poster, and title-info render paths. */
 export function paintWatchlistButton(btnEl, added) {
-  btnEl.classList.toggle("added", added);
+  btnEl.classList.toggle(WATCHLIST_ADDED_CLASS, added);
   /* title-info's watchlist button carries a separate icon+label span (see plex-netflix-card.js's
      template) so a stacked description can sit under the icon on desktop - hero's and rows.js's
      poster watchlist buttons don't, and just take the plain textContent path instead. */
@@ -23,7 +24,7 @@ async function resolveDiscoverRatingKey(item, plexAccountToken) {
   try {
     const url = new URL("https://discover.provider.plex.tv/library/search");
     url.searchParams.set("query", item.title);
-    url.searchParams.set("searchTypes", item.type === "show" ? "tv" : "movies");
+    url.searchParams.set("searchTypes", item.type === MEDIA_TYPE.SHOW ? "tv" : "movies");
     url.searchParams.set("searchProviders", "discover");
     url.searchParams.set("limit", "10");
     url.searchParams.set("X-Plex-Token", plexAccountToken);

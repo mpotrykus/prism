@@ -1,3 +1,6 @@
+import PLAYER_SETTINGS_DEFAULTS from "../player-settings.defaults.json";
+import { INPUT_MODE } from "../../../constants.js";
+
 export const CONTROLS_HIDE_DELAY_MS = 1000;
 export const PLAYBACK_RATES = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 4, 8];
 export const SLEEP_TIMER_PRESETS_MIN = [15, 30, 45, 60];
@@ -138,7 +141,7 @@ export function ensurePlayerFocusStyle() {
            above, an inline style always wins over any stylesheet selector here regardless
            of specificity. */
         html[data-xbox-device="true"] .${OVERLAY_CLOSE_BTN_CLASS},
-        html[data-input-mode="keyboard"] .${OVERLAY_CLOSE_BTN_CLASS} {
+        html[data-input-mode="${INPUT_MODE.KEYBOARD}"] .${OVERLAY_CLOSE_BTN_CLASS} {
             display: none !important;
         }
     `;
@@ -182,9 +185,20 @@ export const AUTO_SKIP_INTRO_CREDITS_STORAGE_KEY = "prism_player_auto_skip_intro
 export const AUDIO_LEVELING_STORAGE_KEY = "prism_player_audio_leveling_enabled";
 export const AUTO_CROP_STORAGE_KEY = "prism_player_auto_crop_enabled";
 
+function storedBool(key, defaultValue) {
+    const stored = localStorage.getItem(key);
+    return stored === null ? defaultValue : stored === "1";
+}
+
+function storedFloat01(key, defaultValue) {
+    const stored = localStorage.getItem(key);
+    const raw = Number(stored);
+    return stored !== null && Number.isFinite(raw) && raw >= 0 && raw <= 1 ? raw : defaultValue;
+}
+
 export function storedVolume() {
     const raw = Number(localStorage.getItem(VOLUME_STORAGE_KEY));
-    return Number.isFinite(raw) && raw > 0 && raw <= 1 ? raw : 1;
+    return Number.isFinite(raw) && raw > 0 && raw <= 1 ? raw : PLAYER_SETTINGS_DEFAULTS.volume;
 }
 
 /* The in-player toggle IS the setting, written here the moment it's flipped (see
@@ -192,7 +206,7 @@ export function storedVolume() {
    persistence model as VOLUME_STORAGE_KEY above - no Settings-modal default to reconcile
    against. */
 export function storedAmbientEnabled() {
-    return localStorage.getItem(AMBIENT_STORAGE_KEY) === "1";
+    return storedBool(AMBIENT_STORAGE_KEY, PLAYER_SETTINGS_DEFAULTS.ambientEnabled);
 }
 
 /* Same immediate-persistence model as storedAmbientEnabled above - opacity has no
@@ -201,9 +215,7 @@ export function storedAmbientEnabled() {
    and silently make "never set" indistinguishable from "explicitly set to 0" - every
    fresh session would start at 0% (invisible) instead of the intended 50% default. */
 export function storedAmbientOpacity() {
-    const stored = localStorage.getItem(AMBIENT_OPACITY_STORAGE_KEY);
-    const raw = Number(stored);
-    return stored !== null && Number.isFinite(raw) && raw >= 0 && raw <= 1 ? raw : 0.5;
+    return storedFloat01(AMBIENT_OPACITY_STORAGE_KEY, PLAYER_SETTINGS_DEFAULTS.ambientOpacity);
 }
 
 /* Same immediate-persistence model as storedAmbientEnabled - whatever the in-player
@@ -212,7 +224,7 @@ export function storedAmbientOpacity() {
    detection is unrelated to this and still resolves fresh every time (see
    plex-player.js's play()). */
 export function storedShaderEnabled() {
-    return localStorage.getItem(UPSCALE_ENABLED_STORAGE_KEY) === "1";
+    return storedBool(UPSCALE_ENABLED_STORAGE_KEY, PLAYER_SETTINGS_DEFAULTS.shaderEnabled);
 }
 
 /* Same immediate-persistence model as storedShaderEnabled above. 0.65 (not documented
@@ -226,16 +238,14 @@ export function storedShaderEnabled() {
    Auto mode look permanently stuck at 0% for anyone who'd never touched the manual
    slider. */
 export function storedShaderStrength() {
-    const stored = localStorage.getItem(UPSCALE_STRENGTH_STORAGE_KEY);
-    const raw = Number(stored);
-    return stored !== null && Number.isFinite(raw) && raw >= 0 && raw <= 1 ? raw : 0.65;
+    return storedFloat01(UPSCALE_STRENGTH_STORAGE_KEY, PLAYER_SETTINGS_DEFAULTS.shaderStrength);
 }
 
 /* Same immediate-persistence model as storedShaderEnabled above. The resolved auto
    strength itself is never persisted, only this flag - see shader-pipeline.js's
    renderShaderFrame. */
 export function storedUpscaleAuto() {
-    return localStorage.getItem(UPSCALE_AUTO_STORAGE_KEY) === "1";
+    return storedBool(UPSCALE_AUTO_STORAGE_KEY, PLAYER_SETTINGS_DEFAULTS.upscaleAuto);
 }
 
 /* Same immediate-persistence model as storedAmbientEnabled - Color Boost's Saturation and
@@ -243,11 +253,11 @@ export function storedUpscaleAuto() {
    independent controls now (see shader-pipeline.js's setColorBoostSaturationMode/
    setColorBoostContrastMode) - each gets its own enabled key rather than sharing one. */
 export function storedColorBoostSaturationEnabled() {
-    return localStorage.getItem(COLOR_BOOST_SATURATION_ENABLED_STORAGE_KEY) === "1";
+    return storedBool(COLOR_BOOST_SATURATION_ENABLED_STORAGE_KEY, PLAYER_SETTINGS_DEFAULTS.colorBoostSaturationEnabled);
 }
 
 export function storedColorBoostContrastEnabled() {
-    return localStorage.getItem(COLOR_BOOST_CONTRAST_ENABLED_STORAGE_KEY) === "1";
+    return storedBool(COLOR_BOOST_CONTRAST_ENABLED_STORAGE_KEY, PLAYER_SETTINGS_DEFAULTS.colorBoostContrastEnabled);
 }
 
 /* Same `stored !== null` reasoning as storedAmbientOpacity/storedShaderStrength above.
@@ -255,15 +265,11 @@ export function storedColorBoostContrastEnabled() {
    setColorBoostSaturationStrength/setColorBoostContrastStrength) - each gets its own
    persisted key rather than sharing the one "strength" this used to be. */
 export function storedColorBoostSaturationStrength() {
-    const stored = localStorage.getItem(COLOR_BOOST_SATURATION_STRENGTH_STORAGE_KEY);
-    const raw = Number(stored);
-    return stored !== null && Number.isFinite(raw) && raw >= 0 && raw <= 1 ? raw : 0.5;
+    return storedFloat01(COLOR_BOOST_SATURATION_STRENGTH_STORAGE_KEY, PLAYER_SETTINGS_DEFAULTS.colorBoostSaturationStrength);
 }
 
 export function storedColorBoostContrastStrength() {
-    const stored = localStorage.getItem(COLOR_BOOST_CONTRAST_STRENGTH_STORAGE_KEY);
-    const raw = Number(stored);
-    return stored !== null && Number.isFinite(raw) && raw >= 0 && raw <= 1 ? raw : 0.5;
+    return storedFloat01(COLOR_BOOST_CONTRAST_STRENGTH_STORAGE_KEY, PLAYER_SETTINGS_DEFAULTS.colorBoostContrastStrength);
 }
 
 /* Same immediate-persistence model as storedColorBoostSaturationEnabled/storedUpscaleAuto
@@ -272,23 +278,23 @@ export function storedColorBoostContrastStrength() {
    from its own signal (avgSaturation vs lumaStdDev), so there's no shared auto state left
    to key one flag off. */
 export function storedColorBoostSaturationAuto() {
-    return localStorage.getItem(COLOR_BOOST_SATURATION_AUTO_STORAGE_KEY) === "1";
+    return storedBool(COLOR_BOOST_SATURATION_AUTO_STORAGE_KEY, PLAYER_SETTINGS_DEFAULTS.colorBoostSaturationAuto);
 }
 
 export function storedColorBoostContrastAuto() {
-    return localStorage.getItem(COLOR_BOOST_CONTRAST_AUTO_STORAGE_KEY) === "1";
+    return storedBool(COLOR_BOOST_CONTRAST_AUTO_STORAGE_KEY, PLAYER_SETTINGS_DEFAULTS.colorBoostContrastAuto);
 }
 
 /* Defaults off like every other quality-toggle here (Ambient/Color Boost/Sharpening's own
    default-off siblings) - AI Upscaling is opt-in for a never-touched user. */
 export function storedAiUpscalingEnabled() {
-    return localStorage.getItem(AI_UPSCALING_STORAGE_KEY) === "1";
+    return storedBool(AI_UPSCALING_STORAGE_KEY, PLAYER_SETTINGS_DEFAULTS.aiUpscalingEnabled);
 }
 
 /* Same immediate-persistence model as storedAmbientEnabled - a debug readout has no
    per-video/genre concern to reconcile either. */
 export function storedStatsOverlayEnabled() {
-    return localStorage.getItem(STATS_OVERLAY_STORAGE_KEY) === "1";
+    return storedBool(STATS_OVERLAY_STORAGE_KEY, PLAYER_SETTINGS_DEFAULTS.statsOverlayEnabled);
 }
 
 /* Same immediate-persistence model as storedStatsOverlayEnabled - no per-video/genre
@@ -297,8 +303,7 @@ export function storedStatsOverlayEnabled() {
    storedAutoSkipIntroCreditsEnabled/storedAudioLevelingEnabled which default off) for a user
    who's never touched this setting at all - a bare-missing key, not an explicit "0". */
 export function storedAutoPlayEnabled() {
-    const stored = localStorage.getItem(AUTO_PLAY_STORAGE_KEY);
-    return stored === null ? true : stored === "1";
+    return storedBool(AUTO_PLAY_STORAGE_KEY, PLAYER_SETTINGS_DEFAULTS.autoPlayEnabled);
 }
 
 /* Unlike storedAutoPlayEnabled, this does NOT default on for a never-touched user -
@@ -306,14 +311,14 @@ export function storedAutoPlayEnabled() {
    core/abr.js), not a free/seamless adjustment, so a user who's never opted in
    shouldn't have Plex silently re-transcoding their stream. */
 export function storedAutoQualityEnabled() {
-    return localStorage.getItem(AUTO_QUALITY_STORAGE_KEY) === "1";
+    return storedBool(AUTO_QUALITY_STORAGE_KEY, PLAYER_SETTINGS_DEFAULTS.autoQualityEnabled);
 }
 
 /* Unlike storedAutoPlayEnabled, this defaults OFF for a never-touched user - auto-skipping
    past content (rather than just auto-advancing between titles) is intrusive enough that a
    user should opt in rather than have it sprung on them. */
 export function storedAutoSkipIntroCreditsEnabled() {
-    return localStorage.getItem(AUTO_SKIP_INTRO_CREDITS_STORAGE_KEY) === "1";
+    return storedBool(AUTO_SKIP_INTRO_CREDITS_STORAGE_KEY, PLAYER_SETTINGS_DEFAULTS.autoSkipIntroCreditsEnabled);
 }
 
 /* Defaults OFF for a never-touched user - same reasoning as storedAutoQualityEnabled above:
@@ -321,7 +326,7 @@ export function storedAutoSkipIntroCreditsEnabled() {
    on a fresh install without the user opting in. Once they do touch it, their choice
    (on or off) persists across sessions like every other stored toggle. */
 export function storedAudioLevelingEnabled() {
-    return localStorage.getItem(AUDIO_LEVELING_STORAGE_KEY) === "1";
+    return storedBool(AUDIO_LEVELING_STORAGE_KEY, PLAYER_SETTINGS_DEFAULTS.audioLevelingEnabled);
 }
 
 /* Same `stored === null` default-on reasoning as storedAutoPlayEnabled above - unlike the
@@ -329,8 +334,7 @@ export function storedAudioLevelingEnabled() {
    automatically rather than opt in, since a title with a matted-in border is otherwise
    wrapped in two stacked sets of bars (see auto-crop.js's own header comment). */
 export function storedAutoCropEnabled() {
-    const stored = localStorage.getItem(AUTO_CROP_STORAGE_KEY);
-    return stored === null ? true : stored === "1";
+    return storedBool(AUTO_CROP_STORAGE_KEY, PLAYER_SETTINGS_DEFAULTS.autoCropEnabled);
 }
 
 export function volumeIconMarkup(level) {

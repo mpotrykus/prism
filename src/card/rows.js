@@ -4,6 +4,7 @@
    so this has no hidden dependency on the rest of the card's state. */
 
 import { createRowScroll } from "./row-scroll.js";
+import { WATCHLIST_ADDED_CLASS, MEDIA_TYPE } from "../../constants.js";
 
 const POSTER_FALLBACK_ICON_SVG =
   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="2" fill="currentColor" stroke="none"/><circle cx="12" cy="5.8" r="1.3" fill="currentColor" stroke="none"/><circle cx="17.4" cy="9.3" r="1.3" fill="currentColor" stroke="none"/><circle cx="17.4" cy="14.7" r="1.3" fill="currentColor" stroke="none"/><circle cx="12" cy="18.2" r="1.3" fill="currentColor" stroke="none"/><circle cx="6.6" cy="14.7" r="1.3" fill="currentColor" stroke="none"/><circle cx="6.6" cy="9.3" r="1.3" fill="currentColor" stroke="none"/></svg>';
@@ -128,7 +129,7 @@ export function buildPoster(item, source, { glow = true, landscape = false, item
   if (item.ratingKey != null) el.dataset.ratingKey = item.ratingKey;
   if (itemIndex != null) el.style.animationDelay = `${Math.min(itemIndex, 8) * 30}ms`;
   const src = landscape ? item.art || item.image : item.image;
-  const canWatchlist = item.type === "movie" || item.type === "show";
+  const canWatchlist = item.type === MEDIA_TYPE.MOVIE || item.type === MEDIA_TYPE.SHOW;
   el.innerHTML = `
     ${glow ? '<div class="glow"></div>' : ""}
     <div class="card">
@@ -184,14 +185,14 @@ export function buildPoster(item, source, { glow = true, landscape = false, item
     const watchlistBtn = el.querySelector(".watchlist-btn");
     if (ctx.isInWatchlist(item)) ctx.paintWatchlistButton(watchlistBtn, true);
     watchlistBtn.addEventListener("mouseenter", () => {
-      if (watchlistBtn.classList.contains("added")) watchlistBtn.textContent = "−";
+      if (watchlistBtn.classList.contains(WATCHLIST_ADDED_CLASS)) watchlistBtn.textContent = "−";
     });
     watchlistBtn.addEventListener("mouseleave", () => {
-      if (watchlistBtn.classList.contains("added")) watchlistBtn.textContent = "✓";
+      if (watchlistBtn.classList.contains(WATCHLIST_ADDED_CLASS)) watchlistBtn.textContent = "✓";
     });
     watchlistBtn.addEventListener("click", (e) => {
       e.stopPropagation();
-      if (watchlistBtn.classList.contains("added")) {
+      if (watchlistBtn.classList.contains(WATCHLIST_ADDED_CLASS)) {
         ctx.onRemoveFromWatchlist(item, watchlistBtn);
       } else {
         ctx.onAddToWatchlist(item, watchlistBtn);

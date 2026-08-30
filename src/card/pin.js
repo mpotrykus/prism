@@ -1,4 +1,5 @@
 import { focusAfterPaint, registerNavHandler } from "../../focus-nav.js";
+import { NAV_COMMAND } from "../../constants.js";
 
 /* Custom numeric-keypad modal replacing window.prompt/alert for PIN entry - this card
    has no native browser-dialog usage elsewhere, and a Netflix-style kiosk dashboard
@@ -112,31 +113,31 @@ export class PinEntry {
       const idx = keys.indexOf(active);
       if (idx === -1) {
         if (active !== this._cancelBtn) return false;
-        if (command === "up") {
+        if (command === NAV_COMMAND.UP) {
           keys[keys.length - 1].focus();
           return true;
         }
-        if (command === "activate") {
+        if (command === NAV_COMMAND.ACTIVATE) {
           active.click();
           return true;
         }
         return false;
       }
-      if (command === "activate") {
+      if (command === NAV_COMMAND.ACTIVATE) {
         active.click();
         return true;
       }
-      if (command === "back") {
+      if (command === NAV_COMMAND.BACK) {
         this._resolvePin(null);
         return true;
       }
       const row = Math.floor(idx / PIN_GRID_COLS);
       const col = idx % PIN_GRID_COLS;
       let targetIdx;
-      if (command === "right") targetIdx = row * PIN_GRID_COLS + Math.min(col + 1, PIN_GRID_COLS - 1);
-      else if (command === "left") targetIdx = row * PIN_GRID_COLS + Math.max(col - 1, 0);
-      else if (command === "down") targetIdx = idx + PIN_GRID_COLS;
-      else if (command === "up") targetIdx = idx - PIN_GRID_COLS;
+      if (command === NAV_COMMAND.RIGHT) targetIdx = row * PIN_GRID_COLS + Math.min(col + 1, PIN_GRID_COLS - 1);
+      else if (command === NAV_COMMAND.LEFT) targetIdx = row * PIN_GRID_COLS + Math.max(col - 1, 0);
+      else if (command === NAV_COMMAND.DOWN) targetIdx = idx + PIN_GRID_COLS;
+      else if (command === NAV_COMMAND.UP) targetIdx = idx - PIN_GRID_COLS;
       else return false;
 
       if (targetIdx < 0) return true; // nothing above the top row - swallow, don't fall through

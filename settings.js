@@ -1,9 +1,11 @@
 import { wireLinearNav, focusAfterPaint, isControllerActive, registerNavHandler } from "./focus-nav.js";
+import { NAV_COMMAND, APP_EVENT } from "./constants.js";
 import { hasSecrets, loadSecrets, saveSecrets } from "./vault.js";
 import { discoverLibraries } from "./plex-auth.js";
 import { isXboxDevice } from "./src/player/core/platform.js";
 import { getImageCacheTtlDays, setImageCacheTtlDays, clearImageCache } from "./image-cache.js";
 import MODAL_STYLE from "./src/styles/settings-modal.css?inline";
+import DEFAULT_PLAIN_CONFIG from "./app-settings.defaults.json";
 
 /* Only non-sensitive fields live here in plain localStorage. plex_token,
    openrouter_api_key, and plex_account_token go through vault.js instead - see there for
@@ -15,32 +17,6 @@ import MODAL_STYLE from "./src/styles/settings-modal.css?inline";
    card actually uses) so "refresh servers" can re-run discovery later without a
    full re-login. */
 const PLAIN_STORAGE_KEY = "prism.config";
-
-const DEFAULT_PLAIN_CONFIG = {
-    plex_url: "",
-    machine_id: "",
-    home_enabled: true,
-    servers: [],
-    sections: [],
-    default_view: "home",
-    ai_rows_cadence_ms: 7 * 24 * 60 * 60 * 1000,
-    max_genre_rows: 12,
-    row_size: 20,
-    subtitle_provider: "plex",
-    trailers_enabled: true,
-    title_trailers_enabled: true,
-    ai_rows_enabled: true,
-    xbox_hdr_always_on: false,
-    title_audio_enabled: true,
-    title_audio_volume: 0.65,
-    row_continue_watching_enabled: true,
-    row_recently_added_enabled: true,
-    row_watchlist_enabled: true,
-    row_recommended_enabled: true,
-    row_popular_enabled: true,
-    row_collections_enabled: true,
-    row_playlists_enabled: true,
-};
 
 export function loadPlain() {
     try {
@@ -125,10 +101,12 @@ class StreamingSettingsModal extends HTMLElement {
     this._sections = [];
     this._servers = [];
     this._homeEnabled = true;
+    this._moviesEnabled = true;
+    this._tvEnabled = true;
     /* Reflected onto this host element, not read via a :root selector inside the shadow
        stylesheet below - see focus-nav.js's own comment on why :root never matches there. */
     this.toggleAttribute("controller-active", isControllerActive());
-    document.addEventListener("controller-active-change", (e) => {
+    document.addEventListener(APP_EVENT.CONTROLLER_ACTIVE_CHANGE, (e) => {
       this.toggleAttribute("controller-active", e.detail.active);
     });
     this.attachShadow({ mode: "open" });
@@ -157,7 +135,7 @@ class StreamingSettingsModal extends HTMLElement {
               </section>
 
               <section class="group">
-                ${groupHead(ICONS.libraries, "Libraries", "Choose which libraries show up as browsing tabs, and pick your default screen")}
+                ${groupHead(ICONS.libraries, "Libraries", "Choose which libraries feed Home/Movies/TV Shows, which ones get their own tab, and your default screen")}
                 <button type="button" class="btn btn-secondary btn-fetch-libraries">Discover Libraries</button>
                 <div class="hint">Finds every server on your account, including ones friends have shared with you, and lists their libraries below.</div>
                 <div class="status fetch-status"></div>
@@ -371,8 +349,9 @@ class StreamingSettingsModal extends HTMLElement {
        focus-nav.js. */
     wireLinearNav(
       this.shadowRoot,
-      ".modal-close, .tab-btn, .btn-reauth, .btn-fetch-libraries, .home-enabled, .server-all-row .sv-enabled, " +
-        ".section-row .s-enabled, .section-row .s-label, .section-row .default-view-radio, " +
+      ".modal-close, .tab-btn, .btn-reauth, .btn-fetch-libraries, .home-enabled, .movies-enabled, .tv-enabled, " +
+        ".server-all-row .sv-enabled, .server-all-row .sv-show-tab, " +
+        ".section-row .s-enabled, .section-row .s-show-tab, .section-row .s-label, .section-row .default-view-radio, " +
         ".f-trailers-enabled, .f-title-trailers-enabled, .f-ai-enabled, .f-openrouter-key, .f-subtitle-provider, " +
         ".f-opensubtitles-username, .f-opensubtitles-password, .f-opensubtitles-key, " +
         ".f-ai-cadence, .f-max-genre-rows, .f-row-size, " +
@@ -389,11 +368,11 @@ class StreamingSettingsModal extends HTMLElement {
        handler already owns Left/Right within the tab row's data-nav-group="tabs". */
     registerNavHandler((command) => {
       if (!this.isOpen()) return false;
-      if (command !== "chapterPrev" && command !== "chapterNext") return false;
+      if (command !== NAV_COMMAND.CHAPTER_PREV && command !== NAV_COMMAND.CHAPTER_NEXT) return false;
       const keys = TABS.map((t) => t.key);
       const idx = keys.indexOf(this.shadowRoot.querySelector(".tab-btn.active")?.dataset.tab);
       if (idx === -1) return false;
-      const nextIdx = Math.max(0, Math.min(keys.length - 1, idx + (command === "chapterNext" ? 1 : -1)));
+      const nextIdx = Math.max(0, Math.min(keys.length - 1, idx + (command === NAV_COMMAND.CHAPTER_NEXT ? 1 : -1)));
       if (nextIdx !== idx) {
         this._switchTab(keys[nextIdx]);
         focusAfterPaint(this._el(`.tab-btn[data-tab="${keys[nextIdx]}"]`));
@@ -482,6 +461,8 @@ class StreamingSettingsModal extends HTMLElement {
        metadata until then so _renderSectionList() can still show something immediately. */
     this._servers = config.servers || [];
     this._homeEnabled = config.home_enabled !== false;
+    this._moviesEnabled = config.movies_enabled !== false;
+    this._tvEnabled = config.tv_enabled !== false;
     this._el(".f-trailers-enabled").checked = config.trailers_enabled !== false;
     this._el(".f-title-trailers-enabled").checked = config.title_trailers_enabled !== false;
     this._el(".f-ai-enabled").checked = config.ai_rows_enabled !== false;
@@ -546,7 +527,7 @@ class StreamingSettingsModal extends HTMLElement {
      the PIN flow here - Settings only needs to ask for it, not run it. */
   _reauthenticate() {
     this.close();
-    this.dispatchEvent(new CustomEvent("request-plex-reauth", { bubbles: true, composed: true }));
+    this.dispatchEvent(new CustomEvent(APP_EVENT.REQUEST_PLEX_REAUTH, { bubbles: true, composed: true }));
   }
 
   /* Discovers every server on the signed-in account - the owned one plus any a friend
@@ -619,6 +600,34 @@ class StreamingSettingsModal extends HTMLElement {
           <input type="radio" name="default-view" class="default-view-radio" value="home" data-nav-group="home-row" ${this._defaultView === "home" ? "checked" : ""} ${this._homeEnabled === false ? "disabled" : ""} />
           <span>Default</span>
         </label>
+      </div>
+      <div class="section-row movies-row">
+        <label class="switch">
+          <input type="checkbox" class="movies-enabled" data-nav-group="movies-row" ${this._moviesEnabled !== false ? "checked" : ""} />
+          <span class="switch-track"></span>
+        </label>
+        <div class="section-row-main">
+          <span class="section-row-title">Movies</span>
+          <span class="section-row-server">Every enabled movie library, across every server</span>
+        </div>
+        <label class="default-radio">
+          <input type="radio" name="default-view" class="default-view-radio" value="movies" data-nav-group="movies-row" ${this._defaultView === "movies" ? "checked" : ""} ${this._moviesEnabled === false ? "disabled" : ""} />
+          <span>Default</span>
+        </label>
+      </div>
+      <div class="section-row tv-row">
+        <label class="switch">
+          <input type="checkbox" class="tv-enabled" data-nav-group="tv-row" ${this._tvEnabled !== false ? "checked" : ""} />
+          <span class="switch-track"></span>
+        </label>
+        <div class="section-row-main">
+          <span class="section-row-title">TV Shows</span>
+          <span class="section-row-server">Every enabled TV library, across every server</span>
+        </div>
+        <label class="default-radio">
+          <input type="radio" name="default-view" class="default-view-radio" value="tv" data-nav-group="tv-row" ${this._defaultView === "tv" ? "checked" : ""} ${this._tvEnabled === false ? "disabled" : ""} />
+          <span>Default</span>
+        </label>
       </div>`;
     const serverGroupsHtml = this._servers
       .map((sv) => {
@@ -630,6 +639,7 @@ class StreamingSettingsModal extends HTMLElement {
           .map((i) => {
             const s = this._sections[i];
             const view = `section-${sv.id}:${s.key}`;
+            const usableAsDefault = s.enabled !== false && s.show_tab === true;
             return `
           <div class="section-row" data-index="${i}">
             <label class="switch">
@@ -641,14 +651,19 @@ class StreamingSettingsModal extends HTMLElement {
               <span class="section-row-server">${this._escape(sv.name)}</span>
             </div>
             <span class="type-badge">${s.type === 1 ? "Movies" : "TV"}</span>
+            <label class="tab-toggle">
+              <input type="checkbox" class="s-show-tab" data-nav-group="section-row-${i}" ${s.show_tab ? "checked" : ""} ${s.enabled === false ? "disabled" : ""} />
+              <span>Tab</span>
+            </label>
             <label class="default-radio">
-              <input type="radio" name="default-view" class="default-view-radio" value="${this._escape(view)}" data-nav-group="section-row-${i}" ${this._defaultView === view ? "checked" : ""} ${s.enabled === false ? "disabled" : ""} />
+              <input type="radio" name="default-view" class="default-view-radio" value="${this._escape(view)}" data-nav-group="section-row-${i}" ${this._defaultView === view ? "checked" : ""} ${usableAsDefault ? "" : "disabled"} />
               <span>Default</span>
             </label>
           </div>`;
           })
           .join("");
         const serverView = `server-${sv.id}`;
+        const serverUsableAsDefault = sv.all_enabled !== false && sv.show_tab === true;
         return `
         <div class="server-group">
           <div class="server-group-header">
@@ -663,8 +678,12 @@ class StreamingSettingsModal extends HTMLElement {
               <span class="section-row-title">${this._escape(sv.name)}</span>
               <span class="section-row-server">All libraries on this server</span>
             </div>
+            <label class="tab-toggle">
+              <input type="checkbox" class="sv-show-tab" data-nav-group="server-row-${this._escape(sv.id)}" ${sv.show_tab ? "checked" : ""} ${sv.all_enabled === false ? "disabled" : ""} />
+              <span>Tab</span>
+            </label>
             <label class="default-radio">
-              <input type="radio" name="default-view" class="default-view-radio" value="${this._escape(serverView)}" data-nav-group="server-row-${this._escape(sv.id)}" ${this._defaultView === serverView ? "checked" : ""} ${sv.all_enabled === false ? "disabled" : ""} />
+              <input type="radio" name="default-view" class="default-view-radio" value="${this._escape(serverView)}" data-nav-group="server-row-${this._escape(sv.id)}" ${this._defaultView === serverView ? "checked" : ""} ${serverUsableAsDefault ? "" : "disabled"} />
               <span>Default</span>
             </label>
           </div>
@@ -679,19 +698,56 @@ class StreamingSettingsModal extends HTMLElement {
       list.querySelector(".home-row .default-view-radio").disabled = !e.target.checked;
       this._reconcileDefaultView();
     });
+    list.querySelector(".movies-enabled").addEventListener("change", (e) => {
+      this._moviesEnabled = e.target.checked;
+      list.querySelector(".movies-row .default-view-radio").disabled = !e.target.checked;
+      this._reconcileDefaultView();
+    });
+    list.querySelector(".tv-enabled").addEventListener("change", (e) => {
+      this._tvEnabled = e.target.checked;
+      list.querySelector(".tv-row .default-view-radio").disabled = !e.target.checked;
+      this._reconcileDefaultView();
+    });
+    /* A server's "All libraries" tab can only be the default view once it's both enabled
+       and actually shown as a tab - same two-flag pattern as syncDefaultRadio below for
+       individual libraries, kept as its own copy since it reads from this._servers, not
+       this._sections. */
+    const syncServerDefaultRadio = (row, sv) => {
+      row.querySelector(".default-view-radio").disabled = sv.all_enabled === false || sv.show_tab !== true;
+    };
     list.querySelectorAll(".server-all-row").forEach((row) => {
+      const sv = this._servers.find((s) => s.id === row.dataset.server);
       row.querySelector(".sv-enabled").addEventListener("change", (e) => {
-        const sv = this._servers.find((s) => s.id === row.dataset.server);
         if (sv) sv.all_enabled = e.target.checked;
-        row.querySelector(".default-view-radio").disabled = !e.target.checked;
+        row.querySelector(".sv-show-tab").disabled = !e.target.checked;
+        if (sv) syncServerDefaultRadio(row, sv);
+        this._reconcileDefaultView();
+      });
+      row.querySelector(".sv-show-tab").addEventListener("change", (e) => {
+        if (sv) sv.show_tab = e.target.checked;
+        if (sv) syncServerDefaultRadio(row, sv);
         this._reconcileDefaultView();
       });
     });
+    /* A library tab can only be the default view once it's both enabled and actually
+       shown as a tab - re-derived from current in-memory state on every change to either
+       checkbox rather than toggled independently by each handler, so the two can't drift
+       out of sync with each other. */
+    const syncDefaultRadio = (row, i) => {
+      const s = this._sections[i];
+      row.querySelector(".default-view-radio").disabled = s.enabled === false || s.show_tab !== true;
+    };
     list.querySelectorAll(".section-row[data-index]").forEach((row) => {
       const i = Number(row.dataset.index);
       row.querySelector(".s-enabled").addEventListener("change", (e) => {
         this._sections[i].enabled = e.target.checked;
-        row.querySelector(".default-view-radio").disabled = !e.target.checked;
+        row.querySelector(".s-show-tab").disabled = !e.target.checked;
+        syncDefaultRadio(row, i);
+        this._reconcileDefaultView();
+      });
+      row.querySelector(".s-show-tab").addEventListener("change", (e) => {
+        this._sections[i].show_tab = e.target.checked;
+        syncDefaultRadio(row, i);
         this._reconcileDefaultView();
       });
       row.querySelector(".s-label").addEventListener("input", (e) => {
@@ -729,11 +785,13 @@ class StreamingSettingsModal extends HTMLElement {
       plex_url: (this._plexUrl || "").replace(/\/$/, ""),
       machine_id: this._machineId || "",
       home_enabled: this._homeEnabled !== false,
+      movies_enabled: this._moviesEnabled !== false,
+      tv_enabled: this._tvEnabled !== false,
       /* Tokens live in secrets (see _collectSecrets' server_tokens below), not here. */
       servers: (this._servers || []).map(({ token, ...rest }) => rest),
       sections: (this._sections || [])
         .filter((s) => s.enabled !== false)
-        .map((s) => ({ key: s.key, type: s.type, label: s.label, server_id: s.server_id })),
+        .map((s) => ({ key: s.key, type: s.type, label: s.label, server_id: s.server_id, show_tab: s.show_tab === true })),
       default_view: this.shadowRoot.querySelector(".default-view-radio:checked")?.value || "home",
       ai_rows_cadence_ms: Number(this._el(".f-ai-cadence").value),
       max_genre_rows: Number(this._el(".f-max-genre-rows").value) || 12,
@@ -790,7 +848,7 @@ class StreamingSettingsModal extends HTMLElement {
          back to opening Plex's own web/app link instead of this app's player. */
       const servers = (plain.servers || []).map((s) => ({ ...s, token: secrets.server_tokens?.[s.id] || "" }));
       const fullConfig = { ...plain, ...secrets, servers };
-      this.dispatchEvent(new CustomEvent("settings-saved", { bubbles: true, composed: true, detail: fullConfig }));
+      this.dispatchEvent(new CustomEvent(APP_EVENT.SETTINGS_SAVED, { bubbles: true, composed: true, detail: fullConfig }));
       this.close();
     } catch (e) {
       statusEl.textContent = `Couldn't save: ${e.message}`;

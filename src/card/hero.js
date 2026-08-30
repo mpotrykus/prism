@@ -2,6 +2,7 @@ import { paintWatchlistButton } from "./watchlist.js";
 import { pickHeroItem, pickHeroItemFromPool, heroArtUrl, heroSubtitleText, heroShouldPlay } from "./logic/hero.js";
 import { extractLogoUrl } from "./logic/catalog.js";
 import { resolveTrailerVideo } from "./logic/trailer.js";
+import { APP_EVENT, WATCHLIST_ADDED_CLASS, MEDIA_TYPE } from "../../constants.js";
 
 /* Plain glyphs (⏸/▶) render via Android's emoji font as a colored, boxed icon instead of a
    flat monochrome symbol - these SVGs give a crisp currentColor icon on every platform. */
@@ -207,7 +208,7 @@ export class HeroController {
     this._subtitleEl.textContent = heroSubtitleText(this._item);
     this._summaryEl.textContent = (this._item.summary || "").slice(0, 240);
 
-    const canWatchlist = this._item.type === "movie" || this._item.type === "show";
+    const canWatchlist = this._item.type === MEDIA_TYPE.MOVIE || this._item.type === MEDIA_TYPE.SHOW;
     this._watchlistBtn.style.display = canWatchlist ? "" : "none";
     if (canWatchlist) {
       this._watchlistBtn.classList.remove("busy", "error");
@@ -399,17 +400,17 @@ export class HeroController {
     this._watchlistBtn.addEventListener("click", (e) => {
       e.stopPropagation();
       if (!this._item) return;
-      if (this._watchlistBtn.classList.contains("added")) {
+      if (this._watchlistBtn.classList.contains(WATCHLIST_ADDED_CLASS)) {
         this._ctx.onRemoveFromWatchlist(this._item, this._watchlistBtn);
       } else {
         this._ctx.onAddToWatchlist(this._item, this._watchlistBtn);
       }
     });
     this._watchlistBtn.addEventListener("mouseenter", () => {
-      if (this._watchlistBtn.classList.contains("added")) this._watchlistBtn.textContent = "−";
+      if (this._watchlistBtn.classList.contains(WATCHLIST_ADDED_CLASS)) this._watchlistBtn.textContent = "−";
     });
     this._watchlistBtn.addEventListener("mouseleave", () => {
-      if (this._watchlistBtn.classList.contains("added")) this._watchlistBtn.textContent = "✓";
+      if (this._watchlistBtn.classList.contains(WATCHLIST_ADDED_CLASS)) this._watchlistBtn.textContent = "✓";
     });
     this._muteBtn.addEventListener("click", () => {
       this._muted = !this._muted;
@@ -466,14 +467,14 @@ export class HeroController {
        keeps playing, audio and all, behind the player. Only restores playback on close
        if this is what paused it - never overrides a pause the user set themselves via
        the hero's own button. */
-    window.addEventListener("streaming-player-open", () => {
+    window.addEventListener(APP_EVENT.PLAYER_OPEN, () => {
       if (!this._userPaused) {
         this._userPaused = true;
         this._pausedByPlayer = true;
         this.updatePlayback();
       }
     });
-    window.addEventListener("streaming-player-close", () => {
+    window.addEventListener(APP_EVENT.PLAYER_CLOSE, () => {
       if (this._pausedByPlayer) {
         this._pausedByPlayer = false;
         this._userPaused = false;
@@ -489,14 +490,14 @@ export class HeroController {
        !this._userPaused guard on that listener is already false by then, so
        _pausedByPlayer stays false and its own -close listener correctly leaves the hero
        paused (title-info is still open) instead of resuming it. */
-    window.addEventListener("streaming-title-info-open", () => {
+    window.addEventListener(APP_EVENT.TITLE_INFO_OPEN, () => {
       if (!this._userPaused) {
         this._userPaused = true;
         this._pausedByTitleInfo = true;
         this.updatePlayback();
       }
     });
-    window.addEventListener("streaming-title-info-close", () => {
+    window.addEventListener(APP_EVENT.TITLE_INFO_CLOSE, () => {
       if (this._pausedByTitleInfo) {
         this._pausedByTitleInfo = false;
         this._userPaused = false;

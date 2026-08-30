@@ -1,0 +1,22 @@
+{
+    "volume": 1,
+    "ambientEnabled": false,
+    "ambientOpacity": 0.5,
+    "shaderEnabled": false,
+    "shaderStrength": 0.65,
+    "shaderFamilyOverride": "auto",
+    "upscaleAuto": false,
+    "colorBoostSaturationEnabled": false,
+    "colorBoostContrastEnabled": false,
+    "colorBoostSaturationStrength": 0.5,
+    "colorBoostContrastStrength": 0.5,
+    "colorBoostSaturationAuto": false,
+    "colorBoostContrastAuto": false,
+    "aiUpscalingEnabled": false,
+    "statsOverlayEnabled": false,
+    "autoPlayEnabled": true,
+    "autoQualityEnabled": false,
+    "autoSkipIntroCreditsEnabled": false,
+    "audioLevelingEnabled": false,
+    "autoCropEnabled": true
+}

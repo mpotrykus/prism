@@ -23,7 +23,8 @@
    reaching into the shared control-row/menu chrome) keeps working unchanged. */
 import { registerNavHandler } from "./focus-nav.js";
 import { lockScroll, unlockScroll } from "./scroll-lock.js";
-import { hasNativePlayer, platformTag, plexPlatformTag, usesProgressiveStream, supportsHdr, getDecodeCapabilities } from "./src/player/core/platform.js";
+import { NAV_COMMAND, APP_EVENT, SHADER_OFF } from "./constants.js";
+import { hasNativePlayer, platformTag, PLATFORM_TAG, plexPlatformTag, usesProgressiveStream, supportsHdr, getDecodeCapabilities } from "./src/player/core/platform.js";
 import { media } from "./src/player/core/media-facade.js";
 import { buildStreamUrl, buildDecisionUrl, resolvePlaybackUrl } from "./src/player/core/stream-url.js";
 import { deriveChapterMarkers } from "./src/player/core/chapter-markers.js";
@@ -169,7 +170,7 @@ class StreamingPlayerController {
         this._ambientSampleCtx = null;
         this._ambientLastSampleAt = 0;
         this._ambientRafId = null;
-        this._shaderType = "off";
+        this._shaderType = SHADER_OFF;
         this._shaderEnabled = false;
         this._shaderStrength = 0;
         this._shaderAutoType = "live_action";
@@ -235,7 +236,7 @@ class StreamingPlayerController {
                menu selection. The convention this module is following is focus-nav.js's own: only the
                handler whose scope currently owns focus should act. */
             if (this._inlineMenuEl || this._audioSubtitlesEl || this._episodeListEl || this._chapterListEl) return false;
-            if (command === "back") {
+            if (command === NAV_COMMAND.BACK) {
                 /* B cancels an in-progress left-stick scrub instead of stopping playback -
                    only ever true on Xbox, since that's the only place _adjustScrub ever sets
                    it (see _handlePlayerNavCommand). */
@@ -246,7 +247,7 @@ class StreamingPlayerController {
                 this.stop();
                 return true;
             }
-            if (platformTag() !== "uwp") return false;
+            if (platformTag() !== PLATFORM_TAG.UWP) return false;
             return this._handlePlayerNavCommand(command);
         });
     }
@@ -272,7 +273,7 @@ class StreamingPlayerController {
            elsewhere on the page - it isn't paused just because a full-screen video now
            covers it. Decoupled via a window event (same pattern as the rest of the app's
            cross-component wiring) rather than reaching into the card's internals directly. */
-        window.dispatchEvent(new CustomEvent("streaming-player-open"));
+        window.dispatchEvent(new CustomEvent(APP_EVENT.PLAYER_OPEN));
 
         /* The player itself is a position:fixed overlay, not a real replacement for the
            card underneath it - the card's own content (taller than one viewport, see
@@ -540,7 +541,7 @@ class StreamingPlayerController {
            shader-pipeline.js's resolveShaderType), so this order matters, not just the
            values themselves. */
         this._upscaleAuto = storedUpscaleAuto();
-        this._shaderType = this._shaderEnabled && (this._upscaleAuto || this._shaderStrength > 0) ? this._shaderAutoType : "off";
+        this._shaderType = this._shaderEnabled && (this._upscaleAuto || this._shaderStrength > 0) ? this._shaderAutoType : SHADER_OFF;
         /* AI Upscaling (the real Anime4K CNN / FSR 1 chains) - independent of Sharpening's
            state above, no per-video/genre concern of its own either. */
         this._aiUpscalingEnabled = storedAiUpscalingEnabled();
@@ -620,7 +621,7 @@ class StreamingPlayerController {
                fire-and-forget ping and read the pre-stop position. */
             await this._reportTimeline("stopped");
             if (hasNativePlayer()) {
-                await (platformTag() === "uwp" ? stopXbox(this) : stopNative(this));
+                await (platformTag() === PLATFORM_TAG.UWP ? stopXbox(this) : stopNative(this));
             } else {
                 this._teardownWeb();
             }
@@ -635,7 +636,7 @@ class StreamingPlayerController {
         await this._teardownMedia();
         if (wasPlaying) {
             unlockScroll();
-            window.dispatchEvent(new CustomEvent("streaming-player-close"));
+            window.dispatchEvent(new CustomEvent(APP_EVENT.PLAYER_CLOSE));
         }
         if (this._pushedHistoryState) {
             window.removeEventListener("popstate", this._onPopState);
@@ -694,7 +695,7 @@ class StreamingPlayerController {
        and event NAMES - see xbox-bridge.js's header. buildPlaybackPayload is Android's, reused
        deliberately: it owns the String() coercions for Plex's numeric ids that a bridge must not lose. */
     _playNative(streamUrl, startOffsetMs) {
-        if (platformTag() === "uwp") {
+        if (platformTag() === PLATFORM_TAG.UWP) {
             return playXbox(
                 this,
                 streamUrl,
@@ -707,7 +708,7 @@ class StreamingPlayerController {
     }
 
     _switchNative(streamUrl, startOffsetMs) {
-        if (platformTag() === "uwp") {
+        if (platformTag() === PLATFORM_TAG.UWP) {
             return switchXbox(this, streamUrl, startOffsetMs, buildPlaybackPayload(this, streamUrl, startOffsetMs));
         }
         return switchNative(this, streamUrl, startOffsetMs);
@@ -748,7 +749,7 @@ class StreamingPlayerController {
         if (!el) return false;
         this._showControls();
         switch (command) {
-            case "activate":
+            case NAV_COMMAND.ACTIVATE:
                 if (this._skipButtonFocused) {
                     this._skipBtnEl?.click();
                     return true;
@@ -760,39 +761,39 @@ class StreamingPlayerController {
                 if (el.paused) this.resume();
                 else this.pause();
                 return true;
-            case "up":
+            case NAV_COMMAND.UP:
                 if (!this._skipButtonFocused && isSkipButtonShowing(this)) {
                     this._skipButtonFocused = true;
                     this._skipBtnEl.focus();
                     return true;
                 }
                 return false;
-            case "down":
+            case NAV_COMMAND.DOWN:
                 if (this._skipButtonFocused) {
                     this._skipButtonFocused = false;
                     this._skipBtnEl?.blur();
                     return true;
                 }
                 return false;
-            case "left":
+            case NAV_COMMAND.LEFT:
                 this._adjustScrub(-NAV_SEEK_STEP_MS);
                 return true;
-            case "right":
+            case NAV_COMMAND.RIGHT:
                 this._adjustScrub(NAV_SEEK_STEP_MS);
                 return true;
-            case "chapterPrev":
+            case NAV_COMMAND.CHAPTER_PREV:
                 this._seekToAdjacentChapter("prev");
                 return true;
-            case "chapterNext":
+            case NAV_COMMAND.CHAPTER_NEXT:
                 this._seekToAdjacentChapter("next");
                 return true;
-            case "rewind":
+            case NAV_COMMAND.REWIND:
                 this._queueNavSeek(-NAV_SEEK_STEP_MS);
                 return true;
-            case "forward":
+            case NAV_COMMAND.FORWARD:
                 this._queueNavSeek(NAV_SEEK_STEP_MS);
                 return true;
-            case "menu":
+            case NAV_COMMAND.MENU:
                 if (this._menuButtonEl) this._openHamburgerMenu(this._menuButtonEl);
                 return true;
             default:
@@ -893,7 +894,7 @@ class StreamingPlayerController {
     }
 
     _reloadSource(overrides) {
-        if (platformTag() === "uwp") {
+        if (platformTag() === PLATFORM_TAG.UWP) {
             return reloadXboxSource(this, overrides, (streamUrl, offsetMs) =>
                 buildPlaybackPayload(this, streamUrl, offsetMs)
             );
@@ -1077,7 +1078,7 @@ class StreamingPlayerController {
     async pause() {
         if (!this._session) return;
         if (hasNativePlayer()) {
-            await (platformTag() === "uwp" ? pauseXbox() : pauseNative());
+            await (platformTag() === PLATFORM_TAG.UWP ? pauseXbox() : pauseNative());
         } else {
             media(this)?.pause();
         }
@@ -1086,7 +1087,7 @@ class StreamingPlayerController {
     async resume() {
         if (!this._session) return;
         if (hasNativePlayer()) {
-            await (platformTag() === "uwp" ? resumeXbox() : resumeNative());
+            await (platformTag() === PLATFORM_TAG.UWP ? resumeXbox() : resumeNative());
         } else {
             media(this)?.play();
         }

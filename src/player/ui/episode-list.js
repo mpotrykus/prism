@@ -7,6 +7,7 @@ import { WATCHED_ICON_SVG } from "../../card/rows.js";
 import { formatRuntime } from "../../card/title-info.js";
 import { createRowScroll } from "../../card/row-scroll.js";
 import { PLAYER_FOCUSABLE_CLASS, PLAYER_CARD_CLASS } from "./shared.js";
+import { INPUT_MODE } from "../../../constants.js";
 
 /* In-player episode/queue list overlay (HBO Max-style) - a bottom sheet over the still-
    playing video (see the "keep playing behind overlay" decision) listing every title in
@@ -68,7 +69,7 @@ function ensureScrollStyle() {
            directly on the button - an inline style always wins over any stylesheet
            selector here regardless of specificity. */
         html[data-xbox-device="true"] .${QUEUE_ARROW_CLASS},
-        html[data-input-mode="keyboard"] .${QUEUE_ARROW_CLASS} {
+        html[data-input-mode="${INPUT_MODE.KEYBOARD}"] .${QUEUE_ARROW_CLASS} {
             display: none !important;
         }
     `;

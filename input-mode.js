@@ -16,6 +16,7 @@
    itself. */
 
 import { KEY_TO_COMMAND } from "./focus-nav.js";
+import { INPUT_MODE, APP_EVENT } from "./constants.js";
 
 /* `any-pointer: coarse` (not `pointer: coarse`) so a hybrid device isn't missed just
    because a mouse happens to also be attached - `pointer` only reports the *primary*
@@ -44,10 +45,10 @@ export function isRemoteDrivenDevice() {
    hybrids with both a coarse and fine pointer) defaults to mouse, matching this app's
    mouse/click/hover-only history (see focus-nav.js) until proven otherwise. */
 function computeInitialMode() {
-  if (isRemoteDrivenDevice()) return "keyboard";
+  if (isRemoteDrivenDevice()) return INPUT_MODE.KEYBOARD;
   const fine = window.matchMedia && window.matchMedia("(any-pointer: fine)").matches;
-  if (hasTouch() && !fine) return "touch";
-  return "mouse";
+  if (hasTouch() && !fine) return INPUT_MODE.TOUCH;
+  return INPUT_MODE.MOUSE;
 }
 
 let mode = computeInitialMode();
@@ -57,7 +58,7 @@ function setMode(next) {
   if (next === mode) return;
   mode = next;
   document.documentElement.dataset.inputMode = mode;
-  document.dispatchEvent(new CustomEvent("input-mode-change", { detail: { mode } }));
+  document.dispatchEvent(new CustomEvent(APP_EVENT.INPUT_MODE_CHANGE, { detail: { mode } }));
 }
 
 export function getInputMode() {
@@ -70,8 +71,8 @@ export function getInputMode() {
 document.addEventListener(
   "pointerdown",
   (e) => {
-    if (e.pointerType === "touch") setMode("touch");
-    else if (e.pointerType === "mouse" || e.pointerType === "pen") setMode("mouse");
+    if (e.pointerType === "touch") setMode(INPUT_MODE.TOUCH);
+    else if (e.pointerType === "mouse" || e.pointerType === "pen") setMode(INPUT_MODE.MOUSE);
   },
   true
 );
@@ -83,7 +84,7 @@ document.addEventListener(
 document.addEventListener(
   "keydown",
   (e) => {
-    if (KEY_TO_COMMAND[e.key]) setMode("keyboard");
+    if (KEY_TO_COMMAND[e.key]) setMode(INPUT_MODE.KEYBOARD);
   },
   true
 );

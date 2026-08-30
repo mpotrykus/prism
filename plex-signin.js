@@ -3,6 +3,7 @@
    configurable (libraries, trailers, AI rows, display) lives in Settings. */
 import { wireLinearNav, focusAfterPaint, isControllerActive } from "./focus-nav.js";
 import { isRemoteDrivenDevice } from "./input-mode.js";
+import { APP_EVENT } from "./constants.js";
 import * as StreamingPlexAuth from "./plex-auth.js";
 import { loadPlain, savePlain } from "./settings.js";
 import { hasSecrets, loadSecrets, saveSecrets } from "./vault.js";
@@ -15,7 +16,7 @@ class StreamingPlexSigninModal extends HTMLElement {
     /* Reflected onto this host element, not read via a :root selector inside the shadow
        stylesheet below - see focus-nav.js's own comment on why :root never matches there. */
     this.toggleAttribute("controller-active", isControllerActive());
-    document.addEventListener("controller-active-change", (e) => {
+    document.addEventListener(APP_EVENT.CONTROLLER_ACTIVE_CHANGE, (e) => {
       this.toggleAttribute("controller-active", e.detail.active);
     });
     this.attachShadow({ mode: "open" });
@@ -238,7 +239,7 @@ class StreamingPlexSigninModal extends HTMLElement {
     const wasBlocking = this._blocking;
     this._blocking = false;
     this.dispatchEvent(
-      new CustomEvent("plex-connected", { bubbles: true, composed: true, detail: { config: { ...plain, ...secrets }, wasBlocking } })
+      new CustomEvent(APP_EVENT.PLEX_CONNECTED, { bubbles: true, composed: true, detail: { config: { ...plain, ...secrets }, wasBlocking } })
     );
     this.close();
   }

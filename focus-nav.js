@@ -21,6 +21,8 @@
       navigating.
 */
 
+import { NAV_COMMAND, APP_EVENT } from "./constants.js";
+
 /* WebView2 (confirmed on the Xbox/UWP shell, reproduces on desktop too) won't accept
    .focus() on an element in the same synchronous tick its display:none is lifted (e.g.
    right after classList.add("open")) - the element silently stays unfocused until
@@ -53,36 +55,36 @@ const STICK_RELEASE_THRESHOLD = 0.3;
    bumper/trigger/Start entries below - chapter-skip, seek, and "open the player's more
    menu" have no sensible keyboard equivalent either, only a gamepad. */
 export const KEY_TO_COMMAND = {
-  ArrowUp: "up",
-  ArrowDown: "down",
-  ArrowLeft: "left",
-  ArrowRight: "right",
-  Enter: "activate",
-  Escape: "back",
-  Backspace: "back",
-  GamepadY: "search",
-  GamepadLB: "chapterPrev",
-  GamepadRB: "chapterNext",
-  GamepadLT: "rewind",
-  GamepadRT: "forward",
-  GamepadStart: "menu",
-  GamepadSelect: "profile",
+  ArrowUp: NAV_COMMAND.UP,
+  ArrowDown: NAV_COMMAND.DOWN,
+  ArrowLeft: NAV_COMMAND.LEFT,
+  ArrowRight: NAV_COMMAND.RIGHT,
+  Enter: NAV_COMMAND.ACTIVATE,
+  Escape: NAV_COMMAND.BACK,
+  Backspace: NAV_COMMAND.BACK,
+  GamepadY: NAV_COMMAND.SEARCH,
+  GamepadLB: NAV_COMMAND.CHAPTER_PREV,
+  GamepadRB: NAV_COMMAND.CHAPTER_NEXT,
+  GamepadLT: NAV_COMMAND.REWIND,
+  GamepadRT: NAV_COMMAND.FORWARD,
+  GamepadStart: NAV_COMMAND.MENU,
+  GamepadSelect: NAV_COMMAND.PROFILE,
 };
 
 const COMMAND_TO_KEY = {
-  up: "ArrowUp",
-  down: "ArrowDown",
-  left: "ArrowLeft",
-  right: "ArrowRight",
-  activate: "Enter",
-  back: "Escape",
-  search: "GamepadY",
-  chapterPrev: "GamepadLB",
-  chapterNext: "GamepadRB",
-  rewind: "GamepadLT",
-  forward: "GamepadRT",
-  menu: "GamepadStart",
-  profile: "GamepadSelect",
+  [NAV_COMMAND.UP]: "ArrowUp",
+  [NAV_COMMAND.DOWN]: "ArrowDown",
+  [NAV_COMMAND.LEFT]: "ArrowLeft",
+  [NAV_COMMAND.RIGHT]: "ArrowRight",
+  [NAV_COMMAND.ACTIVATE]: "Enter",
+  [NAV_COMMAND.BACK]: "Escape",
+  [NAV_COMMAND.SEARCH]: "GamepadY",
+  [NAV_COMMAND.CHAPTER_PREV]: "GamepadLB",
+  [NAV_COMMAND.CHAPTER_NEXT]: "GamepadRB",
+  [NAV_COMMAND.REWIND]: "GamepadLT",
+  [NAV_COMMAND.FORWARD]: "GamepadRT",
+  [NAV_COMMAND.MENU]: "GamepadStart",
+  [NAV_COMMAND.PROFILE]: "GamepadSelect",
 };
 
 /* Tracks whether the most recent input was D-pad/gamepad/keyboard nav (real or synthetic
@@ -109,7 +111,7 @@ function setControllerActive(next) {
   if (next === controllerActive) return;
   controllerActive = next;
   document.documentElement.dataset.controllerActive = String(next);
-  document.dispatchEvent(new CustomEvent("controller-active-change", { detail: { active: next } }));
+  document.dispatchEvent(new CustomEvent(APP_EVENT.CONTROLLER_ACTIVE_CHANGE, { detail: { active: next } }));
 }
 document.addEventListener(
   "keydown",
@@ -191,9 +193,9 @@ function resolveDeepActiveElement(el) {
    (see adjustRange below). Any other ungrouped item leaves Left/Right unhandled, same as
    before this existed. */
 export function wireLinearNav(root, selector, { orientation = "vertical", onActivate, onBack, loop = false } = {}) {
-  const forwardCommand = orientation === "vertical" ? "down" : "right";
-  const backwardCommand = orientation === "vertical" ? "up" : "left";
-  const acrossCommands = orientation === "vertical" ? ["left", "right"] : ["up", "down"];
+  const forwardCommand = orientation === "vertical" ? NAV_COMMAND.DOWN : NAV_COMMAND.RIGHT;
+  const backwardCommand = orientation === "vertical" ? NAV_COMMAND.UP : NAV_COMMAND.LEFT;
+  const acrossCommands = orientation === "vertical" ? [NAV_COMMAND.LEFT, NAV_COMMAND.RIGHT] : [NAV_COMMAND.UP, NAV_COMMAND.DOWN];
 
   function items() {
     return Array.from(root.querySelectorAll(selector)).filter(
@@ -394,7 +396,7 @@ export function wireLinearNav(root, selector, { orientation = "vertical", onActi
        mode (blur + re-highlight) instead of reaching onBack, so Escape/B backs out of
        typing one step at a time instead of also closing the whole modal/overlay. */
     const editing = isTextEntry(cur) && cur === root.activeElement;
-    if (command === "back") {
+    if (command === NAV_COMMAND.BACK) {
       /* Backspace and Escape both map to "back" (KEY_TO_COMMAND) since a real keyboard's
          Backspace is Fire TV/Android's back-equivalent - but while genuinely editing text,
          Backspace instead means "delete the character behind the caret", confirmed on real
@@ -419,7 +421,7 @@ export function wireLinearNav(root, selector, { orientation = "vertical", onActi
     }
     if (editing) return false;
 
-    if (command === "activate") {
+    if (command === NAV_COMMAND.ACTIVATE) {
       if (isTextEntry(cur)) {
         clearHighlight();
         cur.focus();
@@ -444,8 +446,8 @@ export function wireLinearNav(root, selector, { orientation = "vertical", onActi
       }
       return moveWithinGroup(delta);
     }
-    if ((command === "chapterPrev" || command === "chapterNext") && cur?.tagName === "INPUT" && cur.type === "range") {
-      jumpRange(cur, command === "chapterNext" ? 10 : -10);
+    if ((command === NAV_COMMAND.CHAPTER_PREV || command === NAV_COMMAND.CHAPTER_NEXT) && cur?.tagName === "INPUT" && cur.type === "range") {
+      jumpRange(cur, command === NAV_COMMAND.CHAPTER_NEXT ? 10 : -10);
       return true;
     }
     return false;
@@ -472,7 +474,7 @@ export function wireLinearNav(root, selector, { orientation = "vertical", onActi
       setHighlight(cur);
     }
   }
-  document.addEventListener("xbox-keyboard-hiding", exitEditIfFocused);
+  document.addEventListener(APP_EVENT.XBOX_KEYBOARD_HIDING, exitEditIfFocused);
   let vkWasVisible = false;
   function onVirtualKeyboardGeometryChange() {
     const visible = navigator.virtualKeyboard.boundingRect.height > 0;
@@ -491,7 +493,7 @@ export function wireLinearNav(root, selector, { orientation = "vertical", onActi
        more of each rather than replacing the last. */
     destroy: () => {
       unregister();
-      document.removeEventListener("xbox-keyboard-hiding", exitEditIfFocused);
+      document.removeEventListener(APP_EVENT.XBOX_KEYBOARD_HIDING, exitEditIfFocused);
       if (navigator.virtualKeyboard) {
         navigator.virtualKeyboard.removeEventListener("geometrychange", onVirtualKeyboardGeometryChange);
       }
@@ -508,14 +510,22 @@ export function wireLinearNav(root, selector, { orientation = "vertical", onActi
    held/repeat treatment a directional press gets, not a single edge-triggered fire like a button
    press. Bumpers and Start stay one-shot (GAMEPAD_BUTTONS below) - jumping a chapter or opening the
    menu on every repeat tick while the button is held would be a bug, not a feature. */
-const REPEATABLE_COMMANDS = ["up", "down", "left", "right", "rewind", "forward"];
+const REPEATABLE_COMMANDS = [NAV_COMMAND.UP, NAV_COMMAND.DOWN, NAV_COMMAND.LEFT, NAV_COMMAND.RIGHT, NAV_COMMAND.REWIND, NAV_COMMAND.FORWARD];
 const repeatState = Object.fromEntries(REPEATABLE_COMMANDS.map((c) => [c, { active: false, heldSince: 0, lastRepeatAt: 0 }]));
 const buttonState = Object.create(null);
 /* Persists across animation frames (unlike active[] below, which is recomputed fresh every
    frame) - this is the stick's own virtual d-pad-button state, carrying the hysteresis
    band's "stay pressed" memory from one frame to the next. */
 const stickButtonState = { up: false, down: false, left: false, right: false };
-const GAMEPAD_BUTTONS = { 0: "activate", 1: "back", 3: "search", 4: "chapterPrev", 5: "chapterNext", 8: "profile", 9: "menu" }; // standard mapping: A, B, Y, LB, RB, Back/Select, Start
+const GAMEPAD_BUTTONS = {
+  0: NAV_COMMAND.ACTIVATE,
+  1: NAV_COMMAND.BACK,
+  3: NAV_COMMAND.SEARCH,
+  4: NAV_COMMAND.CHAPTER_PREV,
+  5: NAV_COMMAND.CHAPTER_NEXT,
+  8: NAV_COMMAND.PROFILE,
+  9: NAV_COMMAND.MENU,
+}; // standard mapping: A, B, Y, LB, RB, Back/Select, Start
 
 /* PrismUwp's MainPage.xaml.cs also forwards d-pad/thumbstick/A/B natively via
    CoreWindow.KeyDown, in principle covering the same input this poller does - but with
@@ -536,7 +546,7 @@ const GAMEPAD_BUTTONS = { 0: "activate", 1: "back", 3: "search", 4: "chapterPrev
    custom event - default true so the web-only (non-Xbox) build, which never receives that
    event, behaves exactly as before. */
 let inputActive = window.__prismXboxInputActive !== false;
-document.addEventListener("xbox-input-active-change", (e) => {
+document.addEventListener(APP_EVENT.XBOX_INPUT_ACTIVE_CHANGE, (e) => {
   inputActive = e.detail.active;
   if (!inputActive) {
     for (const state of Object.values(repeatState)) state.active = false;

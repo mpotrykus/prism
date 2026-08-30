@@ -5,6 +5,7 @@
    rather than this module reaching into card state itself. */
 
 import { collapseByGuid } from "./cross-server.js";
+import { MEDIA_TYPE } from "../../../constants.js";
 
 export function shuffle(array) {
   const arr = [...array];
@@ -46,7 +47,7 @@ export function mapItem(m, withProgress, { plexImageUrl, plexThumbUrl = plexImag
      tally of episode-view events, not a completion signal (e.g. 4 of a 7-episode
      season watched can still read viewCount: 4, which a bare "viewCount > 0" check
      would wrongly read as fully watched). */
-  const isShowLike = m.type === "show" || m.type === "season";
+  const isShowLike = m.type === MEDIA_TYPE.SHOW || m.type === MEDIA_TYPE.SEASON;
   const item = {
     ratingKey: m.ratingKey,
     key: m.key,
@@ -71,8 +72,8 @@ export function mapItem(m, withProgress, { plexImageUrl, plexThumbUrl = plexImag
     viewCount: m.viewCount || 0,
     watched: isShowLike ? m.leafCount > 0 && m.viewedLeafCount === m.leafCount : (m.viewCount || 0) > 0,
     hasHistory: isShowLike ? (m.viewedLeafCount || 0) > 0 : (m.viewCount || 0) > 0,
-    genres: m.Genre?.length ? m.Genre.map((g) => (g.tag || "").trim()).filter(Boolean) : m.type === "episode" ? episodeFallbackGenres || [] : [],
-    studio: m.studio || (m.type === "episode" ? episodeFallbackStudio || "" : ""),
+    genres: m.Genre?.length ? m.Genre.map((g) => (g.tag || "").trim()).filter(Boolean) : m.type === MEDIA_TYPE.EPISODE ? episodeFallbackGenres || [] : [],
+    studio: m.studio || (m.type === MEDIA_TYPE.EPISODE ? episodeFallbackStudio || "" : ""),
     /* Which Plex server this item was fetched from - stamped on the raw item by
        data.js's plexFetch (__server) whenever a server is passed to it. Downstream
        playback/deep-link/scrobble code reads this instead of a single global

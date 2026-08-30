@@ -215,6 +215,11 @@ export async function discoverLibraries(accountToken, { prevServers = [], prevSe
          a friend sharing a library should show up right away, not require an opt-in
          per library first). */
       all_enabled: prevServer ? prevServer.all_enabled !== false : true,
+      /* Unlike all_enabled above, a newly-discovered server defaults to NOT having its own
+         "All libraries on this server" tab - same show_tab convention as an individual
+         library (see below) - so a multi-server account starts collapsed to just Home/
+         Movies/TV Shows instead of one tab per server on top of those three. */
+      show_tab: prevServer ? prevServer.show_tab === true : false,
     };
     servers.push(server);
     try {
@@ -228,6 +233,11 @@ export async function discoverLibraries(accountToken, { prevServers = [], prevSe
           type: SECTION_TYPE_MAP[dir.type],
           label: prev?.label || dir.title,
           enabled: prev ? prev.enabled !== false : true,
+          /* Unlike `enabled` above, a newly-discovered library defaults to NOT having its
+             own tab - it still feeds Home/Movies/TV Shows once enabled, but doesn't clutter
+             the nav with a tab per library until the user opts in (confirmed with the
+             user). */
+          show_tab: prev ? prev.show_tab === true : false,
           server_id: id,
         });
       }

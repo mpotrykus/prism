@@ -1,5 +1,5 @@
 import { AUDIO_LEVELING_STORAGE_KEY } from "./ui/shared.js";
-import { hasNativePlayer, platformTag } from "./core/platform.js";
+import { hasNativePlayer, platformTag, PLATFORM_TAG } from "./core/platform.js";
 /* Circular with xbox-bridge.js (which would import teardown/ensure helpers back from this file
    if it ever needed to - it doesn't yet) - safe for the same "function-body-only reference"
    reason ambient-pipeline.js's own identical cycle documents: postAudioLeveling is only
@@ -7,7 +7,7 @@ import { hasNativePlayer, platformTag } from "./core/platform.js";
 import { postAudioLeveling } from "./xbox-bridge.js";
 
 function isXbox() {
-    return hasNativePlayer() && platformTag() === "uwp";
+    return hasNativePlayer() && platformTag() === PLATFORM_TAG.UWP;
 }
 
 /* "Normalize Audio" toggle (in the hamburger menu's "Options" screen - see
@@ -44,9 +44,15 @@ const MIN_GAIN_DB = -15;
 const MEASURE_INTERVAL_MS = 300;
 /* Exponential-moving-average smoothing on the loudness estimate itself - large relative
    to MEASURE_INTERVAL_MS on purpose, so the estimate (and therefore the gain it drives)
-   settles over tens of seconds, never within one scene. This, plus the gain ramp's own
-   time constant below, is what keeps this "leveling" rather than "compression". */
-const LOUDNESS_EMA_TAU_S = 20;
+   settles over minutes, not within a single scene. This, plus the gain ramp's own time
+   constant below, is what keeps this "leveling" rather than "compression". Raised from an
+   original 20s first guess - that was short enough for the gain to visibly chase a scene's
+   own average loudness (audible pumping across a scene change, still under- or over-shooting
+   within a loud/quiet scene rather than riding out a whole title), which is exactly what a
+   rolling per-title average is supposed to avoid; 90s keeps a typical scene from swinging the
+   average on its own while still adapting within a few minutes to a title that's genuinely
+   mixed differently throughout. */
+const LOUDNESS_EMA_TAU_S = 90;
 const LOUDNESS_EMA_ALPHA = (MEASURE_INTERVAL_MS / 1000) / LOUDNESS_EMA_TAU_S;
 /* How slowly gainNode.gain itself is allowed to move toward the newly-computed target -
    an audible jump between measurement ticks would read as pumping, exactly what this

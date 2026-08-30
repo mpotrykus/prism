@@ -1,5 +1,6 @@
 import { extractTmdbId, extractLegacyAgentId, resolveTmdbIdFromImdb, resolveTmdbTrailer } from "./tmdb.js";
 import { getYoutubeAspectRatio, computeCoverScale } from "./youtube-oembed.js";
+import { MEDIA_TYPE } from "../../../constants.js";
 
 /* Trailer resolution shared by the home hero (hero.js) and the title-info modal
    (title-info.js): a Plex "extras" trailer first, falling back to a TMDB-discovered
@@ -50,7 +51,7 @@ const TMDB_KIND_BY_ITEM_TYPE = { movie: "movie", show: "tv" };
 async function resolveTmdbVideoId(item, plexFetch) {
   let kind = TMDB_KIND_BY_ITEM_TYPE[item.type];
   let ratingKey = item.ratingKey;
-  if (item.type === "episode") {
+  if (item.type === MEDIA_TYPE.EPISODE) {
     kind = "tv";
     ratingKey = item.showKey || item.ratingKey;
   }

@@ -1,4 +1,5 @@
 import { wireLinearNav, isControllerActive, focusAfterPaint } from "./focus-nav.js";
+import { APP_EVENT, VIEW, SECTION_TYPE } from "./constants.js";
 import { App } from "@capacitor/app";
 import { player } from "./plex-player.js";
 import { tapUrl } from "./src/card/logic/deep-link.js";
@@ -40,6 +41,7 @@ import {
   wireHeaderNav,
   wireHomeNav,
   wireSearchNav,
+  wireTabSwitch,
   wireSearchToggle,
   wireVirtualKeyboardDismiss,
   wireStartButton,
@@ -165,7 +167,7 @@ class PlexNetflixCard extends HTMLElement {
        stylesheet below - a shadow tree's root node is the ShadowRoot itself, not an Element,
        so :root never matches there (see focus-nav.js's own comment on this). */
     this.toggleAttribute("controller-active", isControllerActive());
-    document.addEventListener("controller-active-change", (e) => {
+    document.addEventListener(APP_EVENT.CONTROLLER_ACTIVE_CHANGE, (e) => {
       this.toggleAttribute("controller-active", e.detail.active);
     });
     this.attachShadow({ mode: "open" });
@@ -174,7 +176,7 @@ class PlexNetflixCard extends HTMLElement {
       <div class="wrap">
         <nav class="sidenav">
           <div class="nav-top">
-            <div class="nav-item active" data-view="home" tabindex="0">
+            <div class="nav-item active" data-view="${VIEW.HOME}" tabindex="0">
               <span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M4 11 12 4l8 7" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M6 10v9h12v-9" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><rect x="10" y="14" width="4" height="5" fill="currentColor"/></svg></span>
               <span class="nav-label">Home</span>
             </div>
@@ -219,7 +221,7 @@ class PlexNetflixCard extends HTMLElement {
               </button>
               <div class="header-nav-scroller">
                 <div class="header-nav-track">
-                  <div class="nav-item header-nav-item active" data-view="home" tabindex="0">
+                  <div class="nav-item header-nav-item active" data-view="${VIEW.HOME}" tabindex="0">
                     <span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M4 11 12 4l8 7" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M6 10v9h12v-9" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><rect x="10" y="14" width="4" height="5" fill="currentColor"/></svg></span>
                     <span class="nav-label">Home</span>
                   </div>
@@ -409,7 +411,7 @@ class PlexNetflixCard extends HTMLElement {
     };
     this._contentEl.addEventListener("scroll", updateHeaderAtTop, { passive: true });
     this._contentEl.addEventListener("scroll", updateHeaderNavScroll, { passive: true });
-    document.addEventListener("controller-active-change", updateHeaderNavScroll);
+    document.addEventListener(APP_EVENT.CONTROLLER_ACTIVE_CHANGE, updateHeaderNavScroll);
     updateHeaderAtTop();
     updateHeaderNavScroll();
     this._headerNavScroller = this.shadowRoot.querySelector(".header-nav-scroller");
@@ -483,16 +485,16 @@ class PlexNetflixCard extends HTMLElement {
        that started from the title-info modal (e.g. an episode row's direct-play click) -
        a single card-level listener covers every path, rather than each of them having to
        remember to call _onPlayHistoryMutated itself. */
-    window.addEventListener("streaming-player-close", () => this._onPlayHistoryMutated());
+    window.addEventListener(APP_EVENT.PLAYER_CLOSE, () => this._onPlayHistoryMutated());
 
     /* Dynamic (per-library) nav items are already wired inside _renderNavSections,
        called above - only the two static Home items (sidenav + header-nav) need wiring
        here. */
-    this.shadowRoot.querySelectorAll('.nav-item[data-view="home"]').forEach((el) => this._wireNavItem(el));
+    this.shadowRoot.querySelectorAll(`.nav-item[data-view="${VIEW.HOME}"]`).forEach((el) => this._wireNavItem(el));
     this._wireHeaderNav();
 
     this._settingsBtn.addEventListener("click", () => {
-      this.dispatchEvent(new CustomEvent("open-settings", { bubbles: true, composed: true }));
+      this.dispatchEvent(new CustomEvent(APP_EVENT.OPEN_SETTINGS, { bubbles: true, composed: true }));
     });
 
     this._profileNavItem.addEventListener("click", (e) => {
@@ -574,7 +576,7 @@ class PlexNetflixCard extends HTMLElement {
       else if (this._moreOverlay.classList.contains("open")) this._closeMoreSheet();
       else if (this._librariesOverlay.classList.contains("open")) this._closeLibrariesSheet();
       else if (settingsModal?.isOpen()) settingsModal.close();
-      else if (this._currentView === "search") {
+      else if (this._currentView === VIEW.SEARCH) {
         this._clearSearchInput();
         this._exitSearch();
         this._searchWrap.classList.remove("expanded");
@@ -619,7 +621,7 @@ class PlexNetflixCard extends HTMLElement {
     });
     this._searchInput.addEventListener("focus", () => this._searchWrap.classList.add("expanded"));
     this._searchInput.addEventListener("blur", () => {
-      if (this._currentView === "search") return;
+      if (this._currentView === VIEW.SEARCH) return;
       this._searchWrap.classList.remove("expanded");
     });
     this._searchInput.addEventListener("input", () => {
@@ -693,6 +695,17 @@ class PlexNetflixCard extends HTMLElement {
 
   _sectionForView(view) {
     return sectionForView(this, view);
+  }
+
+  /* The section `type` (1=movie, 2=show - see SECTION_TYPE_FILTERS above) to filter every
+     raw pool by for a given view. A single-library tab borrows that library's own type;
+     Movies/TV are cross-server aggregates with no single backing section, so they carry a
+     fixed type instead; every other view (Home, a server's "All" tab, search) has no type
+     restriction (undefined - see SECTION_TYPE_FILTERS' own lookup at each call site). */
+  _sectionTypeForView(view) {
+    if (view === VIEW.MOVIES) return SECTION_TYPE.MOVIE;
+    if (view === VIEW.TV) return SECTION_TYPE.SHOW;
+    return this._sectionForView(view)?.type;
   }
 
   /* sectionsForView (data.js) already scopes genre/collection rows to the tapped
@@ -772,7 +785,7 @@ class PlexNetflixCard extends HTMLElement {
      tab) behavior for a title that isn't actually on this server, and is a no-op on
      home/search where the underlying serverFilter is already `() => true`. */
   _watchlistFilterForView(view) {
-    const sectionFilters = SECTION_TYPE_FILTERS[this._sectionForView(view)?.type];
+    const sectionFilters = SECTION_TYPE_FILTERS[this._sectionTypeForView(view)];
     const serverFilter = this._serverFilterForView(view);
     const pool = this._watchlistLocalPool();
     return (m) => {
@@ -834,7 +847,7 @@ class PlexNetflixCard extends HTMLElement {
     if (showHero) this._showHero();
     const sectionsForGenres = this._sectionsForView(view);
 
-    const sectionFilters = SECTION_TYPE_FILTERS[this._sectionForView(view)?.type];
+    const sectionFilters = SECTION_TYPE_FILTERS[this._sectionTypeForView(view)];
     const serverFilter = this._serverFilterForView(view);
     const onDeckFilter = (m) => (sectionFilters ? m.type === sectionFilters.onDeck : true) && serverFilter(m);
     const otherFilter = (m) => (sectionFilters ? m.type === sectionFilters.other : true) && serverFilter(m);
@@ -956,7 +969,7 @@ class PlexNetflixCard extends HTMLElement {
      needed for the insert case, unlike the watchlist row. */
   _refreshOnDeckRow() {
     const view = this._currentView || "home";
-    const sectionFilters = SECTION_TYPE_FILTERS[this._sectionForView(view)?.type];
+    const sectionFilters = SECTION_TYPE_FILTERS[this._sectionTypeForView(view)];
     const serverFilter = this._serverFilterForView(view);
     const onDeckFilter = (m) => (sectionFilters ? m.type === sectionFilters.onDeck : true) && serverFilter(m);
     const onDeck =
@@ -1166,6 +1179,7 @@ class PlexNetflixCard extends HTMLElement {
   _wireHomeNav() {
     wireHomeNav(this);
     wireSearchNav(this);
+    wireTabSwitch(this);
   }
 
   /* Prefers the shared player (native on Android, <video>+hls.js everywhere else - see
@@ -1178,7 +1192,7 @@ class PlexNetflixCard extends HTMLElement {
        what they were looking for - leave them back on their normal view, not still
        sitting in search results, once playback closes. Mirrors the Escape-key exit path
        above minus the blur/focus-restore, since focus is about to move to the player. */
-    if (this._currentView === "search") {
+    if (this._currentView === VIEW.SEARCH) {
       this._clearSearchInput();
       this._exitSearch();
       this._searchWrap.classList.remove("expanded");
@@ -1287,7 +1301,7 @@ class PlexNetflixCard extends HTMLElement {
      floor here (unlike _mergeGenreRows) - collections are hand-curated and small ones
      (e.g. a 2-film franchise) are still worth showing as-is. */
   _typeFilterForView(view) {
-    const sectionFilters = SECTION_TYPE_FILTERS[this._sectionForView(view)?.type];
+    const sectionFilters = SECTION_TYPE_FILTERS[this._sectionTypeForView(view)];
     const serverFilter = this._serverFilterForView(view);
     return (m) => (sectionFilters ? m.type === sectionFilters.other : true) && serverFilter(m);
   }

@@ -583,7 +583,7 @@ input.nav-text-highlight {
     text-overflow: ellipsis;
 }
 
-.default-radio {
+.default-radio, .tab-toggle {
     display: flex;
     align-items: center;
     gap: 5px;
@@ -598,7 +598,7 @@ input.nav-text-highlight {
     white-space: nowrap;
 }
 
-.default-radio input[type="radio"] {
+.default-radio input[type="radio"], .tab-toggle input[type="checkbox"] {
     margin: 0;
     width: 14px;
     height: 14px;
@@ -606,11 +606,11 @@ input.nav-text-highlight {
     cursor: pointer;
 }
 
-.default-radio input[type="radio"]:disabled {
+.default-radio input[type="radio"]:disabled, .tab-toggle input[type="checkbox"]:disabled {
     cursor: default;
 }
 
-.default-radio input[type="radio"]:disabled+span {
+.default-radio input[type="radio"]:disabled+span, .tab-toggle input[type="checkbox"]:disabled+span {
     opacity: 0.4;
 }
 
@@ -623,7 +623,7 @@ input.nav-text-highlight {
     color: var(--color-accent);
 }
 
-.home-row {
+.home-row, .movies-row, .tv-row {
     background: rgba(var(--color-accent-rgb), 0.07);
 }
 

@@ -1,4 +1,5 @@
 import { focusAfterPaint, registerNavHandler } from "../../focus-nav.js";
+import { NAV_COMMAND, APP_EVENT, VIEW } from "../../constants.js";
 import { player } from "../../plex-player.js";
 import { createRowScroll } from "./row-scroll.js";
 import { wireArrowVisibility } from "./rows.js";
@@ -39,7 +40,10 @@ export function updateNavActiveState(card) {
   const librariesBtn = card.shadowRoot.querySelector(".nav-libraries");
   librariesBtn?.classList.toggle(
     "active",
-    card._currentView.startsWith("section-") || card._currentView.startsWith("server-")
+    card._currentView.startsWith("section-") ||
+      card._currentView.startsWith("server-") ||
+      card._currentView === VIEW.MOVIES ||
+      card._currentView === VIEW.TV
   );
 }
 
@@ -58,26 +62,34 @@ export function wireNavItem(card, el) {
   });
 }
 
-/* Builds the ordered list of dynamic tabs from config.servers/config.sections: one
-   "everything on this server" tab per server with all_enabled, then that server's own
-   individually-enabled libraries (subtitled with the server's name so a library tab
-   reads unambiguously once more than one server is in play) - repeated per server, in
-   discovery order. A section whose server was never (re-)discovered this session (a
+/* Builds the ordered list of dynamic tabs. Movies/TV Shows (cross-server aggregates,
+   independently toggleable - see settings.js's movies_enabled/tv_enabled) come first when
+   enabled, then config.servers/config.sections drive the rest: one "everything on this
+   server" tab per server whose own show_tab is set, then that server's own libraries whose
+   own show_tab is set (subtitled with the server's name so a library tab reads
+   unambiguously once more than one server is in play) - repeated per server, in discovery
+   order. A server/library that's enabled (feeds Home/Movies/TV Shows via all_enabled/
+   enabled) but not show_tab still has no tab of its own - see sectionsForView (data.js),
+   which filters on `enabled`/`all_enabled`, not `show_tab`; this is what lets a user with
+   several servers collapse the nav down to just Home/Movies/TV Shows while every server
+   still feeds them. A section whose server was never (re-)discovered this session (a
    config saved before this app tracked servers, or a server that's since vanished from
    the account) still gets a tab, just without a subtitle. */
 function buildNavTabs(card) {
   const servers = card._config.servers || [];
   const sections = card._config.sections || [];
   const tabs = [];
+  if (card._config.movies_enabled !== false) tabs.push({ view: VIEW.MOVIES, label: "Movies", sublabel: "" });
+  if (card._config.tv_enabled !== false) tabs.push({ view: VIEW.TV, label: "TV Shows", sublabel: "" });
   const seenServerIds = new Set();
   for (const sv of servers) {
     seenServerIds.add(sv.id);
-    if (sv.all_enabled !== false) tabs.push({ view: `server-${sv.id}`, label: sv.name, sublabel: "" });
-    for (const s of sections.filter((x) => x.server_id === sv.id)) {
+    if (sv.all_enabled !== false && sv.show_tab) tabs.push({ view: `server-${sv.id}`, label: sv.name, sublabel: "" });
+    for (const s of sections.filter((x) => x.server_id === sv.id && x.show_tab)) {
       tabs.push({ view: `section-${sv.id}:${s.key}`, label: s.label, sublabel: sv.name });
     }
   }
-  for (const s of sections.filter((x) => !seenServerIds.has(x.server_id))) {
+  for (const s of sections.filter((x) => !seenServerIds.has(x.server_id) && x.show_tab)) {
     tabs.push({ view: `section-${s.server_id}:${s.key}`, label: s.label, sublabel: "" });
   }
   return tabs;
@@ -103,8 +115,8 @@ function navItemHtml(card, t, classes) {
    Home stays the same static item as before, just now hideable via config.home_enabled
    instead of being unconditionally present. */
 export function renderNavSections(card) {
-  const homeItem = card.shadowRoot.querySelector('.nav-top .nav-item[data-view="home"]');
-  const headerHomeItem = card.shadowRoot.querySelector('.header-nav-item[data-view="home"]');
+  const homeItem = card.shadowRoot.querySelector(`.nav-top .nav-item[data-view="${VIEW.HOME}"]`);
+  const headerHomeItem = card.shadowRoot.querySelector(`.header-nav-item[data-view="${VIEW.HOME}"]`);
   card.shadowRoot.querySelectorAll(".nav-item-dynamic, .header-nav-item-dynamic").forEach((el) => el.remove());
 
   const homeEnabled = card._config.home_enabled !== false;
@@ -131,10 +143,10 @@ export function renderNavSections(card) {
   const librariesBtn = card.shadowRoot.querySelector(".nav-libraries");
   if (librariesBtn) librariesBtn.style.display = tabs.length > 1 ? "" : "none";
 
-  const validViews = new Set(["search", ...tabs.map((t) => t.view)]);
-  if (homeEnabled) validViews.add("home");
+  const validViews = new Set([VIEW.SEARCH, ...tabs.map((t) => t.view)]);
+  if (homeEnabled) validViews.add(VIEW.HOME);
   if (!validViews.has(card._currentView)) {
-    card._currentView = homeEnabled ? "home" : tabs[0]?.view || "home";
+    card._currentView = homeEnabled ? VIEW.HOME : tabs[0]?.view || VIEW.HOME;
   }
   updateNavActiveState(card);
   card._centerActiveHeaderNav?.(false);
@@ -214,10 +226,10 @@ function firstVisibleNavItem(card) {
 }
 
 export function focusFirstAvailable(card) {
-  if (card._currentView === "search") {
+  if (card._currentView === VIEW.SEARCH) {
     return card.shadowRoot.querySelector(".search-page-grid .poster") || firstVisibleNavItem(card);
   }
-  if (card._currentView === "home") {
+  if (card._currentView === VIEW.HOME) {
     return card.shadowRoot.querySelector(".hero-info-btn") || firstVisibleNavItem(card);
   }
   return firstVisibleNavItem(card);
@@ -243,7 +255,7 @@ export function restoreFocusAfterSearch(card) {
    browsing them immediately; only an empty results page (nothing to browse into) falls back
    to fully exiting search and restoring whatever had focus before search was opened. */
 export function dismissSearchKeyboard(card) {
-  const firstResult = card._currentView === "search" ? card.shadowRoot.querySelector(".search-page-grid .poster") : null;
+  const firstResult = card._currentView === VIEW.SEARCH ? card.shadowRoot.querySelector(".search-page-grid .poster") : null;
   card._searchInput.blur();
   if (firstResult) {
     focusAfterPaint(firstResult);
@@ -279,7 +291,7 @@ function inMainApp(card) {
    deciding by focus membership the way wireHomeNav below does. */
 export function wireSearchToggle(card) {
   registerNavHandler((command, e, active) => {
-    if (command !== "search") return false;
+    if (command !== NAV_COMMAND.SEARCH) return false;
     if (!inMainApp(card)) return false;
 
     if (active !== card._searchInput) {
@@ -294,7 +306,7 @@ export function wireSearchToggle(card) {
     card._searchInput.blur();
     /* Same condition as the input's own blur listener: the box stays expanded while the
        search results page is what's on screen. */
-    if (card._currentView !== "search") card._searchWrap.classList.remove("expanded");
+    if (card._currentView !== VIEW.SEARCH) card._searchWrap.classList.remove("expanded");
     /* Blurring alone would leave focus on nothing at all, so the next D-pad press would
        restart from wireHomeNav's lazy first-press fallback instead of resuming where the
        user was. */
@@ -310,8 +322,8 @@ export function wireSearchToggle(card) {
      unhandled entirely - there, B always backs all the way out, same as clearing the query
      by hand (search-page.js's onSearchInput already exits search once the box is empty). */
   registerNavHandler((command, e, active) => {
-    if (command !== "back") return false;
-    if (!inMainApp(card) || card._currentView !== "search") return false;
+    if (command !== NAV_COMMAND.BACK) return false;
+    if (!inMainApp(card) || card._currentView !== VIEW.SEARCH) return false;
     if (active === card._searchInput) {
       /* Backspace and Escape both map to "back" (focus-nav.js's KEY_TO_COMMAND) - on real
          Xbox hardware, selecting the on-screen keyboard's Backspace glyph and pressing A
@@ -340,9 +352,9 @@ export function wireSearchToggle(card) {
      search was opened) - so this always lands on focusFirstAvailable rather than
      card._searchReturnFocusEl. */
   registerNavHandler((command, e, active) => {
-    if (active !== card._searchInput || command !== "down") return false;
+    if (active !== card._searchInput || command !== NAV_COMMAND.DOWN) return false;
     card._searchInput.blur();
-    if (card._currentView !== "search") card._searchWrap.classList.remove("expanded");
+    if (card._currentView !== VIEW.SEARCH) card._searchWrap.classList.remove("expanded");
     focusAfterPaint(focusFirstAvailable(card));
     return true;
   });
@@ -353,7 +365,7 @@ export function wireSearchToggle(card) {
      at the very start of the field - otherwise Left is real caret movement through typed
      text and must fall through to the input's own native handling untouched. */
   registerNavHandler((command, e, active) => {
-    if (active !== card._searchInput || command !== "left") return false;
+    if (active !== card._searchInput || command !== NAV_COMMAND.LEFT) return false;
     if (card._searchInput.selectionStart !== 0 || card._searchInput.selectionEnd !== 0) return false;
     const list = card._navItems.filter((n) => n.offsetParent !== null && !n.classList.contains("nav-profile"));
     list[list.length - 1]?.focus();
@@ -387,7 +399,7 @@ export function wireVirtualKeyboardDismiss(card) {
     dismissSearchKeyboard(card);
   };
 
-  document.addEventListener("xbox-keyboard-hiding", dismissIfSearchFocused);
+  document.addEventListener(APP_EVENT.XBOX_KEYBOARD_HIDING, dismissIfSearchFocused);
 
   if (!navigator.virtualKeyboard) return;
   navigator.virtualKeyboard.overlaysContent = true;
@@ -408,13 +420,13 @@ export function wireVirtualKeyboardDismiss(card) {
    so Start doesn't fight the player's own handler or reopen Settings on top of itself. */
 export function wireStartButton(card) {
   registerNavHandler((command) => {
-    if (command !== "menu") return false;
+    if (command !== NAV_COMMAND.MENU) return false;
     if (player.isOpen()) return false;
     if (document.querySelector("streaming-settings-modal")?.isOpen()) return false;
     if (document.querySelector("streaming-plex-signin-modal")?.isOpen()) return false;
 
     if (card._titleInfo.isOpen()) card._titleInfo.close();
-    card.dispatchEvent(new CustomEvent("open-settings", { bubbles: true, composed: true }));
+    card.dispatchEvent(new CustomEvent(APP_EVENT.OPEN_SETTINGS, { bubbles: true, composed: true }));
     return true;
   });
 }
@@ -428,7 +440,7 @@ export function wireStartButton(card) {
    overlay. */
 export function wireProfileButton(card) {
   registerNavHandler((command) => {
-    if (command !== "profile") return false;
+    if (command !== NAV_COMMAND.PROFILE) return false;
     if (!card._hasMultipleProfiles) return false;
     if (player.isOpen()) return false;
     if (document.querySelector("streaming-settings-modal")?.isOpen()) return false;
@@ -447,7 +459,7 @@ export function wireProfileButton(card) {
    ever fires for a real keyboard Escape/Backspace. */
 export function wireProfileMenu(card) {
   registerNavHandler((command) => {
-    if (command !== "back") return false;
+    if (command !== NAV_COMMAND.BACK) return false;
     if (card._profileDropdown.hidden) return false;
     card._closeProfileDropdown();
     focusAfterPaint(card._profileNavItem);
@@ -556,7 +568,7 @@ export function wireHomeNav(card) {
          left-right on a virtually-highlighted Settings field was silently scrolling the
          home row behind it. */
       const nothingFocusedYet = (!active || active === document.body || active === card) && inMainApp(card);
-      if (nothingFocusedYet && ["up", "down", "left", "right"].includes(command)) {
+      if (nothingFocusedYet && [NAV_COMMAND.UP, NAV_COMMAND.DOWN, NAV_COMMAND.LEFT, NAV_COMMAND.RIGHT].includes(command)) {
         const target = continueWatchingFirstPoster();
         if (target) focusPoster(target);
         else sidenavItems()[0]?.focus();
@@ -565,7 +577,7 @@ export function wireHomeNav(card) {
       return false;
     }
 
-    if (command === "activate") {
+    if (command === NAV_COMMAND.ACTIVATE) {
       active.click();
       return true;
     }
@@ -579,7 +591,7 @@ export function wireHomeNav(card) {
          case to keep this list's old vertical Up/Down semantics working for.) */
       const list = sidenavItems();
       const idx = list.indexOf(active);
-      if (command === "right") {
+      if (command === NAV_COMMAND.RIGHT) {
         if (idx < list.length - 1) {
           list[idx + 1].focus();
           return true;
@@ -589,11 +601,11 @@ export function wireHomeNav(card) {
         focusAfterPaint(card._searchInput);
         return true;
       }
-      if (command === "left") {
+      if (command === NAV_COMMAND.LEFT) {
         if (idx > 0) list[idx - 1].focus();
         return true; // first item - nothing further left, swallow
       }
-      if (command === "down") {
+      if (command === NAV_COMMAND.DOWN) {
         const remembered = card._lastContentFocusEl;
         const rememberedUsable = remembered?.isConnected && remembered.tabIndex >= 0 && remembered.offsetParent !== null;
         if (rememberedUsable && heroItems().includes(remembered)) {
@@ -613,19 +625,19 @@ export function wireHomeNav(card) {
     if (inHero) {
       const list = heroItems();
       const idx = list.indexOf(active);
-      if (command === "right") {
+      if (command === NAV_COMMAND.RIGHT) {
         focusHero(list[Math.min(idx + 1, list.length - 1)]);
         return true;
       }
-      if (command === "left") {
+      if (command === NAV_COMMAND.LEFT) {
         if (idx > 0) focusHero(list[idx - 1]);
         return true; // first hero button - nothing further left, swallow
       }
-      if (command === "down") {
+      if (command === NAV_COMMAND.DOWN) {
         focusPoster(postersIn(rowSections()[0])[0]);
         return true;
       }
-      if (command === "up") {
+      if (command === NAV_COMMAND.UP) {
         // The nav strip sits directly above the hero on both breakpoints now (see
         // header-nav.css) - land on whichever of its items is currently active, not
         // search (search sits beside the nav strip, not above the hero).
@@ -639,11 +651,11 @@ export function wireHomeNav(card) {
     // posterSection
     const posters = postersIn(posterSection);
     const idx = posters.indexOf(active);
-    if (command === "right") {
+    if (command === NAV_COMMAND.RIGHT) {
       focusPoster(posters[Math.min(idx + 1, posters.length - 1)]);
       return true;
     }
-    if (command === "left") {
+    if (command === NAV_COMMAND.LEFT) {
       if (idx > 0) focusPoster(posters[idx - 1]);
       return true; // start of the row - nothing further left, swallow
     }
@@ -652,25 +664,52 @@ export function wireHomeNav(card) {
        to the row's own ends rather than leaving the row the way a plain Left off the row's
        start does - a fast-scroll gesture landing on "nothing further this way" reads
        as reaching the end of the row, not as a request to leave it. */
-    if (command === "chapterPrev" || command === "chapterNext") {
-      const delta = command === "chapterNext" ? 4 : -4;
+    if (command === NAV_COMMAND.CHAPTER_PREV || command === NAV_COMMAND.CHAPTER_NEXT) {
+      const delta = command === NAV_COMMAND.CHAPTER_NEXT ? 4 : -4;
       focusPoster(posters[Math.max(0, Math.min(posters.length - 1, idx + delta))]);
       return true;
     }
-    if (command === "down" || command === "up") {
+    if (command === NAV_COMMAND.DOWN || command === NAV_COMMAND.UP) {
       const sections = rowSections();
       const sectionIdx = sections.indexOf(posterSection);
-      if (command === "up" && sectionIdx === 0) {
+      if (command === NAV_COMMAND.UP && sectionIdx === 0) {
         focusHero(heroItems()[0]);
         return true;
       }
-      const targetSection = sections[sectionIdx + (command === "down" ? 1 : -1)];
+      const targetSection = sections[sectionIdx + (command === NAV_COMMAND.DOWN ? 1 : -1)];
       if (!targetSection) return true; // no more rows that way - swallow
       const targetPosters = postersIn(targetSection);
       focusPoster(closestByPosition(targetPosters, active));
       return true;
     }
     return false;
+  });
+}
+
+/* LB/RB (CHAPTER_PREV/CHAPTER_NEXT) switch between top-level tabs (sidenav/header-nav
+   items) whenever focus isn't on a poster - wireHomeNav's own posterSection branch above
+   already claims LB/RB there for its row fast-scroll-by-4 gesture, so this only ever fires
+   for the sidenav/hero/search-input/nothing-focused cases, never stealing the row gesture.
+   Scoped to the main app via inMainApp so it doesn't fight the player's own use of the same
+   command for chapter skip (plex-player.js). Clamped at the tab list's own ends, same as
+   the sidenav's own Left/Right handling in wireHomeNav - no wraparound. */
+export function wireTabSwitch(card) {
+  registerNavHandler((command, e, active) => {
+    if (command !== NAV_COMMAND.CHAPTER_PREV && command !== NAV_COMMAND.CHAPTER_NEXT) return false;
+    if (!inMainApp(card)) return false;
+    if (active?.classList?.contains("poster")) return false;
+    if (active === card._searchInput) return false;
+
+    const list = card._navItems.filter((n) => n.offsetParent !== null && !n.classList.contains("nav-profile"));
+    if (!list.length) return false;
+    const activeIdx = list.findIndex((n) => n.classList.contains("active"));
+    const idx = activeIdx === -1 ? 0 : activeIdx;
+    const delta = command === NAV_COMMAND.CHAPTER_NEXT ? 1 : -1;
+    const next = list[Math.max(0, Math.min(list.length - 1, idx + delta))];
+    if (next === list[idx]) return true;
+    next.click();
+    focusAfterPaint(next);
+    return true;
   });
 }
 
@@ -729,7 +768,7 @@ export function wireSearchNav(card) {
   };
 
   registerNavHandler((command, e, active) => {
-    if (card._currentView !== "search") return false;
+    if (card._currentView !== VIEW.SEARCH) return false;
 
     /* hero.js's show() forces display:none for the whole hero banner whenever
        getCurrentView() === "search", so there's no hero to hand off to here the way
@@ -738,7 +777,7 @@ export function wireSearchNav(card) {
        exists on this page, so without this the event was swallowed with nowhere to
        go. Enter the grid directly instead. */
     if (sidenavItems().includes(active)) {
-      if (command !== "down") return false;
+      if (command !== NAV_COMMAND.DOWN) return false;
       const remembered = card._lastContentFocusEl;
       const rememberedUsable =
         remembered?.isConnected && remembered.tabIndex >= 0 && remembered.offsetParent !== null && allPosters().includes(remembered);
@@ -748,7 +787,7 @@ export function wireSearchNav(card) {
 
     if (!active?.classList?.contains("poster") || !active.closest(".search-page-grid")) return false;
 
-    if (command === "activate") {
+    if (command === NAV_COMMAND.ACTIVATE) {
       active.click();
       return true;
     }
@@ -757,18 +796,18 @@ export function wireSearchNav(card) {
     const idx = posters.indexOf(active);
     if (idx === -1) return false;
 
-    if (command === "right") {
+    if (command === NAV_COMMAND.RIGHT) {
       if (idx < posters.length - 1) focusPoster(posters[idx + 1]);
       return true; // last poster on the page - nowhere further right, swallow
     }
-    if (command === "left") {
+    if (command === NAV_COMMAND.LEFT) {
       if (idx > 0) focusPoster(posters[idx - 1]);
       return true; // first poster on the page - nothing further left, swallow
     }
-    if (command === "up" || command === "down") {
+    if (command === NAV_COMMAND.UP || command === NAV_COMMAND.DOWN) {
       const rows = rowsOf(posters);
       const rowIdx = rows.findIndex((r) => r.items.includes(active));
-      const targetRowIdx = rowIdx + (command === "down" ? 1 : -1);
+      const targetRowIdx = rowIdx + (command === NAV_COMMAND.DOWN ? 1 : -1);
       if (targetRowIdx < 0) {
         // no hero to hand off to during search (see the sidenav branch above) - the nav
         // strip, directly above the grid, is it

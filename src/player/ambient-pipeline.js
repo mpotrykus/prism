@@ -1,5 +1,5 @@
 import { AMBIENT_STORAGE_KEY, AMBIENT_OPACITY_STORAGE_KEY } from "./ui/shared.js";
-import { hasNativePlayer, platformTag } from "./core/platform.js";
+import { hasNativePlayer, platformTag, PLATFORM_TAG } from "./core/platform.js";
 import { media } from "./core/media-facade.js";
 import { cropAdjustedAspectRatio } from "./auto-crop.js";
 /* Circular with xbox-bridge.js (which imports applyXboxAmbientColors/teardownAmbient from this
@@ -9,7 +9,7 @@ import { cropAdjustedAspectRatio } from "./auto-crop.js";
 import { postAmbientLighting } from "./xbox-bridge.js";
 
 function isXbox() {
-    return hasNativePlayer() && platformTag() === "uwp";
+    return hasNativePlayer() && platformTag() === PLATFORM_TAG.UWP;
 }
 
 /* Ambient-lighting pipeline (web/Xbox only - Android's native ExoPlayer leg has its own

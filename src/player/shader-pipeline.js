@@ -14,7 +14,9 @@ import {
     AI_UPSCALING_STORAGE_KEY,
 } from "./ui/shared.js";
 import { updateContentAnalysis } from "./content-analysis.js";
-import { hasNativePlayer, platformTag } from "./core/platform.js";
+import PLAYER_SETTINGS_DEFAULTS from "./player-settings.defaults.json";
+import { hasNativePlayer, platformTag, PLATFORM_TAG } from "./core/platform.js";
+import { SHADER_OFF, TRIPLE_MODE } from "../../constants.js";
 /* Circular with xbox-bridge.js (which imports postXboxShaderSettings/postXboxColorBoostSettings
    from content-analysis.js, which itself imports them from this file) - safe for the same reason
    the other cycles in src/player/ui/ are: postShaderEffect/postColorBoost are only referenced
@@ -23,7 +25,7 @@ import { hasNativePlayer, platformTag } from "./core/platform.js";
 import { postShaderEffect, postColorBoost, postAiUpscaling } from "./xbox-bridge.js";
 
 function isXbox() {
-    return hasNativePlayer() && platformTag() === "uwp";
+    return hasNativePlayer() && platformTag() === PLATFORM_TAG.UWP;
 }
 
 /* Xbox has no real <video> element for ensureShaderPipeline's canvas/WebGL pass to read from -
@@ -112,7 +114,7 @@ const SHADER_FAMILY_OVERRIDE_STORAGE_KEY = "prism_player_shader_family_override"
 
 export function storedShaderFamilyOverride() {
     const stored = localStorage.getItem(SHADER_FAMILY_OVERRIDE_STORAGE_KEY);
-    return stored === "anime4k" || stored === "live_action" ? stored : "auto";
+    return stored === "anime4k" || stored === "live_action" ? stored : PLAYER_SETTINGS_DEFAULTS.shaderFamilyOverride;
 }
 
 /* Unlike storedShaderEnabled/storedShaderStrength/storedUpscaleAuto (which deliberately carry
@@ -167,9 +169,9 @@ export function setShaderFamilyOverride(controller, override) {
    coupling entirely: this function no longer needs to know upgradeTo/strengthless exist at
    all, which is what it looked like before either upgrade was ever added. */
 function resolveShaderType(controller) {
-    if (!controller._shaderEnabled) return "off";
+    if (!controller._shaderEnabled) return SHADER_OFF;
     const hasStrength = controller._upscaleAuto || controller._shaderStrength > 0;
-    return hasStrength ? controller._shaderAutoType : "off";
+    return hasStrength ? controller._shaderAutoType : SHADER_OFF;
 }
 
 /* AI Upscaling (the real Anime4K CNN / FSR 1 chains) - split out from Sharpening into its
@@ -282,38 +284,38 @@ export function setColorBoostContrastAuto(controller, enabled) {
    layer, rather than threading a third piece of state through the rendering/persistence
    code that already works correctly off the pair. */
 export function upscaleModeOf(controller) {
-    if (!controller._shaderEnabled) return "off";
-    return controller._upscaleAuto ? "auto" : "on";
+    if (!controller._shaderEnabled) return TRIPLE_MODE.OFF;
+    return controller._upscaleAuto ? TRIPLE_MODE.AUTO : TRIPLE_MODE.ON;
 }
 
 /* Drives both flags from one selection - "off" and "on" both set _upscaleAuto false so
    a later switch straight to "on" (skipping "auto") doesn't inherit a stale auto flag
    from a previous session. */
 export function setUpscaleMode(controller, mode) {
-    setShaderEnabled(controller, mode !== "off");
-    setUpscaleAuto(controller, mode === "auto");
+    setShaderEnabled(controller, mode !== TRIPLE_MODE.OFF);
+    setUpscaleAuto(controller, mode === TRIPLE_MODE.AUTO);
 }
 
 /* Same collapsing reasoning as upscaleModeOf/setUpscaleMode above, one independent triple
    per component now instead of one shared Color Boost mode. */
 export function colorBoostSaturationModeOf(controller) {
-    if (!controller._colorBoostSaturationEnabled) return "off";
-    return controller._colorBoostSaturationAuto ? "auto" : "on";
+    if (!controller._colorBoostSaturationEnabled) return TRIPLE_MODE.OFF;
+    return controller._colorBoostSaturationAuto ? TRIPLE_MODE.AUTO : TRIPLE_MODE.ON;
 }
 
 export function setColorBoostSaturationMode(controller, mode) {
-    setColorBoostSaturationEnabled(controller, mode !== "off");
-    setColorBoostSaturationAuto(controller, mode === "auto");
+    setColorBoostSaturationEnabled(controller, mode !== TRIPLE_MODE.OFF);
+    setColorBoostSaturationAuto(controller, mode === TRIPLE_MODE.AUTO);
 }
 
 export function colorBoostContrastModeOf(controller) {
-    if (!controller._colorBoostContrastEnabled) return "off";
-    return controller._colorBoostContrastAuto ? "auto" : "on";
+    if (!controller._colorBoostContrastEnabled) return TRIPLE_MODE.OFF;
+    return controller._colorBoostContrastAuto ? TRIPLE_MODE.AUTO : TRIPLE_MODE.ON;
 }
 
 export function setColorBoostContrastMode(controller, mode) {
-    setColorBoostContrastEnabled(controller, mode !== "off");
-    setColorBoostContrastAuto(controller, mode === "auto");
+    setColorBoostContrastEnabled(controller, mode !== TRIPLE_MODE.OFF);
+    setColorBoostContrastAuto(controller, mode === TRIPLE_MODE.AUTO);
 }
 
 /* Off by default - same reasoning as the Android leg (ShaderUpscaleEffect): this spends
@@ -338,7 +340,7 @@ export function updateShaderPipeline(controller) {
        or both) still needs the canvas rendering (with sharpenStrength forced to 0 in
        renderShaderFrame below), same as Sharpening or AI Upscaling alone. */
     if (
-        controller._shaderType === "off" &&
+        controller._shaderType === SHADER_OFF &&
         !controller._aiUpscalingEnabled &&
         !controller._colorBoostSaturationEnabled &&
         !controller._colorBoostContrastEnabled
@@ -349,7 +351,7 @@ export function updateShaderPipeline(controller) {
         return;
     }
     if (!ensureShaderPipeline(controller)) {
-        controller._shaderType = "off";
+        controller._shaderType = SHADER_OFF;
         controller._aiUpscalingEnabled = false;
         controller._colorBoostSaturationEnabled = false;
         controller._colorBoostContrastEnabled = false;
@@ -704,7 +706,7 @@ function chooseRenderPreset(controller, video, familyKey, displayW, displayH, up
            it - except for a strengthless preset (AI Upscaling), which always applies once it's
            a candidate at all: being a candidate already means upgradedPresetKey found its own
            toggle on, undowngraded, and built - Sharpening's on/off state is irrelevant to it. */
-        const applies = preset.strengthless || (controller._shaderType !== "off" && upscaleStrength > 0);
+        const applies = preset.strengthless || (controller._shaderType !== SHADER_OFF && upscaleStrength > 0);
         const tuning = applies ? shaderTuningAt(key, upscaleStrength) : { scale: 1, sharpen: 0, kernel: 1 };
         const [outW, outH] = outputSizeFor(video, displayW, displayH, tuning.scale);
 
@@ -731,7 +733,7 @@ export function renderShaderFrame(controller, timestamp = 0, mediaTimeSec = null
        strength leaves the sharpen stage a no-op either way). Whether the AI Upscaling upgrade
        itself is tried at all is now entirely upgradedPresetKey's own call (controller._aiUpscalingEnabled),
        not gated on this. */
-    const programType = controller._shaderType !== "off" ? controller._shaderType : controller._shaderAutoType;
+    const programType = controller._shaderType !== SHADER_OFF ? controller._shaderType : controller._shaderAutoType;
     /* Auto strength (see content-analysis.js) writes straight to _autoUpscaleStrength/
        _autoColorBoostSaturationStrength/_autoColorBoostContrastStrength rather than through
        setShaderStrength/setColorBoostSaturationStrength/setColorBoostContrastStrength - those
@@ -747,7 +749,7 @@ export function renderShaderFrame(controller, timestamp = 0, mediaTimeSec = null
        scale/sharpen/kernel. Same "0 strength must mean off, not the type's own MIN tuning"
        gating chooseRenderPreset's family candidate already uses - see its own comment for why
        upscaleStrength > 0 is what makes a live 0 actually read as off. */
-    const sharpeningActive = controller._shaderType !== "off" && upscaleStrength > 0;
+    const sharpeningActive = controller._shaderType !== SHADER_OFF && upscaleStrength > 0;
     const sharpeningTuning = sharpeningActive ? shaderTuningAt(programType, upscaleStrength) : { scale: 1, sharpen: 0, kernel: 1 };
     /* Saturation and Contrast each have their own independent Auto|On|Off mode now (see
        colorBoostSaturationModeOf/colorBoostContrastModeOf) and their own auto-derived value
@@ -797,7 +799,7 @@ export function renderShaderFrame(controller, timestamp = 0, mediaTimeSec = null
            throwing on every animation frame. */
         console.error("StreamingPlayer: shader upscaling disabled - video frame is cross-origin tainted", e);
         controller._shaderEnabled = false;
-        controller._shaderType = "off";
+        controller._shaderType = SHADER_OFF;
         controller._aiUpscalingEnabled = false;
         updateShaderPipeline(controller);
         return;
@@ -860,7 +862,7 @@ export function renderShaderFrame(controller, timestamp = 0, mediaTimeSec = null
            covering the video every frame. */
         console.error("StreamingPlayer: shader pass targets unavailable, shader upscaling disabled");
         controller._shaderEnabled = false;
-        controller._shaderType = "off";
+        controller._shaderType = SHADER_OFF;
         controller._aiUpscalingEnabled = false;
         updateShaderPipeline(controller);
     }

@@ -3,6 +3,7 @@ import { collapseByGuid } from "./logic/cross-server.js";
 import * as StreamingPlexAuth from "../../plex-auth.js";
 import { loadPlain, savePlain } from "../../settings.js";
 import { hasSecrets, loadSecrets, saveSecrets } from "../../vault.js";
+import { VIEW, SECTION_TYPE } from "../../constants.js";
 
 /* Plex fetch/data-loading orchestration - the card's single "go get everything Home
    needs" entry point plus every raw fetch it fans out to. Takes the PlexNetflixCard
@@ -101,6 +102,10 @@ export function sectionsForView(card, view) {
     const id = view.slice("server-".length);
     return (card._config.sections || []).filter((s) => s.server_id === id && s.enabled !== false);
   }
+  /* Movies/TV Shows: every enabled library of that type, across every server - the
+     cross-server aggregate views (see constants.js's VIEW). */
+  if (view === VIEW.MOVIES) return (card._config.sections || []).filter((s) => s.enabled !== false && s.type === SECTION_TYPE.MOVIE);
+  if (view === VIEW.TV) return (card._config.sections || []).filter((s) => s.enabled !== false && s.type === SECTION_TYPE.SHOW);
   /* Home/"everything" - explicit enabled filter rather than trusting
      card._config.sections to already be enabled-only (true today only because
      settings.js's save strips disabled sections out of what it persists - an implicit
@@ -156,10 +161,16 @@ export async function fetchOnDeckRaw(card) {
       }
     })
   );
+  /* Sorted by lastViewedAt before collapsing/flattening - each server's own response
+     already comes back most-recent-first, but perServer.flat() otherwise concatenates
+     server A's whole list before server B's, so a title just watched on a second/remote
+     server would land far down the row regardless of how recently it was actually
+     watched. collapseByGuid preserves input order, so sorting here is enough. */
+  const merged = perServer.flat().sort((a, b) => (b.lastViewedAt || 0) - (a.lastViewedAt || 0));
   /* Collapsed before the enabled-section filter below - on deck genuinely spans every
      active server (unlike, say, playlists), so the same in-progress title on two servers
      is a real case, not just a defensive no-op. */
-  return collapseByGuid(perServer.flat()).filter((m) => isFromEnabledSection(card, m));
+  return collapseByGuid(merged).filter((m) => isFromEnabledSection(card, m));
 }
 
 export async function fetchWatchlistRaw(card) {

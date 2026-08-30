@@ -1,5 +1,5 @@
 import { autoUpscaleStrength, autoColorBoostStrength, autoContrastBoostStrength } from "./shader/shaders.js";
-import { hasNativePlayer, platformTag } from "./core/platform.js";
+import { hasNativePlayer, platformTag, PLATFORM_TAG } from "./core/platform.js";
 import { media } from "./core/media-facade.js";
 /* Circular with shader-pipeline.js (which imports updateContentAnalysis from this file, while
    this file imports postXboxShaderSettings/postXboxColorBoostSettings from it) - safe for the
@@ -37,7 +37,7 @@ export function updateContentAnalysis(controller) {
        native's own "auto" flags live in the same setShaderEffect/setColorBoost message
        shader-pipeline.js already owns building - re-posting here keeps them in sync without a
        third copy of the payload-building logic. */
-    if (hasNativePlayer() && platformTag() === "uwp") {
+    if (hasNativePlayer() && platformTag() === PLATFORM_TAG.UWP) {
         postXboxShaderSettings(controller);
         postXboxColorBoostSettings(controller);
         return;

@@ -8,6 +8,7 @@ import { matchEpisodesAcrossServers, dedupeSourcesByServer } from "./logic/cross
 import { createRowScroll } from "./row-scroll.js";
 import { resolveTrailerVideo } from "./logic/trailer.js";
 import { renderMediaBadge } from "./media-badges.js";
+import { APP_EVENT, WATCHLIST_ADDED_CLASS, MEDIA_TYPE } from "../../constants.js";
 
 const THEME_AUDIO_FADE_MS = 900;
 const THEME_AUDIO_DEFAULT_VOLUME = 0.65;
@@ -305,7 +306,7 @@ export function videoCodecLabel(media, mediaIndex) {
    movie or episode does (see mapItem's comment), so its own "fully watched"/"has any
    history" both key off viewedLeafCount/leafCount instead. */
 function isFullyWatched(meta) {
-  if (meta.type === "show" || meta.type === "season") return meta.leafCount > 0 && meta.viewedLeafCount === meta.leafCount;
+  if (meta.type === MEDIA_TYPE.SHOW || meta.type === MEDIA_TYPE.SEASON) return meta.leafCount > 0 && meta.viewedLeafCount === meta.leafCount;
   return (meta.viewCount || 0) > 0;
 }
 /* viewedLeafCount alone misses a show/season where the very first episode has been
@@ -317,7 +318,7 @@ function isFullyWatched(meta) {
    Plex's own container-level "has anything under this ever been played" timestamp -
    set the moment a leaf's viewOffset starts moving, not just once one is completed. */
 function hasAnyHistory(meta) {
-  if (meta.type === "show" || meta.type === "season") return (meta.viewedLeafCount || 0) > 0 || !!meta.lastViewedAt;
+  if (meta.type === MEDIA_TYPE.SHOW || meta.type === MEDIA_TYPE.SEASON) return (meta.viewedLeafCount || 0) > 0 || !!meta.lastViewedAt;
   return (meta.viewOffset || 0) > 0 || (meta.viewCount || 0) > 0;
 }
 /* "Has an actual mid-title resume position" - distinct from hasAnyHistory above, which
@@ -325,7 +326,7 @@ function hasAnyHistory(meta) {
    Restart only makes sense when there's real progress to discard by starting over; a
    show/season container has no viewOffset of its own to resume from at all. */
 function hasProgress(meta) {
-  if (meta.type === "show" || meta.type === "season") return false;
+  if (meta.type === MEDIA_TYPE.SHOW || meta.type === MEDIA_TYPE.SEASON) return false;
   return (meta.viewOffset || 0) > 0;
 }
 
@@ -522,7 +523,7 @@ export class TitleInfoController {
     /* Mirrors streaming-player-open/-close (see the listener in _wire below) - the hero
        banner behind this modal has no idea it's been covered, so without this its own
        trailer keeps autoplaying (audio and all) underneath the whole time this is open. */
-    window.dispatchEvent(new CustomEvent("streaming-title-info-close"));
+    window.dispatchEvent(new CustomEvent(APP_EVENT.TITLE_INFO_CLOSE));
     /* "open" (drives isOpen(), read by the reentrancy checks above and elsewhere) comes off
        immediately - only the visual fade lags behind, via "closing" (keeps display:block
        while the opacity transition below plays out) and dropping "visible" (see open(),
@@ -826,7 +827,7 @@ export class TitleInfoController {
     this._pendingEpisodeFocus = { seasonRatingKey: item.seasonKey, episodeRatingKey: item.ratingKey };
     const showItem = {
       ratingKey: item.showKey,
-      type: "show",
+      type: MEDIA_TYPE.SHOW,
       title: item.title,
       subtitle: "",
       image: item.image,
@@ -902,7 +903,7 @@ export class TitleInfoController {
      (e.g. from Continue Watching) redirects to its show's info instead of a standalone
      episode modal - see openForEpisode. */
   async open(item, source, { flatQueueContext = null } = {}) {
-    if (item.type === "episode" && item.showKey) {
+    if (item.type === MEDIA_TYPE.EPISODE && item.showKey) {
       return this.openForEpisode(item, source);
     }
     /* Starts fading out whatever title's theme is currently playing immediately, rather
@@ -964,7 +965,7 @@ export class TitleInfoController {
     this._castEl.innerHTML = "";
     this._similarWrap.hidden = true;
     this._similarEl.innerHTML = "";
-    const canWatchlist = item.type === "movie" || item.type === "show";
+    const canWatchlist = item.type === MEDIA_TYPE.MOVIE || item.type === MEDIA_TYPE.SHOW;
     this._watchlistBtn.hidden = !canWatchlist;
     if (canWatchlist) {
       paintWatchlistButton(this._watchlistBtn, this._ctx.isInWatchlist(item));
@@ -989,7 +990,7 @@ export class TitleInfoController {
       this._returnFocusEl = this._shadowRoot.activeElement;
       /* Only fired on the closed->open transition too - a reopen for a different item
          while already open (see above) shouldn't re-pause the hero, it's already paused. */
-      window.dispatchEvent(new CustomEvent("streaming-title-info-open"));
+      window.dispatchEvent(new CustomEvent(APP_EVENT.TITLE_INFO_OPEN));
     }
     this._overlay.classList.remove("closing");
     this._overlay.classList.add("open");
@@ -1052,7 +1053,7 @@ export class TitleInfoController {
     /* Playlists aren't part of library metadata (see the card's _fetchPlaylistsRaw) -
        their detail lives under /playlists/{ratingKey}, not /library/metadata/{ratingKey}
        like every other item type here. */
-    const metaPath = item.type === "playlist" ? `/playlists/${ratingKey}` : `/library/metadata/${ratingKey}`;
+    const metaPath = item.type === MEDIA_TYPE.PLAYLIST ? `/playlists/${ratingKey}` : `/library/metadata/${ratingKey}`;
     try {
       const data = await this._ctx.plexFetch(metaPath, { includeChapters: 1, includeMarkers: 1 });
       const meta = data?.MediaContainer?.Metadata?.[0];
@@ -1188,12 +1189,12 @@ export class TitleInfoController {
       })
       .join("");
 
-    if (meta.type === "show") {
+    if (meta.type === MEDIA_TYPE.SHOW) {
       this._loadSeasons(meta.ratingKey);
       this._loadShowResumeLabel(meta);
       this._loadShowFormatBadges(meta);
-    } else if (meta.type === "collection") this._loadCollectionItems(meta.ratingKey);
-    else if (meta.type === "playlist") this._loadPlaylistItems(meta.ratingKey);
+    } else if (meta.type === MEDIA_TYPE.COLLECTION) this._loadCollectionItems(meta.ratingKey);
+    else if (meta.type === MEDIA_TYPE.PLAYLIST) this._loadPlaylistItems(meta.ratingKey);
     this._loadSimilar(meta.ratingKey);
   }
 
@@ -1362,7 +1363,7 @@ export class TitleInfoController {
            queue context only matters, and is only kept, for the types the player could
            actually use it for. */
         const flatQueueContext =
-          mapped.type === "movie" || mapped.type === "episode"
+          mapped.type === MEDIA_TYPE.MOVIE || mapped.type === MEDIA_TYPE.EPISODE
             ? { ratingKeys: rawItems.map((m) => m.ratingKey), index: i }
             : null;
         this.open(mapped, "local", { flatQueueContext });
@@ -1427,7 +1428,7 @@ export class TitleInfoController {
        first directly-playable child instead (movies/episodes; shows still require
        picking an episode), with the rest of the flat list attached as a queue so
        title-next/prev walks through it exactly like clicking each row by hand would. */
-    if (item.type === "collection" || item.type === "playlist") {
+    if (item.type === MEDIA_TYPE.COLLECTION || item.type === MEDIA_TYPE.PLAYLIST) {
       return this._playFirstFlatItem();
     }
     /* A show has no Media[] of its own either - this only runs when _resumeEpisodeKey
@@ -1439,7 +1440,7 @@ export class TitleInfoController {
        show whose modal wasn't opened via an episode. Plex has no per-show on-deck lookup
        (confirmed empirically - /library/metadata/<ratingKey>/onDeck 404s), so this pulls
        every episode via allLeaves and picks one with pickNextEpisode instead. */
-    if (item.type === "show") {
+    if (item.type === MEDIA_TYPE.SHOW) {
       return this._playShow(item.ratingKey, { restart });
     }
     /* Always starts on the first Media[] entry with no cap - Version/Quality Cap are
@@ -1608,7 +1609,7 @@ export class TitleInfoController {
     const rawItems = this._flatItems || [];
     const index = rawItems.findIndex((m) => {
       const mapped = this._ctx.mapItem(m, false);
-      return mapped.type === "movie" || mapped.type === "episode";
+      return mapped.type === MEDIA_TYPE.MOVIE || mapped.type === MEDIA_TYPE.EPISODE;
     });
     if (index < 0) return;
     try {
@@ -1846,7 +1847,7 @@ export class TitleInfoController {
        - without this it keeps playing underneath the title's real audio. Paused rather
        than faded/stopped, so the same track just resumes (not re-fetched/re-faded-in)
        once playback ends and this modal is still showing the same item. */
-    window.addEventListener("streaming-player-open", () => {
+    window.addEventListener(APP_EVENT.PLAYER_OPEN, () => {
       this._themeAudioEl?.pause();
       /* Same decoupling problem as the theme audio just above, for the trailer video/
          iframe instead - it has no idea full-screen playback just started on top of it.
@@ -1857,7 +1858,7 @@ export class TitleInfoController {
         this._updateTrailerPlayback();
       }
     });
-    window.addEventListener("streaming-player-close", () => {
+    window.addEventListener(APP_EVENT.PLAYER_CLOSE, () => {
       this._refreshAfterPlayback();
       if (this.isOpen() && isControllerActive()) focusAfterPaint(this._playBtn);
       if (this._themeAudioEl?.paused) this._themeAudioEl.play().catch(() => {});
@@ -2023,17 +2024,17 @@ export class TitleInfoController {
       e.stopPropagation();
       const item = this._item;
       if (!item) return;
-      if (this._watchlistBtn.classList.contains("added")) {
+      if (this._watchlistBtn.classList.contains(WATCHLIST_ADDED_CLASS)) {
         this._ctx.onRemoveFromWatchlist(item, this._watchlistBtn);
       } else {
         this._ctx.onAddToWatchlist(item, this._watchlistBtn);
       }
     });
     this._watchlistBtn.addEventListener("mouseenter", () => {
-      if (this._watchlistBtn.classList.contains("added")) this._watchlistBtn.querySelector(".title-info-action-icon").textContent = "−";
+      if (this._watchlistBtn.classList.contains(WATCHLIST_ADDED_CLASS)) this._watchlistBtn.querySelector(".title-info-action-icon").textContent = "−";
     });
     this._watchlistBtn.addEventListener("mouseleave", () => {
-      if (this._watchlistBtn.classList.contains("added")) this._watchlistBtn.querySelector(".title-info-action-icon").textContent = "✓";
+      if (this._watchlistBtn.classList.contains(WATCHLIST_ADDED_CLASS)) this._watchlistBtn.querySelector(".title-info-action-icon").textContent = "✓";
     });
     this._playBtn.addEventListener("click", () => this._playCurrentItem());
     this._restartBtn.addEventListener("click", () => this._playCurrentItem({ restart: true }));

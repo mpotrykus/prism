@@ -25,13 +25,14 @@ import java.nio.ByteBuffer;
 @OptIn(markerClass = UnstableApi.class)
 final class AudioLevelingProcessor extends BaseAudioProcessor {
 
-    /* Same first-guess constants as audio-leveling.js's web leg - kept numerically
-       identical so the two platforms behave the same way, and equally in need of a real
-       listening pass to retune. */
+    /* Same constants as audio-leveling.js's web leg - kept numerically identical so all
+       platforms behave the same way. LOUDNESS_EMA_TAU_S raised from an original 20s first
+       guess to 90s - see that file's own comment on why 20s let the gain visibly chase a
+       single scene's loudness instead of riding out a whole title. */
     private static final double TARGET_DBFS = -20;
     private static final double MAX_GAIN_DB = 15;
     private static final double MIN_GAIN_DB = -15;
-    private static final double LOUDNESS_EMA_TAU_S = 20;
+    private static final double LOUDNESS_EMA_TAU_S = 90;
     private static final double GAIN_RAMP_TIME_CONSTANT_S = 2;
     private static final double SILENCE_FLOOR_DBFS = -60;
 
