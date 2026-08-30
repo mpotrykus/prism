@@ -38,10 +38,10 @@
   .title-info-meta span { white-space: nowrap; }
   .title-info-actions { flex-wrap: wrap; row-gap: 10px; }
   .title-info-play { flex: 1 1 100%; white-space: nowrap; }
-  .title-info-restart-btn, .title-info-watched-btn, .title-info-watchlist-btn { flex: 1 1 100%; }
+  .title-info-restart-btn, .title-info-watched-btn, .title-info-download-btn, .title-info-watchlist-btn { flex: 1 1 100%; }
   /* Same icon+label markup as desktop (see title-info.css) - just reflowed from a stacked
      column to a full-width row, same border treatment as .title-info-restart-btn above. */
-  .title-info-watched-btn, .title-info-watchlist-btn {
+  .title-info-watched-btn, .title-info-download-btn, .title-info-watchlist-btn {
     width: auto; flex-direction: row; padding: 10px 14px; border-radius: 8px;
     border: 1px solid rgba(var(--color-fg-rgb), 0.3); gap: 8px;
   }

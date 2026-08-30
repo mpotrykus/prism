@@ -13,6 +13,11 @@ export const EMPTY_STATE_ICON_SVG =
   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="10.5" cy="10.5" r="7"/><path d="M20 20l-4.8-4.8" stroke-linecap="round"/></svg>';
 export const WATCHED_ICON_SVG =
   '<svg viewBox="0 0 24 24"><path d="M5 13l4 4 10-10" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+/* Classic "arrow into a tray" download glyph (stroke-based, matching WATCHED_ICON_SVG's
+   own weight/style above) rather than a heavier emoji character - a plain "⬇" reads more
+   like a directional/sort indicator than a download action at this button's small size. */
+export const DOWNLOAD_ICON_SVG =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v11"/><path d="M7 9.5 12 14.5 17 9.5"/><path d="M4.5 19.5h15"/></svg>';
 
 /* Row rebuilds (search exit, profile switch, ...) wipe and recreate every
    poster via innerHTML. Reusing the same <img> node (rather than a fresh one with the same

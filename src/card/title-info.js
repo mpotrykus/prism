@@ -1,7 +1,7 @@
 import { wireLinearNav, registerNavHandler, focusAfterPaint, isControllerActive } from "../../focus-nav.js";
 import { lockScroll, unlockScroll } from "../../scroll-lock.js";
 import { paintWatchlistButton } from "./watchlist.js";
-import { WATCHED_ICON_SVG, wireArrowVisibility } from "./rows.js";
+import { WATCHED_ICON_SVG, DOWNLOAD_ICON_SVG, wireArrowVisibility } from "./rows.js";
 import { PROFILE_ICON_SVG } from "./profile.js";
 import { pickNextEpisode, extractLogoUrl } from "./logic/catalog.js";
 import { matchEpisodesAcrossServers, dedupeSourcesByServer } from "./logic/cross-server.js";
@@ -9,6 +9,7 @@ import { createRowScroll } from "./row-scroll.js";
 import { resolveTrailerVideo } from "./logic/trailer.js";
 import { renderMediaBadge } from "./media-badges.js";
 import { APP_EVENT, WATCHLIST_ADDED_CLASS, MEDIA_TYPE } from "../../constants.js";
+import { isXboxDevice } from "../player/core/platform.js";
 
 const THEME_AUDIO_FADE_MS = 900;
 const THEME_AUDIO_DEFAULT_VOLUME = 0.65;
@@ -363,8 +364,16 @@ function buildEpisodeRowArrow(dir, scroller, rowScroll) {
    in .title-info-episode, as they did before this became a card row) so mobile's own CSS
    (see responsive.css) can revert this card to the old thumb-beside-text row layout by
    just flipping .title-info-episode back to flex-row with that wrapper as its second
-   item - the same markup then serves both layouts, no separate mobile template needed. */
-function episodeCardHtml(ctx, ep) {
+   item - the same markup then serves both layouts, no separate mobile template needed.
+
+   `downloadable` (see TitleInfoController's own _isEpisodeDownloadable) renders a second,
+   always-visible corner badge - a real <button>, not a hover-only reveal like
+   .title-info-episode-play's big center icon, since touch/D-pad/remote input can't rely on
+   hover to even discover it exists. Deliberately NOT wired to a click handler here - this
+   is a plain string template with no controller reference to call back into; the caller
+   (showSeason below) attaches the actual download handler once these strings become real
+   DOM nodes, the same split it already uses for the card's own play-on-click handler. */
+function episodeCardHtml(ctx, ep, downloadable) {
   const progress = ep.duration ? Math.max(0, Math.min(1, (ep.viewOffset || 0) / ep.duration)) : 0;
   const watched = !!ep.viewCount && progress <= 0;
   return `
@@ -378,6 +387,11 @@ function episodeCardHtml(ctx, ep) {
             : ""
         }
         <div class="title-info-episode-play"><div class="title-info-episode-play-icon">▶</div></div>
+        ${
+          downloadable
+            ? `<button type="button" class="title-info-episode-download-btn" data-rating-key="${ep.ratingKey}" aria-label="Download episode">${DOWNLOAD_ICON_SVG}</button>`
+            : ""
+        }
       </div>
       <div class="title-info-episode-text">
         <div class="title-info-episode-title">${ep.index}. ${ctx.escape(ep.title)}</div>
@@ -442,6 +456,7 @@ export class TitleInfoController {
     this._playBtn = shadowRoot.querySelector(".title-info-play");
     this._restartBtn = shadowRoot.querySelector(".title-info-restart-btn");
     this._watchedBtn = shadowRoot.querySelector(".title-info-watched-btn");
+    this._downloadBtn = shadowRoot.querySelector(".title-info-download-btn");
     this._watchlistBtn = shadowRoot.querySelector(".title-info-watchlist-btn");
     this._actionsEl = shadowRoot.querySelector(".title-info-actions");
     this._actionsLoadingEl = shadowRoot.querySelector(".title-info-actions-loading");
@@ -465,6 +480,15 @@ export class TitleInfoController {
     this._chapters = [];
     this._media = [];
     this._flatItems = null;
+    /* Container-level flag off the /library/metadata response (see _loadDetail) - Plex
+       sets this per-section based on whether the library/account combination permits
+       downloading a copy of the original file (the same "Sync"/offline-download feature
+       Plex Web's own download button gates on), not anything this app tracks itself.
+       Unverified against a real Plex Pass account with downloads actually enabled - if
+       the button never appears even where it should, check this field's raw value first
+       before assuming the gating logic below is wrong. */
+    this._allowSync = false;
+    this._downloadUrl = null;
     /* Per-episode cross-server source matches for the currently-open show, resolved
        async and non-blocking by _loadSeasons (see _getEpisodeSourceMatches) - reset here
        so a stale match from whatever show was open before doesn't leak onto this one
@@ -922,6 +946,9 @@ export class TitleInfoController {
     this._chapters = [];
     this._media = [];
     this._flatItems = null;
+    this._allowSync = false;
+    this._downloadUrl = null;
+    this._downloadBtn.hidden = true;
     /* Per-episode cross-server source matches for the currently-open show, resolved
        async and non-blocking by _loadSeasons (see _getEpisodeSourceMatches) - reset here
        so a stale match from whatever show was open before doesn't leak onto this one
@@ -1057,7 +1084,10 @@ export class TitleInfoController {
     try {
       const data = await this._ctx.plexFetch(metaPath, { includeChapters: 1, includeMarkers: 1 });
       const meta = data?.MediaContainer?.Metadata?.[0];
-      if (meta && this._item === item) this._renderDetail(meta);
+      if (meta && this._item === item) {
+        this._allowSync = !!data?.MediaContainer?.allowSync;
+        this._renderDetail(meta);
+      }
     } catch (e) {
       // detail is best-effort - the poster/title painted above stays usable on failure
     } finally {
@@ -1111,6 +1141,58 @@ export class TitleInfoController {
     this._badgesEl.hidden = !badgeLabels.length;
   }
 
+  /* Gated on this._allowSync (see the constructor's own comment) - without it, a server/
+     library that doesn't actually permit downloads would still offer a button that 403s
+     on click. Also false on a real Xbox console (isXboxDevice() - see platform.js's own
+     comment on why that's narrower than platformTag() === "uwp") - there's nowhere on a
+     console for a browser download to land that anything could later open, unlike the PC
+     UWP target (same shell, but a real Windows filesystem underneath), so the button would
+     just be a dead end there. Shared by _updateDownloadButton (the show-level/movie action
+     button) and showSeason's per-episode corner badges below - same underlying question,
+     just asked with a different episode's own Media[] each time. */
+  _isEpisodeDownloadable(media) {
+    return !!(this._allowSync && extractPartInfo(media, 0).partKey && !isXboxDevice());
+  }
+
+  /* Same shape Plex Web's own download link uses: the Part's direct-file path (see
+     extractPartInfo) plus `download=1`, which flips Plex's response to a
+     Content-Disposition: attachment instead of an inline video - unverified against a
+     real response, same caution as extractPartInfo's own partKey comment. ctx.plexImageUrl
+     is reused here rather than a bespoke URL builder despite its name - it already does
+     exactly the "append X-Plex-Token to this server-relative path" job any Plex path needs,
+     images included. */
+  _buildDownloadUrl(partKey) {
+    return this._ctx.plexImageUrl(`${partKey}${partKey.includes("?") ? "&" : "?"}download=1`);
+  }
+
+  /* A plain navigation (location.href = url) would leave whichever modal is open on a
+     spinner while the browser decides what to do with the response - a temporary
+     <a download> click instead hands the request off to the browser's own download
+     manager without disturbing the page. `download=""` (rather than a real filename)
+     matches Plex Web's own link - the server's Content-Disposition header already names
+     the file, and hardcoding a name here would only fight that when it's wrong. Shared by
+     the top-level Download button and each episode card's own corner badge. */
+  _triggerDownload(url) {
+    if (!url) return;
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "";
+    a.rel = "noopener";
+    this._shadowRoot.appendChild(a);
+    a.click();
+    a.remove();
+  }
+
+  /* Shared by _renderDetail (movies, off the item's own Media[]) and _loadShowFormatBadges
+     (shows, off the same representative next-episode Media[] that feeds the format
+     badges), same split those two already use - drives the top-level action button, not
+     the per-episode corner badges (see _isEpisodeDownloadable/showSeason for those). */
+  _updateDownloadButton(media) {
+    const downloadable = this._isEpisodeDownloadable(media);
+    this._downloadUrl = downloadable ? this._buildDownloadUrl(extractPartInfo(media, 0).partKey) : null;
+    this._downloadBtn.hidden = !downloadable;
+  }
+
   _renderDetail(meta) {
     this._duration = meta.duration || null;
     this._viewOffset = meta.viewOffset || 0;
@@ -1118,6 +1200,11 @@ export class TitleInfoController {
     this._markers = meta.Marker || [];
     this._chapters = meta.Chapter || [];
     this._media = meta.Media || [];
+    /* A show has no Media[] of its own (see _loadShowFormatBadges' own comment) - this
+       call still runs for one (empty media, so hidden) as the optimistic default, and
+       _loadShowFormatBadges overwrites it once the representative next-episode fetch
+       resolves. */
+    this._updateDownloadButton(this._media);
     const audioConfig = this._ctx.getConfig?.() || {};
     const themeAudioEnabled = audioConfig.title_audio_enabled !== false;
     this._playThemeAudio(
@@ -1293,7 +1380,7 @@ export class TitleInfoController {
         const episodes = epData?.MediaContainer?.Metadata || [];
         const track = this._buildCardRow(
           list,
-          episodes.map((ep) => episodeCardHtml(this._ctx, ep)).join("")
+          episodes.map((ep) => episodeCardHtml(this._ctx, ep, this._isEpisodeDownloadable(ep.Media))).join("")
         );
         track.querySelectorAll(".title-info-episode").forEach((row) => {
           /* Delegates to _playEpisodeByRatingKey (same as the show-level Play button
@@ -1308,6 +1395,18 @@ export class TitleInfoController {
             const ep = episodes.find((e) => String(e.ratingKey) === row.dataset.ratingKey);
             if (!ep) return;
             await this._playEpisodeByRatingKey(ep.ratingKey);
+          });
+          /* Unlike Play above, this doesn't need the full single-item re-fetch -
+             _isEpisodeDownloadable already proved this episode's own Part.key survives the
+             /children listing untruncated (see extractPartInfo's own comment), so the
+             download URL can be built straight off the list response. stopPropagation
+             keeps this from also triggering the row's own play-on-click listener above. */
+          const downloadBtn = row.querySelector(".title-info-episode-download-btn");
+          downloadBtn?.addEventListener("click", (e) => {
+            e.stopPropagation();
+            const ep = episodes.find((item) => String(item.ratingKey) === row.dataset.ratingKey);
+            const { partKey } = extractPartInfo(ep?.Media, 0);
+            this._triggerDownload(this._buildDownloadUrl(partKey));
           });
         });
         if (focusEpisodeRatingKey) {
@@ -1534,6 +1633,7 @@ export class TitleInfoController {
     const episode = await this._getNextEpisode(showRatingKey);
     if (!episode || this._item?.ratingKey !== showRatingKey) return;
     this._renderFormatBadges(episode.Media || []);
+    this._updateDownloadButton(episode.Media || []);
   }
 
   /* Full show-wide episode order (every season flattened, ratingKeys only) so the
@@ -1957,7 +2057,7 @@ export class TitleInfoController {
     });
     this._nav = wireLinearNav(
       this._shadowRoot,
-      ".title-info-close, .title-info-play, .title-info-restart-btn, .title-info-watched-btn, .title-info-watchlist-btn, .title-info-season-trigger, .title-info-episode, .title-info-cast-wrap, .title-info-similar-item",
+      ".title-info-close, .title-info-play, .title-info-restart-btn, .title-info-watched-btn, .title-info-watchlist-btn, .title-info-download-btn, .title-info-season-trigger, .title-info-episode, .title-info-episode-download-btn, .title-info-cast-wrap, .title-info-similar-item",
       { orientation: "vertical", onBack: () => this.close() }
     );
     this._seasonOverlay.addEventListener("click", (e) => {
@@ -1971,13 +2071,13 @@ export class TitleInfoController {
        scroll axis, but the actions row (Play/Restart/Watched/Watchlist) sits right below
        the hero art near the very top - centering it scrolls the art half out of view
        instead of landing back at the natural top-of-modal position. Disabling scrollIntoView
-       on just these four (an own-instance override shadows the prototype method JS-wide, so
+       on just these five (an own-instance override shadows the prototype method JS-wide, so
        this only affects calls made through these specific elements) stops it fighting our
        own explicit reset below - without this, Left/Right between two action buttons has
        wireLinearNav re-center the newly-focused one (scrolling down from 0, since centering
        doesn't know we'd already reset it), and our reset then snaps it straight back to 0 -
        a visible jitter on every move within the row, not just on first arriving at it. */
-    [this._playBtn, this._restartBtn, this._watchedBtn, this._watchlistBtn].forEach((el) => {
+    [this._playBtn, this._restartBtn, this._watchedBtn, this._watchlistBtn, this._downloadBtn].forEach((el) => {
       el.scrollIntoView = () => {};
     });
     this._shadowRoot.addEventListener("focusin", (e) => {
@@ -1985,15 +2085,15 @@ export class TitleInfoController {
         this._overlay.scrollTop = 0;
       }
     });
-    /* Play/Restart/Watched/Watchlist visually sit in one horizontal row (.title-info-actions,
-       see title-info.css) except on mobile (responsive.css wraps them to one full-width button
-       per line instead) - grouping them via data-nav-group (see wireLinearNav) only on the
-       desktop layout makes Left/Right cycle across the row there, while Up/Down still steps
-       through them one at a time on mobile where they're actually stacked. Same 700px cutoff
-       responsive.css itself uses. */
+    /* Play/Restart/Watched/Watchlist/Download visually sit in one horizontal row
+       (.title-info-actions, see title-info.css) except on mobile (responsive.css wraps
+       them to one full-width button per line instead) - grouping them via data-nav-group
+       (see wireLinearNav) only on the desktop layout makes Left/Right cycle across the row
+       there, while Up/Down still steps through them one at a time on mobile where they're
+       actually stacked. Same 700px cutoff responsive.css itself uses. */
     const desktopActionsQuery = window.matchMedia("(min-width: 701px)");
     const syncActionsNavGroup = () => {
-      [this._playBtn, this._restartBtn, this._watchedBtn, this._watchlistBtn].forEach((el) => {
+      [this._playBtn, this._restartBtn, this._watchedBtn, this._watchlistBtn, this._downloadBtn].forEach((el) => {
         if (desktopActionsQuery.matches) el.dataset.navGroup = "title-info-actions";
         else delete el.dataset.navGroup;
       });
@@ -2042,6 +2142,10 @@ export class TitleInfoController {
       e.stopPropagation();
       if (this._watched) this._markUnwatched();
       else this._markWatched();
+    });
+    this._downloadBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      this._triggerDownload(this._downloadUrl);
     });
   }
 }

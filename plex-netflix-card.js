@@ -17,6 +17,7 @@ import {
 import { paintWatchlistButton, addToWatchlist, removeFromWatchlist } from "./src/card/watchlist.js";
 import {
   WATCHED_ICON_SVG,
+  DOWNLOAD_ICON_SVG,
   emptyStateHtml,
   renderMessage,
   renderLoading,
@@ -345,6 +346,10 @@ class PlexNetflixCard extends HTMLElement {
               <button type="button" class="title-info-watchlist-btn" aria-label="Add to My List">
                 <span class="title-info-action-icon">+</span>
                 <span class="title-info-action-label">My List</span>
+              </button>
+              <button type="button" class="title-info-download-btn" aria-label="Download" hidden>
+                <span class="title-info-action-icon">${DOWNLOAD_ICON_SVG}</span>
+                <span class="title-info-action-label">Download</span>
               </button>
             </div>
             <div class="title-info-actions-loading" hidden><span class="spinner"></span></div>

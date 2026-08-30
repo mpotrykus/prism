@@ -460,6 +460,7 @@
    reads fine the first time but is easy to forget the meaning of on a return visit. */
 
 .title-info-watched-btn,
+.title-info-download-btn,
 .title-info-watchlist-btn {
     width: 60px;
     flex: none;
@@ -497,8 +498,27 @@
 }
 
 .title-info-watched-btn:hover,
+.title-info-download-btn:hover,
 .title-info-watchlist-btn:hover {
     background: rgba(var(--color-fg-rgb), 0.1);
+}
+
+.title-info-download-btn[hidden] {
+    display: none;
+}
+
+/* A controller/D-pad/remote session (Xbox, Fire TV, a gamepad paired to any other
+   platform) has nowhere for a browser download to land that's reachable from that same
+   session afterward - isXboxDevice() already covers the Xbox console specifically (see
+   TitleInfoController's own _isEpisodeDownloadable), but this covers every other
+   controller-driven session too, the same host attribute/event this file's own
+   :host([controller-active]) .title-info-close rule above already uses (see
+   focus-nav.js's controller-active-change comment). Unlike that rule, this isn't about
+   the control being merely redundant - a mouse/touch session on the very same device
+   still gets a real, useful download button, only a controller session hides it. */
+:host([controller-active]) .title-info-download-btn,
+:host([controller-active]) .title-info-episode-download-btn {
+    display: none;
 }
 
 .title-info-watched-btn.watched {
@@ -837,6 +857,41 @@
 .title-info-episode-watched svg {
     width: 11px;
     height: 11px;
+}
+
+/* Opposite corner from .title-info-episode-watched above, same badge treatment - always
+   visible (unlike .title-info-episode-play's hover-only reveal just below) since touch/
+   D-pad/remote input can't discover a hover-only control at all. A real <button>, not a
+   div, so it's independently clickable/focusable over the card's own play-on-click area -
+   z-index above .title-info-episode-play so it stays reachable even once that overlay
+   fades in on hover/focus. */
+.title-info-episode-download-btn {
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    z-index: 3;
+    width: 22px;
+    height: 22px;
+    border: none;
+    border-radius: 50%;
+    background: rgba(var(--color-panel-rgb), 0.7);
+    color: var(--color-fg);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+}
+
+.title-info-episode-download-btn svg {
+    width: 12px;
+    height: 12px;
+}
+
+.title-info-episode-download-btn:hover,
+.title-info-episode-download-btn:focus-visible {
+    color: var(--color-accent);
+    background: var(--color-panel);
 }
 
 .title-info-episode-play {
