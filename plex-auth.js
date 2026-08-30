@@ -153,12 +153,31 @@ async function probeConnection(uri, token, timeoutMs = 2500) {
   }
 }
 
-/* Local (LAN) connections are probed before relay/remote ones - a relay hop through
-   plex.tv adds real latency when the server is right there on the home network. */
+async function raceFirstReachable(conns, token) {
+  try {
+    return await Promise.any(
+      conns.map(async (c) => {
+        if (await probeConnection(c.uri, token)) return c.uri;
+        throw new Error("unreachable");
+      })
+    );
+  } catch {
+    return null;
+  }
+}
+
+/* Local (LAN) connections are raced against each other before relay/remote ones are
+   even tried - a relay hop through plex.tv adds real latency when the server is right
+   there on the home network. Within a group, all connections are probed concurrently
+   (Promise.any) rather than one at a time, so one dead LAN candidate's 2.5s timeout
+   doesn't block trying the next candidate. */
 export async function resolveBestConnection(server) {
-  const ordered = [...server.connections].sort((a, b) => (a.local === b.local ? 0 : a.local ? -1 : 1));
-  for (const conn of ordered) {
-    if (await probeConnection(conn.uri, server.accessToken)) return conn.uri;
+  const local = server.connections.filter((c) => c.local);
+  const remote = server.connections.filter((c) => !c.local);
+  for (const group of [local, remote]) {
+    if (!group.length) continue;
+    const uri = await raceFirstReachable(group, server.accessToken);
+    if (uri) return uri;
   }
   return null;
 }
@@ -184,67 +203,83 @@ export async function discoverLibraries(accountToken, { prevServers = [], prevSe
   const discovered = await discoverServers(accountToken);
   const prevServersById = new Map(prevServers.map((s) => [s.id, s]));
   const prevSectionsByServerKey = new Map(prevSections.map((s) => [`${s.server_id}:${s.key}`, s]));
+
+  /* Each server's connection probing + section listing is independent of every other
+     server's, so they're run concurrently (Promise.all) instead of one server at a
+     time - a multi-server account no longer pays each server's probe/fetch latency
+     serially. Promise.all preserves `discovered`'s order in `results`, so the merge
+     below still produces servers/sections in the same order the old sequential loop
+     did. */
+  const results = await Promise.all(
+    discovered.map(async (d) => {
+      const id = d.clientIdentifier;
+      if (!id) return null;
+      const prevServer = prevServersById.get(id);
+      const uri = await resolveBestConnection(d);
+      if (!uri) {
+        /* Keep whatever was already saved for it rather than dropping it - a friend's
+           server being briefly offline shouldn't wipe out every toggle the user set
+           for it, and data.js's own fetches already tolerate a stale/unreachable
+           server gracefully (empty results, not a hard error). */
+        return {
+          unreachable: true,
+          servers: prevServer ? [prevServer] : [],
+          sections: prevServer ? prevSections.filter((s) => s.server_id === id) : [],
+        };
+      }
+      const server = {
+        id,
+        name: d.name,
+        owned: d.owned,
+        sourceTitle: d.sourceTitle || "",
+        url: uri,
+        token: d.accessToken,
+        /* Defaults to fully on for a newly-discovered server (confirmed with the user:
+           a friend sharing a library should show up right away, not require an opt-in
+           per library first). */
+        all_enabled: prevServer ? prevServer.all_enabled !== false : true,
+        /* Unlike all_enabled above, a newly-discovered server defaults to NOT having its own
+           "All libraries on this server" tab - same show_tab convention as an individual
+           library (see below) - so a multi-server account starts collapsed to just Home/
+           Movies/TV Shows instead of one tab per server on top of those three. */
+        show_tab: prevServer ? prevServer.show_tab === true : false,
+      };
+      const sections = [];
+      try {
+        const data = await plexGetJson(uri, d.accessToken, "/library/sections");
+        const dirs = data?.MediaContainer?.Directory || [];
+        for (const dir of dirs) {
+          if (!SECTION_TYPE_MAP[dir.type]) continue;
+          const prev = prevSectionsByServerKey.get(`${id}:${dir.key}`);
+          sections.push({
+            key: Number(dir.key),
+            type: SECTION_TYPE_MAP[dir.type],
+            label: prev?.label || dir.title,
+            enabled: prev ? prev.enabled !== false : true,
+            /* Unlike `enabled` above, a newly-discovered library defaults to NOT having its
+               own tab - it still feeds Home/Movies/TV Shows once enabled, but doesn't clutter
+               the nav with a tab per library until the user opts in (confirmed with the
+               user). */
+            show_tab: prev ? prev.show_tab === true : false,
+            server_id: id,
+          });
+        }
+      } catch (e) {
+        // couldn't list this server's libraries this pass - keep whatever was already saved for it
+        sections.push(...prevSections.filter((s) => s.server_id === id));
+      }
+      return { unreachable: false, servers: [server], sections };
+    })
+  );
+
   const servers = [];
   const sections = [];
   let unreachableCount = 0;
-  for (const d of discovered) {
-    const id = d.clientIdentifier;
-    if (!id) continue;
-    const prevServer = prevServersById.get(id);
-    const uri = await resolveBestConnection(d);
-    if (!uri) {
-      unreachableCount++;
-      /* Keep whatever was already saved for it rather than dropping it - a friend's
-         server being briefly offline shouldn't wipe out every toggle the user set
-         for it, and data.js's own fetches already tolerate a stale/unreachable
-         server gracefully (empty results, not a hard error). */
-      if (prevServer) {
-        servers.push(prevServer);
-        sections.push(...prevSections.filter((s) => s.server_id === id));
-      }
-      continue;
-    }
-    const server = {
-      id,
-      name: d.name,
-      owned: d.owned,
-      sourceTitle: d.sourceTitle || "",
-      url: uri,
-      token: d.accessToken,
-      /* Defaults to fully on for a newly-discovered server (confirmed with the user:
-         a friend sharing a library should show up right away, not require an opt-in
-         per library first). */
-      all_enabled: prevServer ? prevServer.all_enabled !== false : true,
-      /* Unlike all_enabled above, a newly-discovered server defaults to NOT having its own
-         "All libraries on this server" tab - same show_tab convention as an individual
-         library (see below) - so a multi-server account starts collapsed to just Home/
-         Movies/TV Shows instead of one tab per server on top of those three. */
-      show_tab: prevServer ? prevServer.show_tab === true : false,
-    };
-    servers.push(server);
-    try {
-      const data = await plexGetJson(uri, d.accessToken, "/library/sections");
-      const dirs = data?.MediaContainer?.Directory || [];
-      for (const dir of dirs) {
-        if (!SECTION_TYPE_MAP[dir.type]) continue;
-        const prev = prevSectionsByServerKey.get(`${id}:${dir.key}`);
-        sections.push({
-          key: Number(dir.key),
-          type: SECTION_TYPE_MAP[dir.type],
-          label: prev?.label || dir.title,
-          enabled: prev ? prev.enabled !== false : true,
-          /* Unlike `enabled` above, a newly-discovered library defaults to NOT having its
-             own tab - it still feeds Home/Movies/TV Shows once enabled, but doesn't clutter
-             the nav with a tab per library until the user opts in (confirmed with the
-             user). */
-          show_tab: prev ? prev.show_tab === true : false,
-          server_id: id,
-        });
-      }
-    } catch (e) {
-      // couldn't list this server's libraries this pass - keep whatever was already saved for it
-      sections.push(...prevSections.filter((s) => s.server_id === id));
-    }
+  for (const r of results) {
+    if (!r) continue;
+    if (r.unreachable) unreachableCount++;
+    servers.push(...r.servers);
+    sections.push(...r.sections);
   }
   return { servers, sections, unreachableCount };
 }
