@@ -45,10 +45,17 @@ final class AudioLevelingProcessor extends BaseAudioProcessor {
        of the leveling gain: since queueInput already sees the whole buffer before writing
        output, the peak of *this* buffer is known ahead of applying gain to it, so attack
        can be instantaneous (no lookahead buffering needed) while release decays like a
-       normal limiter so the reduction doesn't snap back audibly. */
+       normal limiter so the reduction doesn't snap back audibly.
+
+       LIMITER_RELEASE_TIME_CONSTANT_S raised from an original 0.2s guess to 3s - see
+       audio-leveling.js's own comment on why real playback still fluctuated rapidly even
+       after the EMA tau/gain ramp were both slowed down, which pointed at this limiter
+       (re-engaging on every loud syllable of any boosted content) rather than the leveling
+       gain itself. Slower release keeps reduction from unwinding between individual peaks
+       within the same loud passage. */
     private static final double LIMITER_CEILING_DBFS = -1.0;
     private static final double LIMITER_CEILING_LINEAR = Math.pow(10, LIMITER_CEILING_DBFS / 20);
-    private static final double LIMITER_RELEASE_TIME_CONSTANT_S = 0.2;
+    private static final double LIMITER_RELEASE_TIME_CONSTANT_S = 3.0;
 
     /* Read/written only from the audio-processing thread (queueInput/onReset) except for
        this flag, which PlayerActivity's UI-thread toggle sets directly - volatile rather

@@ -71,11 +71,22 @@ const SILENCE_FLOOR_DBFS = -60;
    DynamicsCompressorNode with a near-0dBFS threshold and a high ratio acts as a brick-wall
    limiter that only engages on those transients - unlike the gain node above, it's not
    part of the "steer toward a target level" logic, just a safety net so the leveling gain
-   never actually clips. */
+   never actually clips.
+
+   LIMITER_RELEASE_S raised from an original 0.25s guess to 3s after real playback still
+   fluctuated rapidly even once the EMA tau/gain ramp above were both slowed way down - that
+   ruled out the leveling gain itself as the cause and pointed at this limiter instead. Any
+   boosted content's ordinary speech/music peaks cross a near-0dBFS threshold constantly, so
+   a quarter-second release meant this was re-engaging and releasing on every loud syllable -
+   audible as fast pumping, exactly the "compression" this feature is supposed to not be, and
+   entirely independent of how slow the RMS-driven gain path is. A slow release keeps
+   reduction from unwinding between individual peaks within the same loud passage - it only
+   readjusts on the scale of whole passages, not syllable to syllable. Attack stays fast
+   (still has to catch each peak instantaneously to avoid clipping); only release changes. */
 const LIMITER_THRESHOLD_DB = -1;
 const LIMITER_RATIO = 20;
 const LIMITER_ATTACK_S = 0.003;
-const LIMITER_RELEASE_S = 0.25;
+const LIMITER_RELEASE_S = 3;
 
 export function setAudioLevelingEnabled(controller, enabled) {
     controller._audioLevelingEnabled = enabled;

@@ -75,9 +75,15 @@ namespace PrismUwpEffects
         // ProcessFrame already sees the whole frame before writing output, this frame's own
         // peak is known ahead of applying gain to it, so attack can be instantaneous while
         // release decays like a normal limiter.
+        //
+        // LimiterReleaseTimeConstantSeconds raised from an original 0.2s guess to 3s - see
+        // audio-leveling.js's own comment on why real playback still fluctuated rapidly even
+        // after the EMA tau/gain ramp were both slowed down, which pointed at this limiter
+        // (re-engaging on every loud syllable of any boosted content) rather than the
+        // leveling gain itself.
         private const double LimiterCeilingDbfs = -1.0;
         private static readonly double LimiterCeilingLinear = Math.Pow(10, LimiterCeilingDbfs / 20);
-        private const double LimiterReleaseTimeConstantSeconds = 0.2;
+        private const double LimiterReleaseTimeConstantSeconds = 3.0;
 
         private uint _sampleRate;
         private uint _channelCount;
