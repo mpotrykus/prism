@@ -2,10 +2,12 @@ import { wireLinearNav, focusAfterPaint, isControllerActive, registerNavHandler 
 import { NAV_COMMAND, APP_EVENT } from "./constants.js";
 import { hasSecrets, loadSecrets, saveSecrets } from "./vault.js";
 import { discoverLibraries } from "./plex-auth.js";
-import { isXboxDevice } from "./src/player/core/platform.js";
+import { isXboxDevice, platformTag, PLATFORM_TAG } from "./src/player/core/platform.js";
 import { getImageCacheTtlDays, setImageCacheTtlDays, clearImageCache } from "./image-cache.js";
+import { SECTION_TYPE } from "./constants.js";
 import MODAL_STYLE from "./src/styles/settings-modal.css?inline";
 import DEFAULT_PLAIN_CONFIG from "./app-settings.defaults.json";
+import { version as APP_VERSION } from "./package.json";
 
 /* Only non-sensitive fields live here in plain localStorage. plex_token,
    openrouter_api_key, and plex_account_token go through vault.js instead - see there for
@@ -43,6 +45,30 @@ export async function loadFull() {
 }
 export function isConfigured(fullConfig) {
     return !!(fullConfig && fullConfig.plex_url && fullConfig.plex_token);
+}
+
+/* "PC" vs "Xbox" both report platformTag() === PLATFORM_TAG.UWP (same shell/bridge - see
+   platform.js's own comment on why identity doesn't imply routing); isXboxDevice() is the
+   narrower signal that tells them apart for display purposes only. */
+function platformLabel() {
+    const tag = platformTag();
+    if (tag === PLATFORM_TAG.ANDROID) return "Android";
+    if (tag === PLATFORM_TAG.UWP) return isXboxDevice() ? "Xbox" : "PC";
+    return "Web";
+}
+
+/* Cheap /library/sections/<key>/all probe with container size 0 - Plex still returns
+   MediaContainer.totalSize (the section's real item count) without sending back a single
+   Metadata item, so this is one round-trip per enabled section rather than a full listing. */
+async function fetchSectionTotalSize(server, sectionKey) {
+    const url = new URL(`${server.url}/library/sections/${sectionKey}/all`);
+    url.searchParams.set("X-Plex-Container-Start", "0");
+    url.searchParams.set("X-Plex-Container-Size", "0");
+    url.searchParams.set("X-Plex-Token", server.token);
+    const res = await fetch(url, { headers: { Accept: "application/json" } });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    return data?.MediaContainer?.totalSize || 0;
 }
 
 const TABS = [
@@ -282,14 +308,43 @@ class StreamingSettingsModal extends HTMLElement {
             <div class="tab-panel" data-tab="about">
               <section class="group about-group">
                 <img class="about-logo" src="./assets/prism-logo.svg" alt="Prism" />
-                <div class="hint">Prism is an independent app and is not affiliated with, endorsed by, or sponsored by Plex, Inc.</div>
-                <div class="hint">This product uses the TMDB API but is not endorsed or certified by TMDB.</div>
-                <div class="about-links">
-                  <a class="about-privacy-link" href="https://mpotrykus.github.io/prism/privacy" target="_blank" rel="noopener noreferrer">Privacy Policy</a>
-                  <span class="about-links-sep">·</span>
-                  <a class="about-privacy-link" href="https://github.com/mpotrykus/prism" target="_blank" rel="noopener noreferrer">GitHub</a>
-                  <span class="about-links-sep">·</span>
-                  <a class="about-privacy-link" href="https://www.themoviedb.org/" target="_blank" rel="noopener noreferrer">TMDB</a>
+                <div class="about-version">Version ${APP_VERSION}</div>
+                <div class="about-stats">
+                  <div class="about-stats-row">
+                    <div class="about-stat">
+                      <span class="about-stat-value about-stat-platform"></span>
+                      <span class="about-stat-label">Platform</span>
+                    </div>
+                    <div class="about-stat">
+                      <span class="about-stat-value about-stat-servers"></span>
+                      <span class="about-stat-label">Servers</span>
+                    </div>
+                    <div class="about-stat">
+                      <span class="about-stat-value about-stat-libraries"></span>
+                      <span class="about-stat-label">Libraries</span>
+                    </div>
+                  </div>
+                  <div class="about-stats-row">
+                    <div class="about-stat">
+                      <span class="about-stat-value about-stat-movies">…</span>
+                      <span class="about-stat-label">Movies</span>
+                    </div>
+                    <div class="about-stat">
+                      <span class="about-stat-value about-stat-shows">…</span>
+                      <span class="about-stat-label">TV Shows</span>
+                    </div>
+                  </div>
+                </div>
+                <div class="about-legal">
+                  <div class="hint">Prism is an independent app and is not affiliated with, endorsed by, or sponsored by Plex, Inc.</div>
+                  <div class="hint">This product uses the TMDB API but is not endorsed or certified by TMDB.</div>
+                  <div class="about-links">
+                    <a class="about-privacy-link" href="https://mpotrykus.github.io/prism/privacy" target="_blank" rel="noopener noreferrer">Privacy Policy</a>
+                    <span class="about-links-sep">·</span>
+                    <a class="about-privacy-link" href="https://github.com/mpotrykus/prism" target="_blank" rel="noopener noreferrer">GitHub</a>
+                    <span class="about-links-sep">·</span>
+                    <a class="about-privacy-link" href="https://www.themoviedb.org/" target="_blank" rel="noopener noreferrer">TMDB</a>
+                  </div>
                 </div>
               </section>
             </div>
@@ -353,6 +408,9 @@ class StreamingSettingsModal extends HTMLElement {
     this.shadowRoot.querySelectorAll(".tab-btn").forEach((btn) => {
       btn.addEventListener("click", () => this._switchTab(btn.dataset.tab));
     });
+    /* Library counts cost a Plex round-trip per enabled section, so they're only fetched
+       once the user actually opens the About tab rather than on every modal open(). */
+    this._el('.tab-btn[data-tab="about"]').addEventListener("click", () => this._loadLibraryStats());
     /* One long vertical list rather than per-row/per-section sub-navigation - simpler,
        and good enough for a screen that isn't the primary Xbox-blocking flow the way
        sign-in is. Tab buttons share data-nav-group="tabs" (set in the template above) so
@@ -458,6 +516,45 @@ class StreamingSettingsModal extends HTMLElement {
     this.shadowRoot.querySelectorAll(".tab-panel").forEach((panel) => panel.classList.toggle("active", panel.dataset.tab === key));
   }
 
+  /* Synchronous counts derived from state already in memory - no Plex round-trip, so
+     these are safe to refresh on every open() rather than lazily like _loadLibraryStats. */
+  _updateAboutBasics() {
+    this._el(".about-stat-platform").textContent = platformLabel();
+    this._el(".about-stat-servers").textContent = String((this._servers || []).length);
+    this._el(".about-stat-libraries").textContent = String((this._sections || []).filter((s) => s.enabled !== false).length);
+  }
+
+  /* Movie/show counts across every enabled library, summed per Plex section `type`
+     (SECTION_TYPE.MOVIE/SHOW - see constants.js). One section failing (server
+     unreachable, stale token) shouldn't blank out the rest, so a fetch that rejects is
+     just dropped from the total rather than surfaced as an error. */
+  async _loadLibraryStats() {
+    if (this._libraryStatsLoaded) return;
+    this._libraryStatsLoaded = true;
+    const enabledSections = (this._sections || []).filter((s) => s.enabled !== false);
+    if (!enabledSections.length) {
+      this._el(".about-stat-movies").textContent = "0";
+      this._el(".about-stat-shows").textContent = "0";
+      return;
+    }
+    const results = await Promise.allSettled(
+      enabledSections.map(async (s) => {
+        const server = (this._servers || []).find((sv) => sv.id === s.server_id);
+        if (!server) throw new Error("no matching server");
+        return { type: s.type, total: await fetchSectionTotalSize(server, s.key) };
+      })
+    );
+    let movies = 0;
+    let shows = 0;
+    results.forEach((r) => {
+      if (r.status !== "fulfilled") return;
+      if (r.value.type === SECTION_TYPE.MOVIE) movies += r.value.total;
+      else shows += r.value.total;
+    });
+    this._el(".about-stat-movies").textContent = String(movies);
+    this._el(".about-stat-shows").textContent = String(shows);
+  }
+
   async open() {
     const config = loadPlain();
     this._plexUrl = config.plex_url || "";
@@ -517,6 +614,10 @@ class StreamingSettingsModal extends HTMLElement {
     this._syncIntegrationToggleFields();
     this._switchTab(TABS[0].key);
     this._renderSectionList();
+    this._libraryStatsLoaded = false;
+    this._el(".about-stat-movies").textContent = "…";
+    this._el(".about-stat-shows").textContent = "…";
+    this._updateAboutBasics();
     this._el(".fetch-status").textContent = "";
     this._el(".fetch-status").className = "status fetch-status";
     this._el(".save-status").textContent = "";
@@ -572,6 +673,10 @@ class StreamingSettingsModal extends HTMLElement {
       this._servers = servers;
       this._sections = sections;
       this._renderSectionList();
+      this._updateAboutBasics();
+      this._libraryStatsLoaded = false;
+      this._el(".about-stat-movies").textContent = "…";
+      this._el(".about-stat-shows").textContent = "…";
       this._scheduleSave();
       const suffix = unreachableCount ? ` — ${unreachableCount} server(s) unreachable right now` : "";
       statusEl.textContent = `Found ${sections.length} library section(s) across ${servers.length} server(s)${suffix}.`;

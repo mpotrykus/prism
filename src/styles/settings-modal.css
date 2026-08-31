@@ -380,18 +380,82 @@ select:focus-visible,
 .about-logo {
     height: 40px;
     width: auto;
-    margin-bottom: 22px;
+    margin-bottom: 10px;
+}
+
+.about-version {
+    font-size: 12px;
+    font-weight: 600;
+    color: rgba(var(--color-fg-rgb), 0.5);
+}
+
+.about-stats {
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+    width: 100%;
+    max-width: 360px;
+    margin-top: 22px;
+    padding-top: 20px;
+    border-top: 1px solid rgba(var(--color-fg-rgb), 0.08);
+}
+
+/* Two independently-centered rows rather than one grid, so a row with fewer stats
+   (Movies/TV Shows) still centers as its own pair instead of hugging the grid's left
+   columns the way a short trailing grid row would. */
+.about-stats-row {
+    display: flex;
+    justify-content: center;
+    gap: 28px;
+}
+
+.about-stat {
+    min-width: 64px;
+}
+
+.about-stat-value {
+    display: block;
+    font-size: 18px;
+    font-weight: 700;
+}
+
+.about-stat-label {
+    display: block;
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: rgba(var(--color-fg-rgb), 0.45);
+    margin-top: 2px;
+}
+
+/* Everything below the stats block - disclaimer text and links - boxed as its own
+   card (background + border, not just a divider line) so it reads as a distinct
+   footer section rather than the links looking tacked onto the last paragraph. */
+.about-legal {
+    width: 100%;
+    max-width: 360px;
+    margin-top: 20px;
+    padding: 18px 16px;
+    background: rgba(var(--color-fg-rgb), 0.035);
+    border: 1px solid rgba(var(--color-fg-rgb), 0.08);
+    border-radius: 12px;
 }
 
 .about-group .hint {
     margin-top: 0;
 }
 
+.about-group .hint + .hint {
+    margin-top: 6px;
+}
+
 .about-links {
     display: flex;
     align-items: center;
+    justify-content: center;
     gap: 8px;
-    margin-top: 8px;
+    margin-top: 10px;
 }
 
 .about-links-sep {

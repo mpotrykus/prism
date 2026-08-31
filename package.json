@@ -15,7 +15,8 @@
     "uwp:sync": "vite build && node scripts/uwp-sync.mjs",
     "xbox:build": "npm run uwp:sync && node scripts/xbox-build.mjs",
     "xbox:deploy": "node scripts/xbox-deploy.mjs",
-    "xbox:deploy:debug": "node scripts/xbox-deploy.mjs --logs"
+    "xbox:deploy:debug": "node scripts/xbox-deploy.mjs --logs",
+    "store:build": "npm run uwp:sync && node scripts/store-build.mjs"
   },
   "dependencies": {
     "@capacitor/android": "^8.5.0",

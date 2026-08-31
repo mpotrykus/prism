@@ -204,6 +204,14 @@ namespace PrismUwp
             coreWebView.ProcessFailed += OnWebViewProcessFailed;
             webView.NavigationCompleted += OnNavigationCompleted;
 
+            // Unhandled, WebView2's default is to open a new WebView2-hosted popup window -
+            // that default never materializes inside this UWP shell's CoreWindow, so
+            // window.open() (plex-signin.js's browser-popup sign-in flow) looked like it did
+            // nothing at all in the packaged build. Hand the URL to the system default browser
+            // instead via Launcher - the sanctioned way for an app-container app to open
+            // another app - which is also the better outcome for Plex's OAuth-style sign-in.
+            coreWebView.NewWindowRequested += OnNewWindowRequested;
+
             // The real playback bridge. It subscribes WebMessageReceived itself and ignores anything
             // without a "method" field, so it coexists with the diagnostic channel below on one
             // message channel.
@@ -426,6 +434,19 @@ namespace PrismUwp
         private void OnWebViewProcessFailed(CoreWebView2 sender, CoreWebView2ProcessFailedEventArgs args)
         {
             Debug.WriteLine($"WebView2 process failed: {args.ProcessFailedKind} / {args.Reason}");
+        }
+
+        private async void OnNewWindowRequested(CoreWebView2 sender, CoreWebView2NewWindowRequestedEventArgs args)
+        {
+            args.Handled = true;
+            try
+            {
+                await Launcher.LaunchUriAsync(new Uri(args.Uri));
+            }
+            catch (Exception e)
+            {
+                Debug.WriteLine($"Failed to launch external browser for {args.Uri}: {e.Message}");
+            }
         }
 
         // WebView2 is a separate Chromium process hosted as a visual island, not the old

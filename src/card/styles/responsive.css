@@ -106,7 +106,7 @@
     }
     .title-info-actions {
         flex-wrap: wrap;
-        row-gap: 20px;
+        row-gap: 15px;
         justify-content: center;
         column-gap: 50px;
     }
