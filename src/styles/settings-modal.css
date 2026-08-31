@@ -429,24 +429,22 @@ select:focus-visible,
     margin-top: 2px;
 }
 
-/* Everything below the stats block - disclaimer text and links - boxed as its own
-   card (background + border, not just a divider line) so it reads as a distinct
-   footer section rather than the links looking tacked onto the last paragraph. */
+/* A sibling section.group (same card treatment as every other Settings group - see
+   section.group above) rather than nested inside .about-group, so the disclaimer/links
+   footer reads as its own top-level card instead of a box-within-a-box. */
 .about-legal {
-    width: 100%;
-    max-width: 360px;
-    margin-top: 20px;
-    padding: 18px 16px;
-    background: rgba(var(--color-fg-rgb), 0.035);
-    border: 1px solid rgba(var(--color-fg-rgb), 0.08);
-    border-radius: 12px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
 }
 
-.about-group .hint {
+.about-legal .hint {
     margin-top: 0;
+    max-width: 440px;
 }
 
-.about-group .hint + .hint {
+.about-legal .hint + .hint {
     margin-top: 6px;
 }
 

@@ -335,16 +335,17 @@ class StreamingSettingsModal extends HTMLElement {
                     </div>
                   </div>
                 </div>
-                <div class="about-legal">
-                  <div class="hint">Prism is an independent app and is not affiliated with, endorsed by, or sponsored by Plex, Inc.</div>
-                  <div class="hint">This product uses the TMDB API but is not endorsed or certified by TMDB.</div>
-                  <div class="about-links">
-                    <a class="about-privacy-link" href="https://mpotrykus.github.io/prism/privacy" target="_blank" rel="noopener noreferrer">Privacy Policy</a>
-                    <span class="about-links-sep">·</span>
-                    <a class="about-privacy-link" href="https://github.com/mpotrykus/prism" target="_blank" rel="noopener noreferrer">GitHub</a>
-                    <span class="about-links-sep">·</span>
-                    <a class="about-privacy-link" href="https://www.themoviedb.org/" target="_blank" rel="noopener noreferrer">TMDB</a>
-                  </div>
+              </section>
+
+              <section class="group about-legal">
+                <div class="hint">Prism is an independent app and is not affiliated with, endorsed by, or sponsored by Plex, Inc.</div>
+                <div class="hint">This product uses the TMDB API but is not endorsed or certified by TMDB.</div>
+                <div class="about-links">
+                  <a class="about-privacy-link" href="https://mpotrykus.github.io/prism/privacy" target="_blank" rel="noopener noreferrer">Privacy Policy</a>
+                  <span class="about-links-sep">·</span>
+                  <a class="about-privacy-link" href="https://github.com/mpotrykus/prism" target="_blank" rel="noopener noreferrer">GitHub</a>
+                  <span class="about-links-sep">·</span>
+                  <a class="about-privacy-link" href="https://www.themoviedb.org/" target="_blank" rel="noopener noreferrer">TMDB</a>
                 </div>
               </section>
             </div>
