@@ -65,6 +65,7 @@ function buildTranscodeUrl(endpoint, {
   progressive = false,
   hdr = false,
   hevcMain10_2160 = false,
+  directPlay = false,
 }) {
   const url = new URL(`${plexUrl}${endpoint}`);
   url.searchParams.set("path", key);
@@ -81,16 +82,22 @@ function buildTranscodeUrl(endpoint, {
      evidence in docs/xbox-native-hdr-player/05-phase0-spike-results.md. */
   url.searchParams.set("protocol", progressive ? "http" : "hls");
   url.searchParams.set("fastSeek", "1");
-  /* directPlay=0 is deliberate, not a missed optimization: this same URL always
-     requests an .m3u8 HLS playlist, and asking Plex for a literal direct-play
-     response (the raw file, no container/playlist at all) from an .m3u8-suffixed
-     endpoint is self-contradictory - empirically, it produces a player that opens
-     but never gets anything to actually play. directStream=1 still lets Plex skip
-     video re-encoding when the codec is HLS-compatible, remuxing into HLS segments
-     without a full transcode - true zero-cost direct play would need a separate
-     /video/:/transcode/universal/decision call and a fork to the raw
-     /library/parts/... URL, not implemented here yet. */
-  url.searchParams.set("directPlay", "0");
+  /* directPlay=0 is deliberate, not a missed optimization, on every URL this function
+     builds EXCEPT the dedicated eligibility probe (see resolvePlaybackUrl's
+     probeDirectPlayEligibility below, the only caller that passes directPlay:true):
+     start.m3u8/start.mp4 always requests an .m3u8/.mp4 HLS-family response, and asking
+     Plex for a literal direct-play response (the raw file, no container/playlist at
+     all) from that suffix is self-contradictory - empirically, it produces a player
+     that opens but never gets anything to actually play. The matched decision call
+     that precedes /start (buildDecisionUrl, used to make Plex's MDE actually commit to
+     a new audioStreamID/mediaIndex/qualityCapKbps - see that function's own comment)
+     must also keep directPlay=0 here, in lockstep with /start, or it stops reliably
+     predicting what /start does (same "exact same params" rule this file's header
+     comment already states) - confirmed against a real server previously for the
+     audio-track-switch fix, don't re-break it by widening this shared builder's
+     default. directStream=1 still lets Plex skip video re-encoding when the codec is
+     HLS-compatible, remuxing into HLS segments without a full transcode. */
+  url.searchParams.set("directPlay", directPlay ? "1" : "0");
   url.searchParams.set("directStream", "1");
   /* Without this, Plex bakes only the single audioStreamID below into the transcode at
      session start, so switching tracks means restarting the whole HLS session with a
@@ -169,27 +176,40 @@ export function buildDecisionUrl(opts) {
   return buildTranscodeUrl("/video/:/transcode/universal/decision", opts);
 }
 
-/* The one place both first-play (plex-player.js's _prepareSession) and reload
-   (session-reload.js) resolve a playback URL - the same "one shared helper, not two
-   divergent copies" discipline session-reload.js's own header comment already applies to
-   everything else in that file.
+/* CONFIRMED against a real server (2026-09-01, the Bleach investigation): the decision
+   response's shape is data.MediaContainer.Metadata[0].Media[0].Part[0], and its
+   `decision` field really is the string "directplay" when Plex is willing to hand back
+   the raw file. But the ORIGINAL version of this function checked that field on the
+   same decision call buildDecisionUrl builds for the audio-track-switch MDE-commit
+   trick above - which hardcodes directPlay=0 - so `decision` could never come back
+   "directplay" no matter what the source was: Plex's own response literally said
+   "App cannot direct play this item. Direct play is disabled" (directPlayDecisionCode
+   3000), caused entirely by the app's own request, not the content. That is what broke
+   Bleach (and every other title) on every Prism leg: an old interlaced-480i/MPEG-TS
+   episode that Plex Web/Plezy direct play without issue got forced down Prism's
+   transcode path instead, where the specific ffmpeg job PMS spun up for it crashed
+   immediately (confirmed via /transcode/sessions showing zero active sessions moments
+   after /start, while the segment the playlist itself listed 404'd forever).
 
-   Attempts a real, zero-cost Plex direct play (the raw file itself, no transcode/HLS
-   session) when the decision engine's response gives an EXPLICIT, unambiguous "directplay"
-   signal - never on an absent/ambiguous field. That asymmetry is deliberate: guessing wrong
-   in the other direction (treating an absent/unexpected field as "direct play IS possible")
-   risks handing the player a raw file it genuinely can't decode, which breaks playback;
-   guessing conservatively only costs a missed optimization, never a regression - the
-   fallback path below is byte-identical to buildStreamUrl's existing behavior.
-
-   THE EXACT decision-response field/value shape below is NOT YET CONFIRMED against a real
-   server - flagged in this feature's own plan as needing empirical verification. The
-   console.info left in deliberately surfaces the raw Part every time a decision call
-   resolves, so the first real run can confirm (or correct) the field name/value this
-   checks. Until confirmed, this only widens behavior when it recognizes something - it
-   never narrows or breaks the existing path. */
+   probeDirectPlayEligibility below is a SEPARATE decision call, on its own throwaway
+   session id, with directPlay:true - the only way to get a genuine answer out of Plex's
+   MDE. It must stay separate from (and not replace) the matched, directPlay=0 decision
+   call in fallback() below: that one's response is discarded, its only job is firing
+   immediately before /start with identical params so Plex's MDE actually commits to a
+   new audioStreamID/mediaIndex/qualityCapKbps selection (see buildDecisionUrl's header
+   comment) - confirmed against a real server previously, and this function must not
+   regress it while fixing direct-play detection. */
 export async function resolvePlaybackUrl(urlOpts) {
-  const fallback = () => ({ streamUrl: buildStreamUrl(urlOpts), isDirectPlay: false });
+  const fallback = async () => {
+    await Promise.race([
+      fetch(buildDecisionUrl(urlOpts), { headers: { Accept: "application/json" } }),
+      /* A slow decision response must never stall playback - same "a failed decision
+         call shouldn't block /start" principle this file's own buildDecisionUrl comment
+         already documents for the reload case. */
+      new Promise((resolve) => setTimeout(resolve, 1500)),
+    ]).catch(() => {});
+    return { streamUrl: buildStreamUrl(urlOpts), isDirectPlay: false };
+  };
 
   /* A user-set quality cap has no meaning against a raw file, and a non-default audio
      track has no server-side mux to fall back on for legs that can't switch it natively
@@ -198,26 +218,39 @@ export async function resolvePlaybackUrl(urlOpts) {
   if (urlOpts.isDefaultAudioTrack === false) return fallback();
   if (!urlOpts.partKey) return fallback();
 
-  try {
-    const res = await Promise.race([
-      fetch(buildDecisionUrl(urlOpts), { headers: { Accept: "application/json" } }),
-      /* A slow decision response must never stall first-play - same "a failed decision
-         call shouldn't block /start" principle this file's own buildDecisionUrl comment
-         already documents for the reload case. */
-      new Promise((_, reject) => setTimeout(() => reject(new Error("decision timeout")), 1500)),
-    ]);
-    if (!res.ok) return fallback();
-    const text = await res.text();
-    const data = text ? JSON.parse(text) : null;
-    const part = data?.MediaContainer?.Metadata?.[0]?.Media?.[0]?.Part?.[0];
-    if (!part) return fallback();
-    // eslint-disable-next-line no-console
-    console.info("[direct-play] decision Part (verify shape against this):", part);
-    if (part.decision !== "directplay") return fallback();
+  if (await probeDirectPlayEligibility(urlOpts)) {
     const url = new URL(`${urlOpts.plexUrl}${urlOpts.partKey}`);
     url.searchParams.set("X-Plex-Token", urlOpts.plexToken);
     return { streamUrl: url.toString(), isDirectPlay: true };
+  }
+  return fallback();
+}
+
+/* Guessing wrong in the "eligible" direction (treating an absent/unexpected field as
+   "direct play IS possible") risks handing the player a raw file it genuinely can't
+   decode, which breaks playback; guessing conservatively (any error, timeout, or
+   non-"directplay" decision falls through to false) only costs a missed optimization,
+   never a regression - callers always have fallback() to land on. Uses its own
+   sessionId, distinct from urlOpts.sessionId, so this probe's directPlay:true request
+   never becomes part of the per-session state the real (directPlay=0) decision/start
+   pair depends on. */
+async function probeDirectPlayEligibility(urlOpts) {
+  try {
+    const probeUrl = buildTranscodeUrl("/video/:/transcode/universal/decision", {
+      ...urlOpts,
+      sessionId: crypto.randomUUID(),
+      directPlay: true,
+    });
+    const res = await Promise.race([
+      fetch(probeUrl, { headers: { Accept: "application/json" } }),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("decision timeout")), 1500)),
+    ]);
+    if (!res.ok) return false;
+    const text = await res.text();
+    const data = text ? JSON.parse(text) : null;
+    const part = data?.MediaContainer?.Metadata?.[0]?.Media?.[0]?.Part?.[0];
+    return part?.decision === "directplay";
   } catch {
-    return fallback();
+    return false;
   }
 }

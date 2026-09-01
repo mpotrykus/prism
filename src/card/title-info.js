@@ -207,6 +207,27 @@ export function extractPartInfo(media, mediaIndex) {
   return { partId: part?.id ?? null, partKey: part?.key ?? null };
 }
 
+/* Picks the first Media[] entry that isn't a known-broken duplicate, instead of always
+   assuming index 0 (every play path used to). Confirmed against a real server (the Bleach
+   investigation): a library moved to different storage left a stale Media entry pointing at
+   a file that no longer exists (Part.exists:false, Part.accessible:false) sitting at index 0,
+   while a second, actually-playable Media entry for the same episode sat at index 1 - Plex
+   still answered /decision and /start against the broken one without complaint, spun up a
+   transcode session, then that session's ffmpeg process died before producing a single
+   segment (every request for it 404s). Plex Web and Plezy both dodge this because they check
+   file existence themselves and land on the working entry. Those exists/accessible fields
+   only come back when the metadata fetch passes checkFiles:1 - without it (or on a server too
+   old to support the flag) both are undefined here and this returns 0, the previous
+   behavior. */
+export function resolvePlayableMediaIndex(media) {
+  const list = media || [];
+  const index = list.findIndex((m) => {
+    const part = m?.Part?.[0];
+    return !(part?.exists === false || part?.accessible === false);
+  });
+  return index >= 0 ? index : 0;
+}
+
 export function formatRuntime(ms) {
   const mins = Math.round(ms / 60000);
   const h = Math.floor(mins / 60);
@@ -1082,7 +1103,7 @@ export class TitleInfoController {
        like every other item type here. */
     const metaPath = item.type === MEDIA_TYPE.PLAYLIST ? `/playlists/${ratingKey}` : `/library/metadata/${ratingKey}`;
     try {
-      const data = await this._ctx.plexFetch(metaPath, { includeChapters: 1, includeMarkers: 1 });
+      const data = await this._ctx.plexFetch(metaPath, { includeChapters: 1, includeMarkers: 1, checkFiles: 1 });
       const meta = data?.MediaContainer?.Metadata?.[0];
       if (meta && this._item === item) {
         this._allowSync = !!data?.MediaContainer?.allowSync;
@@ -1545,7 +1566,7 @@ export class TitleInfoController {
     /* Always starts on the first Media[] entry with no cap - Version/Quality Cap are
        now an in-player "Video Quality" menu (see chrome.js's openVideoQualityMenu) fed
        by mediaVersions below, not a pre-play choice made here. */
-    const mediaIndex = 0;
+    const mediaIndex = resolvePlayableMediaIndex(this._media);
     /* Only attaches the flat playlist/collection queue captured on the row click that
        led here (see _renderFlatItems) when it still actually matches what's playing -
        reopening this same modal via some other route (e.g. a "More Like This" card) in
@@ -1666,7 +1687,7 @@ export class TitleInfoController {
     const showRatingKey = this._item?.ratingKey;
     try {
       const [data, queueRatingKeys] = await Promise.all([
-        this._ctx.plexFetch(`/library/metadata/${ratingKey}`, { includeChapters: 1, includeMarkers: 1 }),
+        this._ctx.plexFetch(`/library/metadata/${ratingKey}`, { includeChapters: 1, includeMarkers: 1, checkFiles: 1 }),
         showRatingKey ? this._getShowEpisodeQueue(showRatingKey) : Promise.resolve([]),
       ]);
       const meta = data?.MediaContainer?.Metadata?.[0];
@@ -1679,6 +1700,7 @@ export class TitleInfoController {
          match fetch itself. */
       const episodeSources = this._episodeSourceMatches?.get(String(mappedEpisode.ratingKey));
       if (episodeSources) mappedEpisode.sources = episodeSources;
+      const mediaIndex = resolvePlayableMediaIndex(meta.Media);
       await this._ctx.onPlayItem(mappedEpisode, {
         durationMs: meta.duration || null,
         startOffsetMs: restart ? 0 : meta.viewOffset || 0,
@@ -1686,11 +1708,12 @@ export class TitleInfoController {
         markers: meta.Marker || [],
         chapters: meta.Chapter || [],
         mediaVersions: await buildCrossServerVersions(mappedEpisode, meta.Media),
-        audioStreams: extractAudioStreams(meta.Media, 0),
-        isHdr: isHdrVideo(meta.Media, 0),
-        subtitleTracks: extractSubtitleTracks(meta.Media, 0),
-        bifIndexPath: bifIndexPath(meta.Media, 0),
-        ...extractPartInfo(meta.Media, 0),
+        mediaIndex,
+        audioStreams: extractAudioStreams(meta.Media, mediaIndex),
+        isHdr: isHdrVideo(meta.Media, mediaIndex),
+        subtitleTracks: extractSubtitleTracks(meta.Media, mediaIndex),
+        bifIndexPath: bifIndexPath(meta.Media, mediaIndex),
+        ...extractPartInfo(meta.Media, mediaIndex),
         ...(queueIndex >= 0 ? { queueRatingKeys, queueIndex } : {}),
       });
     } catch (e) {
@@ -1713,10 +1736,11 @@ export class TitleInfoController {
     });
     if (index < 0) return;
     try {
-      const data = await this._ctx.plexFetch(`/library/metadata/${rawItems[index].ratingKey}`, { includeChapters: 1, includeMarkers: 1 });
+      const data = await this._ctx.plexFetch(`/library/metadata/${rawItems[index].ratingKey}`, { includeChapters: 1, includeMarkers: 1, checkFiles: 1 });
       const meta = data?.MediaContainer?.Metadata?.[0];
       if (!meta || this._item?.ratingKey !== ratingKey) return;
       const mappedFlatItem = this._ctx.mapItem(meta, true);
+      const mediaIndex = resolvePlayableMediaIndex(meta.Media);
       await this._ctx.onPlayItem(mappedFlatItem, {
         durationMs: meta.duration || null,
         startOffsetMs: meta.viewOffset || 0,
@@ -1724,11 +1748,12 @@ export class TitleInfoController {
         markers: meta.Marker || [],
         chapters: meta.Chapter || [],
         mediaVersions: await buildCrossServerVersions(mappedFlatItem, meta.Media),
-        audioStreams: extractAudioStreams(meta.Media, 0),
-        isHdr: isHdrVideo(meta.Media, 0),
-        subtitleTracks: extractSubtitleTracks(meta.Media, 0),
-        bifIndexPath: bifIndexPath(meta.Media, 0),
-        ...extractPartInfo(meta.Media, 0),
+        mediaIndex,
+        audioStreams: extractAudioStreams(meta.Media, mediaIndex),
+        isHdr: isHdrVideo(meta.Media, mediaIndex),
+        subtitleTracks: extractSubtitleTracks(meta.Media, mediaIndex),
+        bifIndexPath: bifIndexPath(meta.Media, mediaIndex),
+        ...extractPartInfo(meta.Media, mediaIndex),
         queueRatingKeys: rawItems.map((m) => m.ratingKey),
         queueIndex: index,
       });
