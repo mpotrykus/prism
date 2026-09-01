@@ -1,7 +1,7 @@
 {
   "name": "prism",
   "private": true,
-  "version": "0.0.1",
+  "version": "1.0.2",
   "type": "module",
   "scripts": {
     "dev": "vite --host",
@@ -9,9 +9,10 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
-    "android": "node scripts/android-sync-shaders.mjs && npx cap sync android && cd android && .\\gradlew.bat assembleDebug",
+    "version:set": "node scripts/set-version.mjs",
+    "android": "vite build && node scripts/android-sync-shaders.mjs && npx cap sync android && cd android && .\\gradlew.bat assembleDebug",
     "android:deploy": "node scripts/android-deploy.mjs",
-    "android:bundle": "node scripts/android-sync-shaders.mjs && npx cap sync android && cd android && .\\gradlew.bat bundleRelease",
+    "android:bundle": "vite build && node scripts/android-sync-shaders.mjs && npx cap sync android && cd android && .\\gradlew.bat bundleRelease",
     "uwp:sync": "vite build && node scripts/uwp-sync.mjs",
     "xbox:build": "npm run uwp:sync && node scripts/xbox-build.mjs",
     "xbox:deploy": "node scripts/xbox-deploy.mjs",
