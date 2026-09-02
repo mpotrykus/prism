@@ -1,7 +1,7 @@
 {
   "name": "prism",
   "private": true,
-  "version": "1.0.2",
+  "version": "1.1.0",
   "type": "module",
   "scripts": {
     "dev": "vite --host",
@@ -17,7 +17,8 @@
     "xbox:build": "npm run uwp:sync && node scripts/xbox-build.mjs",
     "xbox:deploy": "node scripts/xbox-deploy.mjs",
     "xbox:deploy:debug": "node scripts/xbox-deploy.mjs --logs",
-    "store:build": "npm run uwp:sync && node scripts/store-build.mjs"
+    "store:build": "npm run uwp:sync && node scripts/store-build.mjs",
+    "release": "node scripts/release.mjs"
   },
   "dependencies": {
     "@capacitor/android": "^8.5.0",
