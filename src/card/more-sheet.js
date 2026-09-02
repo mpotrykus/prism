@@ -1,7 +1,8 @@
+import { escapeHtml } from "../core/html.js";
 /* Mobile-only overflow sheet for the bottom nav bar - collects whichever nav rows the
    card decides don't fit (see the card's own _renderMoreSheet for which those are) and
    renders them as a plain list, delegating each tap back to the row's own onSelect. */
-export function renderMoreSheet(moreListEl, rows, escape) {
+export function renderMoreSheet(moreListEl, rows) {
   moreListEl.innerHTML = rows
     .map(
       (r) => `
@@ -9,8 +10,8 @@ export function renderMoreSheet(moreListEl, rows, escape) {
           <span class="more-sheet-item-icon">${r.iconHTML}</span>
           ${
             r.sublabel
-              ? `<span class="more-sheet-item-label"><span>${escape(r.label)}</span><span class="more-sheet-item-sublabel">${escape(r.sublabel)}</span></span>`
-              : `<span>${escape(r.label)}</span>`
+              ? `<span class="more-sheet-item-label"><span>${escapeHtml(r.label)}</span><span class="more-sheet-item-sublabel">${escapeHtml(r.sublabel)}</span></span>`
+              : `<span>${escapeHtml(r.label)}</span>`
           }
         </button>`
     )

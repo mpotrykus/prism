@@ -1,6 +1,7 @@
 import { media } from "../core/media-facade.js";
 import { postAspectMode, postAutoCrop } from "../xbox-bridge.js";
 import { applyAutoCropGeometry } from "../auto-crop.js";
+import { setAudioLevelingEnabled } from "../audio-leveling.js";
 import {
     skipIconMarkup,
     audioLevelingIconMarkup,
@@ -161,7 +162,7 @@ export function renderOptionsList(controller, list, onBack, setGoBack) {
         toggle: {
             checked: controller._audioLevelingEnabled,
             onChange: (checked) => {
-                controller._setAudioLevelingEnabled(checked);
+                setAudioLevelingEnabled(controller, checked);
                 return checked ? "On" : null;
             },
         },
@@ -209,7 +210,7 @@ export function renderOptionsList(controller, list, onBack, setGoBack) {
            for a genuine aspect-ratio mismatch against the viewport. On by default (see
            storedAutoCropEnabled) - a title with a matted-in border looks wrapped in two
            stacked sets of bars until this runs, not a look anyone would want to opt into.
-           controller._autoCropEnabled is set the same way on both legs (plex-player.js's
+           controller._autoCropEnabled is set the same way on both legs (player.js's
            _prepareSession resolves it from storedAutoCropEnabled() regardless of platform), so
            getValue below reads correctly on Xbox with no extra branching - only actually
            APPLYING a change needs one, same as applyFitMode above, since there's no
@@ -223,7 +224,7 @@ export function renderOptionsList(controller, list, onBack, setGoBack) {
                    safe to call unconditionally - its own video-pipeline calls already no-op
                    when controller._videoEl is null); Xbox additionally needs the native side
                    told, since nothing else does that for a mid-session toggle. */
-                controller._setAutoCropEnabled(checked);
+                setAutoCropEnabled(controller, checked);
                 if (!controller._videoEl) postAutoCrop(checked);
                 return checked ? "On" : null;
             },

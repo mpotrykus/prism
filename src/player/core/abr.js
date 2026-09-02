@@ -9,7 +9,7 @@ import { QUALITY_CAP_PRESETS, AUTO_QUALITY_STORAGE_KEY } from "../ui/shared.js";
 
    Only meaningful when a bandwidth source has been registered (see setBandwidthSource) -
    Safari's native-HLS <video> branch has no bandwidthEstimate equivalent, so
-   updateAbrMonitor below simply never starts the loop there; chrome.js's
+   updateAbrMonitor below simply never starts the loop there; chrome-menu.js's
    openQualityCapMenu is what tells the user that explicitly ("unavailable") rather than
    this module pretending it's running.
 

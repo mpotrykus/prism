@@ -1,7 +1,7 @@
 import { parseYearQuery, parseMetaTagQuery, buildGenreMatchHubs, buildReasonMatchHubs, SEARCH_REASON_LABELS } from "./logic/search.js";
-import { plexFetch, activeServers, serverForSection, isFromEnabledSection } from "./data.js";
+import { plexFetch, fetchMetadataList, activeServers, serverForSection, isFromEnabledSection } from "./data.js";
 import { collapseByGuid } from "./logic/cross-server.js";
-import { releasePosterImgClaims } from "./rows.js";
+import { releasePosterImgClaims, renderLoading, emptyStateHtml, buildPoster } from "./rows.js";
 import { updateNavActiveState } from "./nav.js";
 
 /* Search: the search-box input handling, the /hubs/search + genre/year/facet hub
@@ -30,8 +30,8 @@ function enterSearch(card) {
   card._preSearchView = card._currentView;
   card._currentView = "search";
   updateNavActiveState(card);
-  card._showHero();
-  card._renderLoading();
+  card._hero.show();
+  renderLoading(card._rowsEl);
 }
 
 export function exitSearch(card) {
@@ -39,7 +39,7 @@ export function exitSearch(card) {
   card._currentView = card._preSearchView || "home";
   updateNavActiveState(card);
   card._renderCurrentView();
-  card._advanceHero();
+  card._hero.advance();
   card._centerActiveHeaderNav?.(false);
 }
 
@@ -60,7 +60,7 @@ async function runSearch(card, q) {
     renderSearchPage(card, hubs);
   } catch (e) {
     if (card._currentView !== "search" || seq !== card._searchSeq) return;
-    card._rowsEl.innerHTML = `<div class="empty">${card._emptyStateHtml("Search failed")}</div>`;
+    card._rowsEl.innerHTML = `<div class="empty">${emptyStateHtml("Search failed")}</div>`;
   }
 }
 
@@ -133,7 +133,7 @@ async function buildSearchHubs(card, q, hubLimit, rowLimit) {
 async function expandSearchSection(card, title) {
   const q = card._lastSearchQuery;
   if (!q) return;
-  card._renderLoading();
+  renderLoading(card._rowsEl);
   try {
     const hubs = await buildSearchHubs(card, q, SEARCH_EXPAND_LIMIT, SEARCH_EXPAND_LIMIT);
     if (card._currentView !== "search") return;
@@ -141,7 +141,7 @@ async function expandSearchSection(card, title) {
     renderSearchPage(card, hub ? [hub] : [], { expanded: true });
   } catch (e) {
     if (card._currentView !== "search") return;
-    card._rowsEl.innerHTML = `<div class="empty">${card._emptyStateHtml("Search failed")}</div>`;
+    card._rowsEl.innerHTML = `<div class="empty">${emptyStateHtml("Search failed")}</div>`;
   }
 }
 
@@ -253,12 +253,7 @@ async function fetchByFacet(card, facet, filterName, limit) {
     base.searchParams.set("type", facet.section.type);
     base.searchParams.set("X-Plex-Container-Size", limit);
     base.searchParams.set("X-Plex-Token", server.token);
-    const res = await fetch(`${base.toString()}&${filterName}=${facet.key}`, {
-      headers: { Accept: "application/json" },
-    });
-    if (!res.ok) return [];
-    const data = await res.json();
-    return data?.MediaContainer?.Metadata || [];
+    return fetchMetadataList(`${base.toString()}&${filterName}=${facet.key}`);
   } catch (e) {
     return [];
   }
@@ -269,7 +264,7 @@ async function fetchByFacet(card, facet, filterName, limit) {
    (there may be no prior search at all), so onBack/backLabel let a caller override both
    the label and the action while still getting the identical grid rendering. */
 /* A browse row's "See More" card (rows.js's buildSeeMoreCard, wired up via row.hasMore/
-   row.loadMore - see plex-netflix-card.js's _rowCtx.onSeeMoreRow) - not a real search, but
+   row.loadMore - see card.js's _rowCtx.onSeeMoreRow) - not a real search, but
    reuses the exact same expanded single-hub grid page since that's already the codebase's
    "uncapped version of a row" UI (see expandSearchSection above). Borrows the "search"
    view's own re-render guard (data.js's loadAll/loadBackgroundData both skip their
@@ -280,8 +275,8 @@ export async function openRowSeeMore(card, row) {
   card._preSearchView = returnView;
   card._currentView = "search";
   card._navItems.forEach((n) => n.classList.remove("active"));
-  card._showHero();
-  card._renderLoading();
+  card._hero.show();
+  renderLoading(card._rowsEl);
   let rawItems = [];
   try {
     rawItems = (await row.loadMore?.()) || [];
@@ -292,14 +287,14 @@ export async function openRowSeeMore(card, row) {
   renderSearchPage(card, [{ title: row.title, Metadata: rawItems }], {
     expanded: true,
     backLabel: "← Back",
-    onBack: () => card._exitSearch(),
+    onBack: () => exitSearch(card),
   });
 }
 
 export function renderSearchPage(card, hubs, { expanded = false, onBack = null, backLabel = "← Back to all results" } = {}) {
   const visibleHubs = hubs.filter((hub) => (hub.Metadata || []).length);
   if (!visibleHubs.length) {
-    card._rowsEl.innerHTML = `<div class="empty">${card._emptyStateHtml("No results")}</div>`;
+    card._rowsEl.innerHTML = `<div class="empty">${emptyStateHtml("No results")}</div>`;
     return;
   }
   /* The whole page (every hub's posters) is built fully detached below and only attached
@@ -358,7 +353,7 @@ export function renderSearchPage(card, hubs, { expanded = false, onBack = null, 
     grid.className = "search-page-grid";
     for (const m of hub.Metadata || []) {
       const item = card._mapItem(m, false);
-      grid.appendChild(card._buildPoster(item, "local"));
+      grid.appendChild(buildPoster(item, "local", {}, card._rowCtx));
     }
     group.appendChild(grid);
     page.appendChild(group);

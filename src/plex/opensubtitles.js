@@ -3,7 +3,7 @@
    Plain client-side calls to the OpenSubtitles REST API (api.opensubtitles.com/api/v1),
    same no-proxy pattern as the existing YouTube/OpenRouter integrations - credentials
    live in settings.js/vault.js like those do. This is the opt-in alternative to the
-   default Plex-brokered path (plex-subtitles.js) - selected via Settings' Subtitle
+   default Plex-brokered path (plex/subtitles.js) - selected via Settings' Subtitle
    Provider dropdown, dispatched by src/player/core/subtitle-provider.js. Trades "no
    credentials on this client" for "zero extra load on PMS", since every search/download
    here goes straight to OpenSubtitles instead of through the user's own Plex server.
@@ -14,7 +14,7 @@
    alongside the Api-Key header. Username/password are optional Settings fields; without
    them, download() will surface whatever 401 the API returns rather than pretending it
    can work anonymously. */
-import { loadFull } from "./settings.js";
+import { loadFull } from "../core/config.js";
 
 const OPENSUBTITLES_API_BASE = "https://api.opensubtitles.com/api/v1";
 
@@ -131,7 +131,7 @@ export async function resolveDownloadLink(fileId, _retriedAfterRelogin = false) 
 }
 
 /* Returns the raw .srt text - only used by the web/Xbox leg, which converts to WebVTT
-   itself (plex-player.js's _srtToVtt). The Android native leg uses resolveDownloadLink
+   itself (player.js's _srtToVtt). The Android native leg uses resolveDownloadLink
    above instead and never sees this text - Media3's SubripDecoder parses .srt directly,
    so converting it here would be work done for no reason. */
 export async function download(fileId) {

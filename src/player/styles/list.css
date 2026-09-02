@@ -1,0 +1,241 @@
+/* The episode/queue and chapter bottom-sheet overlays. */
+
+.prism-player-list-scrim {
+    position: fixed;
+    inset: 0;
+    z-index: 10003;
+    background: transparent;
+}
+
+.prism-player-list-panel {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 10004;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    /* Vertical only - the header and the card row apply their own horizontal insets. */
+    padding: 24px 0 28px;
+    background: var(--player-sheet-bg);
+    box-sizing: border-box;
+    font-family: var(--player-font);
+    opacity: 0;
+    transform: translateY(12px);
+    transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+.prism-player-list-panel.is-open {
+    opacity: 1;
+    transform: translateY(0);
+}
+
+.prism-player-list-header {
+    display: flex;
+    align-items: center;
+    flex: 0 0 auto;
+    padding: 0 24px;
+}
+
+.prism-player-list-heading {
+    color: var(--player-fg);
+    font-size: 18px;
+    font-weight: 700;
+}
+
+/* flex-shrink:0 keeps the card row at its natural height once the panel itself scrolls -
+   otherwise flexbox squashes it to fit rather than letting it scroll. */
+.prism-player-list-scrollwrap {
+    position: relative;
+    flex-shrink: 0;
+}
+
+/* The clipping viewport, not itself a native scroll container - see row-scroll.js's header
+   for why: Xbox WebView2 hijacks the thumbstick over any native overflow container, fighting
+   this overlay's own D-pad centering. The 54px inset reserves room for the scroll arrows. */
+.prism-player-list-scroll {
+    overflow: hidden;
+    padding: 4px 54px;
+}
+
+.prism-player-list-track {
+    display: flex;
+    gap: 14px;
+}
+
+.prism-player-list-empty {
+    color: rgba(255, 255, 255, 0.6);
+    font-size: 13px;
+}
+
+.prism-player-list-loading {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex: 1 1 auto;
+    width: 100%;
+    /* Approximates one real row of cards (135px thumb + title + subtitle + summary + gaps) so
+       the placeholder doesn't visibly resize once the real cards replace it - the same idea as
+       PlayerUiHelper.java's EPISODE_LOADING_HEIGHT_DP on the native leg. */
+    height: 230px;
+}
+
+.prism-player-list-spinner {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    border: 3px solid rgba(255, 255, 255, 0.25);
+    border-top-color: var(--player-accent);
+    animation: prism-player-spin 0.8s linear infinite;
+}
+
+/* Visible only while there's somewhere left to scroll, rather than hover-revealed like the
+   browsing page's poster rows: this app has no reliable hover input on its touch/remote
+   targets yet. Hidden outright for gamepad/remote, which already has Left/Right - see
+   base.css's .prism-player-overlay-close for why the same two gates are used. */
+.prism-player-list-arrow {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 44px;
+    border: none;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--player-fg);
+    cursor: pointer;
+    z-index: 1;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.15s ease, outline-color 0.125s ease;
+}
+
+.prism-player-list-arrow.left {
+    left: 0;
+    background: linear-gradient(90deg, rgba(10, 10, 12, 0.9), rgba(10, 10, 12, 0));
+}
+
+.prism-player-list-arrow.right {
+    right: 0;
+    background: linear-gradient(270deg, rgba(10, 10, 12, 0.9), rgba(10, 10, 12, 0));
+}
+
+.prism-player-list-arrow.is-visible {
+    opacity: 1;
+    pointer-events: auto;
+}
+
+html[data-xbox-device="true"] .prism-player-list-arrow,
+html[data-input-mode="keyboard"] .prism-player-list-arrow {
+    display: none;
+}
+
+/* --- cards ------------------------------------------------------------------------ */
+
+.prism-player-list-card {
+    flex: 0 0 auto;
+    width: 240px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    text-align: left;
+    background: transparent;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+    font-family: var(--player-font);
+}
+
+.prism-player-list-thumb {
+    position: relative;
+    width: 100%;
+    height: 135px;
+    border-radius: 8px;
+    overflow: hidden;
+    background: var(--player-surface);
+    box-sizing: border-box;
+    border: 2px solid transparent;
+}
+
+.prism-player-list-thumb.is-current {
+    border-color: var(--player-accent);
+}
+
+.prism-player-list-thumb img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+
+/* Same dark-circle/accent-checkmark badge as the browsing modal's episode rows and the
+   poster grid - top-left, not top-right. */
+.prism-player-list-watched {
+    position: absolute;
+    top: 4px;
+    left: 4px;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: rgba(20, 20, 24, 0.7);
+    color: var(--player-accent);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.prism-player-list-watched svg {
+    width: 11px;
+    height: 11px;
+}
+
+.prism-player-list-progress {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 3px;
+    background: rgba(255, 255, 255, 0.3);
+}
+
+.prism-player-list-progress-bar {
+    height: 100%;
+    background: var(--player-accent);
+}
+
+/* Always visible, not hover-revealed - same no-reliable-hover reasoning as the arrows. */
+.prism-player-list-play {
+    position: absolute;
+    left: 8px;
+    bottom: 6px;
+    color: rgba(255, 255, 255, 0.85);
+    font-size: 13px;
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9);
+}
+
+.prism-player-list-title {
+    color: var(--player-fg);
+    font-size: 13px;
+    font-weight: 700;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.prism-player-list-subtitle {
+    color: var(--player-fg-faint);
+    font-size: 11px;
+    font-weight: 600;
+}
+
+.prism-player-list-summary {
+    color: rgba(255, 255, 255, 0.6);
+    font-size: 12px;
+    line-height: 1.4;
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}

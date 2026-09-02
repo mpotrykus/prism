@@ -1,0 +1,54 @@
+/* The parts of the Settings and Plex sign-in modals that are genuinely identical. Each
+   modal's own stylesheet is concatenated after this one (see their `<style>` tags) and
+   owns everything that legitimately differs - overlay z-index/scrim, panel size and
+   layout, button and status metrics. */
+
+:host {
+    all: initial;
+    /* env(safe-area-inset-*) is iOS/web only; Capacitor's Android SystemBars plugin injects
+       --safe-area-inset-* on <html> instead, which inherits down here because these modals
+       are top-level elements, not nested under the card's :host. Both are needed. */
+    --safe-top: max(env(safe-area-inset-top, 0px), var(--safe-area-inset-top, 0px));
+    --safe-bottom: max(env(safe-area-inset-bottom, 0px), var(--safe-area-inset-bottom, 0px));
+}
+
+* {
+    box-sizing: border-box;
+    font-family: "Roboto", sans-serif;
+}
+
+.overlay.open {
+    display: flex;
+}
+
+.modal-close:hover {
+    color: var(--color-fg);
+}
+
+/* B/Escape already backs a controller user out of either modal (see focus-nav.js), so the
+   close button is a dead end for them - hidden rather than left as an unreachable target. */
+:host([controller-active]) .modal-close {
+    display: none;
+}
+
+.btn-secondary {
+    background: rgba(var(--color-fg-rgb), 0.1);
+    color: var(--color-fg);
+}
+
+.btn-secondary:hover {
+    background: rgba(var(--color-fg-rgb), 0.16);
+}
+
+.btn:disabled {
+    opacity: 0.6;
+    cursor: default;
+}
+
+.status.ok {
+    color: var(--color-success);
+}
+
+.status.err {
+    color: var(--color-danger);
+}

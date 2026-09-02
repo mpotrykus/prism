@@ -5,14 +5,14 @@
       the same network round trip, on either the Plex-brokered or direct-OpenSubtitles
       path.
    2. Which result the user actually applied, if any, plus its Sync +/- offset (see
-      getAppliedOffsetMs/setAppliedOffsetMs) - chrome.js's applySubtitleResult and
+      getAppliedOffsetMs/setAppliedOffsetMs) - chrome-subtitles.js's applySubtitleResult and
       native-bridge.js's subtitleSelectRequested handler record the result;
-      chrome.js's adjustSubtitleOffset (web/Xbox) and native-bridge.js's
+      chrome-subtitles.js's adjustSubtitleOffset (web/Xbox) and native-bridge.js's
       subtitleOffsetChanged listener (Android, notified from PlayerActivity's own
       Sync +/- buttons via onSubtitleOffsetChanged - those apply fully natively, but
       still tell JS afterward the same way onSubtitleCleared does for the "Off" row)
-      both record the offset. plex-player.js re-reads all of this at the start of
-      every session (see applyRememberedSubtitle in chrome.js) so the same title
+      both record the offset. player.js re-reads all of this at the start of
+      every session (see applyRememberedSubtitle in chrome-subtitles.js) so the same title
       auto-reapplies its subtitle and sync offset without the user redoing either, on
       either platform. Downloading the actual text for that remembered result still
       goes through subtitle-provider.js's download() - normally served from this same
@@ -137,7 +137,7 @@ export function getAppliedOffsetMs(ratingKey) {
   return entryFor(load(), ratingKey).appliedOffsetMs || 0;
 }
 
-/* Written on every Sync +/- click (see chrome.js's adjustSubtitleOffset), not just on
+/* Written on every Sync +/- click (see chrome-subtitles.js's adjustSubtitleOffset), not just on
    apply - a small, frequent write, same trade-off applyRememberedSubtitle's caller
    already accepts elsewhere in this file. */
 export function setAppliedOffsetMs(ratingKey, offsetMs) {

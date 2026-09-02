@@ -1,8 +1,9 @@
 /* Plex Home profile switching. Listing/current-profile lookup and the actual switch
-   action mix two different Plex API generations - see plex-auth.js's own comments for
+   action mix two different Plex API generations - see plex/auth.js's own comments for
    why (the switch endpoint isn't the "v2" one getHomeUsers/getCurrentUser use). */
-import * as StreamingPlexAuth from "../../plex-auth.js";
-import * as StreamingVault from "../../vault.js";
+import * as StreamingPlexAuth from "../plex/auth.js";
+import { escapeHtml } from "../core/html.js";
+import * as StreamingVault from "../core/vault.js";
 
 export const PROFILE_ICON_SVG =
   '<svg viewBox="0 0 24 24"><circle cx="12" cy="8.4" r="3.6" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M5 20c1.2-4 4-6 7-6s5.8 2 7 6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>';
@@ -10,7 +11,7 @@ export const PROFILE_ICON_SVG =
 /* Only worth surfacing the switcher UI itself when there's more than one profile (a
    solo account has nothing to switch to) - the icon/dropdown trigger stays visible either
    way now, since on desktop it's also the only entry point to Settings (see
-   plex-netflix-card.js's profile-dropdown). Failures (no account token yet, no Plex Home
+   card.js's profile-dropdown). Failures (no account token yet, no Plex Home
    set up, network error) all collapse to "no switcher", same as an empty list - none of
    them should ever block the rest of the dashboard from loading. */
 export async function fetchHomeProfiles(accountToken) {
@@ -29,11 +30,11 @@ export async function fetchHomeProfiles(accountToken) {
 
 /* Returns whether there's an actual switcher (users.length > 1) - the caller uses this to
    show/hide the dropdown's "Profile" row without hiding the icon itself. */
-export function renderProfileNav(profileNavItem, profileNavLabel, profileNavIcon, users, activeUserId, escape) {
+export function renderProfileNav(profileNavItem, profileNavLabel, profileNavIcon, users, activeUserId) {
   const showSwitcher = users.length > 1;
   const active = users.find((u) => u.id === activeUserId);
   profileNavLabel.textContent = active ? active.title : "Profile";
-  profileNavIcon.innerHTML = active?.thumb ? `<span class="nav-profile-avatar"><img loading="lazy" src="${escape(active.thumb)}" alt="" /></span>` : PROFILE_ICON_SVG;
+  profileNavIcon.innerHTML = active?.thumb ? `<span class="nav-profile-avatar"><img loading="lazy" src="${escapeHtml(active.thumb)}" alt="" /></span>` : PROFILE_ICON_SVG;
   return showSwitcher;
 }
 
@@ -41,17 +42,17 @@ export function renderProfileNav(profileNavItem, profileNavLabel, profileNavIcon
    the actual switch action (see switchToUser below) since it needs to mutate config/
    reload data on success. Deliberately not a <button disabled> for the active badge (it
    still needs to be a real, focusable wireLinearNav stop so D-pad/keyboard nav has
-   somewhere to land on open - see plex-netflix-card.js's _openProfileOverlay) - clicking
+   somewhere to land on open - see card.js's _openProfileOverlay) - clicking
    it just has no listener attached, same "no-op, not disabled" idea. */
-export function renderProfileList(profileListEl, users, activeUserId, escape, onSwitch) {
+export function renderProfileList(profileListEl, users, activeUserId, onSwitch) {
   profileListEl.innerHTML = users
     .map((u) => {
       const isActive = u.id === activeUserId;
-      const avatar = u.thumb ? `<img loading="lazy" src="${escape(u.thumb)}" alt="" />` : PROFILE_ICON_SVG;
+      const avatar = u.thumb ? `<img loading="lazy" src="${escapeHtml(u.thumb)}" alt="" />` : PROFILE_ICON_SVG;
       return `
       <button type="button" class="profile-badge${isActive ? " active" : ""}" data-id="${u.id}">
         <span class="profile-badge-avatar">${avatar}</span>
-        <span class="profile-badge-name">${escape(u.title)}</span>
+        <span class="profile-badge-name">${escapeHtml(u.title)}</span>
         <span class="profile-badge-status"></span>
       </button>`;
     })

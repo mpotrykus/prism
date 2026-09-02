@@ -1,27 +1,22 @@
 /* Plex sign-in, split out from <streaming-settings-modal> so it can gate the whole app
    at boot (see app.js) - blocking until a server is connected - while everything else
    configurable (libraries, trailers, AI rows, display) lives in Settings. */
-import { wireLinearNav, focusAfterPaint, isControllerActive } from "./focus-nav.js";
-import { isRemoteDrivenDevice } from "./input-mode.js";
-import { APP_EVENT } from "./constants.js";
-import * as StreamingPlexAuth from "./plex-auth.js";
-import { loadPlain, savePlain } from "./settings.js";
-import { hasSecrets, loadSecrets, saveSecrets } from "./vault.js";
-import SIGNIN_MODAL_STYLE from "./src/styles/signin-modal.css?inline";
+import { wireLinearNav, focusAfterPaint } from "../core/focus-nav.js";
+import { PrismModalElement } from "./modal-element.js";
+import { escapeHtml } from "../core/html.js";
+import { isRemoteDrivenDevice } from "../core/input-mode.js";
+import { APP_EVENT } from "../constants.js";
+import * as StreamingPlexAuth from "../plex/auth.js";
+import { plexGetJson } from "../plex/auth.js";
+import { loadPlain, savePlain } from "../core/config.js";
+import { hasSecrets, loadSecrets, saveSecrets } from "../core/vault.js";
+import SIGNIN_MODAL_STYLE from "../styles/signin-modal.css?inline";
 
-class StreamingPlexSigninModal extends HTMLElement {
+class StreamingPlexSigninModal extends PrismModalElement {
   connectedCallback() {
     if (this._built) return;
     this._built = true;
-    /* Reflected onto this host element, not read via a :root selector inside the shadow
-       stylesheet below - see focus-nav.js's own comment on why :root never matches there. */
-    this.toggleAttribute("controller-active", isControllerActive());
-    document.addEventListener(APP_EVENT.CONTROLLER_ACTIVE_CHANGE, (e) => {
-      this.toggleAttribute("controller-active", e.detail.active);
-    });
-    this.attachShadow({ mode: "open" });
-    this.shadowRoot.innerHTML = `
-      <style>${SIGNIN_MODAL_STYLE}</style>
+    this._buildShell(SIGNIN_MODAL_STYLE, `
       <div class="overlay">
         <div class="modal">
           <button type="button" class="modal-close" aria-label="Close" hidden>✕</button>
@@ -33,20 +28,11 @@ class StreamingPlexSigninModal extends HTMLElement {
           <div class="server-picker"></div>
         </div>
       </div>
-    `;
+    `);
     this._wire();
   }
 
-  _el(sel) {
-    return this.shadowRoot.querySelector(sel);
-  }
-
   _wire() {
-    this._overlay = this._el(".overlay");
-    this._el(".modal-close").addEventListener("click", () => this.close());
-    this._overlay.addEventListener("click", (e) => {
-      if (e.target === this._overlay) this.close();
-    });
     this._el(".btn-plex-signin").addEventListener("click", () => this._signInWithPlex());
     /* This is the app's mandatory first screen and the current hard blocker on Xbox -
        a gamepad/D-pad user has no mouse to fall back on, so this can't be an afterthought
@@ -70,13 +56,11 @@ class StreamingPlexSigninModal extends HTMLElement {
     focusAfterPaint(this._el(".btn-plex-signin"));
   }
 
+  /* Overridden because this modal gates the whole app at boot: while blocking, there is
+     nothing to return to, so neither the "✕" nor a backdrop click may dismiss it. */
   close() {
     if (this._blocking) return;
-    this._overlay.classList.remove("open");
-  }
-
-  isOpen() {
-    return this._overlay.classList.contains("open");
+    super.close();
   }
 
   /* Fire TV (Silk browser) and the Xbox WebView2 shell are remote/gamepad-only - there's no
@@ -163,7 +147,7 @@ class StreamingPlexSigninModal extends HTMLElement {
     const pickerEl = this._el(".server-picker");
     pickerEl.innerHTML = servers
       .map(
-        (s, i) => `<button type="button" class="btn btn-secondary server-choice" data-index="${i}">${this._escape(s.name)}${s.owned ? "" : " (shared)"}</button>`
+        (s, i) => `<button type="button" class="btn btn-secondary server-choice" data-index="${i}">${escapeHtml(s.name)}${s.owned ? "" : " (shared)"}</button>`
       )
       .join("");
     pickerEl.querySelectorAll(".server-choice").forEach((choiceBtn) => {
@@ -189,7 +173,7 @@ class StreamingPlexSigninModal extends HTMLElement {
     }
     let machineId = "";
     try {
-      const identity = await this._plexGet(uri, server.accessToken, "/identity");
+      const identity = await plexGetJson(uri, server.accessToken, "/identity");
       machineId = identity?.MediaContainer?.machineIdentifier || "";
     } catch (e) {
       /* non-fatal - machine_id is only needed for Android deep links */
@@ -197,7 +181,7 @@ class StreamingPlexSigninModal extends HTMLElement {
 
     /* Discover every server on the account (owned + shared), not just the one just
        picked - a fresh sign-in should land with everything already browsable, same
-       discovery Settings' "refresh servers" runs later (see plex-auth.js's
+       discovery Settings' "refresh servers" runs later (see plex/auth.js's
        discoverLibraries). The picked server only decides the legacy plex_url/
        machine_id/plex_token fields below (still needed for Android deep links and
        settings.isConfigured()'s reachability check). */
@@ -244,17 +228,6 @@ class StreamingPlexSigninModal extends HTMLElement {
     this.close();
   }
 
-  async _plexGet(url, token, path) {
-    const u = new URL(url + path);
-    u.searchParams.set("X-Plex-Token", token);
-    const res = await fetch(u, { headers: { Accept: "application/json" } });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return res.json();
-  }
-
-  _escape(s) {
-    return String(s || "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-  }
 }
 
 if (!customElements.get("streaming-plex-signin-modal")) {

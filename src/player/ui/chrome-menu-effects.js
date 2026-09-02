@@ -1,4 +1,5 @@
 import { SHADER_TYPES } from "../shader/shaders.js";
+
 import {
     setShaderStrength,
     setColorBoostSaturationStrength,
@@ -15,7 +16,7 @@ import {
     setShaderFamilyOverride,
 } from "../shader-pipeline.js";
 import { setAmbientOpacity } from "../ambient-pipeline.js";
-import { fullscreenIconMarkup, colorBoostIconMarkup, ambientIconMarkup, aiUpscalingIconMarkup, versionIconMarkup, PLAYER_FOCUSABLE_CLASS } from "./shared.js";
+import { fullscreenIconMarkup, colorBoostIconMarkup, ambientIconMarkup, aiUpscalingIconMarkup, versionIconMarkup } from "./shared.js";
 /* Circular with chrome-menu.js (which imports renderEffectsList from this file for its
    "Effects" row) - safe here because both sides only reference the other module's
    export from inside a function body (makeBackRow/makeToggleSwitch are only called once
@@ -90,7 +91,7 @@ const MODE_OPTIONS = [
    passes a single-entry array. */
 function buildModeRow({ groupId, mode, onModeChange, strips }) {
     const row = document.createElement("div");
-    Object.assign(row.style, { display: "flex", gap: "6px", padding: "0 0 10px" });
+    row.className = "prism-player-segmented";
 
     let currentMode = mode;
     const applyStrengthDisplay = (m) => {
@@ -101,8 +102,6 @@ function buildModeRow({ groupId, mode, onModeChange, strips }) {
         const enabled = m === "on";
         strips.forEach(({ strengthInput, strengthLabel, getAutoValue, getManualValue, label }) => {
             strengthInput.disabled = !enabled;
-            strengthInput.style.opacity = enabled ? "1" : "0.5";
-            strengthInput.style.cursor = enabled ? "pointer" : "default";
             const value = auto ? (getAutoValue() ?? 0) : getManualValue();
             strengthInput.value = String(Math.round(value * 100));
             strengthLabel.textContent = `${label}: ${Math.round(value * 100)}%${auto ? " (auto)" : ""}`;
@@ -112,26 +111,14 @@ function buildModeRow({ groupId, mode, onModeChange, strips }) {
     const buttons = MODE_OPTIONS.map((opt) => {
         const btn = document.createElement("button");
         btn.type = "button";
-        btn.classList.add(PLAYER_FOCUSABLE_CLASS);
+        btn.classList.add("prism-player-focusable");
         /* See focus-nav.js's wireLinearNav: the same data-nav-group value on every button in
            this row makes Left/Right cycle between the modes while Up/Down skips the whole row
            in one step, landing on the slider (or whatever's next) instead of stepping through
            each mode button individually. */
         btn.dataset.navGroup = groupId;
         btn.textContent = opt.label;
-        Object.assign(btn.style, {
-            width: "44px",
-            textAlign: "center",
-            boxSizing: "border-box",
-            padding: "6px 0",
-            fontSize: "12px",
-            fontWeight: "600",
-            border: "1px solid rgba(255,255,255,0.15)",
-            borderRadius: "6px",
-            cursor: "pointer",
-            background: "transparent",
-            color: "rgba(255,255,255,0.7)",
-        });
+        btn.classList.add("prism-player-segmented-btn", "prism-player-segmented-btn--fixed");
         btn.addEventListener("click", () => {
             currentMode = opt.key;
             onModeChange(opt.key);
@@ -145,9 +132,7 @@ function buildModeRow({ groupId, mode, onModeChange, strips }) {
     const setActive = (activeMode) => {
         buttons.forEach(({ key, btn }) => {
             const selected = key === activeMode;
-            btn.style.background = selected ? "#e5a00d" : "transparent";
-            btn.style.color = selected ? "#1a1a1a" : "rgba(255,255,255,0.7)";
-            btn.style.borderColor = selected ? "#e5a00d" : "rgba(255,255,255,0.15)";
+            btn.classList.toggle("is-selected", selected);
         });
     };
     setActive(mode);
@@ -200,39 +185,27 @@ function startLiveAutoRefresh(el, refresh) {
    the only way to flip it. */
 function buildEffectRow(list, { icon, label, caption, toggleReachable = false }) {
     const wrap = document.createElement("div");
-    Object.assign(wrap.style, { borderBottom: "1px solid rgba(255,255,255,0.07)", padding: "14px 16px" });
+    wrap.className = "prism-player-effect-row";
 
     const header = document.createElement(toggleReachable ? "button" : "div");
+    header.className = "prism-player-effect-header";
     if (toggleReachable) {
         header.type = "button";
-        header.classList.add(PLAYER_FOCUSABLE_CLASS);
+        header.classList.add("prism-player-focusable", "is-interactive");
     }
-    Object.assign(header.style, {
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "space-between",
-        gap: "12px",
-        width: "100%",
-        textAlign: "left",
-        border: "none",
-        background: "transparent",
-        padding: "0",
-        cursor: toggleReachable ? "pointer" : "default",
-        fontFamily: '"Roboto", sans-serif',
-    });
 
     const leftSide = document.createElement("span");
-    Object.assign(leftSide.style, { display: "flex", alignItems: "center", gap: "12px", minWidth: "0", flex: "1 1 auto" });
+    leftSide.className = "prism-player-accordion-left";
     const iconEl = document.createElement("span");
+    iconEl.className = "prism-player-accordion-icon";
     iconEl.innerHTML = icon;
-    Object.assign(iconEl.style, { display: "flex", alignItems: "center", justifyContent: "center", flex: "0 0 auto", width: "20px", height: "20px", color: "rgba(255,255,255,0.75)" });
     leftSide.appendChild(iconEl);
 
     const labelStack = document.createElement("span");
-    Object.assign(labelStack.style, { display: "flex", flexDirection: "column", gap: "2px", minWidth: "0" });
+    labelStack.className = "prism-player-accordion-labels";
     const labelEl = document.createElement("span");
+    labelEl.className = "prism-player-accordion-label";
     labelEl.textContent = label;
-    Object.assign(labelEl.style, { color: "#fff", fontSize: "15px", fontWeight: "600" });
     labelStack.appendChild(labelEl);
     /* captionEl is returned (not just written once) so a caller whose caption can change
        after this row is built - buildShaderEffectRow's Detected/manual-override wording -
@@ -240,15 +213,15 @@ function buildEffectRow(list, { icon, label, caption, toggleReachable = false })
     let captionEl = null;
     if (caption) {
         captionEl = document.createElement("span");
+        captionEl.className = "prism-player-effect-caption";
         captionEl.textContent = caption;
-        Object.assign(captionEl.style, { fontSize: "11px", fontWeight: "400", color: "rgba(255,255,255,0.45)" });
         labelStack.appendChild(captionEl);
     }
     leftSide.appendChild(labelStack);
     header.appendChild(leftSide);
 
     const rightSide = document.createElement("span");
-    Object.assign(rightSide.style, { display: "flex", alignItems: "center", gap: "12px", flex: "0 0 auto" });
+    rightSide.className = "prism-player-accordion-right";
     header.appendChild(rightSide);
 
     wrap.appendChild(header);
@@ -271,7 +244,7 @@ function buildEffectRow(list, { icon, label, caption, toggleReachable = false })
    fit that width. */
 function buildFamilyOverrideRow({ groupId, current, onChange }) {
     const row = document.createElement("div");
-    Object.assign(row.style, { display: "flex", gap: "6px", padding: "0 0 10px" });
+    row.className = "prism-player-segmented";
 
     const options = [
         { key: "auto", label: "Auto" },
@@ -282,23 +255,12 @@ function buildFamilyOverrideRow({ groupId, current, onChange }) {
     const buttons = options.map((opt) => {
         const btn = document.createElement("button");
         btn.type = "button";
-        btn.classList.add(PLAYER_FOCUSABLE_CLASS);
+        btn.classList.add("prism-player-focusable");
         /* Same data-nav-group reasoning as buildModeRow's own buttons - see focus-nav.js's
            wireLinearNav. Own group id, scoped to just these three buttons. */
         btn.dataset.navGroup = groupId;
         btn.textContent = opt.label;
-        Object.assign(btn.style, {
-            padding: "6px 10px",
-            textAlign: "center",
-            boxSizing: "border-box",
-            fontSize: "12px",
-            fontWeight: "600",
-            border: "1px solid rgba(255,255,255,0.15)",
-            borderRadius: "6px",
-            cursor: "pointer",
-            background: "transparent",
-            color: "rgba(255,255,255,0.7)",
-        });
+        btn.classList.add("prism-player-segmented-btn");
         btn.addEventListener("click", () => {
             onChange(opt.key);
             setActive(opt.key);
@@ -310,9 +272,7 @@ function buildFamilyOverrideRow({ groupId, current, onChange }) {
     const setActive = (activeKey) => {
         buttons.forEach(({ key, btn }) => {
             const selected = key === activeKey;
-            btn.style.background = selected ? "#e5a00d" : "transparent";
-            btn.style.color = selected ? "#1a1a1a" : "rgba(255,255,255,0.7)";
-            btn.style.borderColor = selected ? "#e5a00d" : "rgba(255,255,255,0.15)";
+            btn.classList.toggle("is-selected", selected);
         });
     };
     setActive(current);
@@ -345,6 +305,26 @@ function buildContentTypeEffectRow(controller, list, { onFamilyChange }) {
     rightSide.appendChild(familyRow);
 }
 
+/* The 0-100% slider plus its live "<label>: N%" caption, shared by the Sharpening row and each
+   Color Boost component section. buildModeRow drives both elements directly (it swaps the
+   caption and the value between the auto-derived and manual readings when the mode changes),
+   so both are handed back rather than wrapped. `onChange` receives 0..1, not 0..100. */
+function buildStrengthSlider(label, onChange) {
+    const strengthLabel = document.createElement("div");
+    strengthLabel.className = "prism-player-slider-label";
+
+    const strengthInput = document.createElement("input");
+    strengthInput.type = "range";
+    strengthInput.min = "0";
+    strengthInput.max = "100";
+    strengthInput.classList.add("prism-player-focusable", "prism-player-slider");
+    strengthInput.addEventListener("input", () => {
+        strengthLabel.textContent = `${label}: ${strengthInput.value}%`;
+        onChange(Number(strengthInput.value) / 100);
+    });
+    return { strengthLabel, strengthInput };
+}
+
 /* Reuses fullscreenIconMarkup's expand-corners glyph - a sharpen kernel is, visually, the same
    "stretch the picture outward" idea. The mode row + slider are the only strength-side
    controls, and dragging strength to 0% in "on" mode is what a plain "Off" used to be.
@@ -362,19 +342,7 @@ function buildShaderEffectRow(controller, list) {
         label: "Sharpening",
     });
 
-    const strengthLabel = document.createElement("div");
-    Object.assign(strengthLabel.style, { color: "rgba(255,255,255,0.7)", fontSize: "12px", padding: "10px 0 4px" });
-
-    const strengthInput = document.createElement("input");
-    strengthInput.type = "range";
-    strengthInput.min = "0";
-    strengthInput.max = "100";
-    strengthInput.classList.add(PLAYER_FOCUSABLE_CLASS);
-    Object.assign(strengthInput.style, { display: "block", width: "100%", accentColor: "#e5a00d", cursor: "pointer", boxSizing: "border-box" });
-    strengthInput.addEventListener("input", () => {
-        strengthLabel.textContent = `Strength: ${strengthInput.value}%`;
-        setShaderStrength(controller, Number(strengthInput.value) / 100);
-    });
+    const { strengthLabel, strengthInput } = buildStrengthSlider("Strength", (value) => setShaderStrength(controller, value));
 
     const { row: modeRow, refreshIfAuto } = buildModeRow({
         groupId: "shader-mode",
@@ -499,7 +467,7 @@ function buildAiUpscalingEffectRow(controller, list) {
         caption,
         toggleReachable: true,
     });
-    const toggleEl = makeToggleSwitch(!!controller._aiUpscalingEnabled, (checked) => controller._setAiUpscalingEnabled(checked));
+    const toggleEl = makeToggleSwitch(!!controller._aiUpscalingEnabled, (checked) => setAiUpscalingEnabled(controller, checked));
     rightSide.appendChild(toggleEl);
     header.addEventListener("click", () => toggleEl.click());
 
@@ -510,10 +478,7 @@ function buildAiUpscalingEffectRow(controller, list) {
        opacity treatment rather than inheriting header's disabled semantics automatically. */
     const applyDisabled = (disabled) => {
         header.disabled = disabled;
-        header.style.opacity = disabled ? "0.5" : "1";
-        header.style.cursor = disabled ? "default" : "pointer";
-        toggleEl.style.opacity = disabled ? "0.5" : "1";
-        toggleEl.style.pointerEvents = disabled ? "none" : "auto";
+        toggleEl.classList.toggle("is-disabled", disabled);
     };
     applyDisabled(noUpscaleNeeded);
 
@@ -533,28 +498,16 @@ function buildAiUpscalingEffectRow(controller, list) {
    between mode buttons stays scoped to one section's own three buttons, not both. */
 function buildColorBoostComponentSection(controller, { title, groupId, modeOf, setMode, getManualValue, setStrength, getAutoValue }) {
     const section = document.createElement("div");
-    Object.assign(section.style, { marginTop: "10px" });
+    section.className = "prism-player-effect-section";
 
     const header = document.createElement("div");
-    Object.assign(header.style, { display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px" });
+    header.className = "prism-player-effect-section-header";
     const titleEl = document.createElement("span");
+    titleEl.className = "prism-player-effect-section-title";
     titleEl.textContent = title;
-    Object.assign(titleEl.style, { color: "rgba(255,255,255,0.85)", fontSize: "13px", fontWeight: "600" });
     header.appendChild(titleEl);
 
-    const strengthLabel = document.createElement("div");
-    Object.assign(strengthLabel.style, { color: "rgba(255,255,255,0.7)", fontSize: "12px", padding: "10px 0 4px" });
-
-    const strengthInput = document.createElement("input");
-    strengthInput.type = "range";
-    strengthInput.min = "0";
-    strengthInput.max = "100";
-    strengthInput.classList.add(PLAYER_FOCUSABLE_CLASS);
-    Object.assign(strengthInput.style, { display: "block", width: "100%", accentColor: "#e5a00d", cursor: "pointer", boxSizing: "border-box" });
-    strengthInput.addEventListener("input", () => {
-        strengthLabel.textContent = `${title}: ${strengthInput.value}%`;
-        setStrength(controller, Number(strengthInput.value) / 100);
-    });
+    const { strengthLabel, strengthInput } = buildStrengthSlider(title, (value) => setStrength(controller, value));
 
     const { row: modeRow, refreshIfAuto } = buildModeRow({
         groupId,
@@ -609,15 +562,14 @@ function buildAmbientEffectRow(controller, list) {
 
     const opacityLabel = document.createElement("div");
     opacityLabel.textContent = `Opacity: ${Math.round(controller._ambientOpacity * 100)}%`;
-    Object.assign(opacityLabel.style, { color: "rgba(255,255,255,0.7)", fontSize: "12px", padding: "10px 0 4px" });
+    opacityLabel.className = "prism-player-slider-label";
 
     const opacityInput = document.createElement("input");
     opacityInput.type = "range";
     opacityInput.min = "0";
     opacityInput.max = "100";
     opacityInput.value = String(Math.round(controller._ambientOpacity * 100));
-    opacityInput.classList.add(PLAYER_FOCUSABLE_CLASS);
-    Object.assign(opacityInput.style, { display: "block", width: "100%", accentColor: "#e5a00d", boxSizing: "border-box" });
+    opacityInput.classList.add("prism-player-focusable", "prism-player-slider");
     opacityInput.addEventListener("input", () => {
         opacityLabel.textContent = `Opacity: ${opacityInput.value}%`;
         setAmbientOpacity(controller, Number(opacityInput.value) / 100);
@@ -628,13 +580,11 @@ function buildAmbientEffectRow(controller, list) {
        slider (see buildModeRow's applyStrengthDisplay). */
     const applyOpacityEnabled = (enabled) => {
         opacityInput.disabled = !enabled;
-        opacityInput.style.opacity = enabled ? "1" : "0.5";
-        opacityInput.style.cursor = enabled ? "pointer" : "default";
     };
     applyOpacityEnabled(controller._ambientEnabled);
 
     const toggleEl = makeToggleSwitch(controller._ambientEnabled, (checked) => {
-        controller._setAmbientEnabled(checked);
+        setAmbientEnabled(controller, checked);
         applyOpacityEnabled(checked);
     });
     rightSide.appendChild(toggleEl);

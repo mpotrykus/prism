@@ -3,7 +3,7 @@
    landing on the item's details page. These links are Android-app-specific - gate on a
    UA check and fall back to a plain web link otherwise. */
 
-import { MEDIA_TYPE } from "../../../constants.js";
+import { MEDIA_TYPE } from "../../constants.js";
 
 export function slugify(text) {
   return (

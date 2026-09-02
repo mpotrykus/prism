@@ -3,7 +3,7 @@ import { extractAudioStreams, extractMediaVersions, bifIndexPath, extractPartInf
 /* Fetches full metadata for a selected queued title (episode-list.js's overlay, or an
    Android title-prev/title-next press - see native-bridge.js's "titleNav" listener) so the
    player can hand it straight to controller._switchTitle. The queue itself
-   (plex-player.js's queueRatingKeys) only ever
+   (player.js's queueRatingKeys) only ever
    carries bare ratingKeys - building it happens well before any given title in it is
    actually navigated to - so this is the same "resolve a ratingKey to a playable item"
    fetch title-info.js's _playEpisodeByRatingKey already does, just reachable from inside
@@ -40,9 +40,9 @@ export async function fetchQueuedTitle(plexUrl, plexToken, ratingKey) {
         ...extractPartInfo(meta.Media, 0),
         title: meta.grandparentTitle || meta.title || "",
         /* Only set for a genuine episode (grandparentTitle present) - same convention
-           plex-netflix-card.js's _playItem uses (episodeTitle: item.seasonNumber != null
+           card.js's _playItem uses (episodeTitle: item.seasonNumber != null
            ? item.subtitle : null), since meta.title IS already the whole title for a
-           movie, not a second "episode name" on top of it. Without this, chrome.js's
+           movie, not a second "episode name" on top of it. Without this, chrome-transport.js's
            transport-bar subtitle (see buildTransportBar's subtitleParts) would silently
            drop the episode's own name and show just "S# E#" for any title reached via
            the title-nav prev/next buttons, unlike a title opened normally from the info
@@ -57,7 +57,7 @@ export async function fetchQueuedTitle(plexUrl, plexToken, ratingKey) {
 }
 
 /* Fetches display metadata (thumb/title/progress/watched) for every ratingKey in a
-   session's queue - used by the in-player episode/queue list overlay (chrome.js's
+   session's queue - used by the in-player episode/queue list overlay (chrome-transport.js's
    openEpisodeListOverlay) to render cards for the whole queue at once, unlike
    fetchQueuedTitle above which resolves one adjacent title for an immediate title-nav
    jump. Same per-item fetch idiom as title-info.js's _fetchShowEpisodeQueue

@@ -113,10 +113,10 @@ function buildTranscodeUrl(endpoint, {
   url.searchParams.set("directStreamAudio", "1");
   url.searchParams.set("subtitleSize", "100");
   /* Prism never wants Plex's own transcode session touching subtitles - they're
-     fetched (plex-subtitles.js) and rendered entirely client-side (chrome.js's
+     fetched (plex/subtitles.js) and rendered entirely client-side (chrome-subtitles.js's
      attachSubtitleTrack, native-bridge.js's setNativeSubtitle) as a sidecar track.
      Without this, Plex defaults to whatever subtitle stream is currently "selected"
-     on the Part (an embedded default track, or the one plex-subtitles.js's download()
+     on the Part (an embedded default track, or the one plex/subtitles.js's download()
      just added) and - since this client's transcode request never advertises soft/
      sidecar subtitle support - burns it into the video instead of leaving it out. */
   url.searchParams.set("subtitleStreamID", "0");

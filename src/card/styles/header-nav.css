@@ -60,7 +60,7 @@
         min-width: 0;
         transition: opacity 0.25s ease;
     }
-    /* Toggled by plex-netflix-card.js's scroll-direction check - scrolling down fades the
+    /* Toggled by card.js's scroll-direction check - scrolling down fades the
      library strip out of the way, scrolling back up brings it right back. Focus escapes
      the fade rather than trapping a keyboard/gamepad user on an invisible target if focus
      ever lands here while scrolled (e.g. wireHomeNav's sidenav "up" hand-off). */

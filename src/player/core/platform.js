@@ -1,131 +1,101 @@
 import { Capacitor, registerPlugin } from "@capacitor/core";
 
-/* The canonical platformTag() values - typo-safety for the ~10 external call sites that used
-   to compare against a hand-typed "uwp"/"android" literal (see this file's own module
-   comment for why "uwp" exists at all). "web" covers Capacitor's own plain-browser id;
-   anything else Capacitor.getPlatform() might report (e.g. "ios") has no dedicated constant
-   here since nothing in this codebase currently branches on it. */
+/* Which platform this build is, and what that implies for playback. Identity and routing are
+   deliberately separate questions throughout this file - see platformTag/hasNativePlayer.
+
+   @capacitor/core is a bundled npm import, not a native-injected global, so `Capacitor` is
+   defined even in a plain PWA or inside WebView2 - it just resolves to platform "web" there,
+   since WebView2 injects neither `androidBridge` nor `webkit.messageHandlers.bridge`. That's
+   why the UWP shell needs its own marker rather than anything Capacitor can tell us. */
+
+/* Anything else Capacitor.getPlatform() might report (e.g. "ios") has no constant here, since
+   nothing in this codebase branches on it. */
 export const PLATFORM_TAG = Object.freeze({
     ANDROID: "android",
     UWP: "uwp",
     WEB: "web",
 });
 
-/* The one place that answers "which player backend is this build talking to". Before this
-   existed, `Capacitor.isNativePlatform() && Capacitor.getPlatform() === "android"` was
-   copy-pasted at ten call sites across plex-player.js and src/player/ui/, which is exactly
-   the shape that produces a third divergent code path the moment a second native platform
-   (the Xbox WebView2 shell) gets its own bridge. Everything that used to test that
-   expression inline now calls hasNativePlayer()/platformTag() instead.
-
-   @capacitor/core is a bundled npm import, not a native-injected global, so `Capacitor`
-   and `window.Capacitor` are defined even in a plain PWA or inside WebView2 - it just
-   resolves to platform "web" there, since WebView2 injects neither `androidBridge` nor
-   `webkit.messageHandlers.bridge`. That's why Xbox needs its own marker rather than
-   anything Capacitor can tell us. */
-
 /* Set by the UWP shell via CoreWebView2.AddScriptToExecuteOnDocumentCreatedAsync, so it's
    present before any app script evaluates. Deliberately a private marker rather than
-   window.CapacitorCustomPlatform: setting that would flip Capacitor.isNativePlatform() to
-   true app-wide, silently changing branches that only ever meant "Android". */
+   window.CapacitorCustomPlatform: setting that would flip Capacitor.isNativePlatform() to true
+   app-wide, silently changing branches that only ever meant "Android". */
 const UWP_MARKER = "__prismUwpNativePlayer";
 
-/* "android" | "uwp" | "web" (or a raw Capacitor platform id for anything else). "uwp" covers
-   both real Xbox consoles and the PC target - both run inside the same UWP+WebView2 shell and
-   share its native-player/streaming/HDR routing; PC_SHELL_MARKER below is the narrower signal
-   for the few places that need to tell the two apart.
+/* "uwp" covers both real Xbox consoles and the PC target - both run inside the same
+   UWP+WebView2 shell and share its native-player/streaming/HDR routing; PC_SHELL_MARKER below
+   is the narrower signal for the few places that need to tell the two apart.
 
-   This is platform IDENTITY only - deliberately separate from hasNativePlayer() below.
-   Identity is what Plex-facing decisions key off (which client capabilities to advertise,
-   what X-Plex-Platform to send), and those are useful on the UWP shell well before it has a
-   native player. Deriving playback routing from identity instead would mean the first thing
-   that wants to identify as UWP silently breaks playback. */
+   This is platform IDENTITY only, deliberately separate from hasNativePlayer() below. Identity
+   is what Plex-facing decisions key off (which client capabilities to advertise, what
+   X-Plex-Platform to send), and those are useful on the UWP shell well before it has a native
+   player. Deriving playback routing from identity instead would mean the first thing that wants
+   to identify as UWP silently breaks playback. */
 export function platformTag() {
     if (typeof window !== "undefined" && window[UWP_MARKER]) return PLATFORM_TAG.UWP;
     return Capacitor.getPlatform();
 }
 
-/* Set by the UWP shell alongside UWP_MARKER above, but only on the PC target - MainPage.xaml.cs's
-   DeviceFamily check. PC still reports platformTag() === "uwp" (same native player bridge,
-   progressive-stream routing, and HDR/decode-capability story - the whole reason this app runs
-   inside the UWP shell on PC instead of a plain browser), so this is deliberately a second,
-   narrower signal rather than a change to platformTag() itself. */
+/* Set alongside UWP_MARKER, but only on the PC target - see MainPage.xaml.cs's DeviceFamily
+   check. PC still reports platformTag() === "uwp" (same native player bridge, progressive-stream
+   routing and HDR/decode story - the whole reason this app runs inside the UWP shell on PC
+   rather than a plain browser), so this is a second, narrower signal, not a change to
+   platformTag() itself. */
 const PC_SHELL_MARKER = "__prismPcShell";
 
 /* Whether the player chrome should use Xbox's gamepad-only layout (floating center play button,
-   no spacebar handler, no mouse-hover row) instead of web's mouse/hover one. NOT the same
-   question as platformTag() === "uwp": PC is also tagged "uwp" for every streaming/native-
-   player purpose above, but has a real mouse and wants the ordinary web layout - see
-   PC_SHELL_MARKER. Scope this to UI-layout gates only (player-chrome.js, chrome-transport.js,
-   chrome-menu.js); anything about streaming, native playback, or HDR should keep testing
-   platformTag() === "uwp" directly. */
+   no spacebar handler, no mouse-hover row) instead of web's. NOT the same question as
+   platformTag() === "uwp": PC is also tagged "uwp" for every streaming purpose but has a real
+   mouse and wants the web layout. Scope this to UI-layout gates only; anything about streaming,
+   native playback or HDR should test platformTag() directly. */
 export function usesGamepadChrome() {
     return isXboxDevice();
 }
 
-/* True only on a real Xbox console, never the PC target - same construction as
-   usesGamepadChrome() above (platformTag() === "uwp" minus PC_SHELL_MARKER), but exported
-   separately since usesGamepadChrome()'s own scope is explicitly limited to player-chrome
-   UI-layout gates. Use this for other Xbox-only-vs-PC settings-visibility checks (e.g. the
-   Always-on HDR toggle in settings.js) that aren't about player-chrome layout. */
+/* True only on a real Xbox console, never PC. Same construction as usesGamepadChrome(), exported
+   separately because that one's scope is explicitly limited to player-chrome layout - this is
+   for other Xbox-only-vs-PC checks, e.g. the Always-on HDR toggle in Settings. */
 export function isXboxDevice() {
     return platformTag() === PLATFORM_TAG.UWP && !(typeof window !== "undefined" && window[PC_SHELL_MARKER]);
 }
 
-/* Mirrored onto documentElement (same self-registering-on-import pattern as input-mode.js's
-   own [data-input-mode]) so CSS elsewhere can key off [data-platform="uwp"] directly rather
-   than every consumer needing its own JS-side platformTag() check. Exists specifically
-   because input-mode.js's own UA/`pointer: none`-based isRemoteDrivenDevice() guess turned
-   out not to reliably catch Xbox's real WebView2 UA/pointer capabilities on hardware - this
-   marker is script-injected by the UWP shell itself (see UWP_MARKER above), not sniffed,
-   so it doesn't have that problem. Guarded on `document` existing since this module is also
-   imported by plain-Node vitest specs, which have no DOM. */
+/* Mirrored onto documentElement so CSS can key off [data-platform]/[data-xbox-device] directly.
+   Needed because input-mode.js's UA/`pointer: none` heuristic turned out not to reliably catch
+   Xbox's real WebView2 capabilities on hardware - this marker is script-injected by the shell
+   itself, not sniffed. Guarded on `document` since vitest specs import this module with no DOM. */
 if (typeof document !== "undefined") {
     document.documentElement.dataset.platform = platformTag();
     document.documentElement.dataset.xboxDevice = String(isXboxDevice());
 }
 
-/* The platforms whose native playback bridge actually exists and is wired up. Add "uwp"
-   here - and only here - when its bridge lands; nothing else needs to change.
+/* The platforms whose native playback bridge actually exists and is wired up.
 
-   Kept as an explicit list rather than derived from platformTag() because "this platform is
-   UWP" and "this build can hand playback to a native player" are genuinely different facts.
-   Conflating them is a trap: the Phase 0 spike build is a real case of a shell that has a
-   partial native player and legitimately wants to be identified as UWP, while playback still
-   has to go through the <video>+hls.js path. If identity implied routing, that build would
-   dispatch to native-bridge.js's Capacitor "NativePlayer" plugin, which does not exist on
-   the UWP shell, and every play() would fail with "not implemented on web". */
+   An explicit list rather than something derived from platformTag(), because "this platform is
+   UWP" and "this build can hand playback to a native player" are genuinely different facts. The
+   Phase 0 spike build was a real case of a shell with a partial native player that legitimately
+   wanted to be identified as UWP while playback still went through <video>+hls.js. Had identity
+   implied routing, every play() there would have dispatched to native-bridge.js's Capacitor
+   plugin - which doesn't exist on that shell - and failed with "not implemented on web". */
 const PLATFORMS_WITH_NATIVE_PLAYER = [PLATFORM_TAG.ANDROID, PLATFORM_TAG.UWP];
 
-/* True when a native playback bridge is present and should be used instead of the
-   <video>+hls.js fallback in web-fallback.js. */
 export function hasNativePlayer() {
     return PLATFORMS_WITH_NATIVE_PLAYER.includes(platformTag());
 }
 
 /* X-Plex-Platform for the transcode/decision URLs (see core/stream-url.js).
 
-   This used to be `Capacitor.isNativePlatform() ? "Android" : "Chrome"` inline in
-   plex-player.js's _buildStreamUrl/_buildDecisionUrl - note it tested only
-   isNativePlatform(), not the OS, so ANY future native platform would have started
-   claiming to be Android to Plex's Media Decision Engine. Keyed off the real tag now.
-
-   Xbox deliberately still reports "Chrome": X-Plex-Platform is one of the inputs Plex
-   picks a server-side client profile from, and a profile chosen for a real Xbox client
-   could override the explicit X-Plex-Client-Capabilities this codebase sends. Changing it
-   belongs with the HEVC/HDR capability work, where the two can be verified together
-   against a real server, not as a side effect of this refactor. */
+   Xbox deliberately reports "Chrome": X-Plex-Platform is one of the inputs Plex picks a
+   server-side client profile from, and a profile chosen for a real Xbox client could override the
+   explicit X-Plex-Client-Capabilities this codebase sends. Changing it belongs with the HEVC/HDR
+   capability work, where the two can be verified together against a real server. */
 export function plexPlatformTag() {
     return platformTag() === PLATFORM_TAG.ANDROID ? "Android" : "Chrome";
 }
 
-/* Whether this platform should ask Plex for progressive output (protocol=http, start.mp4) instead of
-   HLS. Xbox must: HLS is measurably broken there, for two independent reasons documented in
-   core/stream-url.js and docs/xbox-native-hdr-player/05-phase0-spike-results.md. Everything else
-   keeps using HLS, which hls.js and ExoPlayer both handle well.
-
-   Note this is keyed off platform IDENTITY, not hasNativePlayer() - the transport Plex is asked for
-   and whether a native player exists are separate questions. */
+/* Whether to ask Plex for progressive output (protocol=http, start.mp4) instead of HLS. Xbox must:
+   HLS is measurably broken there for two independent reasons, documented in core/stream-url.js and
+   docs/xbox-native-hdr-player/05-phase0-spike-results.md. Everything else keeps HLS, which hls.js
+   and ExoPlayer both handle well. Keyed off identity, not hasNativePlayer(). */
 export function usesProgressiveStream() {
     return platformTag() === PLATFORM_TAG.UWP;
 }
@@ -133,45 +103,41 @@ export function usesProgressiveStream() {
 /* Whether this platform can actually put HDR on screen, which is what decides whether HDR is
    advertised to Plex at all (see core/stream-url.js's clientCapabilities).
 
-   Xbox only. Its native MediaFoundation pipeline passes HDR10 through and the console's HDMI output
-   can be switched to it - documented by Microsoft and confirmed on hardware. The other legs cannot:
-   a browser has no way to present HDR or even read a <video>'s colour space without WebCodecs, and
-   Android's leg deliberately scopes HDR to "skip the SDR shader passes on HDR content" rather than
-   real passthrough.
+   Xbox only. Its native MediaFoundation pipeline passes HDR10 through and the console's HDMI
+   output can be switched to it - documented by Microsoft, confirmed on hardware. The others
+   cannot: a browser has no way to present HDR or even read a <video>'s colour space without
+   WebCodecs, and Android's leg scopes HDR to "skip the SDR shader passes on HDR content" rather
+   than real passthrough.
 
-   Claiming HDR support from a player that cannot present it is worse than not claiming it: Plex would
-   stop tone-mapping and hand over PQ frames to be displayed as washed-out SDR. */
+   Claiming HDR from a player that can't present it is worse than not claiming it: Plex would stop
+   tone-mapping and hand over PQ frames to be displayed as washed-out SDR. */
 export function supportsHdr() {
     return platformTag() === PLATFORM_TAG.UWP;
 }
 
-/* What this device can actually decode, beyond the conservative h264-1080p floor every leg
-   advertises today (see core/stream-url.js's clientCapabilities). Cached after the first probe -
-   decode hardware doesn't change mid-session - and defaulting to today's exact conservative
-   behavior (false) until primeDecodeCapabilities() resolves, so a play() that somehow races the
-   probe just gets the same h264-only treatment as before this existed, never a false positive. */
+/* What this device can decode beyond the conservative h264-1080p floor every leg advertises (see
+   core/stream-url.js's clientCapabilities). Cached after the first probe - decode hardware doesn't
+   change mid-session - and false until primeDecodeCapabilities() resolves, so a play() that races
+   the probe gets h264-only treatment rather than a false positive. */
 let _decodeCaps = { hevcMain10_2160: false };
 
-/* Call once at boot (see app.js), fire-and-forget - by the time a user reaches a title's Play
-   button (after sign-in, browsing, picking something), this has virtually always resolved.
-   Swallows every failure into the conservative default rather than throwing, since a capability
+/* Call once at boot, fire-and-forget: by the time a user reaches a title's Play button this has
+   virtually always resolved. Swallows every failure into the conservative default - a capability
    probe should never be able to block or break playback. */
 export async function primeDecodeCapabilities() {
     const tag = platformTag();
     if (tag === PLATFORM_TAG.UWP) {
-        /* Static hardware fact, not a probe - every Xbox console this ships to (One S and later,
-           the only device family Xbox UWP apps target) has a hardware HEVC Main10 decoder. Same
-           "whole device family" reasoning supportsHdr() above already relies on. */
+        /* A static hardware fact, not a probe: every Xbox console this ships to (One S and later,
+           the only device family Xbox UWP apps target) has a hardware HEVC Main10 decoder. */
         _decodeCaps = { hevcMain10_2160: true };
         return;
     }
     if (tag === PLATFORM_TAG.ANDROID) {
         try {
-            /* A fresh registerPlugin("NativePlayer") call, not an import from native-bridge.js -
-               that file already documents one real circular-import failure of its own (see its
-               NATIVE_TIMELINE_PING_MS comment) from importing back the other way. registerPlugin
-               returns the same underlying plugin proxy regardless of how many call sites request
-               it, so this is safe and keeps platform.js's own module graph simple. */
+            /* A fresh registerPlugin call rather than importing from native-bridge.js, which has
+               already hit one real circular-import failure of its own (see its
+               NATIVE_TIMELINE_PING_MS comment). registerPlugin returns the same underlying proxy
+               however many call sites request it. */
             const caps = await registerPlugin("NativePlayer").getDecodeCapabilities();
             _decodeCaps = { hevcMain10_2160: !!caps?.hevcMain10_2160 };
         } catch {
@@ -182,9 +148,9 @@ export async function primeDecodeCapabilities() {
     try {
         if (typeof navigator !== "undefined" && navigator.mediaCapabilities) {
             /* Codec string unverified against a real Chrome/Edge build - decodingInfo() is picky
-               about the exact fourCC/profile/level and a wrong string just silently reports
-               unsupported (safe: falls back to today's h264-only behavior), not an error. Verify
-               this isn't ALWAYS falling back before trusting a `true` result here matters. */
+               about the exact fourCC/profile/level, and a wrong string silently reports
+               unsupported (safe: falls back to h264-only) rather than erroring. Confirm this isn't
+               ALWAYS falling back before trusting a `true` result. */
             const result = await navigator.mediaCapabilities.decodingInfo({
                 type: "file",
                 video: {

@@ -56,3 +56,6 @@ uwp/PrismUwpEffects/.vs/
 uwp/PrismUwpEffects/*.csproj.user
 uwp/PrismUwpEffects/bin/
 uwp/PrismUwpEffects/obj/
+
+# Scratch diffs/notes kept out of the tree (one was committed by accident once).
+_scratch_*

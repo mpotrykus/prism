@@ -1,7 +1,7 @@
 /* Secrets (plex_token, openrouter_api_key, plex_account_token) are encrypted at rest with
    a non-extractable AES key stored in IndexedDB, instead of plaintext localStorage - but
    deliberately without any WebAuthn/biometric gate.
-   plex_token now comes from Plex's own PIN-based sign-in (plex-signin.js) rather than
+   plex_token now comes from Plex's own PIN-based sign-in (signin-modal.js) rather than
    being hand-typed, so there's no local secret-entry step left that justifies prompting
    Windows Hello/Android biometrics on every save and load. */
 const META_KEY = "prism.vaultMeta";
@@ -57,7 +57,7 @@ async function getOrCreateIdbKey() {
    with a key this code can no longer derive - that required a live biometric/PIN
    assertion this vault no longer performs. Drop them rather than leave an
    undecryptable blob sitting in storage forever; the user just signs into Plex again
-   (plex-signin.js) and re-enters any optional API keys. Only actually does anything
+   (signin-modal.js) and re-enters any optional API keys. Only actually does anything
    once, on the first load after this change ships to a given device/browser. */
 (function migrateAwayFromWebAuthnTiers() {
   let meta;
@@ -91,8 +91,4 @@ export async function loadSecrets() {
   const key = await getOrCreateIdbKey();
   const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv: b64ToBuf(blob.iv) }, key, b64ToBuf(blob.data));
   return JSON.parse(new TextDecoder().decode(plain));
-}
-
-export function status() {
-  return hasSecrets() ? "plain" : "none";
 }

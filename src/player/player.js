@@ -1,6 +1,6 @@
-/* plex-player.js
+/* player.js
 
-   Shared playback module used by plex-netflix-card.js's title-info overlay Play
+   Shared playback module used by card.js's title-info overlay Play
    button. Picks a native path (Android's NativePlayerPlugin, via Capacitor) when
    available, falling back to a full-screen <video>+hls.js overlay everywhere else
    (web, and the Xbox WebView2 shell until it has its own native bridge - WebView2 has
@@ -14,28 +14,32 @@
    same way leaving any other page would - not a separate "dismiss this popup" affordance
    the rest of the app doesn't have.
 
-   The class below is intentionally still one StreamingPlayerController - native-bridge.js/
-   web-fallback.js/shader-pipeline.js/ui/chrome.js each hold one concern's worth of
-   functions that take this controller instance as an explicit first argument (see each
-   file's own header comment for why), and this class keeps a same-named thin delegate
-   method for every one of them so every existing internal cross-reference between
-   concerns (e.g. the shader pipeline reaching into applyFitMode, the web fallback
-   reaching into the shared control-row/menu chrome) keeps working unchanged. */
-import { registerNavHandler } from "./focus-nav.js";
-import { lockScroll, unlockScroll } from "./scroll-lock.js";
-import { NAV_COMMAND, APP_EVENT, SHADER_OFF } from "./constants.js";
-import { hasNativePlayer, platformTag, PLATFORM_TAG, plexPlatformTag, usesProgressiveStream, supportsHdr, getDecodeCapabilities } from "./src/player/core/platform.js";
-import { media } from "./src/player/core/media-facade.js";
-import { buildStreamUrl, buildDecisionUrl, resolvePlaybackUrl } from "./src/player/core/stream-url.js";
-import { deriveChapterMarkers } from "./src/player/core/chapter-markers.js";
-import { playNative, switchNative, stopNative, pauseNative, resumeNative, buildPlaybackPayload } from "./src/player/native-bridge.js";
-import { playXbox, switchXbox, stopXbox, pauseXbox, resumeXbox, reloadXboxSource } from "./src/player/xbox-bridge.js";
-import { playWeb, attachSource, reloadWebSource, teardownWeb } from "./src/player/web-fallback.js";
-import { setShaderStrength, setColorBoostSaturationStrength, setColorBoostContrastStrength, setAiUpscalingEnabled, updateShaderPipeline, ensureShaderPipeline, stopShaderLoop, resolveShaderFamily, resetShaderFamilyOverride } from "./src/player/shader-pipeline.js";
-import { setAmbientEnabled, setAmbientOpacity, updateAmbientPipeline, stopAmbientLoop } from "./src/player/ambient-pipeline.js";
-import { setStatsOverlayEnabled, updateStatsOverlayPipeline } from "./src/player/stats-overlay.js";
-import { setAudioLevelingEnabled, updateAudioLevelingPipeline } from "./src/player/audio-leveling.js";
-import { setAutoCropEnabled, updateAutoCropPipeline } from "./src/player/auto-crop.js";
+   StreamingPlayerController is deliberately one object: native-bridge.js, xbox-bridge.js,
+   web-fallback.js, shader-pipeline.js and src/player/ui/ each hold one concern's worth of
+   functions that take this instance as an explicit first argument (see each file's own header
+   for why). Those modules are imported and called directly wherever they're needed - the
+   controller carries the shared session state, not a forwarding layer. */
+import { registerNavHandler } from "../core/focus-nav.js";
+import { lockScroll, unlockScroll } from "../core/scroll-lock.js";
+import { NAV_COMMAND, APP_EVENT, SHADER_OFF } from "../constants.js";
+import {
+    hasNativePlayer,
+    platformTag,
+    PLATFORM_TAG,
+    plexPlatformTag,
+    usesProgressiveStream,
+    supportsHdr,
+    getDecodeCapabilities,
+} from "./core/platform.js";
+import { media } from "./core/media-facade.js";
+import { buildStreamUrl, buildDecisionUrl, resolvePlaybackUrl } from "./core/stream-url.js";
+import { deriveChapterMarkers } from "./core/chapter-markers.js";
+import { playNative, switchNative, stopNative, pauseNative, resumeNative, buildPlaybackPayload } from "./native-bridge.js";
+import { playXbox, switchXbox, stopXbox, pauseXbox, resumeXbox, reloadXboxSource } from "./xbox-bridge.js";
+import { playWeb, reloadWebSource, teardownWeb } from "./web-fallback.js";
+import { resolveShaderFamily, resetShaderFamilyOverride } from "./shader-pipeline.js";
+import { setAmbientEnabled } from "./ambient-pipeline.js";
+import { updateAutoCropPipeline } from "./auto-crop.js";
 import {
     storedAmbientEnabled,
     storedAmbientOpacity,
@@ -57,31 +61,13 @@ import {
     storedAutoCropEnabled,
     AUTO_PLAY_STORAGE_KEY,
     AUTO_SKIP_INTRO_CREDITS_STORAGE_KEY,
-} from "./src/player/ui/shared.js";
-import {
-    makeControlButton,
-    registerControlButton,
-    showControls,
-    hideControls,
-    scheduleHideControls,
-    buildLoadingSpinner,
-    buildFloatingPlayButton,
-    buildTransportBar,
-    openHamburgerMenu,
-    applyFitMode,
-    closeInlineMenu,
-    activeMarkerAt,
-    skipLabelFor,
-    updateSkipButton,
-    isSkipButtonShowing,
-    shouldAutoSkip,
-    playQueuedTitle,
-    applyRememberedSubtitle,
-    seekToAdjacentChapter,
-    updateTransportBarInfo,
-} from "./src/player/ui/chrome.js";
-import { openEpisodeListOverlay, closeEpisodeListOverlay } from "./src/player/ui/episode-list.js";
-import { fetchQueuedTitle } from "./src/player/core/title-fetch.js";
+} from "./ui/shared.js";
+import { showControls, buildLoadingSpinner } from "./ui/chrome-controls.js";
+import { buildTransportBar, playQueuedTitle, seekToAdjacentChapter, updateTransportBarInfo } from "./ui/chrome-transport.js";
+import { openHamburgerMenu } from "./ui/chrome-menu.js";
+import { applyRememberedSubtitle } from "./ui/chrome-subtitles.js";
+import { updateSkipButton, isSkipButtonShowing, shouldAutoSkip } from "./ui/chrome-skip.js";
+import { fetchQueuedTitle } from "./core/title-fetch.js";
 
 /* native-bridge.js keeps its own local copy of this value (NATIVE_TIMELINE_PING_MS) for
    its "progress"-listener piggyback ping rather than importing it from here - see that
@@ -388,7 +374,7 @@ class StreamingPlayerController {
                progress tick as proof the native side actually has something to attach
                a subtitle to. */
         } else {
-            this._playWeb(streamUrl, startOffsetMs);
+            playWeb(this, streamUrl, startOffsetMs);
             applyRememberedSubtitle(this);
         }
         this._reportTimeline("playing");
@@ -496,7 +482,7 @@ class StreamingPlayerController {
             /* Ordered sibling ratingKeys (a show's full episode order, or a playlist/
                collection's own order) this title came from, if any - see title-info.js's
                _getShowEpisodeQueue/_flatQueueContext. Powers the title-prev/title-next
-               buttons in src/player/ui/chrome.js; null/absent means "no title nav". */
+               buttons in src/player/ui/; null/absent means "no title nav". */
             queueRatingKeys: item.queueRatingKeys || null,
             queueIndex: item.queueIndex ?? null,
         };
@@ -623,7 +609,7 @@ class StreamingPlayerController {
             if (hasNativePlayer()) {
                 await (platformTag() === PLATFORM_TAG.UWP ? stopXbox(this) : stopNative(this));
             } else {
-                this._teardownWeb();
+                teardownWeb(this);
             }
             this._session = null;
         }
@@ -649,45 +635,32 @@ class StreamingPlayerController {
         }
     }
 
+    /* /start, /decision and the direct-play probe must be asked with identical client
+       params or Plex's decision engine and its stream endpoint disagree about what it
+       just approved - so all three go through one place. resolvePlaybackUrl additionally
+       takes `partKey`/`isDefaultAudioTrack`, the two signals it needs to decide whether a
+       real direct play is worth asking about at all. */
+    _clientOpts(opts) {
+        return {
+            ...opts,
+            clientIdentifier: clientIdentifier(),
+            platform: plexPlatformTag(),
+            progressive: usesProgressiveStream(),
+            hdr: supportsHdr(),
+            ...getDecodeCapabilities(),
+        };
+    }
+
     _buildStreamUrl(opts) {
-        return buildStreamUrl({
-            ...opts,
-            clientIdentifier: clientIdentifier(),
-            platform: plexPlatformTag(),
-            progressive: usesProgressiveStream(),
-            hdr: supportsHdr(),
-            ...getDecodeCapabilities(),
-        });
+        return buildStreamUrl(this._clientOpts(opts));
     }
 
-    /* Same opts shape as _buildStreamUrl above (deliberately - see buildDecisionUrl's
-       own comment on why /decision and /start need identical params to agree). Used by
-       web-fallback.js's reloadWebSource right before it rebuilds the stream on an audio/
-       version/quality-cap switch. */
     _buildDecisionUrl(opts) {
-        return buildDecisionUrl({
-            ...opts,
-            clientIdentifier: clientIdentifier(),
-            platform: plexPlatformTag(),
-            progressive: usesProgressiveStream(),
-            hdr: supportsHdr(),
-            ...getDecodeCapabilities(),
-        });
+        return buildDecisionUrl(this._clientOpts(opts));
     }
 
-    /* Same opts shape as _buildStreamUrl/_buildDecisionUrl above, plus `partKey` and
-       `isDefaultAudioTrack` - the two extra signals resolvePlaybackUrl needs to decide
-       whether a real direct play is even worth asking Plex's decision engine about. See
-       stream-url.js's resolvePlaybackUrl for the fork itself. */
     _resolvePlaybackUrl(opts) {
-        return resolvePlaybackUrl({
-            ...opts,
-            clientIdentifier: clientIdentifier(),
-            platform: plexPlatformTag(),
-            progressive: usesProgressiveStream(),
-            hdr: supportsHdr(),
-            ...getDecodeCapabilities(),
-        });
+        return resolvePlaybackUrl(this._clientOpts(opts));
     }
 
     /* The two native backends are dispatched here rather than behind one abstraction, because they
@@ -714,13 +687,7 @@ class StreamingPlayerController {
         return switchNative(this, streamUrl, startOffsetMs);
     }
 
-    _playWeb(streamUrl, startOffsetMs) {
-        return playWeb(this, streamUrl, startOffsetMs);
-    }
 
-    _attachSource(video, streamUrl) {
-        return attachSource(this, video, streamUrl);
-    }
 
     /* Restarts the Plex transcode session with new mediaIndex/qualityCapKbps/audioStreamID, or (on the
        progressive path only) a new position. Dispatches per platform because only the final "hand the
@@ -747,7 +714,7 @@ class StreamingPlayerController {
     _handlePlayerNavCommand(command) {
         const el = media(this);
         if (!el) return false;
-        this._showControls();
+        showControls(this);
         switch (command) {
             case NAV_COMMAND.ACTIVATE:
                 if (this._skipButtonFocused) {
@@ -782,10 +749,10 @@ class StreamingPlayerController {
                 this._adjustScrub(NAV_SEEK_STEP_MS);
                 return true;
             case NAV_COMMAND.CHAPTER_PREV:
-                this._seekToAdjacentChapter("prev");
+                seekToAdjacentChapter(this, "prev", media(this));
                 return true;
             case NAV_COMMAND.CHAPTER_NEXT:
-                this._seekToAdjacentChapter("next");
+                seekToAdjacentChapter(this, "next", media(this));
                 return true;
             case NAV_COMMAND.REWIND:
                 this._queueNavSeek(-NAV_SEEK_STEP_MS);
@@ -794,7 +761,7 @@ class StreamingPlayerController {
                 this._queueNavSeek(NAV_SEEK_STEP_MS);
                 return true;
             case NAV_COMMAND.MENU:
-                if (this._menuButtonEl) this._openHamburgerMenu(this._menuButtonEl);
+                if (this._menuButtonEl) openHamburgerMenu(this, this._menuButtonEl);
                 return true;
             default:
                 return false;
@@ -866,9 +833,6 @@ class StreamingPlayerController {
         this._transportScrub?.endPreview();
     }
 
-    _seekToAdjacentChapter(direction) {
-        return seekToAdjacentChapter(this, direction, media(this));
-    }
 
     /* Seeks are accumulated and committed after a short idle rather than applied per press. On the
        progressive path every seek is a full Plex transcode restart (see xbox-bridge.js's
@@ -902,73 +866,22 @@ class StreamingPlayerController {
         return reloadWebSource(this, overrides);
     }
 
-    _teardownWeb() {
-        return teardownWeb(this);
-    }
 
-    _setShaderStrength(strength) {
-        return setShaderStrength(this, strength);
-    }
 
-    _setAiUpscalingEnabled(enabled) {
-        return setAiUpscalingEnabled(this, enabled);
-    }
 
-    _updateShaderPipeline() {
-        return updateShaderPipeline(this);
-    }
 
-    _ensureShaderPipeline() {
-        return ensureShaderPipeline(this);
-    }
 
-    _stopShaderLoop() {
-        return stopShaderLoop(this);
-    }
 
-    _setAmbientEnabled(enabled) {
-        return setAmbientEnabled(this, enabled);
-    }
 
-    _setAmbientOpacity(opacity) {
-        return setAmbientOpacity(this, opacity);
-    }
 
-    _setColorBoostSaturationStrength(strength) {
-        return setColorBoostSaturationStrength(this, strength);
-    }
 
-    _setColorBoostContrastStrength(strength) {
-        return setColorBoostContrastStrength(this, strength);
-    }
 
-    _setStatsOverlayEnabled(enabled) {
-        return setStatsOverlayEnabled(this, enabled);
-    }
 
-    _updateStatsOverlayPipeline() {
-        return updateStatsOverlayPipeline(this);
-    }
 
-    _updateAmbientPipeline() {
-        return updateAmbientPipeline(this);
-    }
 
-    _setAudioLevelingEnabled(enabled) {
-        return setAudioLevelingEnabled(this, enabled);
-    }
 
-    _updateAudioLevelingPipeline() {
-        return updateAudioLevelingPipeline(this);
-    }
 
-    _setAutoCropEnabled(enabled) {
-        return setAutoCropEnabled(this, enabled);
-    }
 
-    _updateAutoCropPipeline() {
-        return updateAutoCropPipeline(this);
-    }
 
     /* Same "toggle IS the persisted setting" immediate-persistence model as
        _setStatsOverlayEnabled - no pipeline/DOM to rebuild, just the flag itself, read
@@ -1007,73 +920,22 @@ class StreamingPlayerController {
         await this.stop();
     }
 
-    _stopAmbientLoop() {
-        return stopAmbientLoop(this);
-    }
 
-    _makeControlButton(opts) {
-        return makeControlButton(opts);
-    }
 
-    _registerControlButton(el, opts) {
-        return registerControlButton(this, el, opts);
-    }
 
-    _showControls() {
-        return showControls(this);
-    }
 
-    _hideControls() {
-        return hideControls(this);
-    }
 
-    _scheduleHideControls() {
-        return scheduleHideControls(this);
-    }
 
-    _buildLoadingSpinner(video) {
-        return buildLoadingSpinner(this, video);
-    }
 
-    _buildFloatingPlayButton(video) {
-        return buildFloatingPlayButton(this, video);
-    }
 
-    _buildTransportBar(video) {
-        return buildTransportBar(this, video);
-    }
 
-    _openHamburgerMenu(anchor) {
-        return openHamburgerMenu(this, anchor);
-    }
 
-    _openEpisodeListOverlay() {
-        return openEpisodeListOverlay(this);
-    }
 
-    _closeEpisodeListOverlay() {
-        return closeEpisodeListOverlay(this);
-    }
 
-    _applyFitMode(mode) {
-        return applyFitMode(this, mode ?? this._fitMode);
-    }
 
-    _closeInlineMenu() {
-        return closeInlineMenu(this);
-    }
 
-    _activeMarkerAt(timeMs) {
-        return activeMarkerAt(this, timeMs);
-    }
 
-    _skipLabelFor(marker) {
-        return skipLabelFor(marker);
-    }
 
-    _updateSkipButton(marker) {
-        return updateSkipButton(this, marker);
-    }
 
     async pause() {
         if (!this._session) return;

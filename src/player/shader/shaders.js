@@ -14,7 +14,7 @@ import { loadMpvUserShader, loadMpvUserShaderChain } from "./mpv-user-shader.js"
    ShaderUpscaleShaderProgram in android/.../PlayerActivity's Java sources) - same two
    GLSL algorithms and the same min/max tuning endpoints a 0-100% strength slider
    interpolates between, just running as a WebGL pass over the <video> element instead
-   of inside ExoPlayer's native pipeline. See plex-player.js's _ensureShaderPipeline for
+   of inside ExoPlayer's native pipeline. See player.js's _ensureShaderPipeline for
    how frames get from <video> to this shader.
 
    The GLSL itself now lives in ./glsl/*.glsl rather than as template literals here, so
@@ -395,7 +395,7 @@ const CGI_ANIMATION_STUDIOS = [
    tagged. Studio is a coarse, best-effort signal (see CGI_ANIMATION_STUDIOS above for its
    known gaps), not proof - genres/studio can both be missing or wrong. Both platforms (this
    file and Android's PlayerActivity) get this same result computed once here rather than
-   duplicating the check in Java - see plex-player.js's _playNative. */
+   duplicating the check in Java - see player.js's _playNative. */
 export function detectShaderType(genres, studio) {
     const isAnimated = (genres || []).some((g) => (g || "").toLowerCase().includes("anim"));
     if (!isAnimated) return "live_action";

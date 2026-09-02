@@ -3,21 +3,24 @@ import { storedVolume } from "./ui/shared.js";
 import { releaseBifIndex } from "./core/bif.js";
 import { setMediaFacade } from "./core/media-facade.js";
 import { showPlaybackErrorModal } from "./ui/error-modal.js";
+import { activeMarkerAt, updateSkipButton } from "./ui/chrome-skip.js";
+import { showControls } from "./ui/chrome-controls.js";
 import { closeEpisodeListOverlay, closeChapterListOverlay } from "./ui/episode-list.js";
 import { updateAbrMonitor, stopAbrLoop, notifyStall, setBandwidthSource } from "./core/abr.js";
-import { reloadTranscodeSession } from "./core/session-reload.js";
+import { reloadTranscodeSession, markAudioStreamSelected } from "./core/session-reload.js";
 import { acquireWakeLock, releaseWakeLock } from "./core/wake-lock.js";
 import { mountPlayerChrome, unmountPlayerChrome } from "./ui/player-chrome.js";
+import { ensurePlayerStyles } from "./ui/styles.js";
 import { teardownShaderPipeline } from "./shader-pipeline.js";
 import { teardownAmbient } from "./ambient-pipeline.js";
 import { teardownContentAnalysis } from "./content-analysis.js";
 import { teardownAudioLeveling } from "./audio-leveling.js";
 import { teardownAutoCrop } from "./auto-crop.js";
-/* Circular with chrome.js (which already imports reloadWebSource from this file) - safe
+/* Circular with chrome-subtitles.js (which already imports reloadWebSource from this file) - safe
    here for the same reason that one is: closeAudioSubtitlesOverlay is only ever called
    from inside teardownWeb's own function body below, never at module-top-level
    evaluation time. */
-import { closeAudioSubtitlesOverlay, stopSubtitleLoop } from "./ui/chrome.js";
+import { closeAudioSubtitlesOverlay, stopSubtitleLoop } from "./ui/chrome-subtitles.js";
 
 /* <video>+hls.js fallback path - used everywhere WebView2/Chrome/Xbox/Android-web has
    no native player available (see native-bridge.js for the Android/ExoPlayer leg).
@@ -67,22 +70,9 @@ function describeHlsError(data) {
 
 function createVideoElement(controller) {
     const video = document.createElement("video");
-    video.className = "streaming-player-video";
+    video.className = "prism-player-video";
     video.controls = false;
     video.autoplay = true;
-    Object.assign(video.style, {
-        position: "fixed",
-        inset: "0",
-        width: "100%",
-        height: "100%",
-        /* Same "replaced element defaults to object-fit:fill" issue as the shader
-           canvas above - without this, the video stretches to the window's own aspect
-           ratio instead of letterboxing/pillarboxing against its #000 background
-           whenever the two don't match. */
-        objectFit: "contain",
-        background: "#000",
-        zIndex: "10000",
-    });
     video.addEventListener("timeupdate", () => {
         if (controller._videoEl !== video || !controller._session) return;
         controller._session.lastTimeMs = Math.round(video.currentTime * 1000);
@@ -92,7 +82,7 @@ function createVideoElement(controller) {
            fresh position read every tick to count down live, not just on the
            marker-changed edge this used to gate on. updateSkipButton is idempotent for a
            same-marker repeat call either way. */
-        controller._updateSkipButton(controller._activeMarkerAt(controller._session.lastTimeMs));
+        updateSkipButton(controller, activeMarkerAt(controller, controller._session.lastTimeMs));
     });
     video.addEventListener("ended", () => {
         if (controller._videoEl !== video) return;
@@ -121,8 +111,8 @@ function createVideoElement(controller) {
         if (video.paused) video.play();
         else video.pause();
     });
-    video.addEventListener("mousemove", () => controller._showControls());
-    video.addEventListener("touchstart", () => controller._showControls());
+    video.addEventListener("mousemove", () => showControls(controller));
+    video.addEventListener("touchstart", () => showControls(controller));
     return video;
 }
 
@@ -143,6 +133,8 @@ function seekOnceReady(video, offsetMs) {
 }
 
 export function playWeb(controller, streamUrl, startOffsetMs) {
+    /* Before the <video> is created: it takes its layout from prism-player-video. */
+    ensurePlayerStyles();
     const video = createVideoElement(controller);
     attachSource(controller, video, streamUrl);
     seekOnceReady(video, startOffsetMs);
@@ -256,16 +248,7 @@ export function trySwitchAudioTrackLocal(controller, audioStreamID) {
     if (index < 0 || hls.audioTracks.length !== streams.length) return false;
     hls.audioTrack = index;
     s.audioStreamId = audioStreamID;
-    /* Fire-and-forget, same as reloadWebSource's own selectAudio below - keeps Plex's
-       server-side "selected" bookkeeping in sync for other clients/the next launch, but
-       nothing here waits on it since no new session is being requested. */
-    if (s.partId) {
-        const putUrl = new URL(`${s.plexUrl}/library/parts/${s.partId}`);
-        putUrl.searchParams.set("audioStreamID", String(audioStreamID));
-        putUrl.searchParams.set("allParts", "1");
-        putUrl.searchParams.set("X-Plex-Token", s.plexToken);
-        fetch(putUrl, { method: "PUT" }).catch(() => {});
-    }
+    markAudioStreamSelected(s, audioStreamID);
     return true;
 }
 

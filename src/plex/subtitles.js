@@ -1,4 +1,4 @@
-/* plex-subtitles.js
+/* plex/subtitles.js
 
    Subtitle search/download proxied entirely through the user's own Plex Media Server,
    the same approach Plezy (github.com/edde746/plezy) uses - GET/PUT
@@ -13,7 +13,7 @@
    download() below polls for it (backing off from 2s up to 6s, 20s deadline) rather
    than trusting a fixed delay - PMS itself does the actual provider fetch + library
    write + re-analyze, so this only minimizes the extra polling load we add on top. */
-import { plexAssetUrl } from "./src/player/core/plex-asset-url.js";
+import { plexAssetUrl } from "../player/core/plex-asset-url.js";
 
 function subtitlesUrl(session, params) {
     const url = new URL(`${session.plexUrl}/library/metadata/${session.ratingKey}/subtitles`);
@@ -103,7 +103,7 @@ const POLL_TIMEOUT_MS = 20000;
 
 /* Requests the download, then polls metadata for the newly-added stream. Returns the
    raw subtitle text (fetched from the new stream's own asset URL) so existing callers
-   (chrome.js's attachSubtitleTrack, native-bridge.js's setNativeSubtitle) keep consuming
+   (chrome-subtitles.js's attachSubtitleTrack, native-bridge.js's setNativeSubtitle) keep consuming
    a result the same way they did from the old opensubtitles.js's download(). */
 export async function download(session, result) {
     const before = new Set((await fetchSubtitleStreams(session)).map((s) => s.id));

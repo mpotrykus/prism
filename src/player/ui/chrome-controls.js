@@ -1,44 +1,18 @@
-import { CONTROLS_HIDE_DELAY_MS, PLAYER_FOCUSABLE_CLASS } from "./shared.js";
+import { CONTROLS_HIDE_DELAY_MS } from "./shared.js";
 
 /* The idle-fade control row: every corner button and the transport bar share one fade
    timer instead of each reinventing idle-hide logic, plus the buffering spinner - the one
    piece of chrome that deliberately does NOT follow the idle-fade row (see
    buildLoadingSpinner below). */
 
-/* One 44px circular button matching this player's existing inline-style chrome
-   convention. Doesn't position or register itself - callers pass the result to
-   registerControlButton so every button shares one fade timer instead of each
-   reinventing idle-hide logic. */
+/* One corner button. Doesn't position or register itself - callers pass the result to
+   registerControlButton so every button shares one fade timer. */
 export function makeControlButton({ ariaLabel, content, onClick }) {
     const btn = document.createElement("button");
     btn.type = "button";
     btn.textContent = content;
     btn.setAttribute("aria-label", ariaLabel);
-    /* Focus-ring styling (see shared.js's PLAYER_FOCUSABLE_CLASS) - no border-radius set
-       inline here (unlike before) so that class's own rounded-corner outline applies;
-       these buttons have no visible resting background/border of their own, so leaving
-       their corners un-set has no visual effect except on the focus ring itself. */
-    btn.classList.add(PLAYER_FOCUSABLE_CLASS);
-    Object.assign(btn.style, {
-        position: "fixed",
-        top: "24px",
-        zIndex: "10001",
-        width: "40px",
-        height: "40px",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        border: "none",
-        background: "transparent",
-        color: "#fff",
-        fontSize: "22px",
-        fontWeight: "600",
-        lineHeight: "1",
-        cursor: "pointer",
-        opacity: "1",
-        textShadow: "0 1px 4px rgba(0,0,0,0.85)",
-        transition: "opacity 0.25s ease, outline-color 0.125s ease",
-    });
+    btn.classList.add("prism-player-focusable", "prism-player-control-btn");
     if (onClick) btn.addEventListener("click", onClick);
     return btn;
 }
@@ -73,10 +47,7 @@ export function registerControlButton(controller, el, { anchor = true, side = "r
 }
 
 export function showControls(controller) {
-    controller._controlButtons.forEach((b) => {
-        b.style.opacity = "1";
-        b.style.pointerEvents = "auto";
-    });
+    controller._controlButtons.forEach((b) => b.classList.remove("prism-player-chrome-hidden"));
     scheduleHideControls(controller);
 }
 
@@ -86,30 +57,20 @@ export function showControls(controller) {
    immediately rather than linger underneath it until the idle timer catches up. */
 export function hideControls(controller) {
     clearTimeout(controller._controlsHideTimer);
-    controller._controlButtons.forEach((b) => {
-        b.style.opacity = "0";
-        b.style.pointerEvents = "none";
-    });
+    controller._controlButtons.forEach((b) => b.classList.add("prism-player-chrome-hidden"));
 }
 
-/* pointerEvents is toggled alongside opacity, not just opacity alone - a faded-out
-   transport bar spanning the full screen width would otherwise still intercept clicks
-   (opacity:0 doesn't remove a hit target), swallowing taps on the video underneath that
-   are meant to toggle play/pause or reshow the controls. */
 export function scheduleHideControls(controller) {
     clearTimeout(controller._controlsHideTimer);
     if (controller._controlsHovering || controller._inlineMenuEl || controller._episodeListEl || controller._chapterListEl || controller._audioSubtitlesEl) return;
     controller._controlsHideTimer = setTimeout(() => {
-        /* An in-progress left-stick scrub (see plex-player.js's _adjustScrub/_cancelScrub)
+        /* An in-progress left-stick scrub (see player.js's _adjustScrub/_cancelScrub)
            has no meaning once its own preview UI is about to disappear with the rest of the
            chrome - idling out is treated the same as the user pressing B, snapping the
            transport bar back to wherever playback actually is rather than leaving a stale
            pending seek that a later A could still commit unexpectedly. */
         if (controller._scrubActive) controller._cancelScrub();
-        controller._controlButtons.forEach((b) => {
-            b.style.opacity = "0";
-            b.style.pointerEvents = "none";
-        });
+        controller._controlButtons.forEach((b) => b.classList.add("prism-player-chrome-hidden"));
     }, CONTROLS_HIDE_DELAY_MS);
 }
 
@@ -119,37 +80,13 @@ export function scheduleHideControls(controller) {
    has faded out from inactivity. pointerEvents:none so it never blocks clicks on the
    center play/pause button or video underneath it while overlapping them. */
 export function buildLoadingSpinner(controller, video) {
-    if (!document.getElementById("streaming-player-spinner-style")) {
-        const style = document.createElement("style");
-        style.id = "streaming-player-spinner-style";
-        style.textContent = "@keyframes streaming-player-spin { to { transform: translate(-50%, -50%) rotate(360deg); } }";
-        document.head.appendChild(style);
-    }
-
     const spinner = document.createElement("div");
-    Object.assign(spinner.style, {
-        position: "fixed",
-        top: "50%",
-        left: "50%",
-        transform: "translate(-50%, -50%)",
-        zIndex: "10002",
-        width: "48px",
-        height: "48px",
-        borderRadius: "50%",
-        border: "4px solid rgba(255,255,255,0.25)",
-        borderTopColor: "#fff",
-        animation: "streaming-player-spin 0.8s linear infinite",
-        pointerEvents: "none",
-    });
+    spinner.className = "prism-player-spinner";
     document.body.appendChild(spinner);
     controller._spinnerEl = spinner;
 
-    const show = () => {
-        spinner.style.display = "block";
-    };
-    const hide = () => {
-        spinner.style.display = "none";
-    };
+    const show = () => spinner.classList.add("is-visible");
+    const hide = () => spinner.classList.remove("is-visible");
     video.addEventListener("waiting", show);
     video.addEventListener("seeking", show);
     video.addEventListener("playing", hide);

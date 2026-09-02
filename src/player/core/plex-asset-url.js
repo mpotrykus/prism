@@ -1,5 +1,5 @@
-/* Same query-param-token URL shape plex-netflix-card.js's _plexImageUrl uses (see that
-   file's CORS note - a header token makes Plex fail the preflight). Shared by chrome.js
+/* Same query-param-token URL shape card.js's _plexImageUrl uses (see that
+   file's CORS note - a header token makes Plex fail the preflight). Shared by src/player/ui/
    (chapter thumbs, scrub-preview) and native-bridge.js (same two things, handed to
    Android instead of fetched here) so both platforms build this URL identically instead
    of drifting. */

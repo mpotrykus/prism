@@ -1,5 +1,5 @@
-import { focusAfterPaint, registerNavHandler } from "../../focus-nav.js";
-import { NAV_COMMAND } from "../../constants.js";
+import { focusAfterPaint, registerNavHandler } from "../core/focus-nav.js";
+import { NAV_COMMAND } from "../constants.js";
 
 /* Custom numeric-keypad modal replacing window.prompt/alert for PIN entry - this card
    has no native browser-dialog usage elsewhere, and a Netflix-style kiosk dashboard

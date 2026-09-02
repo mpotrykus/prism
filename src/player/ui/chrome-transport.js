@@ -1,6 +1,6 @@
 import { registerControlButton, showControls, scheduleHideControls } from "./chrome-controls.js";
 import { openAudioSubtitlesOverlay } from "./chrome-subtitles.js";
-import { PLAYER_FOCUSABLE_CLASS, VOLUME_STORAGE_KEY, volumeIconMarkup, seekIconMarkup, skipIconMarkup, fullscreenIconMarkup, audioSubtitlesIconMarkup } from "./shared.js";
+import { VOLUME_STORAGE_KEY, volumeIconMarkup, seekIconMarkup, skipIconMarkup, fullscreenIconMarkup, audioSubtitlesIconMarkup } from "./shared.js";
 import { loadBifIndex, findNearestBifFrame, fetchBifFrameUrl } from "../core/bif.js";
 import { plexAssetUrl } from "../core/plex-asset-url.js";
 import { fetchQueuedTitle } from "../core/title-fetch.js";
@@ -34,27 +34,8 @@ import { openEpisodeListOverlay } from "./episode-list.js";
 export function buildFloatingPlayButton(controller, video) {
     const btn = document.createElement("button");
     btn.type = "button";
-    btn.classList.add(PLAYER_FOCUSABLE_CLASS);
+    btn.classList.add("prism-player-focusable", "prism-player-float-play");
     btn.setAttribute("aria-label", "Play/Pause");
-    Object.assign(btn.style, {
-        position: "fixed",
-        top: "50%",
-        left: "50%",
-        transform: "translate(-50%, -50%)",
-        zIndex: "10001",
-        width: "76px",
-        height: "76px",
-        borderRadius: "50%",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        border: "none",
-        background: "rgba(20,20,20,0.4)",
-        color: "#fff",
-        fontSize: "32px",
-        cursor: "pointer",
-        padding: "0",
-    });
     const syncPlayIcon = () => {
         btn.textContent = video.paused ? "▶" : "❙❙";
     };
@@ -74,7 +55,7 @@ export function buildFloatingPlayButton(controller, video) {
    than always jumping two chapters at once) - the same convention as prev-track buttons
    on physical media remotes. Called both by web's own on-screen chapter-nav button
    (makeChapterNavButton below) and, with no on-screen equivalent there, the Xbox bumpers
-   (plex-player.js's _handlePlayerNavCommand) - either way, also reachable via the More
+   (player.js's _handlePlayerNavCommand) - either way, also reachable via the More
    menu's Chapters overlay. */
 export function seekToAdjacentChapter(controller, direction, video) {
     const chapters = controller._session?.chapters || [];
@@ -130,58 +111,25 @@ function ensureSeekFlashEl(controller, direction) {
     if (controller[key]) return controller[key];
     const isBack = direction === "back";
     const el = document.createElement("div");
-    Object.assign(el.style, {
-        position: "fixed",
-        top: "0",
-        bottom: "0",
-        [isBack ? "left" : "right"]: "0",
-        width: "26%",
-        maxWidth: "300px",
-        zIndex: "10000",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        pointerEvents: "none",
-        background: isBack ?
-            "linear-gradient(to right, rgba(0,0,0,0.55), rgba(0,0,0,0))" : "linear-gradient(to left, rgba(0,0,0,0.55), rgba(0,0,0,0))",
-        opacity: "0",
-        transform: "scale(0.8)",
-        transition: "opacity .15s ease-out, transform .15s ease-out",
-    });
-    const label = document.createElement("span");
-    Object.assign(label.style, {
-        color: "#fff",
-        fontSize: "24px",
-        fontWeight: "700",
-        fontFamily: '"Roboto", sans-serif',
-    });
-    label.textContent = isBack ? "-5s" : "+5s";
-    el.appendChild(label);
+    el.className = `prism-player-seek-flash prism-player-seek-flash--${isBack ? "back" : "forward"}`;
+    el.textContent = isBack ? "-5s" : "+5s";
     document.body.appendChild(el);
     controller[key] = el;
     return el;
 }
 
-/* Pops the "-5"/"+5" flash in and fades it back out, restarting the animation from
-   scratch on every press (including a repeat press before the previous fade finished) -
-   forcing a reflow between resetting to the hidden state and re-triggering the visible
-   one is what makes the transition replay instead of no-op'ing because the end style
-   never changed. */
+/* Restarts the animation from scratch on every press, including a repeat press before the
+   previous fade finished - forcing a reflow between resetting to the hidden state and
+   re-triggering the visible one is what makes the transition replay rather than no-op because
+   the end style never changed. */
 function flashSeekIndicator(controller, direction) {
     const el = ensureSeekFlashEl(controller, direction);
     const timerKey = direction === "back" ? "_seekFlashBackTimer" : "_seekFlashForwardTimer";
     clearTimeout(controller[timerKey]);
-    el.style.transition = "none";
-    el.style.opacity = "0";
-    el.style.transform = "scale(0.8)";
+    el.classList.remove("is-visible", "is-fading");
     void el.offsetWidth;
-    el.style.transition = "opacity .15s ease-out, transform .15s ease-out";
-    el.style.opacity = "1";
-    el.style.transform = "scale(1)";
-    controller[timerKey] = setTimeout(() => {
-        el.style.transition = "opacity .4s ease-in";
-        el.style.opacity = "0";
-    }, 450);
+    el.classList.add("is-visible");
+    controller[timerKey] = setTimeout(() => el.classList.add("is-fading"), 450);
 }
 
 /* Removes both flash overlays and their pending timers - called from
@@ -202,22 +150,9 @@ export function teardownSeekFlash(controller) {
 function makeSeekButton(controller, direction, video) {
     const btn = document.createElement("button");
     btn.type = "button";
-    btn.classList.add(PLAYER_FOCUSABLE_CLASS);
+    btn.classList.add("prism-player-focusable", "prism-player-icon-btn", "prism-player-icon-btn--seek");
     btn.setAttribute("aria-label", direction === "back" ? "Back 5 seconds" : "Forward 5 seconds");
     btn.innerHTML = seekIconMarkup(direction);
-    Object.assign(btn.style, {
-        width: "34px",
-        height: "34px",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        borderRadius: "0",
-        border: "none",
-        background: "transparent",
-        color: "#fff",
-        cursor: "pointer",
-        padding: "0",
-    });
     btn.addEventListener("click", () => {
         if (!video.duration) {
             video.currentTime = Math.max(0, (video.currentTime || 0) + (direction === "back" ? -5 : 5));
@@ -232,22 +167,9 @@ function makeSeekButton(controller, direction, video) {
 function makeChapterNavButton(controller, direction, video) {
     const btn = document.createElement("button");
     btn.type = "button";
-    btn.classList.add(PLAYER_FOCUSABLE_CLASS);
+    btn.classList.add("prism-player-focusable", "prism-player-icon-btn", "prism-player-icon-btn--nav");
     btn.setAttribute("aria-label", direction === "prev" ? "Previous chapter" : "Next chapter");
     btn.innerHTML = skipIconMarkup(direction, { double: true });
-    Object.assign(btn.style, {
-        width: "26px",
-        height: "26px",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        borderRadius: "0",
-        border: "none",
-        background: "transparent",
-        color: "#fff",
-        cursor: "pointer",
-        padding: "0",
-    });
     btn.addEventListener("click", () => seekToAdjacentChapter(controller, direction, video));
     return btn;
 }
@@ -258,7 +180,7 @@ const TITLE_PREV_RESTART_MS = 10000;
    valid action whether or not there's a queue at all (a standalone movie included), so
    prev is never disabled. Next is the only one that ever greys out: skipping forward has
    no equivalent "restart" fallback, so it's a real dead end whenever there's no next
-   queued title (see plex-player.js's queueRatingKeys/queueIndex) - shown disabled rather
+   queued title (see player.js's queueRatingKeys/queueIndex) - shown disabled rather
    than hidden so a movie's transport row still reads as symmetric with an episode's. */
 function makeTitleNavButton(controller, direction, video) {
     const session = controller._session;
@@ -268,22 +190,10 @@ function makeTitleNavButton(controller, direction, video) {
 
     const btn = document.createElement("button");
     btn.type = "button";
-    if (enabled) btn.classList.add(PLAYER_FOCUSABLE_CLASS);
+    btn.classList.add("prism-player-icon-btn", "prism-player-icon-btn--nav");
+    if (enabled) btn.classList.add("prism-player-focusable");
     btn.setAttribute("aria-label", direction === "prev" ? "Previous title" : "Next title");
     btn.innerHTML = skipIconMarkup(direction, { double: false });
-    Object.assign(btn.style, {
-        width: "26px",
-        height: "26px",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        borderRadius: "0",
-        border: "none",
-        background: "transparent",
-        color: enabled ? "#fff" : "#666",
-        cursor: enabled ? "pointer" : "default",
-        padding: "0",
-    });
     btn.disabled = !enabled;
     if (enabled) btn.addEventListener("click", () => seekToAdjacentTitle(controller, direction, video));
     return btn;
@@ -332,22 +242,8 @@ function buildCenterControls(controller, video) {
 
     const playBtn = document.createElement("button");
     playBtn.type = "button";
-    playBtn.classList.add(PLAYER_FOCUSABLE_CLASS);
+    playBtn.classList.add("prism-player-focusable", "prism-player-icon-btn", "prism-player-icon-btn--play");
     playBtn.setAttribute("aria-label", "Play/Pause");
-    Object.assign(playBtn.style, {
-        width: "32px",
-        height: "32px",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        borderRadius: "0",
-        border: "none",
-        background: "transparent",
-        color: "#fff",
-        fontSize: "22px",
-        cursor: "pointer",
-        padding: "0",
-    });
     const syncPlayIcon = () => {
         playBtn.textContent = video.paused ? "▶" : "❙❙";
     };
@@ -370,7 +266,7 @@ function buildCenterControls(controller, video) {
 
 /* Repaints the transport bar's title/subtitle from whatever controller._session currently is -
    called once at buildTransportBar's own initial mount, and again by _switchTitleNative
-   (plex-player.js) after an in-place title switch, since that path never rebuilds this chrome. */
+   (player.js) after an in-place title switch, since that path never rebuilds this chrome. */
 export function updateTransportBarInfo(controller) {
     const titleLine = controller._transportTitleEl;
     const subLine = controller._transportSubtitleEl;
@@ -386,7 +282,6 @@ export function updateTransportBarInfo(controller) {
         subtitleParts.push(String(session.year));
     }
     subLine.textContent = subtitleParts.join("  •  ");
-    subLine.style.display = subtitleParts.length ? "" : "none";
 }
 
 export function formatTime(seconds) {
@@ -456,15 +351,10 @@ function buildChapterSegments(layer, chapters, durationMs) {
         const leftGapPx = i > 0 ? 2 : 0;
         const rightGapPx = i < edges.length - 2 ? 2 : 0;
         const el = document.createElement("div");
-        Object.assign(el.style, {
-            position: "absolute",
-            top: "0",
-            bottom: "0",
-            left: `calc(${startPct}% + ${leftGapPx}px)`,
-            width: `calc(${endPct - startPct}% - ${leftGapPx + rightGapPx}px)`,
-            borderRadius: "999px",
-            background: SEEK_UNFILLED_COLOR,
-        });
+        el.className = "prism-player-segment";
+        el.style.left = `calc(${startPct}% + ${leftGapPx}px)`;
+        el.style.width = `calc(${endPct - startPct}% - ${leftGapPx + rightGapPx}px)`;
+        el.style.background = SEEK_UNFILLED_COLOR;
         layer.appendChild(el);
         segments.push({ startPct, endPct, el });
     }
@@ -484,42 +374,28 @@ function paintChapterSegments(segments, pct, bufferedPct) {
    right-anchored button like the others. */
 export function buildTransportBar(controller, video) {
     const bar = document.createElement("div");
-    Object.assign(bar.style, {
-        position: "fixed",
-        left: "0",
-        right: "0",
-        bottom: "0",
-        zIndex: "10001",
-        display: "flex",
-        flexDirection: "column",
-        gap: "10px",
-        padding: "70px 40px 22px",
-        background: "linear-gradient(to top, rgba(0,0,0,0.82) 0%, rgba(0,0,0,0.55) 45%, transparent 100%)",
-        opacity: "1",
-        transition: "opacity 0.25s ease",
-        boxSizing: "border-box",
-    });
+    bar.className = "prism-player-bar";
 
     /* Title/season-episode (or year, for a movie) left, remaining time right - both
-       already carried on the session (see plex-netflix-card.js's _playItem), just not
+       already carried on the session (see card.js's _playItem), just not
        previously surfaced anywhere in this chrome. */
     const infoRow = document.createElement("div");
-    Object.assign(infoRow.style, { display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: "16px" });
+    infoRow.className = "prism-player-info-row";
 
     const titleBlock = document.createElement("div");
     const titleLine = document.createElement("div");
-    Object.assign(titleLine.style, { color: "#fff", fontSize: "19px", fontWeight: "700", fontFamily: '"Roboto", sans-serif', lineHeight: "1.3" });
+    titleLine.className = "prism-player-title";
     titleBlock.appendChild(titleLine);
 
     const subLine = document.createElement("div");
-    Object.assign(subLine.style, { color: "rgba(255,255,255,0.65)", fontSize: "13px", fontWeight: "600", fontFamily: '"Roboto", sans-serif', marginTop: "2px", display: "none" });
+    subLine.className = "prism-player-subtitle";
     titleBlock.appendChild(subLine);
     infoRow.appendChild(titleBlock);
 
     /* Kept on the controller (rather than only closed over here) so an in-place title switch that
        doesn't remount this chrome - _switchTitleNative, which reuses the same DOM chrome across the
        switch rather than tearing it down and rebuilding it the way the <video>+hls.js fallback's
-       _beginSession does (see plex-player.js's _switchTitle) - can still repaint this text for the new
+       _beginSession does (see player.js's _switchTitle) - can still repaint this text for the new
        session. Without this, the bar kept showing whichever title was on screen when it was first
        mounted. */
     controller._transportTitleEl = titleLine;
@@ -527,115 +403,25 @@ export function buildTransportBar(controller, video) {
     updateTransportBarInfo(controller);
 
     const remainingEl = document.createElement("span");
+    remainingEl.className = "prism-player-remaining";
     remainingEl.textContent = "-0:00";
-    Object.assign(remainingEl.style, { flex: "0 0 auto", color: "rgba(255,255,255,0.75)", fontSize: "13px", fontFamily: '"Roboto", sans-serif', fontVariantNumeric: "tabular-nums" });
     infoRow.appendChild(remainingEl);
     bar.appendChild(infoRow);
 
-    /* The lingering focus ring on a <input type=range> lives on its internal
-       ::-webkit-slider-thumb/::-moz-range-thumb shadow part, not the input element
-       itself - setting outline:none as an inline style on the input can't reach it, it
-       has to come from a real stylesheet rule. Chromium's own form-control refresh also
-       draws this ring via box-shadow rather than outline, so both need resetting. */
-    if (!document.getElementById("streaming-player-seek-style")) {
-        const style = document.createElement("style");
-        style.id = "streaming-player-seek-style";
-        style.textContent = `
-            .streaming-player-seek, .streaming-player-seek:focus, .streaming-player-seek:focus-visible {
-                outline: none;
-                box-shadow: none;
-            }
-            .streaming-player-seek::-webkit-slider-thumb { outline: none; box-shadow: none; }
-            .streaming-player-seek::-moz-range-thumb { outline: none; box-shadow: none; }
-            .streaming-player-seek::-moz-focus-outer { border: 0; }
-            /* The scrub bar's embossed rim isn't a focus ring - it's Chromium/Firefox's
-               native appearance:auto track theme (a light groove with a darker edge),
-               which outline/box-shadow resets above can't touch. appearance:none drops
-               that native theme entirely, so the track/thumb/fill all have to be drawn by
-               hand below instead of relying on accent-color. --seek-pct is written from
-               JS (see buildTransportBar) wherever seek.value changes, since a plain CSS
-               gradient can't otherwise express "amber up to the thumb, dim after it". */
-            /* The input's own box is the actual click/touch/drag hit target - a plain
-               3px-tall element (matching the visible track) was nearly impossible to
-               grab precisely. Bumped to 24px here while the track pseudo-elements below
-               stay explicitly 3px, which browsers vertically center within the taller
-               box by default - the same "invisible padding around a thin visual track"
-               trick most custom range sliders use. The thumb's -4.5px margin-top below
-               is calculated against the track's own 3px height, not this one, so it
-               still centers correctly. */
-            .streaming-player-seek.streaming-player-seek--scrub {
-                -webkit-appearance: none;
-                appearance: none;
-                background: transparent;
-                height: 24px;
-            }
-            .streaming-player-seek.streaming-player-seek--scrub::-webkit-slider-runnable-track {
-                height: 3px;
-                border-radius: 2px;
-                border: none;
-                background: linear-gradient(to right, #e5a00d var(--seek-pct, 0%), rgba(255,255,255,0.5) var(--seek-pct, 0%), rgba(255,255,255,0.5) var(--seek-buffered-pct, var(--seek-pct, 0%)), rgba(255,255,255,0.3) var(--seek-buffered-pct, var(--seek-pct, 0%)));
-            }
-            .streaming-player-seek.streaming-player-seek--scrub::-moz-range-track {
-                height: 3px;
-                border-radius: 2px;
-                border: none;
-                background: linear-gradient(to right, #e5a00d var(--seek-pct, 0%), rgba(255,255,255,0.5) var(--seek-pct, 0%), rgba(255,255,255,0.5) var(--seek-buffered-pct, var(--seek-pct, 0%)), rgba(255,255,255,0.3) var(--seek-buffered-pct, var(--seek-pct, 0%)));
-            }
-            /* When rendering real per-chapter segments (see buildSegmentLayout below),
-               those DOM divs sit behind the input and ARE the visible track - the
-               input's own native track paint has to get out of the way entirely rather
-               than showing through/behind them. */
-            .streaming-player-seek.streaming-player-seek--scrub.streaming-player-seek--segmented::-webkit-slider-runnable-track {
-                background: transparent;
-            }
-            .streaming-player-seek.streaming-player-seek--scrub.streaming-player-seek--segmented::-moz-range-track {
-                background: transparent;
-            }
-            .streaming-player-seek.streaming-player-seek--scrub::-webkit-slider-thumb {
-                -webkit-appearance: none;
-                width: 12px;
-                height: 12px;
-                border-radius: 50%;
-                background: #e5a00d;
-                margin-top: -4.5px;
-            }
-            .streaming-player-seek.streaming-player-seek--scrub::-moz-range-thumb {
-                width: 12px;
-                height: 12px;
-                border-radius: 50%;
-                border: none;
-                background: #e5a00d;
-            }
-        `;
-        document.head.appendChild(style);
-    }
 
     const seek = document.createElement("input");
     seek.type = "range";
-    seek.className = "streaming-player-seek streaming-player-seek--scrub";
+    seek.className = "prism-player-range prism-player-seek";
     seek.min = "0";
     seek.max = "1000";
     seek.value = "0";
-    /* position:relative is needed so the thumb paints above segmentLayer - a static
-       (non-positioned) element always paints below any positioned sibling regardless
-       of DOM order, so without this the absolutely-positioned segment divs covered
-       the range input's thumb even though seek is appended after them below. */
-    Object.assign(seek.style, { cursor: "pointer", width: "100%", display: "block", position: "relative", zIndex: "1" });
 
     const chapters = controller._session?.chapters || [];
     const seekWrap = document.createElement("div");
-    Object.assign(seekWrap.style, { position: "relative", flex: "1 1 auto", display: "flex", alignItems: "center" });
+    seekWrap.className = "prism-player-seek-wrap";
     const segmentLayer = document.createElement("div");
-    Object.assign(segmentLayer.style, {
-        position: "absolute",
-        left: "0",
-        right: "0",
-        top: "50%",
-        height: "3px",
-        transform: "translateY(-50%)",
-        pointerEvents: "none",
-    });
-    if (chapters.length) seek.classList.add("streaming-player-seek--segmented");
+    segmentLayer.className = "prism-player-segments";
+    if (chapters.length) seek.classList.add("prism-player-seek--segmented");
     seekWrap.appendChild(segmentLayer);
     seekWrap.appendChild(seek);
 
@@ -690,37 +476,12 @@ export function buildTransportBar(controller, video) {
     }
 
     const previewTooltip = document.createElement("div");
-    Object.assign(previewTooltip.style, {
-        position: "absolute",
-        bottom: "calc(100% + 10px)",
-        display: "none",
-        flexDirection: "column",
-        alignItems: "center",
-        pointerEvents: "none",
-        transform: "translateX(-50%)",
-    });
+    previewTooltip.className = "prism-player-preview";
     const previewImg = document.createElement("img");
     previewImg.alt = "";
-    Object.assign(previewImg.style, {
-        width: "160px",
-        height: "90px",
-        objectFit: "cover",
-        borderRadius: "6px",
-        display: "none",
-        background: "#000",
-        boxShadow: "0 4px 14px rgba(0,0,0,0.5)",
-    });
+    previewImg.className = "prism-player-preview-img";
     const previewTime = document.createElement("div");
-    Object.assign(previewTime.style, {
-        marginTop: "6px",
-        padding: "3px 8px",
-        borderRadius: "4px",
-        background: "rgba(0,0,0,0.75)",
-        color: "#fff",
-        fontSize: "12px",
-        fontFamily: '"Roboto", sans-serif',
-        fontVariantNumeric: "tabular-nums",
-    });
+    previewTime.className = "prism-player-preview-time";
     previewTooltip.appendChild(previewImg);
     previewTooltip.appendChild(previewTime);
     seekWrap.appendChild(previewTooltip);
@@ -737,7 +498,7 @@ export function buildTransportBar(controller, video) {
         const timeMs = fraction * video.duration * 1000;
 
         const rectWidth = seekWrap.getBoundingClientRect().width;
-        previewTooltip.style.display = "flex";
+        previewTooltip.classList.add("is-visible");
         const tooltipHalfWidth = 80;
         previewTooltip.style.left = `${Math.min(rectWidth - tooltipHalfWidth, Math.max(tooltipHalfWidth, fraction * rectWidth))}px`;
         previewTime.textContent = formatTime(timeMs / 1000);
@@ -755,7 +516,7 @@ export function buildTransportBar(controller, video) {
         fetchBifFrameUrl(bifIndex, frame).then((url) => {
             if (requestId !== previewRequestId) return; // a newer preview position won the race
             previewImg.src = url;
-            previewImg.style.display = "block";
+            previewImg.classList.add("is-visible");
         });
     };
     const showPreview = (clientX) => {
@@ -763,8 +524,8 @@ export function buildTransportBar(controller, video) {
         showPreviewAtFraction(Math.min(1, Math.max(0, (clientX - rect.left) / rect.width)));
     };
     const hidePreview = () => {
-        previewTooltip.style.display = "none";
-        previewImg.style.display = "none";
+        previewTooltip.classList.remove("is-visible");
+        previewImg.classList.remove("is-visible");
         previewLastTimeMs = null;
         lastPreviewFraction = null;
     };
@@ -814,7 +575,7 @@ export function buildTransportBar(controller, video) {
         syncSeekFill();
     });
 
-    /* Gamepad scrub-preview (Xbox left stick, see plex-player.js's _adjustScrub/
+    /* Gamepad scrub-preview (Xbox left stick, see player.js's _adjustScrub/
        _commitScrub/_cancelScrub) - moves this same seek fill + BIF tooltip from a bare
        target time, with no pointer involved and no seek applied until the caller commits.
        Reuses the `scrubbing` flag pointer-drag already relies on so the timeupdate
@@ -851,13 +612,13 @@ export function buildTransportBar(controller, video) {
        platformTag() === "uwp" - see usesGamepadChrome()'s own comment. */
     if (!usesGamepadChrome()) {
         const controlsRow = document.createElement("div");
-        Object.assign(controlsRow.style, { display: "flex", alignItems: "center" });
+        controlsRow.className = "prism-player-controls-row";
         const leftCell = document.createElement("div");
-        Object.assign(leftCell.style, { flex: "1 1 0", display: "flex", alignItems: "center", gap: "14px" });
+        leftCell.className = "prism-player-cell-left";
         const centerCell = document.createElement("div");
-        Object.assign(centerCell.style, { flex: "0 0 auto", display: "flex", alignItems: "center", gap: "22px" });
+        centerCell.className = "prism-player-cell-center";
         const rightCell = document.createElement("div");
-        Object.assign(rightCell.style, { flex: "1 1 0", display: "flex", alignItems: "center", justifyContent: "flex-end", gap: "14px" });
+        rightCell.className = "prism-player-cell-right";
         controlsRow.appendChild(leftCell);
         controlsRow.appendChild(centerCell);
         controlsRow.appendChild(rightCell);
@@ -875,43 +636,15 @@ export function buildTransportBar(controller, video) {
         if (session?.queueRatingKeys?.length > 1) {
             const episodesBtn = document.createElement("button");
             episodesBtn.type = "button";
-            episodesBtn.classList.add(PLAYER_FOCUSABLE_CLASS);
+            episodesBtn.classList.add("prism-player-focusable", "prism-player-icon-btn", "prism-player-icon-btn--text");
             episodesBtn.textContent = session.seasonNumber != null ? "Episodes" : "Up Next";
-            Object.assign(episodesBtn.style, {
-                flex: "0 0 auto",
-                height: "28px",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                border: "none",
-                background: "transparent",
-                color: "#fff",
-                fontSize: "13px",
-                fontWeight: "600",
-                fontFamily: '"Roboto", sans-serif',
-                cursor: "pointer",
-                padding: "0",
-            });
             episodesBtn.addEventListener("click", () => openEpisodeListOverlay(controller));
             leftCell.appendChild(episodesBtn);
         }
 
         const muteBtn = document.createElement("button");
         muteBtn.type = "button";
-        muteBtn.classList.add(PLAYER_FOCUSABLE_CLASS);
-        Object.assign(muteBtn.style, {
-            flex: "0 0 auto",
-            width: "28px",
-            height: "28px",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            border: "none",
-            background: "transparent",
-            color: "#fff",
-            cursor: "pointer",
-            padding: "0",
-        });
+        muteBtn.classList.add("prism-player-focusable", "prism-player-icon-btn");
 
         /* A floating panel above the mute icon - matches the volume-flyout convention most
            desktop/TV players use (drag up for louder) rather than a slider that permanently
@@ -919,37 +652,13 @@ export function buildTransportBar(controller, video) {
            fixed` coordinates, computed off muteBtn's own rect in positionVolumePopout,
            aren't affected by the bar's own opacity/transform transitions. */
         const volumePopout = document.createElement("div");
-        Object.assign(volumePopout.style, {
-            position: "fixed",
-            zIndex: "10002",
-            background: "rgba(20,20,20,0.92)",
-            borderRadius: "8px",
-            padding: "14px 10px",
-            boxShadow: "0 12px 32px rgba(0,0,0,0.5)",
-            opacity: "0",
-            transform: "translate(-50%, 8px)",
-            transition: "opacity 0.15s ease, transform 0.15s ease",
-            pointerEvents: "none",
-        });
+        volumePopout.className = "prism-player-volume-popout";
 
         const volumeSlider = document.createElement("input");
         volumeSlider.type = "range";
-        volumeSlider.className = "streaming-player-seek";
+        volumeSlider.className = "prism-player-range prism-player-volume-slider";
         volumeSlider.min = "0";
         volumeSlider.max = "100";
-        Object.assign(volumeSlider.style, {
-            /* writing-mode is the standards-based way to get a vertical range input - every
-               web/Xbox target this app ships to is Chromium-based and supports it (Xbox
-               never renders this element at all, but Android's own WebView also would).
-               direction: rtl puts the minimum at the bottom and the maximum at the top,
-               matching a physical volume slider. */
-            writingMode: "vertical-lr",
-            direction: "rtl",
-            width: "6px",
-            height: "90px",
-            accentColor: "#e5a00d",
-            cursor: "pointer",
-        });
         volumePopout.appendChild(volumeSlider);
         document.body.appendChild(volumePopout);
         controller._volumePopoutEl = volumePopout;
@@ -961,9 +670,7 @@ export function buildTransportBar(controller, video) {
         };
         const showVolumePopout = () => {
             positionVolumePopout();
-            volumePopout.style.opacity = "1";
-            volumePopout.style.pointerEvents = "auto";
-            volumePopout.style.transform = "translate(-50%, 0)";
+            volumePopout.classList.add("is-open");
         };
         /* sliderActive covers the duration of a drag - hideVolumePopout would otherwise fire
            mid-drag whenever the pointer momentarily leaves the (narrow) slider or popout
@@ -972,9 +679,7 @@ export function buildTransportBar(controller, video) {
         let volumeHideTimer = null;
         const hideVolumePopout = () => {
             if (sliderActive) return;
-            volumePopout.style.opacity = "0";
-            volumePopout.style.pointerEvents = "none";
-            volumePopout.style.transform = "translate(-50%, 8px)";
+            volumePopout.classList.remove("is-open");
         };
         /* Debounced rather than immediate - moving the mouse from muteBtn up to the popout
            crosses a small real gap between two non-nested elements, and an immediate
@@ -1045,22 +750,9 @@ export function buildTransportBar(controller, video) {
 
         const audioSubtitlesBtn = document.createElement("button");
         audioSubtitlesBtn.type = "button";
-        audioSubtitlesBtn.classList.add(PLAYER_FOCUSABLE_CLASS);
+        audioSubtitlesBtn.classList.add("prism-player-focusable", "prism-player-icon-btn");
         audioSubtitlesBtn.innerHTML = audioSubtitlesIconMarkup();
         audioSubtitlesBtn.setAttribute("aria-label", "Audio & Subtitles");
-        Object.assign(audioSubtitlesBtn.style, {
-            flex: "0 0 auto",
-            width: "28px",
-            height: "28px",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            border: "none",
-            background: "transparent",
-            color: "#fff",
-            cursor: "pointer",
-            padding: "0",
-        });
         audioSubtitlesBtn.addEventListener("click", () => openAudioSubtitlesOverlay(controller));
 
         rightCell.appendChild(muteBtn);
@@ -1072,20 +764,7 @@ export function buildTransportBar(controller, video) {
         if (fullscreenSupported) {
             const fullscreenBtn = document.createElement("button");
             fullscreenBtn.type = "button";
-            fullscreenBtn.classList.add(PLAYER_FOCUSABLE_CLASS);
-            Object.assign(fullscreenBtn.style, {
-                flex: "0 0 auto",
-                width: "28px",
-                height: "28px",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                border: "none",
-                background: "transparent",
-                color: "#fff",
-                cursor: "pointer",
-                padding: "0",
-            });
+            fullscreenBtn.classList.add("prism-player-focusable", "prism-player-icon-btn");
             const isFullscreen = () => !!(document.fullscreenElement || document.webkitFullscreenElement);
             const syncFullscreenUi = () => {
                 const active = isFullscreen();

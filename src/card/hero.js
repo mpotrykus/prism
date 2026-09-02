@@ -1,8 +1,10 @@
 import { paintWatchlistButton } from "./watchlist.js";
+import { primeYtEmbed, listenToYtEmbed } from "./youtube-embed.js";
+import { escapeHtml } from "../core/html.js";
 import { pickHeroItem, pickHeroItemFromPool, heroArtUrl, heroSubtitleText, heroShouldPlay } from "./logic/hero.js";
 import { extractLogoUrl } from "./logic/catalog.js";
 import { resolveTrailerVideo } from "./logic/trailer.js";
-import { APP_EVENT, WATCHLIST_ADDED_CLASS, MEDIA_TYPE } from "../../constants.js";
+import { APP_EVENT, WATCHLIST_ADDED_CLASS, MEDIA_TYPE } from "../constants.js";
 
 /* Plain glyphs (⏸/▶) render via Android's emoji font as a colored, boxed icon instead of a
    flat monochrome symbol - these SVGs give a crisp currentColor icon on every platform. */
@@ -194,7 +196,7 @@ export class HeroController {
     this._rowsEl.classList.add("overlap-hero");
     const heroTitle = this._item.title || this._item.grandparentTitle || "";
     if (this._logo) {
-      this._titleEl.innerHTML = `<img class="hero-logo" src="${this._ctx.escape(this._logo)}" alt="${this._ctx.escape(heroTitle)}" referrerpolicy="no-referrer" />`;
+      this._titleEl.innerHTML = `<img class="hero-logo" src="${escapeHtml(this._logo)}" alt="${escapeHtml(heroTitle)}" referrerpolicy="no-referrer" />`;
       /* Some Plex clearLogo assets are SVGs served with a Content-Type: image/jpeg
          header (a PMS quirk, not a Prism bug) - browsers refuse to render those through
          an <img>, unlike a mislabeled PNG/JPEG which they'll sniff and render fine. Fall
@@ -251,13 +253,6 @@ export class HeroController {
          request, confirmed via the network log). Setting it on the iframe itself
          overrides the page-level policy for just this element. */
       incoming.innerHTML = `<div class="hero-yt-wrap" style="--yt-cover-scale:${this._video.coverScale ?? 1}"><iframe src="${this._video.embedUrl}" referrerpolicy="strict-origin-when-cross-origin" allow="autoplay; encrypted-media" allowfullscreen></iframe><div class="hero-yt-title-mask"></div></div>`;
-      /* setPlaybackQuality("highres") is advisory only (YouTube can still downgrade for
-         bandwidth), but without it the embed defaults to a lower auto-selected quality.
-         The player's postMessage API isn't ready the instant the iframe fires "load", so
-         retry a few times over ~2s rather than sending once and hoping. Same reasoning
-         applies to the "listening" handshake (needed for infoDelivery/ended detection)
-         and to re-applying an unmuted preference, since the embed URL always starts
-         muted regardless of the user's prior choice. */
       const ytIframe = incoming.querySelector("iframe");
       this._ytIframeEl = ytIframe;
       /* Covers YouTube's own title/channel-name overlay, which the embed draws briefly
@@ -267,27 +262,12 @@ export class HeroController {
          just a fallback in case that event is ever missed. */
       this._ytTitleMaskEl = incoming.querySelector(".hero-yt-title-mask");
       setTimeout(() => this._ytTitleMaskEl?.classList.add("hero-yt-title-mask--hidden"), 3000);
-      ytIframe.addEventListener("load", () => {
-        ytIframe.contentWindow?.postMessage(JSON.stringify({ event: "listening", id: "heroPlayer" }), "*");
-        if (!this._muted) {
-          ytIframe.contentWindow?.postMessage(JSON.stringify({ event: "command", func: "unMute", args: [] }), "*");
-        }
-        /* The embed always autoplays regardless of our desired state (see
-           updatePlayback's earlier no-op call above). Don't correct that by firing
-           pauseVideo immediately here, though - sending a pause as one of the very first
-           commands over this raw (non-official-API) postMessage protocol, before the
-           player's own autoplay sequence has settled, was observed to leave the embed
-           permanently stuck on its unstarted/thumbnail state, never responding to later
-           playVideo commands either (reproduced on the HA Companion app's WebView).
-           Deferring this re-sync a beat, after the natural autoplay has had a chance to
-           actually start, avoids racing it. */
-        setTimeout(() => this.updatePlayback(), 400);
-        for (let i = 0; i < 8; i++) {
-          setTimeout(() => {
-            ytIframe.contentWindow?.postMessage(JSON.stringify({ event: "command", func: "setPlaybackQuality", args: ["highres"] }), "*");
-          }, i * 250);
-        }
-      });
+      /* The embed always autoplays regardless of the desired state (see updatePlayback's
+         earlier no-op call above), so playback is re-synced from onSettled rather than
+         immediately - see youtube-embed.js on why an early command can wedge the embed. */
+      ytIframe.addEventListener("load", () =>
+        primeYtEmbed(ytIframe, { id: "heroPlayer", unmute: !this._muted, onSettled: () => this.updatePlayback() })
+      );
     } else {
       /* No trailer at all (no Plex extra, no TMDB match, etc.) - still advance off the
          static backdrop after a fixed dwell so Home doesn't just sit on one item forever
@@ -463,7 +443,7 @@ export class HeroController {
       this.updatePlayback();
     });
     /* The hero trailer has no idea a full-screen video started playing on top of it
-       (plex-player.js is a separate module, decoupled from the card) - without this it
+       (player.js is a separate module, decoupled from the card) - without this it
        keeps playing, audio and all, behind the player. Only restores playback on close
        if this is what paused it - never overrides a pause the user set themselves via
        the hero's own button. */
@@ -504,38 +484,9 @@ export class HeroController {
         this.updatePlayback();
       }
     });
-    /* YouTube's embed only starts posting "infoDelivery" state updates (playerState 0 =
-       ended) after it receives a "listening" handshake - sent once the iframe loads,
-       see show() above. No official iframe_api script is loaded, so this raw
-       postMessage protocol is the only way to detect trailer-end without it. */
-    window.addEventListener("message", (e) => {
-      /* title-info.js's own trailer can also have a YouTube iframe live at the same time
-         (its modal sits on top of, not instead of, the hero) - both listeners see every
-         message on the window, so without this source check a title-info trailer ending
-         would wrongly advance the hero too, and vice versa. */
-      if (e.source !== this._ytIframeEl?.contentWindow) return;
-      if (typeof e.data !== "string") return;
-      let data;
-      try {
-        data = JSON.parse(e.data);
-      } catch (err) {
-        return;
-      }
-      if (data.event === "infoDelivery" && data.info && data.info.playerState === 0) {
-        this.advance();
-      }
-      if (data.event === "infoDelivery" && data.info && data.info.playerState === 1) {
-        this._ytTitleMaskEl?.classList.add("hero-yt-title-mask--hidden");
-      }
-      /* The only safeguard left against an age-restricted or embedding-disabled video (TMDB's
-         videos endpoint - see tmdb.js - doesn't expose either flag, unlike the old YouTube
-         Data API videos.list call this replaced, which let _resolveVideo pre-filter those
-         out): YouTube posts an error here instead of ever reaching playerState - without
-         this, the hero was just stuck on a dead, silent embed. */
-      const errorCode = data.event === "onError" ? data.info : data.info?.errorCode;
-      if (errorCode !== undefined) {
-        this.advance();
-      }
+    listenToYtEmbed(() => this._ytIframeEl, {
+      onEnded: () => this.advance(),
+      onPlaying: () => this._ytTitleMaskEl?.classList.add("hero-yt-title-mask--hidden"),
     });
   }
 }

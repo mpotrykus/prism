@@ -1,6 +1,27 @@
 import { media } from "./media-facade.js";
 import { notifyReload, updateAbrMonitor } from "./abr.js";
 
+/* audioStreamID on the transcode start URL alone doesn't reliably make Plex mux the
+   requested track - confirmed against a real server, it kept playing the previously-selected
+   audio regardless of that param. The verified mechanism (the same one python-plexapi's own
+   users landed on) is marking the stream "selected" on the Part first:
+   PUT /library/parts/<id>?audioStreamID=...&allParts=1. The transcode decision then honors
+   whatever is currently selected there.
+
+   Every caller treats it as fire-and-forget: a reload awaits it alongside the session stop,
+   and the two local-switch paths (web-fallback.js's hls.js track swap, xbox-bridge.js's
+   direct-play swap) don't wait at all - there it only keeps Plex's server-side bookkeeping in
+   sync for other clients and the next launch. No-ops when no partId was resolved at play()
+   time. */
+export function markAudioStreamSelected(session, audioStreamID) {
+    if (!session?.partId) return Promise.resolve();
+    const putUrl = new URL(`${session.plexUrl}/library/parts/${session.partId}`);
+    putUrl.searchParams.set("audioStreamID", String(audioStreamID));
+    putUrl.searchParams.set("allParts", "1");
+    putUrl.searchParams.set("X-Plex-Token", session.plexToken);
+    return fetch(putUrl, { method: "PUT" }).catch(() => {});
+}
+
 /* Restarting a Plex transcode session, minus the part that differs per platform.
 
    Plex bakes the version, bitrate cap, audio selection AND start offset into a transcode session at
@@ -60,23 +81,8 @@ export function reloadTranscodeSession(controller, overrides = {}, rebuild) {
         isDefaultAudioTrack: nextAudioStreamID == null || nextAudioStreamID === s.audioStreams?.find((a) => a.selected)?.id,
     };
 
-    /* audioStreamID on the transcode start URL alone doesn't reliably make Plex actually mux the
-       requested track - confirmed against a real server, it kept playing the previously-selected audio
-       regardless of this param. The verified mechanism (same one python-plexapi's own users landed on)
-       is marking the stream "selected" on the Part first via
-       PUT /library/parts/<id>?audioStreamID=...&allParts=1 - the transcode decision then honors
-       whatever's currently selected there. Only done when actually switching audio (not on a
-       mediaIndex/qualityCap/seek-only reload) and only when a partId was resolved at play() time. */
-    const selectAudio =
-        overrides.audioStreamID != null && s.partId
-            ? (() => {
-                  const putUrl = new URL(`${s.plexUrl}/library/parts/${s.partId}`);
-                  putUrl.searchParams.set("audioStreamID", String(overrides.audioStreamID));
-                  putUrl.searchParams.set("allParts", "1");
-                  putUrl.searchParams.set("X-Plex-Token", s.plexToken);
-                  return fetch(putUrl, { method: "PUT" }).catch(() => {});
-              })()
-            : Promise.resolve();
+    /* Only on an actual audio switch, not a mediaIndex/qualityCap/seek-only reload. */
+    const selectAudio = overrides.audioStreamID != null ? markAudioStreamSelected(s, overrides.audioStreamID) : Promise.resolve();
 
     /* A new `session` id alone isn't enough either - confirmed against a real server, an in-place
        reload kept getting served the OLD, still-warm transcode session's audio selection even with a

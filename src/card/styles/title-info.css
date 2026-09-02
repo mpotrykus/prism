@@ -113,7 +113,7 @@
 /* B/Escape already backs this overlay out for a controller user - see focus-nav.js's
    controller-active-change comment - so the "X" is a redundant, unreachable-by-D-pad
    dead end for them. Keyed off the card's own host attribute (set in
-   plex-netflix-card.js's _build), same reasoning as rows-poster.css's watchlist-btn rule. */
+   card.js's _build), same reasoning as rows-poster.css's watchlist-btn rule. */
 
 :host([controller-active]) .title-info-close {
     display: none;
@@ -163,7 +163,7 @@
 /* Same Ken-Burns drift as the home hero's .hero-media (hero.css), applied to this art
    layer instead - reuses hero.css's own keyframes rather than redefining them, since
    both files land in the same merged shadow-root stylesheet (see
-   plex-netflix-card.js's STYLE array). Only runs while showing a static backdrop -
+   card.js's STYLE array). Only runs while showing a static backdrop -
    title-info.js removes these classes the moment a trailer starts playing, same as the
    hero does. */
 

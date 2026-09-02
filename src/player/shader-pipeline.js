@@ -14,9 +14,10 @@ import {
     AI_UPSCALING_STORAGE_KEY,
 } from "./ui/shared.js";
 import { updateContentAnalysis } from "./content-analysis.js";
+import { applyFitMode } from "./ui/chrome-menu-options.js";
 import PLAYER_SETTINGS_DEFAULTS from "./player-settings.defaults.json";
 import { hasNativePlayer, platformTag, PLATFORM_TAG } from "./core/platform.js";
-import { SHADER_OFF, TRIPLE_MODE } from "../../constants.js";
+import { SHADER_OFF, TRIPLE_MODE } from "../constants.js";
 /* Circular with xbox-bridge.js (which imports postXboxShaderSettings/postXboxColorBoostSettings
    from content-analysis.js, which itself imports them from this file) - safe for the same reason
    the other cycles in src/player/ui/ are: postShaderEffect/postColorBoost are only referenced
@@ -39,23 +40,18 @@ export function postXboxShaderSettings(controller) {
     postShaderEffect({
         enabled: !!controller._shaderEnabled,
         shaderType: controller._shaderAutoType,
-        /* The bug this fixed: native has no concept of "auto" strength resolution of its own - it
-           only ever renders whatever strength number this message carries. Sending the raw manual
-           slider value here meant Auto mode natively rendered with _shaderStrength (0 unless the
-           viewer had also dragged the slider), a no-op, regardless of what applyXboxContentAnalysis
-           had actually computed into _autoUpscaleStrength - same resolution renderShaderFrame's web
-           path already does per-frame (`controller._upscaleAuto ? controller._autoUpscaleStrength :
-           controller._shaderStrength`). */
+        /* Resolved here because native has no concept of "auto" of its own - it renders whatever
+           strength this message carries. Sending the raw slider value would make Auto mode render
+           with _shaderStrength (0 unless the viewer had also dragged the slider) regardless of what
+           applyXboxContentAnalysis computed. Same resolution renderShaderFrame does per-frame. */
         strength: controller._upscaleAuto ? (controller._autoUpscaleStrength ?? 0) : controller._shaderStrength,
         auto: !!controller._upscaleAuto,
     });
 }
 
-/* Saturation and contrast are independently auto-able now (see setColorBoostSaturationMode/
-   setColorBoostContrastMode below) - each resolves from its own enabled/auto pair and its own
-   auto-derived value (_autoColorBoostSaturationStrength from avgSaturation,
-   _autoColorBoostContrastStrength from lumaStdDev - see content-analysis.js), so there is no
-   longer one shared "strength"/"auto" to send, there are two independent ones. */
+/* Saturation and contrast are independently auto-able: each resolves from its own enabled/auto
+   pair and its own derived value (_autoColorBoostSaturationStrength from avgSaturation,
+   _autoColorBoostContrastStrength from lumaStdDev - see content-analysis.js). */
 /* AI Upscaling's native counterpart - see NativePlayerHost.SetAiUpscaling. preset mirrors the
    family key postXboxShaderSettings sends as shaderType (_shaderAutoType: "anime4k"/
    "live_action"), since AI Upscaling has no algorithm choice of its own - it upgrades whichever
@@ -89,14 +85,13 @@ export function postXboxColorBoostSettings(controller) {
    copy of the video/canvas state - the pipeline's GL resources genuinely are part of
    one playback session's state, not a separable subsystem with its own lifecycle. */
 
-/* controller._shaderType only ever tracks "off" vs. whichever type detectShaderType
-   picked for this video, never a user-chosen algorithm. Gated on _shaderEnabled as well
-   as strength>0 now that on/off is its own toggle (see setShaderEnabled below) rather
-   than dragging the strength slider to 0 being the only way to turn this off - the
-   slider's position is remembered independently of whether the toggle is currently on.
-   Same "toggle IS the persisted setting" immediate-persistence model as Color Boost
-   below (see storedShaderStrength) - whatever this is last set to is what every
-   subsequent video starts from, not a Settings-modal default. */
+/* controller._shaderType only ever tracks "off" vs. whichever type detectShaderType picked for
+   this video, never a user-chosen algorithm. Gated on _shaderEnabled as well as strength > 0, so
+   the slider's position is remembered independently of whether the toggle is on.
+
+   "Toggle IS the persisted setting", the same immediate-persistence model as Color Boost below:
+   whatever this is last set to is what every subsequent video starts from, not a Settings
+   default. */
 export function setShaderStrength(controller, strength) {
     controller._shaderStrength = strength;
     controller._shaderType = resolveShaderType(controller);
@@ -104,12 +99,10 @@ export function setShaderStrength(controller, strength) {
     updateShaderPipeline(controller);
 }
 
-/* Manual Animation/Live-Action override for the Effects menu's Sharpening row
-   (chrome-menu-effects.js) - "auto" defers to detectShaderType's own genre/studio guess
-   (today's behavior), "anime4k"/"live_action" pin the family outright regardless of what
-   the title's genres/studio say, for the case auto-detection got it wrong. Same immediate-
-   persistence model as storedShaderEnabled/storedShaderStrength (see ui/shared.js) - kept
-   here instead of there since this key is only ever read/written from this file. */
+/* Manual Animation/Live-Action override for the Effects menu's Sharpening row: "auto" defers to
+   detectShaderType's genre/studio guess, "anime4k"/"live_action" pin the family outright for the
+   case that guess got it wrong. Kept here rather than in ui/shared.js since this key is only ever
+   read and written from this file. */
 const SHADER_FAMILY_OVERRIDE_STORAGE_KEY = "prism_player_shader_family_override";
 
 export function storedShaderFamilyOverride() {
@@ -118,16 +111,16 @@ export function storedShaderFamilyOverride() {
 }
 
 /* Unlike storedShaderEnabled/storedShaderStrength/storedUpscaleAuto (which deliberately carry
-   the in-player menu's last value forward, see plex-player.js's per-video reset block), the
+   the in-player menu's last value forward, see player.js's per-video reset block), the
    family override is meant to fix a single title's wrong auto-detection, not become a
-   standing preference - so plex-player.js calls this at the start of every new video to wipe
+   standing preference - so player.js calls this at the start of every new video to wipe
    any override left over from whatever was last played, before storedShaderFamilyOverride is
    read for that fresh resolveShaderFamily call. */
 export function resetShaderFamilyOverride() {
     localStorage.removeItem(SHADER_FAMILY_OVERRIDE_STORAGE_KEY);
 }
 
-/* The one place _shaderAutoType is ever computed - both plex-player.js's per-video reset
+/* The one place _shaderAutoType is ever computed - both player.js's per-video reset
    and setShaderFamilyOverride below call this rather than either duplicating the override
    check or calling detectShaderType directly, so there's exactly one spot that has to know
    the override can win outright over genre/studio detection. */
@@ -138,7 +131,7 @@ export function resolveShaderFamily(genres, studio) {
 
 /* Changing the override has to re-resolve _shaderAutoType for the CURRENT video too, not
    just future ones - genres/studio for the title already playing aren't kept anywhere else
-   once _shaderAutoType is first resolved, so plex-player.js's per-video reset stashes them
+   once _shaderAutoType is first resolved, so player.js's per-video reset stashes them
    on the controller (_shaderGenres/_shaderStudio) purely so this can reach them later.
    _shaderType is re-resolved right behind it for the same reason setShaderStrength/
    setShaderEnabled below do - it, not _shaderAutoType, is what renderShaderFrame's web path
@@ -156,52 +149,42 @@ export function setShaderFamilyOverride(controller, override) {
     updateShaderPipeline(controller);
 }
 
-/* Whether the shader actually renders as "off" can't just check _shaderStrength > 0 -
-   in Auto mode the manual slider's position is irrelevant (it isn't applied at all, see
-   renderShaderFrame), so a manual strength of exactly 0 must not force "off" while
-   _upscaleAuto is on. Shared by every place that can change either _shaderEnabled,
-   _shaderStrength, or _upscaleAuto, so none of them can resolve this stale relative to
-   the other two.
+/* Whether the shader renders as "off" can't just check _shaderStrength > 0: in Auto mode the
+   manual slider's position isn't applied at all (see renderShaderFrame), so a manual strength of
+   exactly 0 must not force "off" while _upscaleAuto is on. Shared by every place that can change
+   _shaderEnabled, _shaderStrength or _upscaleAuto, so none of them can resolve this stale relative
+   to the other two.
 
-   Purely about Sharpening now - AI Upscaling (the CNN/FSR chains) used to be coupled in
-   here (a strengthless upgrade meant a remembered 0 strength couldn't read as "off"), but
-   splitting it into its own independent toggle (setAiUpscalingEnabled below) removed that
-   coupling entirely: this function no longer needs to know upgradeTo/strengthless exist at
-   all, which is what it looked like before either upgrade was ever added. */
+   Purely about Sharpening - AI Upscaling has its own independent toggle (setAiUpscalingEnabled). */
 function resolveShaderType(controller) {
     if (!controller._shaderEnabled) return SHADER_OFF;
     const hasStrength = controller._upscaleAuto || controller._shaderStrength > 0;
     return hasStrength ? controller._shaderAutoType : SHADER_OFF;
 }
 
-/* AI Upscaling (the real Anime4K CNN / FSR 1 chains) - split out from Sharpening into its
-   own independent on/off toggle. Confirmed wrong to leave coupled: "Shader Upscaling" running
-   the CNN/FSR chain only when Sharpening also happened to be on and the source needed it isn't
-   upscaling semantics the viewer can reason about as one control - they're different
-   algorithms (a trained network / an analytic edge-directed upscaler vs. a hand-written
-   sharpen kernel) with different costs, and deserve independent on/off state. No strength/
-   auto here - see `strengthless` - there is nothing for either to drive. */
+/* AI Upscaling (the real Anime4K CNN / FSR 1 chains), deliberately its own on/off toggle rather
+   than something Sharpening implies: they're different algorithms with different costs (a trained
+   network or an analytic edge-directed upscaler vs. a hand-written sharpen kernel), and running
+   the CNN chain only when Sharpening happens to also be on isn't semantics a viewer can reason
+   about as one control. No strength or auto here - see `strengthless`, there's nothing to drive. */
 export function setAiUpscalingEnabled(controller, enabled) {
     controller._aiUpscalingEnabled = enabled;
     localStorage.setItem(AI_UPSCALING_STORAGE_KEY, enabled ? "1" : "0");
     updateShaderPipeline(controller);
-    /* Xbox only: postXboxAiUpscalingSettings (called by updateShaderPipeline above) just relays
-       the new flag to native - it does NOT make AI Upscaling actually switch mid-playback.
-       NativePlayerHost.SetAiUpscaling only updates its own fields; the real work (flipping
-       IsVideoFrameServerEnabled, swapping which visual element is shown, aiUpscale.SetActive)
-       lives in SetAiUpscalePathActive, which only runs from Play/SwitchTitle. Real bug hit and
-       fixed 2026-08-20: without this, toggling the switch while a title was already playing had
-       no visible effect at all until the viewer happened to switch/restart a title - reported as
-       "zero difference when toggling AI Upscaling". _reloadSource (the same in-place restart
-       Quality Cap/Version/audio-track changes and every Xbox seek already use, since a Plex
-       progressive stream can't be repositioned in place) re-runs SwitchTitle at the current
-       position with no other overrides, which re-evaluates SetAiUpscalePathActive with the now-
-       current enabled/preset state. Already safe to call before any title has loaded -
-       reloadXboxSource itself no-ops when controller._session isn't set yet. */
+    /* Xbox only. postXboxAiUpscalingSettings relays the flag to native but does NOT make AI
+       Upscaling switch mid-playback: NativePlayerHost.SetAiUpscaling only updates its own fields,
+       and the real work (flipping IsVideoFrameServerEnabled, swapping the visual element,
+       aiUpscale.SetActive) lives in SetAiUpscalePathActive, which runs only from Play/SwitchTitle.
+       Without the reload below, toggling the switch mid-title did nothing visible at all until the
+       viewer happened to restart something (confirmed on hardware). _reloadSource - the same
+       in-place restart Quality Cap/Version/audio changes and every Xbox seek use, since a Plex
+       progressive stream can't be repositioned in place - re-runs SwitchTitle at the current
+       position, re-evaluating SetAiUpscalePathActive against current state. Safe before any title
+       has loaded: reloadXboxSource no-ops when there's no session. */
     if (isXbox()) controller._reloadSource({});
 }
 
-/* The "more" menu's inline toggle (see chrome.js's openHamburgerMenu) - flips whether the
+/* The "more" menu's inline toggle (see chrome-menu.js's openHamburgerMenu) - flips whether the
    shader runs at all without touching _shaderStrength, so switching back on restores
    whatever strength the slider was already at instead of resetting it. Same immediate-
    persistence model as setShaderStrength above. */
@@ -212,15 +195,11 @@ export function setShaderEnabled(controller, enabled) {
     updateShaderPipeline(controller);
 }
 
-/* Color Boost (contrast/saturation "look" lift) - independent of shader upscaling's
-   on/off state, but shares the same GL pass/canvas (see updateShaderPipeline/
-   renderShaderFrame below) rather than spending a second full-frame GPU pass. Saturation
-   and Contrast are fully independent controls now - each its own enabled/auto pair, each
-   its own Auto|On|Off mode (see colorBoostSaturationModeOf/colorBoostContrastModeOf
-   below) - rather than one shared "Color Boost" enabled flag, since a viewer may want one
-   boosted and not the other. Same "toggle IS the persisted setting" immediate-persistence
-   model as ambient lighting (ambient-pipeline.js's setAmbientEnabled) - no per-video/genre
-   concern to reconcile here either. */
+/* Color Boost (contrast/saturation "look" lift) - independent of shader upscaling's on/off state,
+   but sharing the same GL pass/canvas rather than spending a second full-frame GPU pass. Saturation
+   and Contrast are fully independent controls, each with its own enabled/auto pair and Auto|On|Off
+   mode, since a viewer may want one boosted and not the other. Same immediate-persistence model as
+   ambient lighting. */
 export function setColorBoostSaturationEnabled(controller, enabled) {
     controller._colorBoostSaturationEnabled = enabled;
     localStorage.setItem(COLOR_BOOST_SATURATION_ENABLED_STORAGE_KEY, enabled ? "1" : "0");
@@ -245,11 +224,9 @@ export function setColorBoostContrastStrength(controller, strength) {
     updateShaderPipeline(controller);
 }
 
-/* Same immediate-persistence model as setShaderStrength/setShaderEnabled above - only
-   this on/off flag is written through, never the live-computed strength itself (see
-   content-analysis.js's sampleContentFrame). Switching auto off falls back to whatever
-   _shaderStrength the slider was last left at, same "toggle overrides, doesn't erase"
-   model setShaderEnabled already uses for the shader on/off toggle above. */
+/* Only this on/off flag is persisted, never the live-computed strength (see
+   content-analysis.js's sampleContentFrame): switching auto off falls back to whatever
+   _shaderStrength the slider was last left at. */
 export function setUpscaleAuto(controller, enabled) {
     controller._upscaleAuto = enabled;
     controller._shaderType = resolveShaderType(controller);
@@ -257,13 +234,9 @@ export function setUpscaleAuto(controller, enabled) {
     updateContentAnalysis(controller);
 }
 
-/* Same immediate-persistence model as setColorBoostSaturationEnabled/setUpscaleAuto above.
-   Only this on/off flag is written through, never the live-computed strength itself (see
-   content-analysis.js's sampleContentFrame) - unchecking always falls back to whatever
-   _colorBoostSaturationStrength the slider was last left at. Independent of
-   setColorBoostContrastAuto below - each auto-derives from its own signal (avgSaturation vs
-   lumaStdDev, see content-analysis.js/shaders.js), so there's no shared auto state left to
-   couple them through. */
+/* Only this flag is persisted, never the live-computed strength - unchecking falls back to
+   whatever _colorBoostSaturationStrength the slider was last left at. Independent of
+   setColorBoostContrastAuto: each derives from its own signal (avgSaturation vs lumaStdDev). */
 export function setColorBoostSaturationAuto(controller, enabled) {
     controller._colorBoostSaturationAuto = enabled;
     localStorage.setItem(COLOR_BOOST_SATURATION_AUTO_STORAGE_KEY, enabled ? "1" : "0");
@@ -277,12 +250,10 @@ export function setColorBoostContrastAuto(controller, enabled) {
     updateContentAnalysis(controller);
 }
 
-/* "auto"/"on"/"off" - the three-way state chrome.js's mode control presents in place of
-   the old separate enabled-toggle + Auto-checkbox pair. Collapses _shaderEnabled/
-   _upscaleAuto (still the two flags everything else here - renderShaderFrame,
-   persistence, Android's mirrored fields - actually keys off) into one value for the UI
-   layer, rather than threading a third piece of state through the rendering/persistence
-   code that already works correctly off the pair. */
+/* "auto"/"on"/"off" - the three-way state the Effects menu's mode control presents. A UI-layer
+   collapse of the _shaderEnabled/_upscaleAuto pair that everything else (renderShaderFrame,
+   persistence, Android's mirrored fields) actually keys off, rather than a third piece of state
+   threaded through code that already works correctly off the pair. */
 export function upscaleModeOf(controller) {
     if (!controller._shaderEnabled) return TRIPLE_MODE.OFF;
     return controller._upscaleAuto ? TRIPLE_MODE.AUTO : TRIPLE_MODE.ON;
@@ -296,8 +267,7 @@ export function setUpscaleMode(controller, mode) {
     setUpscaleAuto(controller, mode === TRIPLE_MODE.AUTO);
 }
 
-/* Same collapsing reasoning as upscaleModeOf/setUpscaleMode above, one independent triple
-   per component now instead of one shared Color Boost mode. */
+/* Same collapsing as upscaleModeOf/setUpscaleMode, one independent triple per component. */
 export function colorBoostSaturationModeOf(controller) {
     if (!controller._colorBoostSaturationEnabled) return TRIPLE_MODE.OFF;
     return controller._colorBoostSaturationAuto ? TRIPLE_MODE.AUTO : TRIPLE_MODE.ON;
@@ -359,7 +329,7 @@ export function updateShaderPipeline(controller) {
     }
     controller._shaderCanvas.style.display = "block";
     controller._videoEl.style.opacity = "0";
-    controller._applyFitMode();
+    applyFitMode(controller, controller._fitMode);
     startShaderLoop(controller);
     /* The loop only draws when a decoded frame arrives, so without this a settings change
        made while paused wouldn't show until playback resumed. */
@@ -380,16 +350,14 @@ function makeDowngradeHandler(controller) {
 }
 
 /* Compiles every preset's chain once and hangs the result on the controller. Each preset's
-   `buildPasses` returns a fixed composition now - deband is either permanently part of it
-   (the CNN/FSR chains) or never part of it (the sharpen presets), see shaders.js's debandPass
-   comment - so unlike the session this briefly grew a deband on/off toggle, there is no longer
-   any setting that changes what a chain consists of after this runs once.
+   `buildPasses` returns a fixed composition - deband is either permanently part of it (the CNN/FSR
+   chains) or never part of it (the sharpen presets), see shaders.js - so no setting changes what a
+   chain consists of after this runs.
 
-   Why the failure is recorded rather than only logged: a preset whose chain doesn't build simply
-   isn't in `chains`, which is indistinguishable from a device that never had that preset - so the
-   Effects row said nothing at all, and "the upgrade is broken here" looked identical to "there is
-   no upgrade here". Diagnosing that cost three rounds of probing a phone. idleUpgradeLabel
-   reports these. */
+   Build failures are recorded, not just logged: a preset whose chain didn't build simply isn't in
+   `chains`, which is indistinguishable from a device that never had that preset, so the Effects row
+   said nothing at all and "the upgrade is broken here" looked identical to "there is no upgrade
+   here". idleUpgradeLabel reports these. */
 function buildShaderChains(controller, gl, isWebGl2) {
     const chains = {};
     const chainErrors = {};
@@ -509,19 +477,15 @@ export function upgradedPresetKey(controller, familyKey) {
 
 /* What is *actually* rendering, as opposed to what upgradedPresetKey says could render.
 
-   The difference matters because a preset can be built and still not be chosen: both CNN and
-   FSR carry an upscale gate, and neither runs when the picture is being downscaled to fit the
-   window. upgradedPresetKey knows nothing about geometry, so asking it alone made the Effects
-   row claim FSR was the preset and hide the strength slider - while the sharpen chain was the
-   one really running, leaving its strength unadjustable. _shaderActivePreset is what
-   chooseRenderPreset settled on last frame, so it accounts for the gate and the perf downgrade
-   both.
+   The difference matters because a preset can be built and still not be chosen: both CNN and FSR
+   carry an upscale gate, and neither runs when the picture is being downscaled to fit the window.
+   upgradedPresetKey knows nothing about geometry, so asking it alone made the Effects row claim FSR
+   was the preset and hide the strength slider while the sharpen chain was really running, leaving
+   its strength unadjustable. _shaderActivePreset is what chooseRenderPreset settled on last frame,
+   so it accounts for both the gate and the perf downgrade.
 
-   Falls back to upgradedPresetKey when the shader isn't rendering at all: there is no "active"
-   preset then, and describing what *would* run is the useful answer for a menu. No longer
-   special-cases "Sharpening is off" as "nothing could be active" - now that AI Upscaling is
-   independently toggleable, it can be the only thing rendering while Sharpening sits off, and
-   _shaderActivePreset already reflects that correctly every frame it runs. */
+   Falls back to upgradedPresetKey when nothing is rendering: there's no "active" preset then, and
+   describing what *would* run is the useful answer for a menu. */
 export function activePresetKey(controller, familyKey) {
     const active = controller._shaderActivePreset;
     if (active && controller._shaderChains?.[active]) return active;
@@ -572,10 +536,9 @@ export function idleUpgradeLabel(controller, familyKey) {
     return `${label} idle - source not upscaled`;
 }
 
-/* Releases this session's GL/canvas/DOM resources. Previously inlined into
-   web-fallback.js's teardownWeb, which meant every field this module added had to be
-   remembered in a second file - the pass chains own GPU objects (FBOs, intermediate
-   textures, programs) that a field-nulling block in teardownWeb can't reach at all. */
+/* Releases this session's GL/canvas/DOM resources. Lives here rather than in web-fallback.js's
+   teardownWeb because the pass chains own GPU objects (FBOs, intermediate textures, programs) that
+   a field-nulling block in another file can't reach. */
 export function teardownShaderPipeline(controller) {
     stopShaderLoop(controller);
     if (controller._shaderResizeHandler) {
@@ -601,15 +564,13 @@ export function teardownShaderPipeline(controller) {
 }
 
 /* Driven by decoded video frames (requestVideoFrameCallback), not display refresh.
-   requestAnimationFrame fires at the panel's rate, so on a 24fps source at 60Hz the old loop
-   re-ran the entire chain 2-3 times per decoded frame and threw away identical output - free
-   at one sharpen pass, but 2.5x wasted GPU work at ten CNN passes, which is what made the
-   difference between the Anime4K chain fitting the budget on a phone and not. rVFC also hands
-   us metadata.mediaTime, which is what perf-watchdog.js measures against.
+   requestAnimationFrame fires at the panel's rate, so a 24fps source on a 60Hz panel re-runs the
+   whole chain 2-3x per decoded frame for identical output - free at one sharpen pass, 2.5x wasted
+   GPU work at ten CNN passes, which is the difference between the Anime4K chain fitting a phone's
+   budget and not. rVFC also hands us metadata.mediaTime, which perf-watchdog.js measures against.
 
-   rAF remains the fallback for browsers without rVFC. Both paths render only while frames
-   arrive, so a paused player draws nothing - see renderShaderOnce for the cases that then need
-   an explicit repaint. */
+   rAF remains the fallback where rVFC is unavailable. Both render only while frames arrive, so a
+   paused player draws nothing - see renderShaderOnce for the cases that then need a repaint. */
 export function startShaderLoop(controller) {
     if (controller._shaderLoopActive) return;
     controller._shaderLoopActive = true;
@@ -646,12 +607,11 @@ export function stopShaderLoop(controller) {
     controller._shaderVfcId = null;
 }
 
-/* One-shot repaint for the cases a frame-driven loop can't cover: the canvas replaces the
-   video element while this pipeline is on, so anything that changes what should be on screen
-   without a new decoded frame arriving needs an explicit draw. Two real cases - a settings
-   change while paused (the strength slider used to apply visibly because rAF was redrawing
-   regardless), and a window resize while paused (the canvas would otherwise keep the previous
-   size and letterbox wrongly). */
+/* One-shot repaint for what a frame-driven loop can't cover: the canvas replaces the video
+   element while this pipeline is on, so anything changing what should be on screen without a new
+   decoded frame needs an explicit draw. Two real cases: a settings change while paused, and a
+   window resize while paused (which would otherwise leave the canvas at its previous size,
+   letterboxing against the wrong rect). */
 export function renderShaderOnce(controller) {
     if (!controller._shaderGl || !controller._videoEl) return;
     renderShaderFrame(controller, performance.now());
@@ -681,9 +641,9 @@ function chooseRenderPreset(controller, video, familyKey, displayW, displayH, up
     if (!chains) return null;
 
     const candidates = [];
-    /* upgradedPresetKey already encodes every reason the upgrade might not apply (AI Upscaling's
-       own toggle, a perf downgrade, the chain not existing on this device) - Sharpening's own
-       on/off state plays no part in it any more, now that the two are independent toggles. */
+    /* upgradedPresetKey already encodes every reason the upgrade might not apply: AI Upscaling's
+       own toggle, a perf downgrade, the chain not existing on this device. Sharpening's on/off
+       state plays no part in it - they're independent toggles. */
     const upgrade = upgradedPresetKey(controller, familyKey);
     if (upgrade !== familyKey) candidates.push(upgrade);
     candidates.push(familyKey);
@@ -724,41 +684,29 @@ export function renderShaderFrame(controller, timestamp = 0, mediaTimeSec = null
     const dpr = window.devicePixelRatio || 1;
     const displayW = Math.round((window.innerWidth || document.documentElement.clientWidth) * dpr);
     const displayH = Math.round((window.innerHeight || document.documentElement.clientHeight) * dpr);
-    /* Sharpening, AI Upscaling, and Color Boost are three independent toggles sharing this one
-       GL pass. When Sharpening is off (whether or not AI Upscaling or Color Boost is on),
-       there's still no compiled "plain" program to fall back to for the family-key argument
-       chooseRenderPreset needs - reuse whichever algorithm this title's genre auto-detected
-       (_shaderAutoType) with sharpen forced to 0, which both sharpen shaders reduce to an exact
-       passthrough for (see glsl/sharpen-anime.frag.glsl / sharpen-cas.frag.glsl - zero sharpen
-       strength leaves the sharpen stage a no-op either way). Whether the AI Upscaling upgrade
-       itself is tried at all is now entirely upgradedPresetKey's own call (controller._aiUpscalingEnabled),
-       not gated on this. */
+    /* Sharpening, AI Upscaling and Color Boost are three independent toggles sharing this one GL
+       pass. With Sharpening off there's no compiled "plain" program to hand chooseRenderPreset as
+       its family-key argument, so reuse whichever algorithm this title auto-detected
+       (_shaderAutoType) with sharpen forced to 0 - both sharpen shaders reduce to an exact
+       passthrough at zero strength. Whether the AI Upscaling upgrade is tried at all is entirely
+       upgradedPresetKey's call, not gated on this. */
     const programType = controller._shaderType !== SHADER_OFF ? controller._shaderType : controller._shaderAutoType;
-    /* Auto strength (see content-analysis.js) writes straight to _autoUpscaleStrength/
-       _autoColorBoostSaturationStrength/_autoColorBoostContrastStrength rather than through
-       setShaderStrength/setColorBoostSaturationStrength/setColorBoostContrastStrength - those
-       persist to localStorage, which would clobber the remembered manual slider position on
-       every sample tick. Resolved here instead, same shape as _shaderAutoType being resolved
-       into programType just above. */
+    /* Auto strength writes straight to the _auto* fields rather than through the setters, which
+       persist to localStorage and would clobber the remembered manual slider position on every
+       sample tick. Resolved here instead. */
     const upscaleStrength = controller._upscaleAuto ? (controller._autoUpscaleStrength ?? 0) : controller._shaderStrength;
     /* Sharpening's own kernel/strength, computed independently of whichever preset
-       chooseRenderPreset ends up rendering. Needed for two different consumers now: the plain
-       family candidate (as before), and - since the two toggles stack rather than one
-       superseding the other - AI Upscaling's own trailing sharpen pass, which must apply
-       Sharpening's real tuning, not the upgrade preset's own fixed, strength-less placeholder
-       scale/sharpen/kernel. Same "0 strength must mean off, not the type's own MIN tuning"
-       gating chooseRenderPreset's family candidate already uses - see its own comment for why
-       upscaleStrength > 0 is what makes a live 0 actually read as off. */
+       chooseRenderPreset renders. Two consumers: the plain family candidate, and - since the two
+       toggles stack rather than one superseding the other - AI Upscaling's trailing sharpen pass,
+       which must apply Sharpening's real tuning, not the upgrade preset's fixed strength-less
+       placeholder. Same "0 strength must mean off, not the type's MIN tuning" gate
+       chooseRenderPreset's family candidate uses. */
     const sharpeningActive = controller._shaderType !== SHADER_OFF && upscaleStrength > 0;
     const sharpeningTuning = sharpeningActive ? shaderTuningAt(programType, upscaleStrength) : { scale: 1, sharpen: 0, kernel: 1 };
-    /* Saturation and Contrast each have their own independent Auto|On|Off mode now (see
-       colorBoostSaturationModeOf/colorBoostContrastModeOf) and their own auto-derived value
-       (_autoColorBoostSaturationStrength from avgSaturation, _autoColorBoostContrastStrength
-       from lumaStdDev - see content-analysis.js/shaders.js's autoContrastBoostStrength) -
-       there's no shared strength or auto state left to resolve together. A component whose
-       mode is "off" resolves to strength 0, which colorBoostAt's own min-lerp already turns
-       into an exact 1.0 (no-op) for that component - no separate enabled-gate branch needed
-       around the colorBoostAt call itself. */
+    /* Saturation and Contrast each have their own Auto|On|Off mode and their own derived value
+       (avgSaturation, lumaStdDev - see content-analysis.js). A component whose mode is "off"
+       resolves to strength 0, which colorBoostAt's min-lerp turns into an exact 1.0 no-op, so no
+       separate enabled-gate branch is needed around the call. */
     const boostSaturationStrength = controller._colorBoostSaturationEnabled
         ? (controller._colorBoostSaturationAuto ? (controller._autoColorBoostSaturationStrength ?? 0) : controller._colorBoostSaturationStrength)
         : 0;
@@ -838,11 +786,10 @@ export function renderShaderFrame(controller, timestamp = 0, mediaTimeSec = null
             uFrameSeed: (controller._shaderFrameSeed = ((controller._shaderFrameSeed ?? 0) + 1) % 4096),
         },
     });
-    /* Only the multi-pass presets are measured. Timing the single-pass fallback would be
-       pointless - there is nothing cheaper to fall back to, and it is the same one pass this
-       player shipped with before any of this existed. Media time comes from rVFC's metadata
-       when the loop has it and video.currentTime otherwise; the watchdog compares it against
-       wall time, which is what makes the measurement independent of refresh rate. */
+    /* Only the multi-pass presets are measured - there is nothing cheaper to fall back to from
+       the single-pass one. Media time comes from rVFC's metadata when the loop has it and
+       video.currentTime otherwise; the watchdog compares it against wall time, which makes the
+       measurement independent of refresh rate. */
     if (chosen.preset.passes.length > 1) {
         /* Frame counts are report-only (see the watchdog's dropRate) - they catch the case the
            wall-vs-media ratio is blind to, where a dropped frame skips both clocks equally. */

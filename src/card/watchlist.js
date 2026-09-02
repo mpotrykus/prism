@@ -1,17 +1,17 @@
 /* Plex "My List" (watchlist) add/remove. Both actions go through
    discover.provider.plex.tv, scoped by account token (not the server-specific
-   plex_token) - see plex-auth.js's Plex Home comments for why account-level vs.
+   plex_token) - see plex/auth.js's Plex Home comments for why account-level vs.
    server-level tokens matter. A watchlist ratingKey lives in a different ID space than
    this server's /library/metadata, so it has to be re-resolved by normalized title
    match (see logic/watchlist-match.js) before either action can target it. */
 import { normalizeTitle } from "./logic/watchlist-match.js";
-import { WATCHLIST_ADDED_CLASS, MEDIA_TYPE } from "../../constants.js";
+import { WATCHLIST_ADDED_CLASS, MEDIA_TYPE } from "../constants.js";
 
 /* Single paint routine for the watchlist button's "added" state - previously
    duplicated separately in the hero, poster, and title-info render paths. */
 export function paintWatchlistButton(btnEl, added) {
   btnEl.classList.toggle(WATCHLIST_ADDED_CLASS, added);
-  /* title-info's watchlist button carries a separate icon+label span (see plex-netflix-card.js's
+  /* title-info's watchlist button carries a separate icon+label span (see card.js's
      template) so a stacked description can sit under the icon on desktop - hero's and rows.js's
      poster watchlist buttons don't, and just take the plain textContent path instead. */
   const icon = btnEl.querySelector?.(".title-info-action-icon");

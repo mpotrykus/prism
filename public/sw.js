@@ -3,21 +3,18 @@ const IMAGE_CACHE = "prism-plex-images-v1";
 /* Per-image fetch timestamps and the configurable TTL below - kept out of IMAGE_CACHE
    itself since opaque (no-cors) image responses can't have custom headers attached to
    carry a timestamp. Names/keys here are duplicated in image-cache.js (an ES module
-   settings.js can import; this classic-script SW can't) - keep both in sync by hand. */
+   the app can import; this classic-script SW can't) - keep both in sync by hand. */
 const IMAGE_META_CACHE = "prism-plex-image-meta-v1";
 const SETTINGS_CACHE = "prism-image-cache-settings-v1";
 const TTL_KEY = `${self.location.origin}/__prism__/image-cache-ttl-ms`;
 const DEFAULT_IMAGE_CACHE_TTL_MS = 7 * 86400000;
-const SHELL_FILES = [
-  "./",
-  "./index.html",
-  "./app.js",
-  "./vault.js",
-  "./settings.js",
-  "./plex-netflix-card.js",
-  "./manifest.webmanifest",
-  "./assets/prism-logo.svg",
-];
+/* Only files that exist verbatim in a production build. cache.addAll() rejects the WHOLE
+   batch if any one request 404s, which then rejects install's waitUntil and leaves the worker
+   never installed - so listing a raw source path here (./app.js, ./settings.js, ...) doesn't
+   just miss that file, it silently disables offline support entirely. Vite emits the app as a
+   content-hashed assets/index-<hash>.js, so there is no stable name to list for it; the
+   network-first handler below caches it on first load instead. */
+const SHELL_FILES = ["./", "./index.html", "./manifest.webmanifest", "./assets/prism-logo.svg"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(SHELL_CACHE).then((cache) => cache.addAll(SHELL_FILES)));
@@ -48,7 +45,7 @@ function getImageCacheTtlMs() {
 }
 
 /* Network-first for the app shell, not cache-first: this app changes often during
-   development, and a cache-first policy silently serves a stale plex-netflix-card.js
+   development, and a cache-first policy silently serves a stale card.js
    even after the on-disk file is edited (bit us once already). Falling back to cache
    only on network failure still gets the offline-install benefit without that trap. */
 function networkFirstShell(request) {

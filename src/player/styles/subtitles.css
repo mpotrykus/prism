@@ -1,0 +1,202 @@
+/* The Audio & Subtitles panel and the on-video subtitle overlay. */
+
+.prism-player-as-panel {
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 10003;
+    width: min(820px, 92vw);
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    background: var(--player-drawer-bg);
+    font-family: var(--player-font);
+    box-sizing: border-box;
+    padding: 20px 32px 24px;
+    opacity: 0;
+    transform: translateX(20px);
+    transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+.prism-player-as-panel.is-open {
+    opacity: 1;
+    transform: translateX(0);
+}
+
+.prism-player-as-close {
+    position: absolute;
+    top: 16px;
+    right: 16px;
+    width: 28px;
+    height: 28px;
+    font-size: 16px;
+}
+
+/* Two side-by-side columns; each caps its own height and scrolls independently rather than
+   the two having to match heights. */
+.prism-player-as-grid {
+    display: flex;
+    gap: 64px;
+    margin-top: 12px;
+    overflow: hidden;
+}
+
+.prism-player-as-column {
+    flex: 1 1 0;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+.prism-player-as-heading {
+    flex: 0 0 auto;
+    color: var(--player-fg);
+    font-size: 15px;
+    font-weight: 700;
+    padding-bottom: 10px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.25);
+}
+
+/* overflow-x is explicitly hidden: per spec, leaving it at "visible" while overflow-y is
+   "auto" implicitly upgrades it to "auto" too, which surfaced a horizontal scrollbar
+   whenever a row's text nudged past the column's width. */
+.prism-player-as-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    max-height: calc(100vh - 130px);
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding-top: 16px;
+}
+
+/* Search field, Search button and Off button share one full-bleed-minus-gutter footprint. */
+.prism-player-as-field {
+    flex: 0 0 auto;
+    display: block;
+    width: calc(100% - 32px);
+    margin: 0 16px 8px;
+    padding: 9px 12px;
+    border-radius: 8px;
+    border: 1px solid var(--player-hairline);
+    background: rgba(255, 255, 255, 0.06);
+    color: var(--player-fg);
+    font-size: 13px;
+    font-family: var(--player-font);
+    box-sizing: border-box;
+}
+
+.prism-player-as-btn {
+    flex: 0 0 auto;
+    display: block;
+    width: calc(100% - 32px);
+    margin: 0 16px 10px;
+    padding: 9px;
+    border-radius: 8px;
+    border: none;
+    background: var(--player-accent);
+    color: var(--player-on-accent);
+    font-size: 13px;
+    font-weight: 700;
+    cursor: pointer;
+    box-sizing: border-box;
+}
+
+.prism-player-as-btn--ghost {
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    background: var(--player-surface);
+    color: var(--player-fg);
+    font-weight: 600;
+}
+
+/* Fills whatever height is left in the column after heading/input/button - the one and only
+   scroll region for that column, not a second fixed-height scroller nested inside it. */
+.prism-player-as-results {
+    flex: 1 1 auto;
+    min-height: 0;
+    font-size: 13px;
+    color: var(--player-fg-dim);
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding: 0 16px;
+}
+
+.prism-player-as-result-row {
+    display: block;
+    width: 100%;
+    text-align: left;
+    padding: 9px 4px;
+    background: transparent;
+    color: var(--player-fg);
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 13px;
+    margin-bottom: 2px;
+    box-sizing: border-box;
+}
+
+.prism-player-as-result-row:hover {
+    background: rgba(255, 255, 255, 0.1);
+}
+
+.prism-player-as-sync-row {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin: 0 16px 10px;
+    gap: 10px;
+}
+
+.prism-player-as-sync-label {
+    font-size: 13px;
+    color: var(--player-fg-dim);
+}
+
+.prism-player-as-sync-buttons {
+    display: flex;
+    gap: 6px;
+    flex: 0 0 auto;
+}
+
+.prism-player-as-step-btn {
+    flex: 0 0 auto;
+    width: 30px;
+    height: 30px;
+    border-radius: 6px;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    background: var(--player-surface);
+    color: var(--player-fg);
+    font-size: 16px;
+    font-weight: 700;
+    line-height: 1;
+    cursor: pointer;
+}
+
+/* Cues are drawn here rather than natively (a <track> in "showing" mode) because the
+   shader/Color Boost canvas paints from the raw decoded frame with the <video> at opacity 0,
+   and that frame never includes the browser's separately-composited caption layer - native
+   rendering would work until either effect turned on, then silently vanish. */
+.prism-player-subtitles {
+    position: fixed;
+    left: 5%;
+    right: 5%;
+    bottom: 85px;
+    z-index: 10001;
+    text-align: center;
+    pointer-events: none;
+    color: rgba(235, 235, 235, 0.95);
+    font-family: var(--player-font);
+    font-weight: 700;
+    font-size: 1.4em;
+    line-height: 1.3;
+    text-shadow: 0 2px 6px rgba(0, 0, 0, 0.85);
+    display: none;
+}
+
+.prism-player-subtitles.is-showing {
+    display: block;
+}

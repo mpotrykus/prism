@@ -39,15 +39,12 @@ import { cssObjectFitFor } from "./ui/chrome-menu-options.js";
    outer Fit-mode gap of its own - see applyAutoCropGeometry's own comment for why the
    sizing alone isn't enough there. */
 
-/* Strict on purpose - a genuinely dark SCENE (a night shot, space, a dim room) still
-   almost always has some real detail/variation in it, averaging well above a low luma
-   floor even at the frame's own edges; a true matted-in border is flat, uniform #000 (or
-   very close to it) across its entire width, every single frame. Raising this to be more
-   "forgiving" of compression noise (an earlier version of this file tried 24) backfired
-   badly - it also made a merely-dark scene read as a border, cropping into real picture
-   content on a false trigger. CROP_SAFETY_MARGIN_FRACTION below and the two-sample
-   confirmation in scheduleDetection are what actually cover compression noise now,
-   without needing this threshold to also carry that job. */
+/* Strict on purpose. A genuinely dark SCENE (a night shot, space, a dim room) still has real
+   detail in it and averages well above a low luma floor even at the frame's edges; a true
+   matted-in border is flat, uniform #000 across its whole width, every frame. Raising this to
+   be more forgiving of compression noise (24 was tried) backfires: a merely-dark scene then
+   reads as a border and crops into real picture content. CROP_SAFETY_MARGIN_FRACTION and the
+   two-sample confirmation in scheduleDetection cover compression noise instead. */
 const BLACK_LUMA_THRESHOLD = 10;
 /* A real matted-in border isn't just dark, it's FLAT - uniform #000 (or very close to it)
    across its entire width/height, since it's literally an unexposed edge of the film/video
@@ -250,32 +247,26 @@ function sampleFrameToCanvas(video) {
    BLACK_RANGE_THRESHOLD's own comment for why a border scan needs both: average alone can't
    tell a flat black border apart from a dark-but-detailed scene that happens to average just
    as low. */
-function rowLumaStats(data, w, y) {
+function lumaStats(data, count, indexAt) {
     let sum = 0;
     let min = 255;
     let max = 0;
-    for (let x = 0; x < w; x++) {
-        const i = (y * w + x) * 4;
+    for (let n = 0; n < count; n++) {
+        const i = indexAt(n) * 4;
         const luma = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
         sum += luma;
         if (luma < min) min = luma;
         if (luma > max) max = luma;
     }
-    return { avg: sum / w, range: max - min };
+    return { avg: sum / count, range: max - min };
+}
+
+function rowLumaStats(data, w, y) {
+    return lumaStats(data, w, (x) => y * w + x);
 }
 
 function colLumaStats(data, w, h, x) {
-    let sum = 0;
-    let min = 255;
-    let max = 0;
-    for (let y = 0; y < h; y++) {
-        const i = (y * w + x) * 4;
-        const luma = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
-        sum += luma;
-        if (luma < min) min = luma;
-        if (luma > max) max = luma;
-    }
-    return { avg: sum / h, range: max - min };
+    return lumaStats(data, h, (y) => y * w + x);
 }
 
 function isBlack({ avg, range }) {
@@ -338,13 +329,11 @@ function reconcileSamples(samples) {
     return { top: pad(top), bottom: pad(bottom), left: pad(left), right: pad(right) };
 }
 
-/* The aspect ratio ambient-pipeline.js's own computePictureRect (the letterbox/pillarbox
-   gap ambient lighting fills) and applyAutoCropGeometry above both need to letterbox
-   against - `rawAR` unchanged when Auto-Crop is off or found nothing this title, the
-   CROPPED aspect ratio otherwise. Exported so ambient lighting's own gap sizing stays in
-   sync with the actually-visible (post-crop) picture edges instead of the raw frame's -
-   without this, enabling both features together would glow-panel the OLD letterbox gap
-   while the real picture had already moved to fill more of the screen. */
+/* The aspect ratio both ambient-pipeline.js's computePictureRect and applyAutoCropGeometry
+   letterbox against: `rawAR` unchanged when Auto-Crop is off or found nothing, the CROPPED ratio
+   otherwise. Exported so ambient lighting's gap sizing tracks the actually-visible (post-crop)
+   picture edges - otherwise enabling both together glow-panels the old letterbox gap while the
+   real picture has already moved to fill more of the screen. */
 export function cropAdjustedAspectRatio(controller, rawAR) {
     const insets = controller._autoCropEnabled ? controller._autoCropInsets : null;
     if (!insets) return rawAR;
@@ -403,15 +392,12 @@ export function applyAutoCropGeometry(controller) {
     const insets = controller._autoCropEnabled ? controller._autoCropInsets : null;
 
     if (!insets) {
-        /* objectFit has to be restored explicitly here, not just left alone - a crop that
-           was active a moment ago (Auto-Crop just got turned off, or a title switch reset
-           detection) forced it to "fill" below, and nothing else re-asserts the real
-           Fit/Cover/Stretch value afterward the way applyFitMode does when it runs on its
-           own. Without this, turning Auto-Crop off after it had actually cropped something
-           left the picture permanently stretched to the 100%/100% box instead of
-           letterboxing/covering correctly again. Same reasoning for clipPath - a previously
-           active crop's inset() clip would otherwise keep silently cutting off the picture's
-           own edges even after the crop itself cleared. */
+        /* objectFit must be restored explicitly, not just left alone: a crop that was active a
+           moment ago (Auto-Crop turned off, or a title switch reset detection) forced it to
+           "fill" below, and nothing else re-asserts the real Fit/Cover/Stretch value. Without
+           this, turning Auto-Crop off after it had cropped left the picture permanently stretched
+           to the 100%/100% box. Same for clipPath - a previously active inset() clip would keep
+           cutting the picture's edges after the crop itself cleared. */
         const cssFit = cssObjectFitFor(controller._fitMode || "fit");
         targets.forEach((el) => {
             Object.assign(el.style, { width: "100%", height: "100%", left: "0", top: "0", objectFit: cssFit, clipPath: "none" });

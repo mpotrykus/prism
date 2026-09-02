@@ -18,7 +18,7 @@ export async function acquireWakeLock(controller) {
     /* The browser silently releases the lock whenever the tab is hidden, with no event on the
        lock itself for that - so re-request on the next return to "visible" while a session is
        still open. Attached once for the module's lifetime, not once per playback session:
-       `controller` is the app's one singleton (plex-player.js's `export const player`). */
+       `controller` is the app's one singleton (player.js's `export const player`). */
     if (!visibilityListenerAttached) {
         visibilityListenerAttached = true;
         document.addEventListener("visibilitychange", () => {

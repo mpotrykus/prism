@@ -1,10 +1,11 @@
 /* Row/poster rendering: turning the row shapes logic/catalog.js builds into actual
-   scrollable DOM. Kept as plain DOM-factory functions taking an explicit ctx (escape,
-   watchlist state/actions, open-title-info callback) rather than methods on the card,
+   scrollable DOM. Kept as plain DOM-factory functions taking an explicit ctx (watchlist
+   state/actions, open-title-info callback) rather than methods on the card,
    so this has no hidden dependency on the rest of the card's state. */
 
 import { createRowScroll } from "./row-scroll.js";
-import { WATCHLIST_ADDED_CLASS, MEDIA_TYPE } from "../../constants.js";
+import { escapeHtml } from "../core/html.js";
+import { WATCHLIST_ADDED_CLASS, MEDIA_TYPE } from "../constants.js";
 
 const POSTER_FALLBACK_ICON_SVG =
   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="2" fill="currentColor" stroke="none"/><circle cx="12" cy="5.8" r="1.3" fill="currentColor" stroke="none"/><circle cx="17.4" cy="9.3" r="1.3" fill="currentColor" stroke="none"/><circle cx="17.4" cy="14.7" r="1.3" fill="currentColor" stroke="none"/><circle cx="12" cy="18.2" r="1.3" fill="currentColor" stroke="none"/><circle cx="6.6" cy="14.7" r="1.3" fill="currentColor" stroke="none"/><circle cx="6.6" cy="9.3" r="1.3" fill="currentColor" stroke="none"/></svg>';
@@ -64,12 +65,12 @@ function getPosterImg(src, alt) {
   return img;
 }
 
-export function emptyStateHtml(msg, escape) {
-  return `${EMPTY_STATE_ICON_SVG}<div>${escape(msg)}</div>`;
+export function emptyStateHtml(msg) {
+  return `${EMPTY_STATE_ICON_SVG}<div>${escapeHtml(msg)}</div>`;
 }
 
-export function renderMessage(rowsEl, msg, escape) {
-  rowsEl.innerHTML = `<div class="message">${emptyStateHtml(msg, escape)}</div>`;
+export function renderMessage(rowsEl, msg) {
+  rowsEl.innerHTML = `<div class="message">${emptyStateHtml(msg)}</div>`;
 }
 
 export function renderLoading(rowsEl) {
@@ -94,15 +95,22 @@ export function hideLoadingMore(rowsEl) {
   rowsEl.querySelector(".rows-loading-more")?.remove();
 }
 
-export function buildScrollArrow(dir, scroller, rowScroll) {
+const CHEVRON_PATH = {
+  left: "M15.4 7.4 14 6l-6 6 6 6 1.4-1.4L10.8 12z",
+  right: "M8.6 7.4 10 6l6 6-6 6-1.4-1.4L13.2 12z",
+};
+
+/* `className` is a parameter because the two rows this serves are sized differently:
+   rows-poster.css's .scroll-arrow geometry is tuned around the poster grid's glow-bleed
+   padding, which doesn't fit title-info's smaller episode cards. Everything else about the
+   button - glyph, label, the scroll-by-a-viewport click - is identical, and
+   wireArrowVisibility only toggles a "hidden" class so it works with either. */
+export function buildScrollArrow(dir, scroller, rowScroll, { className = "scroll-arrow", size = 28 } = {}) {
   const btn = document.createElement("button");
-  btn.className = `scroll-arrow ${dir} hidden`;
   btn.type = "button";
+  btn.className = `${className} ${dir} hidden`;
   btn.setAttribute("aria-label", dir === "left" ? "Scroll left" : "Scroll right");
-  btn.innerHTML =
-    dir === "left"
-      ? '<svg viewBox="0 0 24 24" width="28" height="28"><path fill="currentColor" d="M15.4 7.4 14 6l-6 6 6 6 1.4-1.4L10.8 12z"/></svg>'
-      : '<svg viewBox="0 0 24 24" width="28" height="28"><path fill="currentColor" d="M8.6 7.4 10 6l6 6-6 6-1.4-1.4L13.2 12z"/></svg>';
+  btn.innerHTML = `<svg viewBox="0 0 24 24" width="${size}" height="${size}"><path fill="currentColor" d="${CHEVRON_PATH[dir]}"/></svg>`;
   btn.addEventListener("click", (e) => {
     e.stopPropagation();
     const amount = scroller.clientWidth * 0.9 * (dir === "left" ? -1 : 1);
@@ -117,12 +125,14 @@ export function wireArrowVisibility(rowScroll, leftArrow, rightArrow) {
     rightArrow.classList.toggle("hidden", max <= 0 || offset >= max);
   };
   rowScroll.onChange(update);
-  window.addEventListener("resize", () => rowScroll.refresh());
+  /* Two deferred passes: the first catches layout once this row is actually in the
+     document, the second catches late-arriving poster images changing the track's width.
+     Resize is handled by row-scroll.js's own ResizeObserver. */
   requestAnimationFrame(() => rowScroll.refresh());
   setTimeout(() => rowScroll.refresh(), 300);
 }
 
-/* ctx: { escape, isInWatchlist, paintWatchlistButton, onAddToWatchlist, onRemoveFromWatchlist, onOpenTitleInfo } */
+/* ctx: { isInWatchlist, paintWatchlistButton, onAddToWatchlist, onRemoveFromWatchlist, onOpenTitleInfo } */
 export function buildPoster(item, source, { glow = true, landscape = false, itemIndex = null } = {}, ctx) {
   const el = document.createElement("div");
   el.className = landscape ? "poster landscape poster-anim-in" : "poster poster-anim-in";
@@ -156,8 +166,8 @@ export function buildPoster(item, source, { glow = true, landscape = false, item
           : ""
       }
       <div class="caption">
-        <div class="t">${ctx.escape(item.title)}</div>
-        ${item.subtitle ? `<div class="s">${ctx.escape(item.subtitle)}</div>` : ""}
+        <div class="t">${escapeHtml(item.title)}</div>
+        ${item.subtitle ? `<div class="s">${escapeHtml(item.subtitle)}</div>` : ""}
       </div>
     </div>
   `;
@@ -304,7 +314,7 @@ export function renderRows(rowsEl, rows, landscapeEveryNth, ctx, { merge = false
     releasePosterImgClaims();
     rowsEl.innerHTML = "";
     if (!rows.length) {
-      rowsEl.innerHTML = `<div class="empty">${emptyStateHtml("Nothing to show yet.", ctx.escape)}</div>`;
+      rowsEl.innerHTML = `<div class="empty">${emptyStateHtml("Nothing to show yet.")}</div>`;
       return;
     }
   } else {

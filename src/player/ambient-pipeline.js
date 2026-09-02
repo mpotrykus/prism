@@ -16,20 +16,16 @@ function isXbox() {
    equivalent built from AmbientLightSampler/AmbientGlowView in the android/ project,
    since native playback renders in a separate Activity outside this WebView entirely,
    the same wall documented for shader upscaling in docs/plezy-player-comparison.md).
-   Takes the StreamingPlayerController instance as an explicit first argument (same
-   "mixin function" pattern as shader-pipeline.js/native-bridge.js/web-fallback.js)
-   rather than owning a private copy of the video/canvas state.
+   Takes the StreamingPlayerController instance as an explicit first argument, the same
+   pattern as shader-pipeline.js/native-bridge.js/web-fallback.js.
 
-   Samples the controller's own <video> element into a tiny offscreen 2D canvas each
-   tick, averages its four edge strips into RGB colors, and paints those onto four
-   blurred glow panels sitting behind the video. Deliberately does NOT resize or zoom
-   the video at all - it only fills whatever letterbox/pillarbox gap the video's own
-   object-fit:contain already leaves when its aspect ratio doesn't match the viewport's.
-   If the video's aspect ratio happens to match the viewport exactly, there's no gap and
-   ambient lighting is a no-op visually, which is intentional (an earlier version
-   artificially shrank the video to manufacture a margin for every video - reverted since
-   that reads as an unwanted zoom rather than "fill the black bars that are already
-   there").
+   Samples the controller's <video> into a tiny offscreen 2D canvas each tick, averages its four
+   edge strips into RGB colors, and paints those onto four blurred glow panels behind the video.
+   Deliberately does NOT resize or zoom the video: it only fills whatever letterbox/pillarbox gap
+   object-fit:contain already leaves when the aspect ratios don't match. When they do match there
+   is no gap and ambient lighting is a visual no-op, which is intentional - artificially shrinking
+   the video to manufacture a margin reads as an unwanted zoom, not as "fill the black bars that
+   are already there".
 
    Two things have to both be true for the glow to actually show through that gap,
    not just be correctly positioned behind it:
@@ -105,7 +101,7 @@ const AMBIENT_GLOW_REACH_PX = 240;
    where two different slopes met, which read as an unnaturally sudden cutoff. */
 const AMBIENT_FALLOFF_STEPS = 8;
 
-/* The "more" menu's inline toggle (see chrome.js's openHamburgerMenu) - unlike shader
+/* The "more" menu's inline toggle (see chrome-menu.js's openHamburgerMenu) - unlike shader
    upscaling's toggle, this one IS the persisted setting (see storedAmbientEnabled's own
    comment), so flipping it writes through to localStorage immediately rather than only
    ever changing in-memory session state. */
@@ -196,12 +192,10 @@ function makeGlowEdge(edge) {
         position: "absolute",
         display: "flex",
         flexDirection: edge === "top" || edge === "bottom" ? "row" : "column",
-        /* Smaller than an earlier version's blur(80px) - a heavy blur diffuses color
-           out past a narrow gap's own edges (there's nothing but transparency beyond
-           the panel's own box for the blur to pull in), which for a typical letterbox
-           gap only a few dozen px tall diluted most of the color away entirely. The
-           gradient's own cosine-eased falloff (see glowGradient) does most of the
-           softening now. */
+        /* Deliberately modest: a heavy blur diffuses color out past a narrow gap's edges -
+           there's nothing but transparency beyond the panel's box for it to pull in - which for
+           a letterbox gap only a few dozen px tall dilutes most of the color away. The
+           gradient's cosine-eased falloff (see glowGradient) does most of the softening. */
         filter: `blur(${AMBIENT_BLUR_PX}px)`,
         pointerEvents: "none",
     });
@@ -357,16 +351,13 @@ function layoutGlowPanels(controller) {
     const rect = computePictureRect(controller);
     const right = rect.left + rect.width;
     const bottom = rect.top + rect.height;
-    /* Real gap per side, before any AMBIENT_BLUR_PX overscan is added - computePictureRect
-       always makes at least one axis come out exactly 0 (object-fit:contain never
-       leaves a gap on both axes at once, only whichever one doesn't match the
-       viewport's own AR), so a video is letterboxed/pillarboxed on one axis pair far
-       more often than not. Overscan must only extend a side that actually *has* a gap -
-       adding it unconditionally (an earlier version of this fix did) made the
-       already-zero-height/width side of a plain pillarboxed/letterboxed video
-       AMBIENT_BLUR_PX tall/wide anyway, and any tiny mismatch between this computed
-       rect and the browser's real object-fit:contain rendering let a full-width/height
-       bright streak leak through right across the video itself on that side. */
+    /* Real gap per side, before any AMBIENT_BLUR_PX overscan. computePictureRect always makes
+       at least one axis come out exactly 0 - object-fit:contain never leaves a gap on both axes
+       at once - so a video is letterboxed or pillarboxed on one axis pair far more often than
+       not. Overscan must only extend a side that actually HAS a gap: adding it unconditionally
+       gives the already-zero side real height/width, and any tiny mismatch between this computed
+       rect and the browser's real contain rendering then leaks a full-width bright streak right
+       across the video. */
     const topGap = Math.max(0, rect.top);
     const bottomGap = Math.max(0, vh - bottom);
     const leftGap = Math.max(0, rect.left);
@@ -387,16 +378,12 @@ function layoutGlowPanels(controller) {
     setReach("left", leftGap);
     setReach("right", rightGap);
 
-    /* clip is sized to the TRUE gap only, in viewport coordinates - never overscan, and never more
-       than the real gap. When a side has no gap at all, clip collapses to 0 and hides its wrapper
-       entirely regardless of what the wrapper itself wants to paint - this is what makes it safe to
-       give wrapper a flat, unconditional gap+AMBIENT_BLUR_PX size below instead of the three-way
-       `gap > 0 ? gap + overscan : 0` ternary an earlier version needed (back when there was no clip
-       to enforce true visibility, a zero-gap side given any height at all could leak a bright
-       streak across the video on the slightest mismatch between this computed rect and the
-       browser's real object-fit:contain rendering - see the git history for that fix). wrapper is
-       positioned relative to clip (its nearest positioned ancestor - see makeGlowEdge), not the
-       viewport, so its offsets below are deliberately DIFFERENT numbers from clip's own. */
+    /* clip is sized to the TRUE gap only, in viewport coordinates - never overscan, never more
+       than the real gap. A side with no gap collapses clip to 0 and hides its wrapper entirely
+       regardless of what the wrapper wants to paint, which is what makes it safe to give wrapper
+       a flat, unconditional gap+AMBIENT_BLUR_PX size below. wrapper is positioned relative to
+       clip (its nearest positioned ancestor - see makeGlowEdge), not the viewport, so its offsets
+       below are deliberately DIFFERENT numbers from clip's. */
     Object.assign(panels.top.clip.style, { left: "0px", top: "0px", width: `${vw}px`, height: `${topGap}px` });
     Object.assign(panels.top.wrapper.style, {
         left: "0px", top: "0px", width: `${vw}px`, height: `${topGap + AMBIENT_BLUR_PX}px`,
@@ -526,20 +513,17 @@ function sampleZones(data, stride, axisLen, thickness, isHorizontalEdge, atStart
     return colors;
 }
 
-/* Explicit px stop positions (not %, unlike a plain 0%-100% fade) so the fade's own
-   distance is fixed regardless of the panel's own box size - `reach` is layoutGlowPanels'
-   own per-edge value (at least AMBIENT_GLOW_REACH_PX, stretched further for a wider real
-   gap - see that constant's own comment), not the bare constant, so the fade always
-   actually reaches this edge's true gap width instead of potentially falling short of it.
-   Each stop's alpha follows a cosine ease rather than the old flat-hold-then-linear-drop
-   shape. Beyond the last stop's own position, the gradient holds that stop's (fully
-   transparent) color automatically - CSS's normal behavior for any point past a
-   gradient's final explicit stop - which no longer leaves a visible black band for any
-   gap `reach` already covers. All positions are offset by AMBIENT_BLUR_PX to match
-   layoutGlowPanels' own overscan - CSS holds the *first* stop's color for anything
-   before its own position too, so this doesn't shift where full-opacity visually starts
-   (still the true picture edge), it just gives that same full-opacity color real,
-   non-transparent margin for AMBIENT_BLUR_PX worth of blur to sample from. */
+/* Explicit px stop positions rather than percentages, so the fade distance is fixed regardless
+   of the panel's box size. `reach` is layoutGlowPanels' per-edge value (at least
+   AMBIENT_GLOW_REACH_PX, stretched further for a wider gap), not the bare constant, so the fade
+   always reaches this edge's true gap width. Each stop's alpha follows a cosine ease. Past the
+   last stop CSS holds its (fully transparent) color automatically, so no black band appears for
+   any gap `reach` covers.
+
+   All positions are offset by AMBIENT_BLUR_PX to match layoutGlowPanels' overscan. CSS also holds
+   the FIRST stop's color for anything before its position, so this doesn't move where full opacity
+   visually starts (still the true picture edge) - it just gives that color real, non-transparent
+   margin for the blur to sample from. */
 function glowGradient(direction, [r, g, b], reach) {
     const stops = [];
     for (let i = 0; i < AMBIENT_FALLOFF_STEPS; i++) {

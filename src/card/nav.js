@@ -1,8 +1,10 @@
-import { focusAfterPaint, registerNavHandler } from "../../focus-nav.js";
-import { NAV_COMMAND, APP_EVENT, VIEW } from "../../constants.js";
-import { player } from "../../plex-player.js";
+import { focusAfterPaint, registerNavHandler } from "../core/focus-nav.js";
+import { escapeHtml } from "../core/html.js";
+import { NAV_COMMAND, APP_EVENT, VIEW } from "../constants.js";
+import { player } from "../player/player.js";
 import { createRowScroll } from "./row-scroll.js";
 import { wireArrowVisibility } from "./rows.js";
+import { exitSearch } from "./search-page.js";
 
 /* Sidenav: rendering one tab per fetched library, wiring each tab's click, and the
    2D D-pad/gamepad navigation across sidenav + hero + poster rows (there's no single
@@ -26,6 +28,20 @@ const NAV_ICON_NAME_RULES = [
 function iconForLibraryLabel(label) {
   const rule = NAV_ICON_NAME_RULES.find((r) => r.test.test(label || ""));
   return rule ? rule.icon : GENERIC_NAV_ICON_SVG;
+}
+
+/* Rows scroll horizontally independent of one another, so the same array index in two rows
+   can sit at completely different on-screen columns - matching by index made up/down land on
+   a poster with no visual relationship to the one just left. Matching by actual horizontal
+   center position is what "roughly preserving column position" actually requires. */
+function closestByPosition(posters, referenceEl) {
+  if (!posters.length) return null;
+  const refCenter = referenceEl.getBoundingClientRect().left + referenceEl.getBoundingClientRect().width / 2;
+  return posters.reduce((best, el) => {
+    const center = el.getBoundingClientRect().left + el.getBoundingClientRect().width / 2;
+    const bestCenter = best.getBoundingClientRect().left + best.getBoundingClientRect().width / 2;
+    return Math.abs(center - refCenter) < Math.abs(bestCenter - refCenter) ? el : best;
+  });
 }
 
 /* Shared by every place that changes card._currentView to a nav-tab view (a nav-item
@@ -57,7 +73,7 @@ export function wireNavItem(card, el) {
     updateNavActiveState(card);
     card.shadowRoot.querySelector(".content")?.scrollTo({ top: 0, behavior: "instant" });
     card._renderCurrentView();
-    card._advanceHero();
+    card._hero.advance();
     card._centerActiveHeaderNav?.(true);
   });
 }
@@ -96,9 +112,9 @@ function buildNavTabs(card) {
 }
 
 function navItemHtml(card, t, classes) {
-  const label = card._escape(t.label);
+  const label = escapeHtml(t.label);
   const labelHtml = t.sublabel
-    ? `<div class="nav-label-wrap"><span class="nav-label">${label}</span><span class="nav-sublabel">${card._escape(t.sublabel)}</span></div>`
+    ? `<div class="nav-label-wrap"><span class="nav-label">${label}</span><span class="nav-sublabel">${escapeHtml(t.sublabel)}</span></div>`
     : `<span class="nav-label">${label}</span>`;
   return `
           <div class="${classes}" data-view="${t.view}" tabindex="0">
@@ -107,13 +123,11 @@ function navItemHtml(card, t, classes) {
           </div>`;
 }
 
-/* Renders one nav tab per server-All/library entry (config.servers/config.sections)
-   instead of fixed Movies/TV entries - lets Settings' "Discover Libraries" list drive
-   the tabs directly, so it naturally covers however many servers/libraries the account
-   actually has access to. Re-run on every setConfig() after the initial build so
-   re-discovering/renaming/toggling in Settings updates the nav without a full rebuild.
-   Home stays the same static item as before, just now hideable via config.home_enabled
-   instead of being unconditionally present. */
+/* One nav tab per server-All/library entry, so Settings' "Discover Libraries" list drives the
+   tabs directly and naturally covers however many servers and libraries the account has access
+   to. Re-run on every setConfig() after the initial build, so re-discovering, renaming or
+   toggling in Settings updates the nav without a full rebuild. Home is the one static item,
+   hideable via config.home_enabled. */
 export function renderNavSections(card) {
   const homeItem = card.shadowRoot.querySelector(`.nav-top .nav-item[data-view="${VIEW.HOME}"]`);
   const headerHomeItem = card.shadowRoot.querySelector(`.header-nav-item[data-view="${VIEW.HOME}"]`);
@@ -212,11 +226,10 @@ export function wireHeaderNav(card) {
   });
 }
 
-/* Shared "no better target" fallback for every place that drops focus out of the search
-   input without a specific destination in mind. The sidenav's Home tab used to be that
-   fallback everywhere, but it's a poor landing spot - it's not "the first thing on
-   screen," it's a tab you weren't navigating to. Home's actual first item is the hero's
-   More Info button; the search results page has real posters to land on instead. */
+/* Shared "no better target" fallback for every place that drops focus out of the search input
+   without a specific destination in mind. Deliberately not the sidenav's Home tab: that's a
+   tab you weren't navigating to, not the first thing on screen. Home's actual first item is
+   the hero's More Info button; the search results page has real posters to land on. */
 /* card._navItems holds both the mobile-sidenav and desktop-header-nav copy of every view
    (see renderNavSections) - only one of the two is ever actually visible/focusable at a
    given breakpoint, so callers need the visible one, not just [0] (which is always the
@@ -239,7 +252,7 @@ export function focusFirstAvailable(card) {
    to resume wherever focus was *before* the box was opened, rather than landing on
    focusFirstAvailable's generic default. card._searchReturnFocusEl is populated either
    explicitly (gamepad Y toggle, hero up-hand-off below) or generically via the input's own
-   "focus" listener in plex-netflix-card.js (FocusEvent.relatedTarget, covers mouse/Tab entry).
+   "focus" listener in card.js (FocusEvent.relatedTarget, covers mouse/Tab entry).
    The remembered element is often stale by the time this runs - typing a query re-renders
    .rows out from under whatever row was focused - hence the still-focusable check. */
 export function restoreFocusAfterSearch(card) {
@@ -262,7 +275,7 @@ export function dismissSearchKeyboard(card) {
     return;
   }
   card._clearSearchInput();
-  card._exitSearch();
+  exitSearch(card);
   card._searchWrap.classList.remove("expanded");
   restoreFocusAfterSearch(card);
 }
@@ -296,7 +309,7 @@ export function wireSearchToggle(card) {
 
     if (active !== card._searchInput) {
       /* No explicit card._searchReturnFocusEl assignment here - the shadowRoot-wide
-         focusin tracker in plex-netflix-card.js already captured `active` the moment it
+         focusin tracker in card.js already captured `active` the moment it
          was focused by whatever nav command landed on it. */
       card._searchWrap.classList.add("expanded");
       focusAfterPaint(card._searchInput);
@@ -337,20 +350,19 @@ export function wireSearchToggle(card) {
       return true;
     }
     card._clearSearchInput();
-    card._exitSearch();
+    exitSearch(card);
     card._searchWrap.classList.remove("expanded");
     card._searchInput.blur();
     restoreFocusAfterSearch(card);
     return true;
   });
 
-  /* Left/Right are left to the input's own native caret movement, but nothing previously
-     handled Down at all - a text input isn't in wireHomeNav's/wireSearchNav's scope
-     (neither sidenav, hero, nor a poster), so a D-pad/gamepad press there had no owner
-     and just sat in the box. Down always means "leave the input and go into the content
-     below it," unlike the Y toggle above (which restores wherever focus was before
-     search was opened) - so this always lands on focusFirstAvailable rather than
-     card._searchReturnFocusEl. */
+  /* Left/Right are left to the input's own caret movement, but Down needs an owner: a text
+     input is in neither wireHomeNav's nor wireSearchNav's scope (not sidenav, hero or a
+     poster), so a D-pad press there would otherwise just sit in the box. Down always means
+     "leave the input and go into the content below it" - unlike the Y toggle above, which
+     restores wherever focus was before search opened - so it lands on focusFirstAvailable
+     rather than card._searchReturnFocusEl. */
   registerNavHandler((command, e, active) => {
     if (active !== card._searchInput || command !== NAV_COMMAND.DOWN) return false;
     card._searchInput.blur();
@@ -413,7 +425,7 @@ export function wireVirtualKeyboardDismiss(card) {
 }
 
 /* Gamepad Start ("menu" command) opens the player's own hamburger menu while a session is
-   active (see plex-player.js's constructor-level registerNavHandler, gated on this._session) -
+   active (see player.js's constructor-level registerNavHandler, gated on this._session) -
    outside the player there's no equivalent overlay, so Start instead surfaces the app's
    Settings modal, same as clicking the sidenav's Settings button. Scoped the same way
    wireSearchToggle is (suppressed while player/title-info/settings/signin are already up)
@@ -431,13 +443,11 @@ export function wireStartButton(card) {
   });
 }
 
-/* Gamepad Back/Select ("profile" command) opens the Plex Home profile switcher directly,
-   replacing the old Settings > Profiles tab - a controller user no longer has to drill
-   into Settings just to switch profiles. Only meaningful when there's actually more than
-   one Home profile to switch between (card._hasMultipleProfiles - see
-   plex-netflix-card.js's _renderProfileNav), and scoped the same way wireStartButton is,
-   so it doesn't fight the player's own handler or reopen the switcher on top of another
-   overlay. */
+/* Gamepad Back/Select ("profile" command) opens the Plex Home profile switcher directly, so a
+   controller user doesn't have to drill into Settings to switch profiles. Only meaningful when
+   there's more than one Home profile (card._hasMultipleProfiles), and scoped the same way
+   wireStartButton is, so it doesn't fight the player's own handler or reopen the switcher on
+   top of another overlay. */
 export function wireProfileButton(card) {
   registerNavHandler((command) => {
     if (command !== NAV_COMMAND.PROFILE) return false;
@@ -453,7 +463,7 @@ export function wireProfileButton(card) {
 }
 
 /* Escape/Backspace ("back") closes the header's Settings/Profile dropdown (see
-   plex-netflix-card.js's profile-menu-wrap) the same way it closes every other overlay in
+   card.js's profile-menu-wrap) the same way it closes every other overlay in
    this app - the dropdown itself is a plain click target with no gamepad path of its own
    (see wireHomeNav's own note on why .nav-profile is excluded from D-pad nav), so this only
    ever fires for a real keyboard Escape/Backspace. */
@@ -475,7 +485,7 @@ export function wireProfileMenu(card) {
    focus - only one handler ever actually acts on a given keypress since focus is a
    singleton. */
 export function wireHomeNav(card) {
-  /* .nav-profile shares the .nav-item class purely for styling (see plex-netflix-card.js's
+  /* .nav-profile shares the .nav-item class purely for styling (see card.js's
      template) but sits in the header next to the search box, not in the vertical sidenav
      it's styled to match - this list's Up/Down/index-based traversal has no sensible
      relationship to that position, which is exactly the "doesn't work well with
@@ -505,17 +515,14 @@ export function wireHomeNav(card) {
   const focusPoster = (el) => {
     el?.focus();
     if (!el) return;
-    /* Smooth again on both axes - retest against the exact bug that made this instant in
-       the first place before assuming it's fine: a held/repeating d-pad or stick fires the
-       next move every REPEAT_RATE_MS (150ms, focus-nav.js), and native scrollIntoView's
-       "smooth" was previously confirmed on real hardware to sometimes not retarget cleanly
-       when interrupted by the next move before it finished, leaving a held stick never
-       quite settling centered. row-scroll.js's own transform-driven inline (horizontal)
-       centering doesn't have that failure mode (CSS transitions retarget smoothly and
-       predictably when interrupted, unlike that scroll API) - block (vertical) centering
-       below is still the real scrollIntoView against .content, so it's the one actually at
-       risk of reproducing the old bug. If it does, the fix is giving .content the same
-       transform-driven treatment row-scroll.js already gives rows, not reverting to instant. */
+    /* Smooth on both axes, but retest this before assuming it's fine: a held d-pad or stick
+       fires the next move every REPEAT_RATE_MS (150ms), and native scrollIntoView's "smooth"
+       was confirmed on real hardware to sometimes not retarget cleanly when interrupted before
+       it finished, leaving a held stick never quite settling centered. row-scroll.js's
+       transform-driven horizontal centering doesn't have that failure mode (CSS transitions
+       retarget predictably when interrupted); vertical centering below is still a real
+       scrollIntoView against .content, so that's the one at risk. If it reproduces, the fix is
+       giving .content the same transform-driven treatment, not reverting to instant. */
     el.scrollIntoView({ block: "center", inline: "nearest", behavior: "smooth" });
     el.closest(".row-scroller")?.rowScroll?.scrollIntoView(el, { inline: "center", animate: true });
   };
@@ -527,20 +534,6 @@ export function wireHomeNav(card) {
     el?.focus();
     card.shadowRoot.querySelector(".content")?.scrollTo({ top: 0, behavior: "smooth" });
   };
-  /* Rows scroll horizontally independent of one another, so the same array index in two
-     rows can sit at completely different on-screen columns - matching by index made
-     up/down land on a poster with no visual relationship to the one just left. Matching
-     by actual horizontal center position is what "roughly preserving column position"
-     (the comment above wireHomeNav) actually requires. */
-  const closestByPosition = (posters, referenceEl) => {
-    if (!posters.length) return null;
-    const refCenter = referenceEl.getBoundingClientRect().left + referenceEl.getBoundingClientRect().width / 2;
-    return posters.reduce((best, el) => {
-      const center = el.getBoundingClientRect().left + el.getBoundingClientRect().width / 2;
-      const bestCenter = best.getBoundingClientRect().left + best.getBoundingClientRect().width / 2;
-      return Math.abs(center - refCenter) < Math.abs(bestCenter - refCenter) ? el : best;
-    });
-  };
 
   registerNavHandler((command, e, active) => {
     const inSidenav = sidenavItems().includes(active);
@@ -548,25 +541,21 @@ export function wireHomeNav(card) {
     const posterSection = !inSidenav && !inHero && active?.classList?.contains("poster") ? active.closest(".row-section") : null;
 
     if (!inSidenav && !inHero && !posterSection) {
-      /* Every registered handler sees every keydown regardless of which one owns
-         focus - a handler returning false here must NOT assume that means "nothing is
-         focused," only "not focused in my scope" (a modal overlay's own handler may
-         legitimately own this keypress instead). Only the true fresh-load case (no
-         active element anywhere, or it's just document.body/the card host with
-         nothing focused inside) gets the lazy first-D-pad-press starting point;
-         anything else falls through untouched, letting the real owner act instead of
-         this handler stealing focus mid-interaction with some other overlay.
-         document.activeElement resting on document.body is NOT unique to a true fresh
-         load, though - wireLinearNav's focusItem deliberately blurs the previously-active
-         element without calling .focus() on a text/password/number field it's landing on
-         (real focus there would pop the on-screen keyboard just for passing through it -
-         see focus-nav.js), leaving document.activeElement on document.body while, say, the
-         Settings modal is legitimately open and one of its fields is only virtually
-         highlighted. Without the inMainApp(card) check here too, that state looked
-         identical to "nothing focused anywhere" and this handler grabbed a home-screen
-         poster out from under the open modal - confirmed on real hardware: D-pad/stick
-         left-right on a virtually-highlighted Settings field was silently scrolling the
-         home row behind it. */
+      /* Every registered handler sees every keydown regardless of which owns focus, so
+         returning false here must NOT be read as "nothing is focused", only "not focused in my
+         scope" - a modal overlay's handler may legitimately own this press. Only a true
+         fresh-load (no active element anywhere, or just document.body/the card host with
+         nothing focused inside) gets the lazy first-D-pad-press starting point.
+
+         document.activeElement resting on document.body is NOT unique to a fresh load, though:
+         wireLinearNav's focusItem blurs the previously-active element without calling .focus()
+         on a text/password/number field it lands on (real focus there would pop the on-screen
+         keyboard just for passing through), leaving activeElement on document.body while the
+         Settings modal is open with one of its fields only virtually highlighted. Without the
+         inMainApp(card) check that state looks identical to "nothing focused anywhere", and
+         this handler grabs a home-screen poster out from under the open modal - confirmed on
+         hardware: D-pad left/right on a highlighted Settings field silently scrolled the home
+         row behind it. */
       const nothingFocusedYet = (!active || active === document.body || active === card) && inMainApp(card);
       if (nothingFocusedYet && [NAV_COMMAND.UP, NAV_COMMAND.DOWN, NAV_COMMAND.LEFT, NAV_COMMAND.RIGHT].includes(command)) {
         const target = continueWatchingFirstPoster();
@@ -691,7 +680,7 @@ export function wireHomeNav(card) {
    already claims LB/RB there for its row fast-scroll-by-4 gesture, so this only ever fires
    for the sidenav/hero/search-input/nothing-focused cases, never stealing the row gesture.
    Scoped to the main app via inMainApp so it doesn't fight the player's own use of the same
-   command for chapter skip (plex-player.js). Clamped at the tab list's own ends, same as
+   command for chapter skip (player.js). Clamped at the tab list's own ends, same as
    the sidenav's own Left/Right handling in wireHomeNav - no wraparound. */
 export function wireTabSwitch(card) {
   registerNavHandler((command, e, active) => {
@@ -756,15 +745,6 @@ export function wireSearchNav(card) {
       row.items.push(el);
     }
     return rows.sort((a, b) => a.top - b.top);
-  };
-  const closestByPosition = (posters, referenceEl) => {
-    if (!posters.length) return null;
-    const refCenter = referenceEl.getBoundingClientRect().left + referenceEl.getBoundingClientRect().width / 2;
-    return posters.reduce((best, el) => {
-      const center = el.getBoundingClientRect().left + el.getBoundingClientRect().width / 2;
-      const bestCenter = best.getBoundingClientRect().left + best.getBoundingClientRect().width / 2;
-      return Math.abs(center - refCenter) < Math.abs(bestCenter - refCenter) ? el : best;
-    });
   };
 
   registerNavHandler((command, e, active) => {

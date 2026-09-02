@@ -1,0 +1,123 @@
+/* The idle-fade corner buttons, the buffering spinner and the skip-intro/credits button. */
+
+/* Corner buttons anchor themselves at build time (registerControlButton sets the inline
+   left/right offset, since it depends on how many buttons already occupy that side). */
+.prism-player-control-btn {
+    position: fixed;
+    top: 24px;
+    z-index: 10001;
+    width: 40px;
+    height: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    background: transparent;
+    color: var(--player-fg);
+    font-size: 22px;
+    font-weight: 600;
+    line-height: 1;
+    cursor: pointer;
+    opacity: 1;
+    text-shadow: 0 1px 4px rgba(0, 0, 0, 0.85);
+    transition: opacity 0.25s ease, outline-color 0.125s ease;
+}
+
+/* pointer-events goes with the opacity, not opacity alone: a faded-out transport bar spans
+   the full screen width and would still swallow taps meant for the video underneath. */
+.prism-player-chrome-hidden {
+    opacity: 0;
+    pointer-events: none;
+}
+
+/* Independent of the idle-fade row (same reasoning as the skip button): it reflects network
+   and decode state, not user activity, so it stays visible while the rest of the chrome has
+   faded out. pointer-events:none so it never blocks the center play/pause button under it. */
+.prism-player-spinner {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    z-index: 10002;
+    width: 48px;
+    height: 48px;
+    border-radius: 50%;
+    border: 4px solid rgba(255, 255, 255, 0.25);
+    border-top-color: var(--player-fg);
+    animation: prism-player-center-spin 0.8s linear infinite;
+    pointer-events: none;
+    display: none;
+}
+
+.prism-player-spinner.is-visible {
+    display: block;
+}
+
+/* Its own keyframes rather than base.css's: this spinner is centered by transform, so the
+   rotation has to compose with the translate instead of replacing it. */
+@keyframes prism-player-center-spin {
+    from {
+        transform: translate(-50%, -50%) rotate(0deg);
+    }
+    to {
+        transform: translate(-50%, -50%) rotate(360deg);
+    }
+}
+
+.prism-player-skip-btn {
+    position: fixed;
+    bottom: 170px;
+    right: 40px;
+    z-index: 10001;
+    padding: 10px 22px;
+    border-radius: 4px;
+    border: none;
+    background: var(--player-accent);
+    color: var(--player-on-accent);
+    font-size: 13px;
+    font-weight: 700;
+    font-family: var(--player-font);
+    letter-spacing: 0.03em;
+    cursor: pointer;
+    display: none;
+}
+
+.prism-player-skip-btn.is-showing {
+    display: block;
+}
+
+/* The <video> the web fallback creates. object-fit:contain because a <video> is a replaced
+   element and defaults to fill, which stretches to the window's aspect ratio instead of
+   letterboxing against its own background whenever the two don't match. */
+.prism-player-video {
+    position: fixed;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    background: #000;
+    z-index: 10000;
+}
+
+/* Transparent full-screen catcher over the Xbox native video surface: tap toggles play/pause,
+   mousemove reveals the chrome. The video itself is behind the WebView2, so there's no DOM
+   element under the pointer without this. */
+.prism-player-native-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 10000;
+    background: transparent;
+}
+
+.prism-player-stats {
+    position: fixed;
+    top: 24px;
+    left: 24px;
+    z-index: 10001;
+    background: rgba(0, 0, 0, 0.55);
+    color: var(--player-fg);
+    font: 11px/1.6 "SFMono-Regular", Consolas, monospace;
+    padding: 8px 10px;
+    border-radius: 6px;
+    pointer-events: none;
+    white-space: pre;
+}

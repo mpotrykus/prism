@@ -1,5 +1,5 @@
 import { hasNativePlayer } from "../core/platform.js";
-import { wireLinearNav, focusAfterPaint } from "../../../focus-nav.js";
+import { wireLinearNav, focusAfterPaint } from "../../core/focus-nav.js";
 import { media } from "../core/media-facade.js";
 import { parseSubtitleCues, activeCuesAt } from "../core/subtitle-cues.js";
 import * as StreamingSubtitles from "../core/subtitle-provider.js";
@@ -9,7 +9,6 @@ import { trySwitchAudioTrackLocallyXbox } from "../xbox-bridge.js";
 import { setNativeSubtitle, setNativeSubtitleOffset, notifyNativeSubtitleApplied } from "../native-bridge.js";
 import { hideControls, showControls } from "./chrome-controls.js";
 import { closeInlineMenu, renderPickerList } from "./chrome-menu.js";
-import { SHEET_GRADIENT, MENU_SCROLL_CLASS, OVERLAY_CLOSE_BTN_CLASS, PLAYER_FOCUSABLE_CLASS, PLAYER_MENU_ROW_CLASS } from "./shared.js";
 
 /* Audio Track/Subtitles picker (its own right-anchored overlay, opened from the More menu's
    "Audio & Subtitles" row - see chrome-menu.js's renderMainList) plus everything about
@@ -23,8 +22,6 @@ import { SHEET_GRADIENT, MENU_SCROLL_CLASS, OVERLAY_CLOSE_BTN_CLASS, PLAYER_FOCU
    the same reason documented in web-fallback.js's own header comment: every cross-reference
    is only ever called from inside a click handler/`nav` callback, never at module-top-level
    evaluation time. */
-
-const AUDIO_SUBTITLES_CLASS = "streaming-player-audio-subtitles";
 
 function renderAudioSection(controller, content, { setValue, collapse }) {
     content.innerHTML = "";
@@ -72,50 +69,17 @@ export function openAudioSubtitlesOverlay(controller) {
     closeInlineMenu(controller);
 
     const scrim = document.createElement("div");
-    Object.assign(scrim.style, { position: "fixed", inset: "0", zIndex: "10002", background: "transparent" });
+    scrim.className = "prism-player-scrim";
     scrim.addEventListener("click", () => closeAudioSubtitlesOverlay(controller));
 
     const panel = document.createElement("div");
-    Object.assign(panel.style, {
-        position: "fixed",
-        top: "0",
-        right: "0",
-        bottom: "0",
-        zIndex: "10003",
-        width: "min(820px, 92vw)",
-        display: "flex",
-        flexDirection: "column",
-        justifyContent: "center",
-        background: SHEET_GRADIENT,
-        fontFamily: '"Roboto", sans-serif',
-        boxSizing: "border-box",
-        padding: "20px 32px 24px",
-        opacity: "0",
-        transform: "translateX(20px)",
-        transition: "opacity 0.2s ease, transform 0.2s ease",
-    });
+    panel.className = "prism-player-as-panel";
 
     const closeBtn = document.createElement("button");
     closeBtn.type = "button";
-    closeBtn.classList.add(OVERLAY_CLOSE_BTN_CLASS, PLAYER_FOCUSABLE_CLASS);
+    closeBtn.classList.add("prism-player-focusable", "prism-player-overlay-close", "prism-player-as-close");
     closeBtn.setAttribute("aria-label", "Close");
     closeBtn.textContent = "✕";
-    Object.assign(closeBtn.style, {
-        position: "absolute",
-        top: "16px",
-        right: "16px",
-        width: "28px",
-        height: "28px",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        border: "none",
-        background: "transparent",
-        color: "#fff",
-        fontSize: "16px",
-        cursor: "pointer",
-        padding: "0",
-    });
     closeBtn.addEventListener("click", () => closeAudioSubtitlesOverlay(controller));
     panel.appendChild(closeBtn);
 
@@ -124,7 +88,7 @@ export function openAudioSubtitlesOverlay(controller) {
        heights exactly (unlike this control's previous top/bottom-split incarnation,
        nothing here requires the two columns to be the same height). */
     const grid = document.createElement("div");
-    Object.assign(grid.style, { display: "flex", gap: "64px", marginTop: "12px", overflow: "hidden" });
+    grid.className = "prism-player-as-grid";
 
     const audioColumn = buildAudioSubtitlesColumn("Audio");
     /* One data-nav-group per column (read by focus-nav.js's groupOf via closest(), not set
@@ -146,12 +110,11 @@ export function openAudioSubtitlesOverlay(controller) {
     document.body.appendChild(scrim);
     document.body.appendChild(panel);
     controller._audioSubtitlesEl = { scrim, panel };
-    panel.classList.add(AUDIO_SUBTITLES_CLASS);
     /* Gamepad navigation for this overlay. `document` is the root rather than the panel because
        wireLinearNav reads root.activeElement, which only exists on Document/ShadowRoot - a plain
        <div> reports undefined and the handler would never consider itself in scope. focusFirst() is
        required: the handler ignores every command until focus is already inside its own list. */
-    const nav = wireLinearNav(document, `.${AUDIO_SUBTITLES_CLASS} input, .${AUDIO_SUBTITLES_CLASS} button:not(.${OVERLAY_CLOSE_BTN_CLASS})`, {
+    const nav = wireLinearNav(document, '.prism-player-as-panel input, .prism-player-as-panel button:not(.prism-player-overlay-close)', {
         orientation: "horizontal",
         loop: true,
         onBack: () => closeAudioSubtitlesOverlay(controller),
@@ -160,8 +123,7 @@ export function openAudioSubtitlesOverlay(controller) {
     controller._audioSubtitlesNav = nav;
     hideControls(controller);
     requestAnimationFrame(() => {
-        panel.style.opacity = "1";
-        panel.style.transform = "translateX(0)";
+        panel.classList.add("is-open");
     });
 }
 
@@ -198,36 +160,15 @@ export function closeAudioSubtitlesOverlay(controller) {
    where 40vh of actual pixels was cramped rather than just "smaller than desktop". */
 function buildAudioSubtitlesColumn(title) {
     const el = document.createElement("div");
-    Object.assign(el.style, { flex: "1 1 0", minWidth: "0", display: "flex", flexDirection: "column" });
+    el.className = "prism-player-as-column";
 
     const heading = document.createElement("div");
+    heading.className = "prism-player-as-heading";
     heading.textContent = title;
-    Object.assign(heading.style, {
-        flex: "0 0 auto",
-        color: "#fff",
-        fontSize: "15px",
-        fontWeight: "700",
-        paddingBottom: "10px",
-        borderBottom: "1px solid rgba(255,255,255,0.25)",
-    });
     el.appendChild(heading);
 
     const body = document.createElement("div");
-    body.className = MENU_SCROLL_CLASS;
-    /* overflowX explicitly "hidden" here - per spec, leaving it at its default
-       "visible" while overflowY is "auto" gets it implicitly upgraded to "auto" too,
-       which was surfacing a horizontal scrollbar whenever a row's text nudged past the
-       column's width. */
-    Object.assign(body.style, {
-        flex: "1 1 auto",
-        minHeight: "0",
-        maxHeight: "calc(100vh - 130px)",
-        display: "flex",
-        flexDirection: "column",
-        overflowY: "auto",
-        overflowX: "hidden",
-        paddingTop: "16px",
-    });
+    body.className = "prism-player-scroll prism-player-as-body";
     el.appendChild(body);
 
     return { el, body };
@@ -251,59 +192,21 @@ function defaultSubtitleSearchQuery(session) {
 function renderSubtitleSection(controller, content, { collapse }) {
     const input = document.createElement("input");
     input.type = "text";
-    input.classList.add(PLAYER_FOCUSABLE_CLASS);
+    input.classList.add("prism-player-focusable", "prism-player-as-field");
     input.placeholder = "Search subtitles…";
     input.value = defaultSubtitleSearchQuery(controller._session);
-    Object.assign(input.style, {
-        flex: "0 0 auto",
-        display: "block",
-        width: "calc(100% - 32px)",
-        margin: "0 16px 8px",
-        padding: "9px 12px",
-        borderRadius: "8px",
-        border: "1px solid rgba(255,255,255,0.15)",
-        background: "rgba(255,255,255,0.06)",
-        color: "#fff",
-        fontSize: "13px",
-        fontFamily: '"Roboto", sans-serif',
-        boxSizing: "border-box",
-    });
 
     const searchBtn = document.createElement("button");
     searchBtn.type = "button";
-    searchBtn.classList.add(PLAYER_FOCUSABLE_CLASS);
+    searchBtn.classList.add("prism-player-focusable", "prism-player-as-btn");
     searchBtn.textContent = "Search";
-    Object.assign(searchBtn.style, {
-        flex: "0 0 auto",
-        display: "block",
-        width: "calc(100% - 32px)",
-        margin: "0 16px 10px",
-        padding: "9px",
-        borderRadius: "8px",
-        border: "none",
-        background: "#e5a00d",
-        color: "#161619",
-        fontSize: "13px",
-        fontWeight: "700",
-        cursor: "pointer",
-        boxSizing: "border-box",
-    });
 
     /* flex:1 1 auto/minHeight:0 fills exactly whatever height is left in the parent
        column after the heading/input/button above (see buildAudioSubtitlesColumn) -
        the one and only scroll region for this column, not a second fixed-height
        (previously 260px) scroller nested inside that column's own. */
     const resultsEl = document.createElement("div");
-    resultsEl.className = MENU_SCROLL_CLASS;
-    Object.assign(resultsEl.style, {
-        flex: "1 1 auto",
-        minHeight: "0",
-        fontSize: "13px",
-        color: "rgba(255,255,255,0.7)",
-        overflowY: "auto",
-        overflowX: "hidden",
-        padding: "0 16px",
-    });
+    resultsEl.className = "prism-player-scroll prism-player-as-results";
 
     const runSearch = async () => {
         if (!input.value.trim()) {
@@ -322,29 +225,9 @@ function renderSubtitleSection(controller, content, { collapse }) {
             results.forEach((r) => {
                 const row = document.createElement("button");
                 row.type = "button";
-                row.classList.add(PLAYER_FOCUSABLE_CLASS, PLAYER_MENU_ROW_CLASS);
+                row.classList.add("prism-player-focusable", "prism-player-menu-row", "prism-player-as-result-row");
                 const isApplied = subtitleStore.isAppliedResult(appliedRatingKey, r);
                 row.textContent = `${r.label} (${r.languageCode})${isApplied ? "  ✓" : ""}`;
-                Object.assign(row.style, {
-                    display: "block",
-                    width: "100%",
-                    textAlign: "left",
-                    padding: "9px 4px",
-                    background: "transparent",
-                    color: "#fff",
-                    border: "none",
-                    borderRadius: "8px",
-                    cursor: "pointer",
-                    fontSize: "13px",
-                    marginBottom: "2px",
-                    boxSizing: "border-box",
-                });
-                row.addEventListener("mouseenter", () => {
-                    row.style.background = "rgba(255,255,255,0.1)";
-                });
-                row.addEventListener("mouseleave", () => {
-                    row.style.background = "transparent";
-                });
                 row.addEventListener("click", () => applySubtitleResult(controller, r, row, collapse));
                 resultsEl.appendChild(row);
             });
@@ -380,20 +263,10 @@ const SUBTITLE_OFFSET_STEP_MS = 250;
 
 function buildSubtitleOffsetRow(controller) {
     const row = document.createElement("div");
-    Object.assign(row.style, {
-        flex: "0 0 auto",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "space-between",
-        margin: "0 16px 10px",
-        gap: "10px",
-    });
+    row.className = "prism-player-as-sync-row";
 
     const label = document.createElement("span");
-    Object.assign(label.style, {
-        fontSize: "13px",
-        color: "rgba(255,255,255,0.7)",
-    });
+    label.className = "prism-player-as-sync-label";
     const renderLabel = () => {
         const ms = controller._subtitleOffsetMs || 0;
         label.textContent = `Sync: ${ms > 0 ? "+" : ""}${ms}ms`;
@@ -403,22 +276,9 @@ function buildSubtitleOffsetRow(controller) {
     const makeStepBtn = (glyph, delta) => {
         const btn = document.createElement("button");
         btn.type = "button";
-        btn.classList.add(PLAYER_FOCUSABLE_CLASS);
+        btn.classList.add("prism-player-focusable", "prism-player-as-step-btn");
         btn.textContent = glyph;
         btn.setAttribute("aria-label", delta < 0 ? "Subtitles earlier" : "Subtitles later");
-        Object.assign(btn.style, {
-            flex: "0 0 auto",
-            width: "30px",
-            height: "30px",
-            borderRadius: "6px",
-            border: "1px solid rgba(255,255,255,0.2)",
-            background: "rgba(255,255,255,0.08)",
-            color: "#fff",
-            fontSize: "16px",
-            fontWeight: "700",
-            lineHeight: "1",
-            cursor: "pointer",
-        });
         btn.addEventListener("click", () => {
             adjustSubtitleOffset(controller, delta);
             renderLabel();
@@ -427,7 +287,7 @@ function buildSubtitleOffsetRow(controller) {
     };
 
     const buttons = document.createElement("div");
-    Object.assign(buttons.style, { display: "flex", gap: "6px", flex: "0 0 auto" });
+    buttons.className = "prism-player-as-sync-buttons";
     buttons.appendChild(makeStepBtn("–", -SUBTITLE_OFFSET_STEP_MS));
     buttons.appendChild(makeStepBtn("+", SUBTITLE_OFFSET_STEP_MS));
 
@@ -442,22 +302,8 @@ function buildSubtitleOffsetRow(controller) {
 function buildSubtitleOffButton(controller, collapse) {
     const btn = document.createElement("button");
     btn.type = "button";
-    btn.classList.add(PLAYER_FOCUSABLE_CLASS);
+    btn.classList.add("prism-player-focusable", "prism-player-as-btn", "prism-player-as-btn--ghost");
     btn.textContent = "Off";
-    Object.assign(btn.style, {
-        display: "block",
-        width: "calc(100% - 32px)",
-        margin: "0 16px 10px",
-        padding: "9px",
-        borderRadius: "8px",
-        border: "1px solid rgba(255,255,255,0.2)",
-        background: "rgba(255,255,255,0.08)",
-        color: "#fff",
-        fontSize: "13px",
-        fontWeight: "600",
-        cursor: "pointer",
-        boxSizing: "border-box",
-    });
     btn.addEventListener("click", () => removeSubtitleResult(controller, collapse));
     return btn;
 }
@@ -485,7 +331,7 @@ function adjustSubtitleOffset(controller, deltaMs) {
 }
 
 /* Shared by applySubtitleResult below and applyRememberedSubtitle (called from
-   plex-player.js at the start of every session) so the native-vs-web branch only lives
+   player.js at the start of every session) so the native-vs-web branch only lives
    in one place. result is the raw search-result object (not the JSON-stringified form
    PlayerUiHelper's list rows carry as fileId) - re-stringified here so the native side
    learns which result this was, the same fileId shape PlayerActivity already gets from
@@ -504,7 +350,7 @@ async function attachDownloadedSubtitle(controller, text, languageCode, result) 
 /* rowEl gets an inline status update on failure instead of the previous
    console.error-only handling - a swallowed error here looked indistinguishable from
    "the click didn't register" since nothing on screen ever changed. Plex's own download
-   is asynchronous (see plex-subtitles.js) so this can take up to ~20s, not the near-
+   is asynchronous (see plex/subtitles.js) so this can take up to ~20s, not the near-
    instant round-trip the direct-OpenSubtitles path (opensubtitles.js) makes.
 
    Guards re-entry via a dataset flag rather than rowEl.disabled - this row holds real
@@ -526,7 +372,7 @@ async function applySubtitleResult(controller, result, rowEl, collapse) {
         const { text, languageCode } = await StreamingSubtitles.download(controller._session, result);
         await attachDownloadedSubtitle(controller, text, languageCode, result);
         /* Remembered per-title (ratingKey), not per-session - see subtitle-store.js.
-           plex-player.js's applyRememberedSubtitle re-reads this at the start of the
+           player.js's applyRememberedSubtitle re-reads this at the start of the
            next session for the same title, so this same result (served from the cache
            subtitle-provider.js's download() already populated above, not a fresh
            network call) auto-reapplies without the user searching/selecting again. */
@@ -542,7 +388,7 @@ async function applySubtitleResult(controller, result, rowEl, collapse) {
 }
 
 /* Re-attaches whatever subtitle was last applied to this title (if any), without the
-   user searching/selecting again - called once per session from plex-player.js right
+   user searching/selecting again - called once per session from player.js right
    after playback actually starts (native or web), since attaching needs a live
    <video>/native player to attach to. download() below is normally served from
    subtitle-provider.js's own cache (subtitle-store.js), not a fresh network call. */
@@ -619,7 +465,7 @@ function detachSubtitleTrack(controller) {
     controller._subtitleRenderedKey = null;
     controller._subtitleOffsetMs = 0;
     if (controller._subtitleOverlayEl) {
-        controller._subtitleOverlayEl.style.display = "none";
+        controller._subtitleOverlayEl.classList.remove("is-showing");
         controller._subtitleOverlayEl.innerHTML = "";
     }
 }
@@ -643,7 +489,7 @@ function renderSubtitleFrame(controller) {
     const key = active.map((c) => c.startMs).join(",");
     if (key === controller._subtitleRenderedKey) return;
     controller._subtitleRenderedKey = key;
-    overlay.style.display = active.length ? "block" : "none";
+    overlay.classList.toggle("is-showing", active.length > 0);
     overlay.innerHTML = active.map((c) => renderSubtitleCueHtml(c.text)).join("<br>");
 }
 
@@ -692,23 +538,7 @@ function renderSubtitleCueHtml(text) {
 function ensureSubtitleOverlay(controller) {
     if (controller._subtitleOverlayEl) return controller._subtitleOverlayEl;
     const overlay = document.createElement("div");
-    overlay.className = "streaming-player-subtitle-overlay";
-    Object.assign(overlay.style, {
-        position: "fixed",
-        left: "5%",
-        right: "5%",
-        bottom: "85px",
-        zIndex: "10001",
-        textAlign: "center",
-        pointerEvents: "none",
-        color: "rgba(235,235,235,0.95)",
-        fontFamily: '"Roboto", sans-serif',
-        fontWeight: "700",
-        fontSize: "1.4em",
-        lineHeight: "1.3",
-        textShadow: "0 2px 6px rgba(0,0,0,0.85)",
-        display: "none",
-    });
+    overlay.className = "prism-player-subtitles";
     document.body.appendChild(overlay);
     controller._subtitleOverlayEl = overlay;
     return overlay;

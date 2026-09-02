@@ -10,13 +10,13 @@
 }
 
 
-/* Rendered outside .header/.content (see plex-netflix-card.js's template) rather than
+/* Rendered outside .header/.content (see card.js's template) rather than
    anchored via position:absolute inside .profile-menu-wrap - .header has a mask-image
    (its own scroll-fade gradient) that clips any descendant box extending past .header's
    own edges, which silently ate this dropdown's contents when it lived there (only its
    top border survived the mask, rendering as a bare line with nothing inside). position:
    fixed here, with top/right set from the icon's real screen position each time it opens
-   (plex-netflix-card.js's _openProfileDropdown) - it can't rely on a positioned ancestor
+   (card.js's _openProfileDropdown) - it can't rely on a positioned ancestor
    for placement anymore. */
 
 .profile-dropdown {
@@ -191,7 +191,7 @@
 
 
 /* The horizontally-scrolling track itself (see row-scroll.js's createRowScroll, wired up
-   in plex-netflix-card.js) - centered when every badge fits without scrolling, since flex
+   in card.js) - centered when every badge fits without scrolling, since flex
    justify-content only matters up to the track's own natural width. */
 
 .profile-list {

@@ -79,9 +79,9 @@ export const VIEW = Object.freeze({
 });
 
 /* Plex library-section `type` (the numeric field on config.sections[], distinct from
-   MEDIA_TYPE's per-item string) - 1/2 is Plex's own convention (plex-auth.js's
+   MEDIA_TYPE's per-item string) - 1/2 is Plex's own convention (plex/auth.js's
    SECTION_TYPE_MAP), aliased here for the cross-server Movies/TV aggregate views
-   (data.js's sectionsForView, plex-netflix-card.js's _sectionTypeForView). */
+   (data.js's sectionsForView, card.js's _sectionTypeForView). */
 export const SECTION_TYPE = Object.freeze({
   MOVIE: 1,
   SHOW: 2,

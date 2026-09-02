@@ -1,11 +1,11 @@
 /* Row-building logic: turning raw Plex metadata (genre listings, watch history, AI-row
    ideas, collections) into the row shapes the UI renders. Kept free of DOM/network so
-   it can be tested directly - callers (plex-netflix-card.js) supply the small set of
+   it can be tested directly - callers (card.js) supply the small set of
    collaborators each function needs (config lookups, mapItem, shuffle) explicitly
    rather than this module reaching into card state itself. */
 
 import { collapseByGuid } from "./cross-server.js";
-import { MEDIA_TYPE } from "../../../constants.js";
+import { MEDIA_TYPE } from "../../constants.js";
 
 export function shuffle(array) {
   const arr = [...array];
@@ -32,8 +32,8 @@ export function extractLogoUrl(m, plexImageUrl) {
    displayed small); defaults to plexImageUrl so existing callers/tests that don't pass
    it keep working unresized rather than throwing. episodeFallbackGenres/episodeFallbackStudio:
    genre tags/studio to use for an episode item, whose own Plex metadata carries no Genre of
-   its own (that lives on the show) - see plex-netflix-card.js's _mapItem for why this matters
-   to plex-player.js's shader auto-detection. */
+   its own (that lives on the show) - see card.js's _mapItem for why this matters
+   to player.js's shader auto-detection. */
 export function mapItem(m, withProgress, { plexImageUrl, plexThumbUrl = plexImageUrl, episodeFallbackGenres = [], episodeFallbackStudio = "" }) {
   const thumbPath = m.thumb || m.grandparentThumb || m.composite || m.art || "";
   const image = plexThumbUrl(thumbPath);
@@ -152,16 +152,13 @@ export function mergeGenreRows(sections, { genreBySection, mapItem: mapItemFn, s
   return shuffleFn(eligible);
 }
 
-/* Genre-affinity recommender: scores every unwatched library item by how much its
-   genres overlap with genres pulled from watch history, weighted so more-recently-
-   watched items count for more. Pure local-PMS data (history + genre listings already
-   fetched elsewhere) - no Plex cloud/Discover dependency, unlike the watchlist fetch. */
-export function buildRecommendedRaw(historyRaw, { genreBySection, onDeckRaw }) {
-  /* Flattened across every section/server before collapsing, not per-bucket - each genre
-     bucket only ever holds one section's (so one server's) own items, so a title present
-     on two servers would never actually collide until the pool spans every server's
-     buckets together. ratingKey alone (this Map's key below) isn't globally unique across
-     servers either, which is the other half of why this has to run before pool.set. */
+/* Every library item seen this session, keyed by ratingKey, backing both row scorers below.
+   Flattened across every section/server before collapsing, not per-bucket: each genre bucket
+   only ever holds one section's (so one server's) items, so a title present on two servers
+   never actually collides until the pool spans every server's buckets together. ratingKey
+   alone isn't globally unique across servers either, which is the other half of why the
+   collapse has to run before the Map is filled. */
+function libraryPool(genreBySection) {
   const allItems = [];
   for (const entries of genreBySection.values()) {
     for (const g of entries) allItems.push(...g.items);
@@ -170,6 +167,15 @@ export function buildRecommendedRaw(historyRaw, { genreBySection, onDeckRaw }) {
   for (const m of collapseByGuid(allItems)) {
     if (m.ratingKey && !pool.has(m.ratingKey)) pool.set(m.ratingKey, m);
   }
+  return pool;
+}
+
+/* Genre-affinity recommender: scores every unwatched library item by how much its
+   genres overlap with genres pulled from watch history, weighted so more-recently-
+   watched items count for more. Pure local-PMS data (history + genre listings already
+   fetched elsewhere) - no Plex cloud/Discover dependency, unlike the watchlist fetch. */
+export function buildRecommendedRaw(historyRaw, { genreBySection, onDeckRaw }) {
+  const pool = libraryPool(genreBySection);
 
   const excluded = new Set((onDeckRaw || []).map((m) => m.grandparentRatingKey || m.ratingKey));
   const genreScore = new Map();
@@ -208,16 +214,7 @@ export function buildRecommendedRaw(historyRaw, { genreBySection, onDeckRaw }) {
    release year, so "recent" is relative to what's actually in the library, not calendar
    time; weighted 50/50 with rating, adjust freely. */
 export function buildPopularRaw({ genreBySection }) {
-  /* Same "flatten across every section/server before collapsing" reasoning as
-     buildRecommendedRaw above. */
-  const allItems = [];
-  for (const entries of genreBySection.values()) {
-    for (const g of entries) allItems.push(...g.items);
-  }
-  const pool = new Map();
-  for (const m of collapseByGuid(allItems)) {
-    if (m.ratingKey && !pool.has(m.ratingKey)) pool.set(m.ratingKey, m);
-  }
+  const pool = libraryPool(genreBySection);
   const eligible = Array.from(pool.values()).filter((m) => typeof m.year === "number" && typeof m.audienceRating === "number");
   if (!eligible.length) return [];
   const years = eligible.map((m) => m.year);

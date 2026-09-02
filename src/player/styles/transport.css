@@ -1,0 +1,397 @@
+/* Bottom transport bar: title/time row, scrub track, control row, volume flyout, plus the
+   floating play button and the seek flash overlays. */
+
+.prism-player-float-play {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 10001;
+    width: 76px;
+    height: 76px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    background: rgba(20, 20, 20, 0.4);
+    color: var(--player-fg);
+    font-size: 32px;
+    cursor: pointer;
+    padding: 0;
+}
+
+/* A dark gradient over whichever side of the screen a seek moved toward. Fixed and
+   full-height like the rest of the document.body-level chrome, so it sits above the video
+   whichever playback backend is rendering underneath. */
+.prism-player-seek-flash {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    width: 26%;
+    max-width: 300px;
+    z-index: 10000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+    opacity: 0;
+    transform: scale(0.8);
+    transition: opacity 0.15s ease-out, transform 0.15s ease-out;
+    color: var(--player-fg);
+    font-size: 24px;
+    font-weight: 700;
+    font-family: var(--player-font);
+}
+
+.prism-player-seek-flash--back {
+    left: 0;
+    background: linear-gradient(to right, rgba(0, 0, 0, 0.55), rgba(0, 0, 0, 0));
+}
+
+.prism-player-seek-flash--forward {
+    right: 0;
+    background: linear-gradient(to left, rgba(0, 0, 0, 0.55), rgba(0, 0, 0, 0));
+}
+
+.prism-player-seek-flash.is-visible {
+    opacity: 1;
+    transform: scale(1);
+}
+
+/* The fade-out leg is slower than the pop-in, and is applied as its own class so the two
+   transitions don't have to be swapped through inline styles mid-animation. */
+.prism-player-seek-flash.is-fading {
+    transition: opacity 0.4s ease-in;
+    opacity: 0;
+}
+
+.prism-player-bar {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 10001;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 70px 40px 22px;
+    background: linear-gradient(to top, rgba(0, 0, 0, 0.82) 0%, rgba(0, 0, 0, 0.55) 45%, transparent 100%);
+    opacity: 1;
+    transition: opacity 0.25s ease;
+    box-sizing: border-box;
+}
+
+.prism-player-info-row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 16px;
+}
+
+.prism-player-title {
+    color: var(--player-fg);
+    font-size: 19px;
+    font-weight: 700;
+    font-family: var(--player-font);
+    line-height: 1.3;
+}
+
+.prism-player-subtitle {
+    color: rgba(255, 255, 255, 0.65);
+    font-size: 13px;
+    font-weight: 600;
+    font-family: var(--player-font);
+    margin-top: 2px;
+}
+
+.prism-player-subtitle:empty {
+    display: none;
+}
+
+.prism-player-remaining {
+    flex: 0 0 auto;
+    color: rgba(255, 255, 255, 0.75);
+    font-size: 13px;
+    font-family: var(--player-font);
+    font-variant-numeric: tabular-nums;
+}
+
+/* --- scrub track ------------------------------------------------------------------ */
+
+/* The lingering focus ring on an <input type=range> lives on its internal
+   ::-webkit-slider-thumb / ::-moz-range-thumb shadow part, not the element, so it can only
+   be reset from a real stylesheet. Chromium's form-control refresh draws that ring as a
+   box-shadow rather than an outline, so both need clearing. */
+.prism-player-range,
+.prism-player-range:focus,
+.prism-player-range:focus-visible {
+    outline: none;
+    box-shadow: none;
+}
+
+.prism-player-range::-webkit-slider-thumb {
+    outline: none;
+    box-shadow: none;
+}
+
+.prism-player-range::-moz-range-thumb {
+    outline: none;
+    box-shadow: none;
+}
+
+.prism-player-range::-moz-focus-outer {
+    border: 0;
+}
+
+/* The scrub bar's embossed rim isn't a focus ring - it's the native appearance:auto track
+   theme, which the resets above can't touch. appearance:none drops that theme entirely, so
+   track, thumb and fill are all drawn by hand below. --seek-pct/--seek-buffered-pct are
+   written from JS wherever the value changes, since a plain gradient can't otherwise say
+   "accent up to the thumb, dim after it".
+
+   The input's own box is the real click/touch/drag target: a 3px-tall element (matching the
+   visible track) was almost impossible to grab precisely, so it's 24px here while the track
+   pseudo-elements stay 3px and get vertically centered in it. The thumb's -4.5px margin is
+   calculated against the track's 3px height, not this one, so it still centers. */
+.prism-player-seek {
+    -webkit-appearance: none;
+    appearance: none;
+    background: transparent;
+    height: 24px;
+    cursor: pointer;
+    width: 100%;
+    display: block;
+    /* So the thumb paints above the chapter segments: a static element always paints below a
+       positioned sibling regardless of DOM order, and the segments are absolutely positioned. */
+    position: relative;
+    z-index: 1;
+}
+
+.prism-player-seek::-webkit-slider-runnable-track {
+    height: 3px;
+    border-radius: 2px;
+    border: none;
+    background: linear-gradient(
+        to right,
+        var(--player-accent) var(--seek-pct, 0%),
+        rgba(255, 255, 255, 0.5) var(--seek-pct, 0%),
+        rgba(255, 255, 255, 0.5) var(--seek-buffered-pct, var(--seek-pct, 0%)),
+        rgba(255, 255, 255, 0.3) var(--seek-buffered-pct, var(--seek-pct, 0%))
+    );
+}
+
+.prism-player-seek::-moz-range-track {
+    height: 3px;
+    border-radius: 2px;
+    border: none;
+    background: linear-gradient(
+        to right,
+        var(--player-accent) var(--seek-pct, 0%),
+        rgba(255, 255, 255, 0.5) var(--seek-pct, 0%),
+        rgba(255, 255, 255, 0.5) var(--seek-buffered-pct, var(--seek-pct, 0%)),
+        rgba(255, 255, 255, 0.3) var(--seek-buffered-pct, var(--seek-pct, 0%))
+    );
+}
+
+/* With real per-chapter segments the DOM divs behind the input ARE the visible track, so the
+   input's own native track paint has to get out of the way rather than show through. */
+.prism-player-seek--segmented::-webkit-slider-runnable-track,
+.prism-player-seek--segmented::-moz-range-track {
+    background: transparent;
+}
+
+.prism-player-seek::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: var(--player-accent);
+    margin-top: -4.5px;
+}
+
+.prism-player-seek::-moz-range-thumb {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    border: none;
+    background: var(--player-accent);
+}
+
+.prism-player-seek-wrap {
+    position: relative;
+    flex: 1 1 auto;
+    display: flex;
+    align-items: center;
+}
+
+.prism-player-segments {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 50%;
+    height: 3px;
+    transform: translateY(-50%);
+    pointer-events: none;
+}
+
+/* One independently rounded pill per chapter rather than one continuous bar with straight
+   gaps cut into it - a single background can only paint one border-radius'd shape. left/width
+   are set inline per segment; the gap between two adjacent segments is a 2px inset on each
+   side, fixed-pixel so it looks the same regardless of the bar's rendered width. */
+.prism-player-segment {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    border-radius: 999px;
+}
+
+/* --- scrub preview tooltip -------------------------------------------------------- */
+
+.prism-player-preview {
+    position: absolute;
+    bottom: calc(100% + 10px);
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    pointer-events: none;
+    transform: translateX(-50%);
+}
+
+.prism-player-preview.is-visible {
+    display: flex;
+}
+
+.prism-player-preview-img {
+    width: 160px;
+    height: 90px;
+    object-fit: cover;
+    border-radius: 6px;
+    display: none;
+    background: #000;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5);
+}
+
+.prism-player-preview-img.is-visible {
+    display: block;
+}
+
+.prism-player-preview-time {
+    margin-top: 6px;
+    padding: 3px 8px;
+    border-radius: 4px;
+    background: rgba(0, 0, 0, 0.75);
+    color: var(--player-fg);
+    font-size: 12px;
+    font-family: var(--player-font);
+    font-variant-numeric: tabular-nums;
+}
+
+/* --- control row ------------------------------------------------------------------ */
+
+.prism-player-controls-row {
+    display: flex;
+    align-items: center;
+}
+
+.prism-player-cell-left,
+.prism-player-cell-right {
+    flex: 1 1 0;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+}
+
+.prism-player-cell-right {
+    justify-content: flex-end;
+}
+
+.prism-player-cell-center {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 22px;
+}
+
+/* Every transport-row button shares one frame; only the box size varies by role. */
+.prism-player-icon-btn {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    border-radius: 0;
+    background: transparent;
+    color: var(--player-fg);
+    cursor: pointer;
+    padding: 0;
+    width: 28px;
+    height: 28px;
+}
+
+.prism-player-icon-btn--seek {
+    width: 34px;
+    height: 34px;
+}
+
+.prism-player-icon-btn--nav {
+    width: 26px;
+    height: 26px;
+}
+
+.prism-player-icon-btn--play {
+    width: 32px;
+    height: 32px;
+    font-size: 22px;
+}
+
+.prism-player-icon-btn--text {
+    width: auto;
+    font-size: 13px;
+    font-weight: 600;
+    font-family: var(--player-font);
+}
+
+/* "Next title" is the only control that ever greys out: skipping forward has no "restart"
+   fallback the way previous does, so with nothing queued it's a real dead end. Shown disabled
+   rather than hidden so a movie's transport row still reads as symmetric with an episode's. */
+.prism-player-icon-btn:disabled {
+    color: #666;
+    cursor: default;
+}
+
+/* --- volume flyout ---------------------------------------------------------------- */
+
+/* A floating panel above the mute icon, the convention most desktop/TV players use, rather
+   than a slider permanently eating transport-bar space. Appended to document.body, not the
+   bar, so its fixed coordinates aren't affected by the bar's own opacity transition. */
+.prism-player-volume-popout {
+    position: fixed;
+    z-index: 10002;
+    background: rgba(20, 20, 20, 0.92);
+    border-radius: 8px;
+    padding: 14px 10px;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+    opacity: 0;
+    transform: translate(-50%, 8px);
+    transition: opacity 0.15s ease, transform 0.15s ease;
+    pointer-events: none;
+}
+
+.prism-player-volume-popout.is-open {
+    opacity: 1;
+    transform: translate(-50%, 0);
+    pointer-events: auto;
+}
+
+/* writing-mode is the standards-based vertical range input; every target this ships to is
+   Chromium-based (Xbox never renders this element, but Android's WebView would). direction:
+   rtl puts the minimum at the bottom, matching a physical volume slider. */
+.prism-player-volume-slider {
+    writing-mode: vertical-lr;
+    direction: rtl;
+    width: 6px;
+    height: 90px;
+    accent-color: var(--player-accent);
+    cursor: pointer;
+}

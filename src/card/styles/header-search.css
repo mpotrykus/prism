@@ -61,7 +61,7 @@
    fade - opacity on .header itself would fade the logo/buttons along with it. .header's
    own position:sticky already makes it a containing block for this absolutely-positioned
    pseudo, same as any other positioned ancestor would. Faded out entirely while
-   card._contentEl reads scrollTop <= 0 (see plex-netflix-card.js's scroll listener) - at
+   card._contentEl reads scrollTop <= 0 (see card.js's scroll listener) - at
    the very top there's nothing scrolled "under" the header yet, so it can blend straight
    into the hero instead of showing a backdrop with nothing behind it to separate from. */
 

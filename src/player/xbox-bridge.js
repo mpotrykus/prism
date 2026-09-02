@@ -17,11 +17,13 @@
       Java because WebView.onPause() suspended all network loading while PlayerActivity was
       foregrounded. Measured here: JS timers and fetch keep running throughout native playback
       (nothing is ever backgrounded - there is no second Activity), so timeline reporting stays in
-      plex-player.js where the rest of the Plex protocol lives. */
+      player.js where the rest of the Plex protocol lives. */
 
 import { media, setMediaFacade, NativeMediaFacade } from "./core/media-facade.js";
+import { showControls } from "./ui/chrome-controls.js";
+import { ensurePlayerStyles } from "./ui/styles.js";
 import { notifyStall, notifyReload, setStallDrivenAbr, updateAbrMonitor } from "./core/abr.js";
-import { reloadTranscodeSession } from "./core/session-reload.js";
+import { reloadTranscodeSession, markAudioStreamSelected } from "./core/session-reload.js";
 import { mountPlayerChrome, unmountPlayerChrome } from "./ui/player-chrome.js";
 import { showPlaybackErrorModal } from "./ui/error-modal.js";
 /* Circular with shader-pipeline.js/content-analysis.js/ambient-pipeline.js (each imports a "post"
@@ -60,6 +62,7 @@ function post(method, params) {
 /* --- JS -> native. Names match native-bridge.js's NativePlayer.* surface. --- */
 
 export function playXbox(controller, streamUrl, startOffsetMs, payload, payloadFor) {
+    ensurePlayerStyles();
     registerListeners(controller);
     const facade = attachFacade(controller, payloadFor);
     mountBackdrop(controller);
@@ -80,7 +83,7 @@ export function playXbox(controller, streamUrl, startOffsetMs, payload, payloadF
     /* Auto-Crop Black Bars (see ../auto-crop.js's own header comment) - detection/cropping runs
        natively on this leg (AiUpscaleFrameServer.cs's AutoCropDetector) instead of that file's
        own <video>-sampling pipeline, but controller._autoCropEnabled is the one
-       platform-agnostic source of truth either way: plex-player.js's _prepareSession already
+       platform-agnostic source of truth either way: player.js's _prepareSession already
        resolved it from storedAutoCropEnabled() before playXbox ever runs, same as
        _shaderEnabled/_ambientEnabled above. This just pushes that already-resolved value to
        native at mount; mid-session toggles are posted separately, from chrome-menu-options.js's
@@ -124,20 +127,14 @@ export function stopXbox(controller) {
 function mountBackdrop(controller) {
     if (controller._xboxBackdropEl) return;
     const backdrop = document.createElement("div");
-    backdrop.className = "streaming-player-native-backdrop";
-    Object.assign(backdrop.style, {
-        position: "fixed",
-        inset: "0",
-        zIndex: "10000",
-        background: "transparent",
-    });
+    backdrop.className = "prism-player-native-backdrop";
     backdrop.addEventListener("click", () => {
         const el = media(controller);
         if (!el) return;
         if (el.paused) el.play();
         else el.pause();
     });
-    backdrop.addEventListener("mousemove", () => controller._showControls());
+    backdrop.addEventListener("mousemove", () => showControls(controller));
 
     /* Hiding the app's own UI is not optional here, and transparent backgrounds alone are not enough.
        On the web leg nothing ever explicitly closes the title-info overlay: playWeb's <video> is opaque
@@ -173,7 +170,7 @@ function mountBackdrop(controller) {
            overlay openHamburgerMenu's hideControls() just hid it for - the same overlay set
            scheduleHideControls already keys off in chrome-controls.js. */
         if (controller._inlineMenuEl || controller._episodeListEl || controller._chapterListEl || controller._audioSubtitlesEl) return;
-        controller._showControls();
+        showControls(controller);
     };
     document.addEventListener("keydown", controller._xboxWakeHandler);
 
@@ -324,15 +321,7 @@ export function trySwitchAudioTrackLocallyXbox(controller, audioStreamID) {
     if (index < 0) return false;
     post("switchAudioTrackLocally", { index });
     s.audioStreamId = audioStreamID;
-    /* Fire-and-forget, same as trySwitchAudioTrackLocal's own PUT - keeps Plex's
-       server-side "selected" bookkeeping in sync for other clients/the next launch. */
-    if (s.partId) {
-        const putUrl = new URL(`${s.plexUrl}/library/parts/${s.partId}`);
-        putUrl.searchParams.set("audioStreamID", String(audioStreamID));
-        putUrl.searchParams.set("allParts", "1");
-        putUrl.searchParams.set("X-Plex-Token", s.plexToken);
-        fetch(putUrl, { method: "PUT" }).catch(() => {});
-    }
+    markAudioStreamSelected(s, audioStreamID);
     return true;
 }
 
@@ -371,7 +360,7 @@ function handleMessage(controller, message) {
             });
             /* Kept as an active push from native rather than a JS interval purely out of caution: the
                measured behaviour is that JS timers survive native playback here (unlike Android), so
-               plex-player.js's own _pingTimer does the timeline reporting. This tick only updates
+               player.js's own _pingTimer does the timeline reporting. This tick only updates
                session position, which the timeline ping then reads. */
             if (controller._session) {
                 controller._session.lastTimeMs = params.positionMs ?? controller._session.lastTimeMs;

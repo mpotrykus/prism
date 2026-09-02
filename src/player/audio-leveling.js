@@ -123,7 +123,7 @@ export function updateAudioLevelingPipeline(controller) {
 
 /* Lazy + idempotent, but keyed on controller._videoEl itself (not just "does a context
    already exist") - a title switch tears down and rebuilds the <video> element (see
-   plex-player.js's _switchTitle), and createMediaElementSource can only ever be called
+   player.js's _switchTitle), and createMediaElementSource can only ever be called
    once per element; a second call on the same element throws. Keying the guard on the
    element means a fresh title naturally rebuilds a fresh graph and starts measuring from
    neutral again, which is the intended per-title behavior anyway. */

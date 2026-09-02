@@ -1,8 +1,13 @@
-import { loadFull, isConfigured } from "./settings.js";
-import { primeDecodeCapabilities, platformTag, PLATFORM_TAG } from "./src/player/core/platform.js";
-import { postAlwaysOnHdr } from "./src/player/xbox-bridge.js";
+import { loadFull, isConfigured } from "./core/config.js";
+import { primeDecodeCapabilities, platformTag, PLATFORM_TAG } from "./player/core/platform.js";
+import { postAlwaysOnHdr } from "./player/xbox-bridge.js";
 import { APP_EVENT } from "./constants.js";
-import "./input-mode.js";
+import "./core/input-mode.js";
+/* Side-effect imports: each of these registers a custom element used by index.html's
+   markup. index.html loads this file alone, so the import graph lives here. */
+import "./settings/signin-modal.js";
+import "./settings/settings-modal.js";
+import "./card/card.js";
 
 (async function () {
   if ("serviceWorker" in navigator) {
@@ -15,11 +20,9 @@ import "./input-mode.js";
   const modal = document.querySelector("streaming-settings-modal");
   const signinModal = document.querySelector("streaming-plex-signin-modal");
 
-  /* setConfig() must run before the element is ever connected - connectedCallback
-     kicks off _loadAll() immediately, which needs this._config to already exist.
-     Creating detached + configuring + appending (rather than putting a static
-     <plex-netflix-card> tag in index.html) mirrors how Home Assistant's own Lovelace
-     always drove this same class. */
+  /* Created detached, configured, then appended - rather than a static <plex-netflix-card>
+     tag in index.html - because setConfig() must run before the element is ever connected:
+     connectedCallback kicks off its full load immediately and needs _config to exist. */
   const card = document.createElement("plex-netflix-card");
   card.addEventListener(APP_EVENT.OPEN_SETTINGS, () => modal.open());
   modal.addEventListener(APP_EVENT.SETTINGS_SAVED, (e) => {

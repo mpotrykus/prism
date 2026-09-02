@@ -5,7 +5,7 @@
    mouse/remote inactivity, so its visibility tracks the active marker/countdown only,
    independent of whatever state the rest of the chrome is in. */
 import { media } from "../core/media-facade.js";
-import { PLAYER_FOCUSABLE_CLASS } from "./shared.js";
+
 
 /* Shared by both playback paths so the marker-range check isn't duplicated even though
    web/native render totally different skip-button UI. Assumes Plex's Marker objects use
@@ -57,28 +57,7 @@ function ensureSkipButtonEl(controller) {
     if (controller._skipBtnEl) return controller._skipBtnEl;
     const btn = document.createElement("button");
     btn.type = "button";
-    btn.classList.add(PLAYER_FOCUSABLE_CLASS);
-    Object.assign(btn.style, {
-        position: "fixed",
-        bottom: "170px",
-        right: "40px",
-        zIndex: "10001",
-        padding: "10px 22px",
-        borderRadius: "4px",
-        border: "none",
-        /* Same brand yellow + near-black text pairing as every other filled button in
-           the player chrome (chrome-subtitles.js's Search button, chrome-menu-effects.js's
-           selected mode buttons) - #e5a00d is this app's one shared accent color, not
-           specific to this button. */
-        background: "#e5a00d",
-        color: "#161619",
-        fontSize: "13px",
-        fontWeight: "700",
-        fontFamily: '"Roboto", sans-serif',
-        letterSpacing: "0.03em",
-        cursor: "pointer",
-        display: "none",
-    });
+    btn.classList.add("prism-player-focusable", "prism-player-skip-btn");
     /* Always seeks to the currently active marker's own end, regardless of whether this
        click landed on the plain "Skip Intro"/"Skip Credits" label or mid-countdown on
        "Playing next in…" - a manual tap always means "skip now", countdown or not. */
@@ -88,7 +67,7 @@ function ensureSkipButtonEl(controller) {
             el.currentTime = (controller._activeSkipMarker.endTimeOffset ?? 0) / 1000;
         }
     });
-    /* Real DOM focus is how gamepad nav reaches this button (see plex-player.js's
+    /* Real DOM focus is how gamepad nav reaches this button (see player.js's
        _handlePlayerNavCommand "up"/"down" cases) - hiding the element (marker ends,
        auto-skip fires) blurs it as a side effect of display:none, so this is the one
        place that has to catch that and drop the controller's own tracking flag with it,
@@ -102,18 +81,18 @@ function ensureSkipButtonEl(controller) {
 }
 
 export function isSkipButtonShowing(controller) {
-    return controller._skipBtnEl?.style.display === "block";
+    return !!controller._skipBtnEl?.classList.contains("is-showing");
 }
 
 function showSkipButton(controller, label) {
     const btn = ensureSkipButtonEl(controller);
     btn.textContent = label;
-    btn.style.display = "block";
+    btn.classList.add("is-showing");
 }
 
 function hideSkipButton(controller) {
     if (!controller._skipBtnEl) return;
-    controller._skipBtnEl.style.display = "none";
+    controller._skipBtnEl.classList.remove("is-showing");
     controller._skipButtonFocused = false;
 }
 

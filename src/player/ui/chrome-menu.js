@@ -1,14 +1,10 @@
 import { hideControls, showControls } from "./chrome-controls.js";
-import { wireLinearNav, focusAfterPaint } from "../../../focus-nav.js";
+import { wireLinearNav, focusAfterPaint } from "../../core/focus-nav.js";
 import { setAutoQualityEnabled, bandwidthSource } from "../core/abr.js";
 import { usesGamepadChrome } from "../core/platform.js";
+import { setStatsOverlayEnabled } from "../stats-overlay.js";
 import {
     QUALITY_CAP_PRESETS,
-    SHEET_GRADIENT,
-    MENU_SCROLL_CLASS,
-    OVERLAY_CLOSE_BTN_CLASS,
-    PLAYER_FOCUSABLE_CLASS,
-    ensureMenuScrollStyle,
     episodesIconMarkup,
     chaptersIconMarkup,
     audioSubtitlesIconMarkup,
@@ -17,8 +13,8 @@ import {
     effectsIconMarkup,
     optionsIconMarkup,
     performanceIconMarkup,
-    PLAYER_MENU_ROW_CLASS,
 } from "./shared.js";
+import { ensurePlayerStyles } from "./styles.js";
 /* Circular with episode-list.js (which imports playQueuedTitle/formatTime from
    chrome-transport.js) - safe here because both sides only reference the other module's
    export from inside a function body (openChapterListOverlay/openEpisodeListOverlay are
@@ -42,11 +38,6 @@ import { renderOptionsList } from "./chrome-menu-options.js";
    shader-pipeline.js for why) rather than owning independent state - the idle-fade timer
    and inline-menu bookkeeping are shared with the rest of the player chrome. */
 
-/* Shared row look for every tap-to-pick item inside an expanded accordion section
-   (speed/sleep/zoom/audio/chapters/quality-cap/version presets) - one visual
-   definition instead of each render function styling its own. */
-const INLINE_MENU_CLASS = "streaming-player-inline-menu";
-
 export function renderPickerList(content, items, { rowGap = 0 } = {}) {
     items.forEach((item, index) => {
         /* A plain, non-interactive section label (chrome-menu.js's server-grouped Version
@@ -56,37 +47,15 @@ export function renderPickerList(content, items, { rowGap = 0 } = {}) {
            openHamburgerMenu's own comment on why every row here needs a real onSelect). */
         if (item.header) {
             const headerEl = document.createElement("div");
+            headerEl.className = "prism-player-picker-header";
             headerEl.textContent = item.label;
-            Object.assign(headerEl.style, {
-                padding: "10px 16px 4px",
-                fontSize: "11px",
-                fontWeight: "700",
-                letterSpacing: "0.04em",
-                textTransform: "uppercase",
-                color: "rgba(255,255,255,0.5)",
-            });
             content.appendChild(headerEl);
             return;
         }
         const row = document.createElement("button");
         row.type = "button";
-        row.classList.add(PLAYER_FOCUSABLE_CLASS, PLAYER_MENU_ROW_CLASS);
-        Object.assign(row.style, {
-            display: "flex",
-            alignItems: "center",
-            gap: "12px",
-            width: "100%",
-            textAlign: "left",
-            padding: "9px 16px",
-            background: "transparent",
-            color: "#fff",
-            border: "none",
-            cursor: "pointer",
-            fontSize: "13px",
-            fontWeight: "500",
-            fontFamily: '"Roboto", sans-serif',
-            marginBottom: index < items.length - 1 ? `${rowGap}px` : "0",
-        });
+        row.classList.add("prism-player-focusable", "prism-player-menu-row", "prism-player-picker-row");
+        if (rowGap && index < items.length - 1) row.style.marginBottom = `${rowGap}px`;
         /* Only the Chapters section sets item.thumb - every other picker (speed, sleep
            timer, audio track...) leaves it undefined, so this is a no-op there. Hidden
            on error rather than left to show a broken-image icon - Plex's chapterImages
@@ -96,27 +65,14 @@ export function renderPickerList(content, items, { rowGap = 0 } = {}) {
             thumb.src = item.thumb;
             thumb.loading = "lazy";
             thumb.alt = "";
-            Object.assign(thumb.style, {
-                width: "64px",
-                height: "36px",
-                borderRadius: "4px",
-                objectFit: "cover",
-                flex: "0 0 auto",
-                background: "rgba(255,255,255,0.08)",
-            });
+            thumb.className = "prism-player-picker-thumb";
             thumb.addEventListener("error", () => thumb.remove());
             row.appendChild(thumb);
         }
         const label = document.createElement("span");
+        label.className = "prism-player-picker-label";
         label.textContent = item.label;
-        label.style.flex = "1 1 auto";
         row.appendChild(label);
-        row.addEventListener("mouseenter", () => {
-            row.style.background = "rgba(255,255,255,0.08)";
-        });
-        row.addEventListener("mouseleave", () => {
-            row.style.background = "transparent";
-        });
         row.addEventListener("click", () => item.onSelect && item.onSelect());
         content.appendChild(row);
     });
@@ -138,37 +94,25 @@ export function renderPickerList(content, items, { rowGap = 0 } = {}) {
    back on. */
 export function buildAccordionRow(list, state, section) {
     const wrap = document.createElement("div");
-    wrap.style.borderBottom = "1px solid rgba(255,255,255,0.07)";
+    wrap.className = "prism-player-accordion";
 
     const header = document.createElement("button");
     header.type = "button";
-    header.classList.add(PLAYER_FOCUSABLE_CLASS, PLAYER_MENU_ROW_CLASS);
-    Object.assign(header.style, {
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "space-between",
-        gap: "12px",
-        width: "100%",
-        textAlign: "left",
-        padding: "14px 16px",
-        background: "transparent",
-        border: "none",
-        cursor: section.render || section.nav || section.toggle ? "pointer" : "default",
-        fontFamily: '"Roboto", sans-serif',
-    });
+    header.classList.add("prism-player-focusable", "prism-player-menu-row", "prism-player-accordion-header");
+    if (!(section.render || section.nav || section.toggle)) header.classList.add("is-inert");
 
     const labelStack = document.createElement("span");
-    Object.assign(labelStack.style, { display: "flex", flexDirection: "column", gap: "2px", minWidth: "0" });
+    labelStack.className = "prism-player-accordion-labels";
     const labelEl = document.createElement("span");
+    labelEl.className = "prism-player-accordion-label";
     labelEl.textContent = section.label;
-    Object.assign(labelEl.style, { color: "#fff", fontSize: "15px", fontWeight: "600" });
     labelStack.appendChild(labelEl);
     let valueEl = null;
     const setValue = (text) => {
         if (text) {
             if (!valueEl) {
                 valueEl = document.createElement("span");
-                Object.assign(valueEl.style, { fontSize: "12px", fontWeight: "400", color: "rgba(255,255,255,0.45)" });
+                valueEl.className = "prism-player-accordion-value";
                 labelStack.appendChild(valueEl);
             }
             valueEl.textContent = text;
@@ -184,18 +128,18 @@ export function buildAccordionRow(list, state, section) {
        "label left, controls right" with exactly two children; a bare 3rd child (the
        icon) would get pushed to the middle instead of hugging the label. */
     const leftSide = document.createElement("span");
-    Object.assign(leftSide.style, { display: "flex", alignItems: "center", gap: "12px", minWidth: "0", flex: "1 1 auto" });
+    leftSide.className = "prism-player-accordion-left";
     if (section.icon) {
         const iconEl = document.createElement("span");
+        iconEl.className = "prism-player-accordion-icon";
         iconEl.innerHTML = section.icon;
-        Object.assign(iconEl.style, { display: "flex", alignItems: "center", justifyContent: "center", flex: "0 0 auto", width: "20px", height: "20px", color: "rgba(255,255,255,0.75)" });
         leftSide.appendChild(iconEl);
     }
     leftSide.appendChild(labelStack);
     header.appendChild(leftSide);
 
     const rightSide = document.createElement("span");
-    Object.assign(rightSide.style, { display: "flex", alignItems: "center", gap: "12px", flex: "0 0 auto" });
+    rightSide.className = "prism-player-accordion-right";
     let toggleEl = null;
     if (section.toggle) {
         toggleEl = makeToggleSwitch(section.toggle.checked, (checked) => setValue(section.toggle.onChange(checked)));
@@ -205,8 +149,8 @@ export function buildAccordionRow(list, state, section) {
     let chevronEl = null;
     if (section.render || section.nav) {
         chevronEl = document.createElement("span");
+        chevronEl.className = "prism-player-chevron";
         chevronEl.textContent = "›";
-        Object.assign(chevronEl.style, { color: "rgba(255,255,255,0.35)", fontSize: "17px", display: "inline-block", transition: "transform 0.15s ease" });
         rightSide.appendChild(chevronEl);
     }
     if (rightSide.children.length) header.appendChild(rightSide);
@@ -214,15 +158,13 @@ export function buildAccordionRow(list, state, section) {
 
     if (section.render) {
         const content = document.createElement("div");
-        content.style.display = "none";
-        content.style.padding = "0 0 12px";
+        content.className = "prism-player-accordion-content";
         wrap.appendChild(content);
 
         header.setAttribute("aria-expanded", "false");
         let built = false;
         const collapse = () => {
-            content.style.display = "none";
-            chevronEl.style.transform = "rotate(0deg)";
+            content.classList.remove("is-open");
             header.setAttribute("aria-expanded", "false");
             if (state.expandedCollapse === collapse) state.expandedCollapse = null;
             /* Whatever was focused when this ran was a button inside `content` (a picker row's
@@ -236,7 +178,7 @@ export function buildAccordionRow(list, state, section) {
             focusAfterPaint(header);
         };
         header.addEventListener("click", () => {
-            if (content.style.display !== "none") {
+            if (content.classList.contains("is-open")) {
                 collapse();
                 return;
             }
@@ -245,8 +187,7 @@ export function buildAccordionRow(list, state, section) {
                 built = true;
                 section.render(content, { setValue, collapse });
             }
-            content.style.display = "block";
-            chevronEl.style.transform = "rotate(90deg)";
+            content.classList.add("is-open");
             header.setAttribute("aria-expanded", "true");
             state.expandedCollapse = collapse;
         });
@@ -265,19 +206,13 @@ export function buildAccordionRow(list, state, section) {
         header.addEventListener("click", () => toggleEl.click());
     }
 
-    /* Lets a sibling row's own onChange (e.g. Auto-Play, see the "autoskip" row below)
-       grey this one out live without rebuilding the whole list - header.disabled (a real
-       <button>) already blocks both the click and D-pad/keyboard activation for free;
-       toggleEl needs its own pointer-events/opacity treatment since it's a plain div (see
-       makeToggleSwitch), same split chrome-menu-effects.js's noUpscaleNeeded case uses. */
+    /* Lets a sibling row's own onChange (e.g. Auto-Play, see the "autoskip" row below) grey
+       this one out live without rebuilding the whole list. header.disabled already blocks both
+       the click and D-pad activation for free; the switch is a plain div, so it needs its own
+       class - same split chrome-menu-effects.js's noUpscaleNeeded case uses. */
     const setDisabled = (disabled) => {
         header.disabled = disabled;
-        header.style.opacity = disabled ? "0.5" : "1";
-        header.style.cursor = disabled ? "default" : (section.render || section.nav || section.toggle ? "pointer" : "default");
-        if (toggleEl) {
-            toggleEl.style.opacity = disabled ? "0.5" : "1";
-            toggleEl.style.pointerEvents = disabled ? "none" : "";
-        }
+        toggleEl?.classList.toggle("is-disabled", disabled);
     };
     if (section.disabled) setDisabled(true);
 
@@ -292,121 +227,62 @@ export function buildAccordionRow(list, state, section) {
 export function makeBackRow(onClick) {
     const row = document.createElement("button");
     row.type = "button";
-    row.classList.add(PLAYER_FOCUSABLE_CLASS, PLAYER_MENU_ROW_CLASS);
+    row.classList.add("prism-player-focusable", "prism-player-menu-row", "prism-player-back-row");
     row.textContent = "‹  Back";
-    Object.assign(row.style, {
-        display: "block",
-        width: "100%",
-        textAlign: "left",
-        background: "transparent",
-        border: "none",
-        borderBottom: "1px solid rgba(255,255,255,0.07)",
-        color: "rgba(255,255,255,0.55)",
-        fontSize: "12px",
-        fontWeight: "700",
-        letterSpacing: "0.02em",
-        cursor: "pointer",
-        padding: "14px 16px",
-        fontFamily: '"Roboto", sans-serif',
-    });
-    row.addEventListener("mouseenter", () => {
-        row.style.color = "#fff";
-    });
-    row.addEventListener("mouseleave", () => {
-        row.style.color = "rgba(255,255,255,0.55)";
-    });
     row.addEventListener("click", onClick);
     return row;
 }
 
-/* Rebuilding a screen's list (a full nav swap - Quality Cap/Effects/Options and Options' own
-   Playback Speed/Aspect/Sleep Timer screens - or renderMainList itself) replaces whatever button
-   was focused with a brand-new DOM subtree - the old element is gone, and nothing else claims
-   focus in its place, so the browser drops it to <body>. Left alone, that silently breaks every
-   subsequent D-pad/keyboard command: wireLinearNav's handler only ever acts when focus is
-   already inside its own list, so the whole sheet would stop responding to B *and*
-   Up/Down/Left/Right the moment a viewer navigated anywhere - it just happened to read as "B
-   doesn't back out" because that's the one thing a mouse user would notice too. Exported (rather
-   than a private helper closing over one `list`) so chrome-menu-options.js's own nested screens
-   can call it too - see its renderOptionsList. */
+/* A full nav swap (Quality Cap/Effects/Options, Options' own sub-screens, or renderMainList
+   itself) replaces the focused button with a brand-new DOM subtree, and nothing claims focus in
+   its place, so the browser drops it to <body>. That silently breaks every subsequent D-pad
+   command: wireLinearNav only acts when focus is already inside its own list, so the whole sheet
+   stops responding to B *and* the arrows the moment a viewer navigates anywhere. Exported rather
+   than closing over one `list` so chrome-menu-options.js's nested screens can call it too. */
 export function refocusList(list) {
     focusAfterPaint(list.querySelector("button"));
 }
 
 export function openHamburgerMenu(controller, anchor) {
     closeInlineMenu(controller);
-    ensureMenuScrollStyle();
+    ensurePlayerStyles();
     const session = controller._session;
 
     const scrim = document.createElement("div");
-    Object.assign(scrim.style, { position: "fixed", inset: "0", zIndex: "10002", background: "transparent" });
+    scrim.className = "prism-player-scrim";
     scrim.addEventListener("click", () => closeInlineMenu(controller));
 
-    /* Full-height, right-hugging gradient backdrop (unchanged from the drawer this
-       replaced) - the header+list card inside it (see `card` below) is what's actually
-       vertically centered, via justifyContent, rather than the gradient itself
-       shrinking to the card's height. A full-height backdrop that shrank to a short
-       row list's own height left a stretch of plain, undarkened video below a
-       vertically-centered card - the backdrop needs to keep covering the full screen
-       height regardless of how tall the card inside it happens to be. */
+    /* The header+list card is what's vertically centered, not the backdrop: a backdrop that
+       shrank to a short list's height left a stretch of plain, undarkened video below the
+       card. */
     const sheet = document.createElement("div");
-    Object.assign(sheet.style, {
-        position: "fixed",
-        top: "0",
-        right: "0",
-        bottom: "0",
-        width: "min(400px, 100vw)",
-        zIndex: "10003",
-        display: "flex",
-        flexDirection: "column",
-        justifyContent: "center",
-        background: SHEET_GRADIENT,
-        fontFamily: '"Roboto", sans-serif',
-        boxSizing: "border-box",
-        opacity: "0",
-        transform: "translateX(20px)",
-        transition: "opacity 0.2s ease, transform 0.2s ease",
-    });
+    sheet.className = "prism-player-sheet";
 
     /* The actual visible "menu" - header plus scrollable row list, capped at 82vh and
        otherwise sized to its own content (a short row list, e.g. the Effects/Options
        sub-screens, centers as a short card rather than stretching to fill the full
        backdrop). */
     const card = document.createElement("div");
-    Object.assign(card.style, { display: "flex", flexDirection: "column", maxHeight: "82vh", minHeight: "0" });
+    card.className = "prism-player-sheet-card";
     sheet.appendChild(card);
 
     const header = document.createElement("div");
-    Object.assign(header.style, { display: "flex", alignItems: "center", justifyContent: "space-between", flex: "0 0 auto", padding: "24px 16px 12px" });
+    header.className = "prism-player-sheet-header";
     const heading = document.createElement("div");
+    heading.className = "prism-player-sheet-heading";
     heading.textContent = "More";
-    Object.assign(heading.style, { color: "#fff", fontSize: "18px", fontWeight: "700" });
     header.appendChild(heading);
     const closeBtn = document.createElement("button");
     closeBtn.type = "button";
-    closeBtn.classList.add(OVERLAY_CLOSE_BTN_CLASS, PLAYER_FOCUSABLE_CLASS);
+    closeBtn.classList.add("prism-player-focusable", "prism-player-overlay-close");
     closeBtn.setAttribute("aria-label", "Close menu");
     closeBtn.textContent = "✕";
-    Object.assign(closeBtn.style, {
-        width: "32px",
-        height: "32px",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        border: "none",
-        background: "transparent",
-        color: "#fff",
-        fontSize: "16px",
-        cursor: "pointer",
-        padding: "0",
-    });
     closeBtn.addEventListener("click", () => closeInlineMenu(controller));
     header.appendChild(closeBtn);
     card.appendChild(header);
 
     const list = document.createElement("div");
-    list.className = MENU_SCROLL_CLASS;
-    Object.assign(list.style, { flex: "1 1 auto", minHeight: "0", overflowY: "auto", padding: "0 0 20px" });
+    list.className = "prism-player-scroll prism-player-sheet-list";
     card.appendChild(list);
 
     /* Tracks "what should B/Escape do right now" - closeInlineMenu at the main list, or back up to
@@ -490,12 +366,10 @@ export function openHamburgerMenu(controller, anchor) {
             nav: () => openAudioSubtitlesOverlay(controller),
         });
     }
-    /* Version and Quality Cap used to live one level deeper, behind a "Video Quality"
-       row - flattened to their own top-level rows (Version only shown when there's an
-       actual choice to make: more than one group/server, or one group with more than one
-       Media[] entry - same "never an empty/dead affordance" rule Audio Track/Chapters
-       follow) so changing either is one fewer tap. Quality Cap is always shown since it
-       always has at least "Original" to show. */
+    /* Version is only shown when there's an actual choice to make - more than one group or
+       server, or one group with more than one Media[] entry - following the same "never a dead
+       affordance" rule as Audio Track and Chapters. Quality Cap is always shown, since it always
+       has at least "Original". */
     const versionGroups = session?.mediaVersions || [];
     if (versionGroups.length > 1 || versionGroups.some((g) => g.versions?.length > 1)) {
         sections.push({
@@ -520,15 +394,10 @@ export function openHamburgerMenu(controller, anchor) {
         },
     });
     sections.push({
-        /* Navigates to a dedicated Normalize Audio/Auto-Play/Auto-Skip Intro & Credits/
-           Playback Speed/Aspect/Sleep Timer screen (see chrome-menu-options.js's
-           renderOptionsList) - moved out of this top level into their own screen, same
-           "several sub-controls read better as their own screen" reasoning Effects
-           below already follows. Playback Speed/Aspect/Sleep Timer used to live behind
-           their own top-level "Extras" row - folded into Options instead since none of
-           the six relate to each other the way Effects' GPU-pipeline controls do, but
-           each is simple/single-picker enough that one combined "everything else"
-           screen still reads as a sensible cluster. */
+        /* Navigates to a dedicated Normalize Audio / Auto-Play / Auto-Skip / Playback Speed /
+           Aspect / Sleep Timer screen (chrome-menu-options.js). None of the six relate to each
+           other the way Effects' GPU-pipeline controls do, but each is a simple enough single
+           picker that one combined "everything else" screen reads as a sensible cluster. */
         key: "options",
         label: "Options",
         icon: optionsIconMarkup(),
@@ -566,7 +435,7 @@ export function openHamburgerMenu(controller, anchor) {
         toggle: {
             checked: controller._statsOverlayEnabled,
             onChange: (checked) => {
-                controller._setStatsOverlayEnabled(checked);
+                setStatsOverlayEnabled(controller, checked);
                 return checked ? "On" : null;
             },
         },
@@ -582,18 +451,17 @@ export function openHamburgerMenu(controller, anchor) {
     document.body.appendChild(sheet);
     controller._inlineMenuEl = sheet;
     controller._inlineMenuScrim = scrim;
-    /* A stable class so gamepad navigation can scope a selector to this sheet. wireLinearNav is given
-       `document` as its root rather than the sheet itself: it reads root.activeElement, which only
-       exists on Document and ShadowRoot - a plain <div> would report undefined and the handler would
-       never consider itself in scope. */
-    sheet.classList.add(INLINE_MENU_CLASS);
+    /* wireLinearNav is given `document` as its root rather than the sheet itself: it reads
+       root.activeElement, which only exists on Document and ShadowRoot - a plain <div> would report
+       undefined and the handler would never consider itself in scope. The selector below scopes it
+       back to this sheet. */
     /* Without this the sheet opens with focus still nowhere, so wireLinearNav's own "is focus inside my
        list" guard never passes and D-pad input does nothing. Also includes input[type=range] (only
        present on chrome-menu-effects.js's Effects sub-screen) so its Shader Upscaling/Color Boost/
        Ambient Lighting sliders are themselves reachable Up/Down stops, not just their Auto/On/Off
        mode buttons - a disabled slider (see buildModeRow's applyStrengthDisplay) is skipped for free,
        since items() already filters out disabled elements. */
-    const menuNav = wireLinearNav(document, `.${INLINE_MENU_CLASS} button:not(.${OVERLAY_CLOSE_BTN_CLASS}), .${INLINE_MENU_CLASS} input[type="range"]`, {
+    const menuNav = wireLinearNav(document, '.prism-player-sheet button:not(.prism-player-overlay-close), .prism-player-sheet input[type="range"]', {
         orientation: "vertical",
         loop: true,
         /* Back up a screen (Quality Cap/Effects/Options -> the main list) if one is open, else close
@@ -609,8 +477,7 @@ export function openHamburgerMenu(controller, anchor) {
     controller._inlineMenuAnchor = anchor;
     hideControls(controller);
     requestAnimationFrame(() => {
-        sheet.style.opacity = "1";
-        sheet.style.transform = "translateX(0)";
+        sheet.classList.add("is-open");
     });
 }
 
@@ -623,7 +490,7 @@ function qualityCapMenuLabel(controller) {
 }
 
 /* The current group is whichever one's server/ratingKey match the live session - not
-   necessarily the first group in the list, since _switchToSource (plex-player.js) keeps
+   necessarily the first group in the list, since _switchToSource (player.js) keeps
    every group in session.mediaVersions selectable even after switching away from one. */
 function currentVersionGroup(session) {
     const groups = session?.mediaVersions || [];
@@ -733,36 +600,16 @@ function renderQualityCapList(controller, list, onBack) {
 export function makeToggleSwitch(checked, onChange) {
     let isOn = checked;
     const el = document.createElement("div");
+    el.className = "prism-player-switch";
     el.setAttribute("role", "switch");
     el.setAttribute("aria-checked", String(isOn));
-    Object.assign(el.style, {
-        position: "relative",
-        width: "34px",
-        height: "20px",
-        flex: "0 0 auto",
-        borderRadius: "10px",
-        background: isOn ? "#e5a00d" : "rgba(255,255,255,0.25)",
-        transition: "background 0.15s ease",
-        cursor: "pointer",
-    });
     const thumb = document.createElement("div");
-    Object.assign(thumb.style, {
-        position: "absolute",
-        top: "2px",
-        left: isOn ? "16px" : "2px",
-        width: "16px",
-        height: "16px",
-        borderRadius: "50%",
-        background: "#fff",
-        transition: "left 0.15s ease",
-    });
+    thumb.className = "prism-player-switch-thumb";
     el.appendChild(thumb);
     el.addEventListener("click", (e) => {
         e.stopPropagation();
         isOn = !isOn;
         el.setAttribute("aria-checked", String(isOn));
-        el.style.background = isOn ? "#e5a00d" : "rgba(255,255,255,0.25)";
-        thumb.style.left = isOn ? "16px" : "2px";
         onChange(isOn);
     });
     return el;

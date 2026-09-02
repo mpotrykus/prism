@@ -1,16 +1,18 @@
 import { registerPlugin } from "@capacitor/core";
 import { plexAssetUrl } from "./core/plex-asset-url.js";
-import { playQueuedTitle, applyRememberedSubtitle } from "./ui/chrome.js";
+import { playQueuedTitle } from "./ui/chrome-transport.js";
+import { applyRememberedSubtitle } from "./ui/chrome-subtitles.js";
 import { getQueueItems, formatEpisodeListItem } from "./ui/episode-list.js";
 import * as StreamingSubtitles from "./core/subtitle-provider.js";
 import * as subtitleStore from "./core/subtitle-store.js";
 import { reloadTranscodeSession } from "./core/session-reload.js";
 import { upNextSkipAtMs } from "./ui/chrome-skip.js";
+import { activeMarkerAt, skipLabelFor } from "./ui/chrome-skip.js";
 import { showPlaybackErrorModal } from "./ui/error-modal.js";
 
 const NativePlayer = registerPlugin("NativePlayer");
-/* Deliberately a local copy of plex-player.js's own TIMELINE_PING_MS, not a shared
-   import - plex-player.js already imports FROM this file at its own top level, and
+/* Deliberately a local copy of player.js's own TIMELINE_PING_MS, not a shared
+   import - player.js already imports FROM this file at its own top level, and
    importing the constant back the other way round-tripped through a live binding that
    came through as undefined in the production Rollup bundle (confirmed against a real
    device: `now - x >= undefined` is always false, so the throttle gate below never
@@ -27,7 +29,7 @@ const NATIVE_TIMELINE_PING_MS = 10000;
    interface. */
 export async function playNative(controller, streamUrl, startOffsetMs) {
     /* Local, not controller fields - controller._autoPlayEnabled/_autoSkipIntroCreditsEnabled
-       are the web/Xbox chrome's own localStorage-backed copies (see plex-player.js's
+       are the web/Xbox chrome's own localStorage-backed copies (see player.js's
        _prepareSession) and are never touched by Android's real, separately-stored
        SharedPreferences flags (PlayerActivity's own autoPlayEnabled/
        autoSkipIntroCreditsEnabled, changed only through PlayerUiHelper's native More
@@ -56,7 +58,7 @@ export async function playNative(controller, streamUrl, startOffsetMs) {
             if (!controller._session) return;
             controller._session.lastTimeMs = positionMs;
             if (durationMs) controller._session.durationMs = durationMs;
-            /* _pingTimer's own setInterval (plex-player.js's _beginSession/
+            /* _pingTimer's own setInterval (player.js's _beginSession/
                _switchTitleNative) never actually fires during native playback -
                confirmed against a real device: PlayerActivity is a genuinely separate
                Android Activity (started via startActivityForResult, see
@@ -109,7 +111,7 @@ export async function playNative(controller, streamUrl, startOffsetMs) {
                controller._autoPlayEnabled/_autoSkipIntroCreditsEnabled - see this
                function's own header comment for why those wouldn't reflect Android's
                real toggle state here. */
-            const marker = controller._activeMarkerAt(positionMs);
+            const marker = activeMarkerAt(controller, positionMs);
             if (marker && marker === controller._autoSkippedMarker) return;
             if (marker && nativeAutoPlayEnabled && nativeAutoSkipIntroCreditsEnabled) {
                 controller._activeSkipMarker = marker;
@@ -130,7 +132,7 @@ export async function playNative(controller, streamUrl, startOffsetMs) {
             if (marker !== controller._activeSkipMarker) {
                 controller._activeSkipMarker = marker;
                 if (marker) {
-                    NativePlayer.showSkipButton({ label: controller._skipLabelFor(marker), seekToMs: marker.endTimeOffset ?? 0 });
+                    NativePlayer.showSkipButton({ label: skipLabelFor(marker), seekToMs: marker.endTimeOffset ?? 0 });
                 } else {
                     NativePlayer.hideSkipButton();
                 }
@@ -191,10 +193,10 @@ export async function playNative(controller, streamUrl, startOffsetMs) {
         })
     );
     /* PlayerUiHelper's Audio & Subtitles search button (native-side equivalent of
-       chrome.js's renderSubtitleSection) has no Plex subtitle result of its own to show
+       chrome-subtitles.js's renderSubtitleSection) has no Plex subtitle result of its own to show
        yet when tapped - it only reports the typed query back here, same "native reports
        a bare request, JS resolves the actual Plex API call" split as
-       episodeListRequested above. Reuses plex-subtitles.js's search() directly rather
+       episodeListRequested above. Reuses plex/subtitles.js's search() directly rather
        than re-deriving the query param in Java. fileId stays an opaque string to Java
        (see SubtitleResultEntry.java) but now carries a JSON-encoded copy of everything
        download() below needs (key/codec/languageCode/providerTitle/hearingImpaired/
@@ -213,8 +215,8 @@ export async function playNative(controller, streamUrl, startOffsetMs) {
         })
     );
     /* A subtitle result row tap - fileId is opaque to this bridge too, it only exists to
-       round-trip through plex-subtitles.js's download() (the same search-then-download
-       chrome.js's own, currently-unreachable Android branch in applySubtitleResult
+       round-trip through plex/subtitles.js's download() (the same search-then-download
+       chrome-subtitles.js's own, currently-unreachable Android branch in applySubtitleResult
        already does) before handing PlayerActivity the raw .srt text via setSubtitle.
        The raw text, not just a download link, is what lets PlayerActivity's Sync +/-
        control re-shift and rewrite a local file natively for every click rather than
@@ -229,7 +231,7 @@ export async function playNative(controller, streamUrl, startOffsetMs) {
                 );
                 await setNativeSubtitle(text, resolvedLanguageCode || languageCode, "application/x-subrip");
                 /* Remembered per-title (ratingKey) - see subtitle-store.js. Read back at
-                   the start of the next session for the same title (plex-player.js's
+                   the start of the next session for the same title (player.js's
                    applyRememberedSubtitle) so it auto-reapplies without a fresh
                    search+select. */
                 subtitleStore.setAppliedSubtitle(controller._session?.ratingKey, result);
@@ -251,7 +253,7 @@ export async function playNative(controller, streamUrl, startOffsetMs) {
     );
     /* PlayerUiHelper's Sync +/- buttons (PlayerActivity.adjustSubtitleOffset) apply
        fully natively too, same "notify JS afterward" reasoning as subtitleCleared
-       above - JS persists the offset per title so applyRememberedSubtitle (chrome.js)
+       above - JS persists the offset per title so applyRememberedSubtitle (chrome-subtitles.js)
        can restore it via setNativeSubtitleOffset below on the next play. */
     controller._nativeListenerHandles.push(
         await NativePlayer.addListener("subtitleOffsetChanged", ({ offsetMs }) => {
@@ -391,12 +393,11 @@ export function buildPlaybackPayload(controller, streamUrl, startOffsetMs) {
 }
 
 /* Swaps the currently playing title in PlayerActivity in place - no Intent, no
-   startActivityForResult, same running Activity/ExoPlayer instance - rather than a full
-   stop()+play() (finish() the Activity, launch a fresh one), which is what used to make
-   title-prev/title-next visibly swipe the whole window out and back in for what should
-   read as one continuous player. No listener re-registration needed here: PlayerActivity
-   stays alive the whole time, so the progress/ended/error/stopped/titleNav listeners
-   playNative already wired up above keep firing for the new title too. */
+   startActivityForResult, same running Activity and ExoPlayer instance. A full stop()+play()
+   would finish() the Activity and launch a fresh one, visibly swiping the whole window out and
+   back in for what should read as one continuous player. No listener re-registration needed:
+   PlayerActivity stays alive, so the progress/ended/error/stopped/titleNav listeners playNative
+   wired up above keep firing for the new title. */
 export async function switchNative(controller, streamUrl, startOffsetMs) {
     await NativePlayer.switchTitle(buildPlaybackPayload(controller, streamUrl, startOffsetMs));
 }
@@ -424,7 +425,7 @@ export async function setNativeSubtitle(text, languageCode, mimeType) {
 }
 
 /* Same notifySubtitleApplied call the subtitleSelectRequested listener above makes
-   after a manual pick - chrome.js's applyRememberedSubtitle needs this too so
+   after a manual pick - chrome-subtitles.js's applyRememberedSubtitle needs this too so
    PlayerActivity.currentSubtitleFileId gets set on session-start auto-reapply, not
    just on a manual selection. Without it, the "Off" row shows falsely checked and the
    real result never checkmarks even once a fresh search surfaces it again. */
@@ -432,7 +433,7 @@ export async function notifyNativeSubtitleApplied(fileId, label) {
     await NativePlayer.notifySubtitleApplied({ fileId, label });
 }
 
-/* Absolute, not a delta - used by chrome.js's applyRememberedSubtitle to restore a
+/* Absolute, not a delta - used by chrome-subtitles.js's applyRememberedSubtitle to restore a
    Sync offset right after a fresh setNativeSubtitle call above, same
    apply-then-restore sequence the web/Xbox leg uses. PlayerUiHelper's own Sync +/-
    buttons never go through this - they call PlayerActivity.adjustSubtitleOffset

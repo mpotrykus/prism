@@ -101,6 +101,13 @@ export function createRowScroll(scroller, track) {
     listeners.forEach((fn) => fn(offset, max));
   }
 
+  /* Observed per-instance rather than via a shared window "resize" listener: rows are torn
+     down and rebuilt on every render, and a global listener per row accumulated one
+     permanently-retained closure per row per render. An observer referenced only by this
+     closure is collected together with the scroller it watches. It also catches box changes
+     a window resize never fires for (the sidenav's hover expansion, an overlay opening). */
+  new ResizeObserver(refresh).observe(scroller);
+
   // --- momentum (post-release glide, mirrors native overflow-scroll's fling) ---
   let momentumRAF = null;
 

@@ -184,7 +184,7 @@ export async function resolveBestConnection(server) {
 
 const SECTION_TYPE_MAP = { movie: 1, show: 2 };
 
-async function plexGetJson(url, token, path) {
+export async function plexGetJson(url, token, path) {
   const u = new URL(url + path);
   u.searchParams.set("X-Plex-Token", token);
   const res = await fetch(u, { headers: { Accept: "application/json" } });
@@ -194,7 +194,7 @@ async function plexGetJson(url, token, path) {
 
 /* Discovers every server on the signed-in account - owned plus anything a friend has
    shared - and every movie/show library on each, defaulting everything to enabled.
-   Shared by the sign-in flow (plex-signin.js - a fresh sign-in should land with
+   Shared by the sign-in flow (signin-modal.js - a fresh sign-in should land with
    everything already browsable, not require a manual trip to Settings) and Settings'
    own "refresh servers" flow, which passes prevServers/prevSections so a re-discovery
    preserves whatever enabled/label/all_enabled toggles the user already set instead of

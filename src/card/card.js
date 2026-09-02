@@ -1,10 +1,10 @@
-import { wireLinearNav, isControllerActive, focusAfterPaint } from "./focus-nav.js";
-import { APP_EVENT, VIEW, SECTION_TYPE } from "./constants.js";
+import { wireLinearNav, focusAfterPaint, reflectControllerActive } from "../core/focus-nav.js";
+import { APP_EVENT, VIEW, SECTION_TYPE } from "../constants.js";
 import { App } from "@capacitor/app";
-import { player } from "./plex-player.js";
-import { tapUrl } from "./src/card/logic/deep-link.js";
-import { normalizeTitle, isInWatchlist, findLocalMatch } from "./src/card/logic/watchlist-match.js";
-import { dedupeSourcesByServer } from "./src/card/logic/cross-server.js";
+import { player } from "../player/player.js";
+import { tapUrl } from "./logic/deep-link.js";
+import { isInWatchlist, findLocalMatch } from "./logic/watchlist-match.js";
+import { dedupeSourcesByServer } from "./logic/cross-server.js";
 import {
   shuffle,
   mapItem,
@@ -13,29 +13,28 @@ import {
   buildPopularRaw,
   buildCollectionRows,
   buildAiRows,
-} from "./src/card/logic/catalog.js";
-import { paintWatchlistButton, addToWatchlist, removeFromWatchlist } from "./src/card/watchlist.js";
+} from "./logic/catalog.js";
+import { paintWatchlistButton, addToWatchlist, removeFromWatchlist } from "./watchlist.js";
+import { WATCHED_ICON_SVG, DOWNLOAD_ICON_SVG, renderRows, buildRowSection, wireArrowVisibility } from "./rows.js";
+import { createRowScroll } from "./row-scroll.js";
+import { PinEntry } from "./pin.js";
+import { renderMoreSheet } from "./more-sheet.js";
+import { renderProfileNav, renderProfileList, switchToUser, PROFILE_ICON_SVG } from "./profile.js";
+import { TitleInfoController } from "./title-info.js";
+import { HeroController, PAUSE_ICON_SVG } from "./hero.js";
 import {
-  WATCHED_ICON_SVG,
-  DOWNLOAD_ICON_SVG,
-  emptyStateHtml,
-  renderMessage,
-  renderLoading,
-  showLoadingMore,
-  hideLoadingMore,
-  renderRows,
-  buildRowSection,
-  buildPoster,
-  wireArrowVisibility,
-} from "./src/card/rows.js";
-import { createRowScroll } from "./src/card/row-scroll.js";
-import { PinEntry } from "./src/card/pin.js";
-import { renderMoreSheet } from "./src/card/more-sheet.js";
-import { fetchHomeProfiles, renderProfileNav, renderProfileList, switchToUser, PROFILE_ICON_SVG } from "./src/card/profile.js";
-import { TitleInfoController } from "./src/card/title-info.js";
-import { HeroController, PAUSE_ICON_SVG } from "./src/card/hero.js";
-import { plexFetch, loadAll, sectionForView, sectionsForView, fetchWatchlistRaw, fetchOnDeckRaw, primaryServer, serverForSection, activeServers } from "./src/card/data.js";
-import { onSearchInput, exitSearch, renderSearchPage, openRowSeeMore } from "./src/card/search-page.js";
+  findOnServer,
+  plexFetch,
+  loadAll,
+  sectionForView,
+  sectionsForView,
+  fetchWatchlistRaw,
+  fetchOnDeckRaw,
+  primaryServer,
+  serverForSection,
+  activeServers,
+} from "./data.js";
+import { onSearchInput, exitSearch, openRowSeeMore } from "./search-page.js";
 import {
   wireNavItem,
   renderNavSections,
@@ -50,20 +49,20 @@ import {
   wireProfileMenu,
   restoreFocusAfterSearch,
   dismissSearchKeyboard,
-} from "./src/card/nav.js";
+} from "./nav.js";
 
-import hostResetCss from "./src/card/styles/host-reset.css?inline";
-import sidenavCss from "./src/card/styles/sidenav.css?inline";
-import heroCss from "./src/card/styles/hero.css?inline";
-import headerSearchCss from "./src/card/styles/header-search.css?inline";
-import headerNavCss from "./src/card/styles/header-nav.css?inline";
-import rowsPosterCss from "./src/card/styles/rows-poster.css?inline";
-import pinModalCss from "./src/card/styles/pin-modal.css?inline";
-import profileCss from "./src/card/styles/profile.css?inline";
-import moreSheetCss from "./src/card/styles/more-sheet.css?inline";
-import titleInfoCss from "./src/card/styles/title-info.css?inline";
-import sharedFocusCss from "./src/card/styles/shared-focus.css?inline";
-import responsiveCss from "./src/card/styles/responsive.css?inline";
+import hostResetCss from "./styles/host-reset.css?inline";
+import sidenavCss from "./styles/sidenav.css?inline";
+import heroCss from "./styles/hero.css?inline";
+import headerSearchCss from "./styles/header-search.css?inline";
+import headerNavCss from "./styles/header-nav.css?inline";
+import rowsPosterCss from "./styles/rows-poster.css?inline";
+import pinModalCss from "./styles/pin-modal.css?inline";
+import profileCss from "./styles/profile.css?inline";
+import moreSheetCss from "./styles/more-sheet.css?inline";
+import titleInfoCss from "./styles/title-info.css?inline";
+import sharedFocusCss from "./styles/shared-focus.css?inline";
+import responsiveCss from "./styles/responsive.css?inline";
 
 const STYLE = [
   hostResetCss,
@@ -104,9 +103,8 @@ const LIBRARIES_ICON_SVG =
   '<svg viewBox="0 0 24 24"><rect x="3" y="3" width="8" height="8" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.6"/><rect x="13" y="3" width="8" height="8" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.6"/><rect x="3" y="13" width="8" height="8" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.6"/><rect x="13" y="13" width="8" height="8" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>';
 
 class PlexNetflixCard extends HTMLElement {
-  /* No required fields here, unlike the original HA-card version - this can be called
-     with an empty/partial config (e.g. first run, nothing in Settings yet) and just
-     renders a "go configure me" message from _loadAll() below instead of throwing. */
+  /* No required fields: this can be called with an empty/partial config (first run, nothing
+     in Settings yet) and renders a "go configure me" message rather than throwing. */
   setConfig(config) {
     this._config = {
       max_genre_rows: 12,
@@ -125,7 +123,7 @@ class PlexNetflixCard extends HTMLElement {
       this._build();
       this._built = true;
     } else {
-      this._renderNavSections();
+      renderNavSections(this);
     }
   }
 
@@ -135,18 +133,10 @@ class PlexNetflixCard extends HTMLElement {
   refreshConfig(config) {
     this.setConfig(config);
     this._loaded = true;
-    this._loadAll();
+    loadAll(this);
   }
 
-  /* See src/card/pin.js's PinEntry for the shared numeric-keypad modal itself - the
-     Plex profile switcher's PIN prompt (_switchToUser) goes through this one instance. */
-  _promptForDigits(length, title) {
-    return this._pin.prompt(length, title);
-  }
 
-  _shakePinEntry() {
-    this._pin.shake();
-  }
 
   getCardSize() {
     return 12;
@@ -155,7 +145,7 @@ class PlexNetflixCard extends HTMLElement {
   connectedCallback() {
     if (!this._loaded) {
       this._loaded = true;
-      this._loadAll();
+      loadAll(this);
     }
   }
 
@@ -164,13 +154,7 @@ class PlexNetflixCard extends HTMLElement {
     this._lastSearchQuery = null;
     this._lastSearchHubs = null;
     this._searchSeq = 0;
-    /* Reflected onto this host element, not read via a :root selector inside the shadow
-       stylesheet below - a shadow tree's root node is the ShadowRoot itself, not an Element,
-       so :root never matches there (see focus-nav.js's own comment on this). */
-    this.toggleAttribute("controller-active", isControllerActive());
-    document.addEventListener(APP_EVENT.CONTROLLER_ACTIVE_CHANGE, (e) => {
-      this.toggleAttribute("controller-active", e.detail.active);
-    });
+    reflectControllerActive(this);
     this.attachShadow({ mode: "open" });
     this.shadowRoot.innerHTML = `
       <style>${STYLE}</style>
@@ -421,7 +405,7 @@ class PlexNetflixCard extends HTMLElement {
     updateHeaderNavScroll();
     this._headerNavScroller = this.shadowRoot.querySelector(".header-nav-scroller");
     this._headerNavTrack = this.shadowRoot.querySelector(".header-nav-track");
-    this._renderNavSections();
+    renderNavSections(this);
     this._settingsBtn = this.shadowRoot.querySelector(".nav-settings");
     this._profileMenuWrap = this.shadowRoot.querySelector(".profile-menu-wrap");
     this._profileNavItem = this.shadowRoot.querySelector(".nav-profile");
@@ -446,19 +430,18 @@ class PlexNetflixCard extends HTMLElement {
     this._librariesCancelBtn = this.shadowRoot.querySelector(".libraries-sheet-cancel");
     this._pin = new PinEntry(this.shadowRoot);
     this._titleInfo = new TitleInfoController(this.shadowRoot, {
-      escape: (s) => this._escape(s),
       /* Bound to whichever item the title-info overlay currently has open, not a
          global server - every metadata/scrobble/season/episode fetch this overlay makes
          is for the same show/movie (and therefore the same server) as this._item, so a
          single binding here covers every ctx.plexFetch/plexImageUrl call inside
          title-info.js without threading a server through each one individually. Safe
          because open() sets this._item synchronously before any of these fire. */
-      plexFetch: (path, params, server) => this._plexFetch(path, params, server || this._titleInfo?.item?.server),
+      plexFetch: (path, params, server) => plexFetch(this, path, params, server || this._titleInfo?.item?.server),
       plexImageUrl: (path, server) => this._plexImageUrl(path, server || this._titleInfo?.item?.server),
       plexThumbUrl: (path, width, height, server) =>
         this._plexThumbUrl(path, width, height, server || this._titleInfo?.item?.server),
       mapItem: (m, withProgress) => this._mapItem(m, withProgress),
-      isInWatchlist: (item) => this._isInWatchlist(item),
+      isInWatchlist: (item) => isInWatchlist(item, this._watchlistRaw),
       resolveLocalRatingKey: (item) => this._resolveLocalRatingKey(item),
       resolveItemSources: (item) => this._resolveItemSources(item),
       onAddToWatchlist: (item, btnEl) => this._addToWatchlist(item, btnEl),
@@ -468,21 +451,20 @@ class PlexNetflixCard extends HTMLElement {
       getConfig: () => this._config,
     });
     this._hero = new HeroController(this.shadowRoot, {
-      escape: (s) => this._escape(s),
       /* Same "bind to the current item's server" reasoning as title-info's ctx above -
          hero.js explicitly passes an item's own __server through to most of these calls
          already (see its _resolveVideo/_resolveLogo), this is just the fallback for the
          couple of spots that don't. */
-      plexFetch: (path, params, server) => this._plexFetch(path, params, server || this._hero?.item?.__server),
+      plexFetch: (path, params, server) => plexFetch(this, path, params, server || this._hero?.item?.__server),
       plexImageUrl: (path, server) => this._plexImageUrl(path, server || this._hero?.item?.__server),
       mapItem: (m, withProgress) => this._mapItem(m, withProgress),
-      isInWatchlist: (item) => this._isInWatchlist(item),
+      isInWatchlist: (item) => isInWatchlist(item, this._watchlistRaw),
       onAddToWatchlist: (item, btnEl) => this._addToWatchlist(item, btnEl),
       onRemoveFromWatchlist: (item, btnEl) => this._removeFromWatchlist(item, btnEl),
-      onOpenTitleInfo: (item, source) => this._openTitleInfo(item, source),
+      onOpenTitleInfo: (item, source) => this._titleInfo.open(item, source),
       getConfig: () => this._config,
       getCurrentView: () => this._currentView,
-      getSectionsForView: (view) => this._sectionsForView(view),
+      getSectionsForView: (view) => sectionsForView(this, view),
       getGenreBySection: () => this._genreBySection,
     });
 
@@ -492,11 +474,11 @@ class PlexNetflixCard extends HTMLElement {
        remember to call _onPlayHistoryMutated itself. */
     window.addEventListener(APP_EVENT.PLAYER_CLOSE, () => this._onPlayHistoryMutated());
 
-    /* Dynamic (per-library) nav items are already wired inside _renderNavSections,
+    /* Dynamic (per-library) nav items are already wired inside renderNavSections,
        called above - only the two static Home items (sidenav + header-nav) need wiring
        here. */
-    this.shadowRoot.querySelectorAll(`.nav-item[data-view="${VIEW.HOME}"]`).forEach((el) => this._wireNavItem(el));
-    this._wireHeaderNav();
+    this.shadowRoot.querySelectorAll(`.nav-item[data-view="${VIEW.HOME}"]`).forEach((el) => wireNavItem(this, el));
+    wireHeaderNav(this);
 
     this._settingsBtn.addEventListener("click", () => {
       this.dispatchEvent(new CustomEvent(APP_EVENT.OPEN_SETTINGS, { bubbles: true, composed: true }));
@@ -535,9 +517,9 @@ class PlexNetflixCard extends HTMLElement {
     this._profileArrowRight.addEventListener("click", () => {
       this._profileRowScroll.scrollBy(this._profileScroll.clientWidth * 0.9, { animate: true });
     });
-    /* Mirrors episode-list.js's own focusin listener - wireLinearNav's plain scrollIntoView
-       has nothing to act on now that .profile-list is a transform-driven track instead of a
-       native scroll container. */
+    /* Mirrors episode-list.js's own focusin listener: .profile-list is a transform-driven
+       track, not a native scroll container, so wireLinearNav's plain scrollIntoView has
+       nothing to act on. */
     this._profileOverlay.addEventListener("focusin", (e) => {
       if (this._profileListEl.contains(e.target)) this._profileRowScroll.scrollIntoView(e.target, { inline: "center", animate: true });
     });
@@ -583,7 +565,7 @@ class PlexNetflixCard extends HTMLElement {
       else if (settingsModal?.isOpen()) settingsModal.close();
       else if (this._currentView === VIEW.SEARCH) {
         this._clearSearchInput();
-        this._exitSearch();
+        exitSearch(this);
         this._searchWrap.classList.remove("expanded");
         this._searchInput.blur();
         restoreFocusAfterSearch(this);
@@ -615,7 +597,7 @@ class PlexNetflixCard extends HTMLElement {
     this._searchToggle.addEventListener("click", () => {
       if (this._searchInput.value) {
         this._clearSearchInput();
-        this._onSearchInput();
+        onSearchInput(this);
         this._searchWrap.classList.remove("expanded");
         this._searchInput.blur();
         restoreFocusAfterSearch(this);
@@ -631,7 +613,7 @@ class PlexNetflixCard extends HTMLElement {
     });
     this._searchInput.addEventListener("input", () => {
       this._updateSearchToggleIcon();
-      this._onSearchInput();
+      onSearchInput(this);
     });
     this._searchInput.addEventListener("keydown", (e) => {
       if (e.key === "Escape") dismissSearchKeyboard(this);
@@ -643,18 +625,6 @@ class PlexNetflixCard extends HTMLElement {
     wireProfileMenu(this);
   }
 
-  _wireNavItem(el) {
-    wireNavItem(this, el);
-  }
-
-  _renderNavSections() {
-    renderNavSections(this);
-  }
-
-  _wireHeaderNav() {
-    wireHeaderNav(this);
-  }
-
   _toggleProfileDropdown() {
     if (this._profileDropdown.hidden) this._openProfileDropdown();
     else this._closeProfileDropdown();
@@ -662,13 +632,11 @@ class PlexNetflixCard extends HTMLElement {
 
   _openProfileDropdown() {
     this._profileDropdownProfileBtn.hidden = !this._hasMultipleProfiles;
-    /* The dropdown lives outside .header/.content now (see the template) rather than
-       anchored via position:absolute inside .profile-menu-wrap - .header's own
-       mask-image (its scroll-fade) clips any descendant content that extends past its
-       own box, which silently ate the dropdown's items (only its top border edge
-       survived the mask, rendering as a bare line with nothing inside). Position it as
-       position:fixed instead, computed fresh from the icon's real screen position each
-       time it opens. */
+    /* The dropdown lives outside .header/.content rather than anchored position:absolute
+       inside .profile-menu-wrap: .header's mask-image (its scroll-fade) clips any descendant
+       extending past its own box, which silently ate the dropdown's items - only its top
+       border edge survived, rendering as a bare line with nothing inside. So it's
+       position:fixed, computed fresh from the icon's real screen position on each open. */
     const rect = this._profileNavItem.getBoundingClientRect();
     this._profileDropdown.style.top = `${rect.bottom + 10}px`;
     this._profileDropdown.style.right = `${document.documentElement.clientWidth - rect.right}px`;
@@ -694,13 +662,7 @@ class PlexNetflixCard extends HTMLElement {
     return plexFetch(this, path, params, server);
   }
 
-  _loadAll() {
-    return loadAll(this);
-  }
 
-  _sectionForView(view) {
-    return sectionForView(this, view);
-  }
 
   /* The section `type` (1=movie, 2=show - see SECTION_TYPE_FILTERS above) to filter every
      raw pool by for a given view. A single-library tab borrows that library's own type;
@@ -710,7 +672,7 @@ class PlexNetflixCard extends HTMLElement {
   _sectionTypeForView(view) {
     if (view === VIEW.MOVIES) return SECTION_TYPE.MOVIE;
     if (view === VIEW.TV) return SECTION_TYPE.SHOW;
-    return this._sectionForView(view)?.type;
+    return sectionForView(this, view)?.type;
   }
 
   /* sectionsForView (data.js) already scopes genre/collection rows to the tapped
@@ -724,27 +686,22 @@ class PlexNetflixCard extends HTMLElement {
       const id = view.slice("server-".length);
       return (m) => m.__server?.id === id;
     }
-    /* A library tab (view = "section-<server_id>:<key>") is scoped to one specific
-       library, not merely one server - a server with two movie libraries has both
-       tagged server_id-equal, so matching server_id alone left every card-wide raw
-       cache (onDeck/watchlist/recentlyAdded/recommended/popular/AI rows) mixing both
-       libraries' items into whichever movie-library tab you opened (SECTION_TYPE_FILTERS
-       above only narrows by movie-vs-show type, not by which library).
-       data.js's stampSection tags recentlyAdded/genre-by-section(-> recommended/popular)/
-       AI-row items with m.__section = {server_id,key} at the exact per-section fetch
-       that produced them - that's checked first and is authoritative. onDeck/watchlist
-       have no such per-section fetch to stamp from (onDeck is a single server-wide
-       endpoint; watchlist is account-level, not tied to any one server's library at
-       all), so those still fall back to trusting Plex's own librarySectionID field on
-       the item - which is NOT reliable enough to use as the *only* signal (confirmed:
-       real-world testing against a multi-library server showed Recently Added/
-       Recommended/Popular/AI rows still mixing sections even after filtering on
-       librarySectionID alone, which is why those sources now get the authoritative
-       __section stamp instead). Missing librarySectionID on the fallback path fails
-       open (kept) rather than dropped, same convention as data.js's own
-       isFromEnabledSection. */
+    /* A library tab (view = "section-<server_id>:<key>") is scoped to one specific library,
+       not merely one server: a server with two movie libraries tags both the same server_id,
+       and SECTION_TYPE_FILTERS above only narrows movie-vs-show, so matching on server_id
+       alone mixed both libraries into whichever movie tab you opened.
+
+       data.js's stampSection tags recentlyAdded / genre-by-section (and therefore
+       recommended/popular) / AI-row items with m.__section = {server_id, key} at the exact
+       per-section fetch that produced them. That's authoritative and checked first.
+       onDeck/watchlist have no per-section fetch to stamp from (onDeck is one server-wide
+       endpoint; watchlist is account-level), so they fall back to Plex's own
+       librarySectionID - which is NOT reliable enough to be the only signal: testing against
+       a real multi-library server showed those rows still mixing sections when filtered on it
+       alone, which is why the other sources carry the stamp. A missing librarySectionID on
+       the fallback path fails open, same convention as data.js's isFromEnabledSection. */
     if (view.startsWith("section-")) {
-      const section = this._sectionForView(view);
+      const section = sectionForView(this, view);
       if (!section) return () => true;
       return (m) => {
         if (m.__section) return m.__section.server_id === section.server_id && m.__section.key === section.key;
@@ -757,13 +714,7 @@ class PlexNetflixCard extends HTMLElement {
     return () => true;
   }
 
-  _sectionsForView(view) {
-    return sectionsForView(this, view);
-  }
 
-  _fetchWatchlistRaw() {
-    return fetchWatchlistRaw(this);
-  }
 
   /* Watchlist items come from plex.tv's account-level Discover API (fetchWatchlistRaw),
      not any local server's plexFetch - unlike every other raw source in this file, they
@@ -782,13 +733,11 @@ class PlexNetflixCard extends HTMLElement {
     return pool;
   }
 
-  /* Same shape as _serverFilterForView composed with a type filter, but for watchlist
-     items specifically - matches by normalized title(+year) against _watchlistLocalPool
-     to borrow a local item's __server/__section stamp instead of trusting the watchlist
-     item's own (nonexistent) one. Falls back to checking the raw watchlist item itself
-     when no local match is found, which preserves the old (always-empty-on-a-specific-
-     tab) behavior for a title that isn't actually on this server, and is a no-op on
-     home/search where the underlying serverFilter is already `() => true`. */
+  /* _serverFilterForView composed with a type filter, but for watchlist items: matches by
+     normalized title(+year) against _watchlistLocalPool to borrow a local item's
+     __server/__section stamp, since a watchlist item has none of its own. With no local match
+     it checks the raw watchlist item instead, which correctly yields nothing on a specific
+     library tab and is a no-op on home/search, where serverFilter is already `() => true`. */
   _watchlistFilterForView(view) {
     const sectionFilters = SECTION_TYPE_FILTERS[this._sectionTypeForView(view)];
     const serverFilter = this._serverFilterForView(view);
@@ -800,9 +749,6 @@ class PlexNetflixCard extends HTMLElement {
     };
   }
 
-  _shuffle(array) {
-    return shuffle(array);
-  }
 
   _plexImageUrl(path, server = null) {
     if (!path) return "";
@@ -839,9 +785,6 @@ class PlexNetflixCard extends HTMLElement {
     return url.toString();
   }
 
-  _advanceHero() {
-    return this._hero.advance();
-  }
 
   _showHero(preserveMute = false, crossfade = false) {
     this._hero.show(preserveMute, crossfade);
@@ -850,7 +793,7 @@ class PlexNetflixCard extends HTMLElement {
   _renderCurrentView({ showHero = true } = {}) {
     const view = this._currentView || "home";
     if (showHero) this._showHero();
-    const sectionsForGenres = this._sectionsForView(view);
+    const sectionsForGenres = sectionsForView(this, view);
 
     const sectionFilters = SECTION_TYPE_FILTERS[this._sectionTypeForView(view)];
     const serverFilter = this._serverFilterForView(view);
@@ -919,7 +862,7 @@ class PlexNetflixCard extends HTMLElement {
        disturbing what's already rendered, for the same reason showHero itself is
        skipped: this isn't a real view change, so nothing already on screen should move
        or restart. */
-    this._renderRows(rows, { merge: !showHero });
+    renderRows(this._rowsEl, rows, this._config.landscape_every_nth, this._rowCtx, { merge: !showHero });
   }
 
   /* Rebuilds just the "My List" row after an add/remove, instead of the full
@@ -945,7 +888,7 @@ class PlexNetflixCard extends HTMLElement {
     const rowIndex = existing ? sections.indexOf(existing) : sections.length;
     const nth = this._config.landscape_every_nth;
     const landscape = !!nth && (rowIndex + 1) % nth === 0;
-    const newSection = this._buildRowSection(
+    const newSection = buildRowSection(
       {
         title: "My List",
         items: watchlist,
@@ -989,7 +932,7 @@ class PlexNetflixCard extends HTMLElement {
     }
 
     const rowIndex = existing ? Array.from(this._rowsEl.children).indexOf(existing) : 0;
-    const newSection = this._buildRowSection({ title: "Continue Watching", items: onDeck, source: "local", landscape: true }, true, rowIndex);
+    const newSection = buildRowSection({ title: "Continue Watching", items: onDeck, source: "local", landscape: true }, true, rowIndex);
 
     if (existing) existing.replaceWith(newSection);
     else this._rowsEl.insertBefore(newSection, this._rowsEl.firstChild);
@@ -1032,9 +975,9 @@ class PlexNetflixCard extends HTMLElement {
   }
 
   _getCollectionsRowForView(sections) {
-    /* Composite server_id+key, not key alone - Plex library keys are small per-server
-       integers, not globally unique, so a bare key match here previously let a different
-       server's same-numbered library's collections leak into this view's Collections row. */
+    /* Composite server_id+key, not key alone: Plex library keys are small per-server integers,
+       not globally unique, so a bare key match lets a different server's same-numbered
+       library's collections leak into this view's Collections row. */
     const keys = new Set(sections.map((s) => `${s.server_id}:${s.key}`));
     const collections = (this._collectionsRaw || []).filter((c) => keys.has(`${c.section.server_id}:${c.section.key}`));
     if (!collections.length) return null;
@@ -1068,20 +1011,13 @@ class PlexNetflixCard extends HTMLElement {
     return { title: "Playlists", items, source: "local" };
   }
 
-  /* Plex Home profiles - only worth surfacing the switcher UI at all when there's more
-     than one (a solo account has nothing to switch to). Failures (no account token yet,
-     no Plex Home set up, network error) all collapse to "no switcher", same as an empty
-     list - none of them should ever block the rest of the dashboard from loading. */
-  _fetchHomeProfiles() {
-    return fetchHomeProfiles(this._config.plex_account_token);
-  }
 
   _renderProfileNav() {
-    this._hasMultipleProfiles = renderProfileNav(this._profileNavItem, this._profileNavLabel, this._profileNavIcon, this._homeUsers || [], this._activeUserId, (s) => this._escape(s));
+    this._hasMultipleProfiles = renderProfileNav(this._profileNavItem, this._profileNavLabel, this._profileNavIcon, this._homeUsers || [], this._activeUserId);
   }
 
   _openProfileOverlay() {
-    this._renderProfileList();
+    renderProfileList(this._profileListEl, this._homeUsers || [], this._activeUserId, (user, badgeEl) => this._switchToUser(user, badgeEl));
     this._profileOverlay.classList.add("open");
     /* Lands D-pad/keyboard nav (and the badge row's own centering, see the focusin listener
        above) on the current profile rather than always the leftmost one - the whole point of
@@ -1122,7 +1058,7 @@ class PlexNetflixCard extends HTMLElement {
       });
     }
     addRow("Settings", this._settingsBtn.querySelector(".nav-icon").innerHTML, false, this._settingsBtn);
-    renderMoreSheet(this._moreListEl, rows, (s) => this._escape(s));
+    renderMoreSheet(this._moreListEl, rows);
   }
 
   _openMoreSheet() {
@@ -1150,7 +1086,7 @@ class PlexNetflixCard extends HTMLElement {
       active: el.classList.contains("active"),
       onSelect: () => { this._closeLibrariesSheet(); el.click(); },
     }));
-    renderMoreSheet(this._librariesListEl, rows, (s) => this._escape(s));
+    renderMoreSheet(this._librariesListEl, rows);
   }
 
   _openLibrariesSheet() {
@@ -1164,22 +1100,9 @@ class PlexNetflixCard extends HTMLElement {
   }
 
   _renderProfileList() {
-    renderProfileList(this._profileListEl, this._homeUsers || [], this._activeUserId, (s) => this._escape(s), (user, badgeEl) => this._switchToUser(user, badgeEl));
+    renderProfileList(this._profileListEl, this._homeUsers || [], this._activeUserId, (user, badgeEl) => this._switchToUser(user, badgeEl));
   }
 
-  /* Redirects an episode click to the parent show's info modal, landing on the season/
-     episode it came from (via _pendingEpisodeFocus, consumed in _loadTitleInfoSeasons)
-     instead of opening a dedicated single-episode modal. item.image/art already resolve
-     to the show's own thumb/art here (see _mapItem's grandparentThumb/grandparentArt
-     fallback for episodes), so the optimistic paint before the real fetch is accurate.
-     _titleInfoResumeEpisodeKey remembers which episode this show modal stands in for, so
-     the Play button resumes that episode instead of trying to "play" the show container
-     itself, which isn't a playable item (StreamingPlayer.play fails on it and falls back
-     to _tapUrl's web/details link - the "thrown to the Plex website" regression this
-     comment is here to prevent reintroducing). */
-  _openTitleInfo(item, source) {
-    return this._titleInfo.open(item, source);
-  }
 
   _wireHomeNav() {
     wireHomeNav(this);
@@ -1188,7 +1111,7 @@ class PlexNetflixCard extends HTMLElement {
   }
 
   /* Prefers the shared player (native on Android, <video>+hls.js everywhere else - see
-     plex-player.js) and only falls back to handing off via _tapUrl (native Plex app /
+     player.js) and only falls back to handing off via _tapUrl (native Plex app /
      Plex web player) when playback fails to start - e.g. a watchlist item with no local
      ratingKey, which player.play rejects by design. Shared by the title-info modal's
      Play button and the episode list's direct-play rows. */
@@ -1199,7 +1122,7 @@ class PlexNetflixCard extends HTMLElement {
        above minus the blur/focus-restore, since focus is about to move to the player. */
     if (this._currentView === VIEW.SEARCH) {
       this._clearSearchInput();
-      this._exitSearch();
+      exitSearch(this);
       this._searchWrap.classList.remove("expanded");
     }
     const server = item.server || primaryServer(this);
@@ -1229,7 +1152,7 @@ class PlexNetflixCard extends HTMLElement {
         year: item.year,
         seasonNumber: item.seasonNumber,
         episodeNumber: item.episodeNumber,
-        /* Drives plex-player.js's shader auto-detection (anime vs. live-action) - see
+        /* Drives player.js's shader auto-detection (anime vs. live-action) - see
            _mapItem/_renderTitleInfoDetail for where this gets resolved. studio is the
            secondary signal detectShaderType uses to catch CGI animation (Pixar/DreamWorks/
            Illumination-style) that would otherwise get misclassified as anime4k just for
@@ -1239,7 +1162,7 @@ class PlexNetflixCard extends HTMLElement {
         /* The ordered list of sibling ratingKeys (a show's full episode order, or a
            playlist/collection's own order) this item came from, if any - see
            title-info.js's _getShowEpisodeQueue/_flatQueueContext. Powers the player's
-           title-prev/title-next buttons (src/player/ui/chrome.js). */
+           title-prev/title-next buttons (src/player/ui/). */
         queueRatingKeys,
         queueIndex,
       });
@@ -1257,7 +1180,7 @@ class PlexNetflixCard extends HTMLElement {
      user to press "Switch" again. */
   _switchToUser(user, badgeEl) {
     return switchToUser(user, badgeEl, {
-      promptForDigits: (length, title) => this._promptForDigits(length, title),
+      promptForDigits: (length, title) => this._pin.prompt(length, title),
       accountToken: this._config.plex_account_token,
       machineId: this._config.machine_id,
       onSuccess: async ({ plexToken, accountToken, userId }) => {
@@ -1265,7 +1188,7 @@ class PlexNetflixCard extends HTMLElement {
         this._config.plex_account_token = accountToken;
         this._activeUserId = userId;
         this._closeProfileOverlay();
-        await this._loadAll();
+        await loadAll(this);
       },
     });
   }
@@ -1277,7 +1200,7 @@ class PlexNetflixCard extends HTMLElement {
       /* Wider pool (2x row_size) keeps the row anchored to genuinely high-affinity
          matches - unlike genre rows, which shuffle across the whole eligible set. */
       const pool = (this._recommendedRaw || []).filter(filterFn).slice(0, rowSize * 2);
-      this._recommendedRowCache[view] = this._shuffle(pool).slice(0, rowSize);
+      this._recommendedRowCache[view] = shuffle(pool).slice(0, rowSize);
     }
     return this._recommendedRowCache[view];
   }
@@ -1291,11 +1214,11 @@ class PlexNetflixCard extends HTMLElement {
       /* Collection rows are guaranteed to appear (reserved out of the max_genre_rows cap
          below) rather than competing for a slot like genre/AI rows - but still shuffled
          into a random position together with everything else, not pinned to a fixed spot. */
-      const pool = this._shuffle([...genreRows, ...aiRows]).slice(
+      const pool = shuffle([...genreRows, ...aiRows]).slice(
         0,
         Math.max(0, this._config.max_genre_rows - collectionRows.length)
       );
-      this._genreRowsCache[view] = this._shuffle([...pool, ...collectionRows]);
+      this._genreRowsCache[view] = shuffle([...pool, ...collectionRows]);
     }
     return this._genreRowsCache[view];
   }
@@ -1345,7 +1268,7 @@ class PlexNetflixCard extends HTMLElement {
     const rows = mergeGenreRows(sections, {
       genreBySection: this._genreBySection,
       mapItem: (m, withProgress) => this._mapItem(m, withProgress),
-      shuffle: (arr) => this._shuffle(arr),
+      shuffle: (arr) => shuffle(arr),
       rowSize: this._config.row_size,
     });
     return rows.map((r) =>
@@ -1410,26 +1333,24 @@ class PlexNetflixCard extends HTMLElement {
   _buildRecommendedRaw(historyRaw) {
     return buildRecommendedRaw(historyRaw, {
       genreBySection: this._genreBySection,
-      isBlockedGenreName: (name) => this._isBlockedGenreName(name),
       onDeckRaw: this._onDeckRaw,
     });
   }
 
-  /* "What's Popular" row: blended recency + audience-rating score computed entirely
-     from local Plex metadata (year + audienceRating, sourced from Rotten Tomatoes per
-     the PMS agent) - no external API calls. Replaces an earlier TMDb-trending-based
-     version that too often had zero overlap with an older library (trending skews hard
-     toward brand-new theatrical releases). Year is normalized against the library's own
-     min/max release year, so "recent" is relative to what's actually in the library,
-     not calendar time; weighted 50/50 with rating, adjust freely. */
+  /* "What's Popular": a blended recency + audience-rating score computed entirely from local
+     Plex metadata (year + audienceRating, sourced from Rotten Tomatoes by the PMS agent), with
+     no external API call - TMDb trending skews hard toward brand-new theatrical releases and
+     had near-zero overlap with an older library. Year is normalized against the library's own
+     min/max release year, so "recent" is relative to the library rather than the calendar;
+     weighted 50/50 with rating, adjust freely. */
   _buildPopularRaw() {
-    return buildPopularRaw({ genreBySection: this._genreBySection, isBlockedGenreName: (name) => this._isBlockedGenreName(name) });
+    return buildPopularRaw({ genreBySection: this._genreBySection });
   }
 
   /* episodeFallbackGenres: an episode's own Plex metadata carries no Genre (that lives
      on the show) - fall back to whatever show-level genres the open title-info modal
      already resolved (see _renderTitleInfoDetail) rather than going undetected by
-     plex-player.js's shader auto-detection. */
+     player.js's shader auto-detection. */
   _mapItem(m, withProgress) {
     return mapItem(m, withProgress, {
       plexImageUrl: (path) => this._plexImageUrl(path, m.__server),
@@ -1450,58 +1371,24 @@ class PlexNetflixCard extends HTMLElement {
 
   get _rowCtx() {
     return {
-      escape: (s) => this._escape(s),
-      isInWatchlist: (item) => this._isInWatchlist(item),
+      isInWatchlist: (item) => isInWatchlist(item, this._watchlistRaw),
       paintWatchlistButton,
       onAddToWatchlist: (item, btnEl) => this._addToWatchlist(item, btnEl),
       onRemoveFromWatchlist: (item, btnEl) => this._removeFromWatchlist(item, btnEl),
-      onOpenTitleInfo: (item, source) => this._openTitleInfo(item, source),
+      onOpenTitleInfo: (item, source) => this._titleInfo.open(item, source),
       onSeeMoreRow: (row) => openRowSeeMore(this, row),
     };
   }
 
-  _emptyStateHtml(msg) {
-    return emptyStateHtml(msg, (s) => this._escape(s));
-  }
 
-  _renderMessage(msg) {
-    renderMessage(this._rowsEl, msg, (s) => this._escape(s));
-  }
 
-  _renderLoading() {
-    renderLoading(this._rowsEl);
-  }
 
-  _showLoadingMore() {
-    showLoadingMore(this._rowsEl);
-  }
 
-  _hideLoadingMore() {
-    hideLoadingMore(this._rowsEl);
-  }
 
-  _renderRows(rows, { merge = false } = {}) {
-    renderRows(this._rowsEl, rows, this._config.landscape_every_nth, this._rowCtx, { merge });
-  }
 
-  _buildRowSection(row, landscape = false, rowIndex = 0) {
-    return buildRowSection(row, landscape, rowIndex, this._rowCtx);
-  }
 
-  _buildPoster(item, source, opts = {}) {
-    return buildPoster(item, source, opts, this._rowCtx);
-  }
 
-  /* Local library titles and Plex's cloud Discover titles can differ in punctuation only
-     (e.g. local "Dragon Ball Z Bio-Broly" vs Discover "Dragon Ball Z: Bio-Broly") - an exact
-     string match silently fails on these, so comparisons strip everything but alphanumerics. */
-  _normalizeTitle(t) {
-    return normalizeTitle(t);
-  }
 
-  _isInWatchlist(item) {
-    return isInWatchlist(item, this._watchlistRaw);
-  }
 
   /* A "My List" item's ratingKey is scoped to discover.provider.plex.tv, a different ID
      space than this server's /library/metadata - using it directly there 404s. Resolve
@@ -1516,22 +1403,10 @@ class PlexNetflixCard extends HTMLElement {
      matching server alongside the ratingKey - open() needs both, since every downstream
      ctx.plexFetch call for this item defaults to whatever server gets stamped there. */
   async _resolveLocalRatingKey(item) {
-    const norm = this._normalizeTitle(item.title);
     const attempts = await Promise.all(
       activeServers(this).map(async (server) => {
-        try {
-          const data = await this._plexFetch("/hubs/search", { query: item.title, limit: 10 }, server);
-          const results = (data?.MediaContainer?.Hub || [])
-            .filter((h) => h.type === item.type)
-            .flatMap((h) => h.Metadata || []);
-          const exact = results.find(
-            (m) => this._normalizeTitle(m.title) === norm && (!item.year || m.year === item.year)
-          );
-          const match = exact || results[0];
-          return match?.ratingKey ? { ratingKey: match.ratingKey, server } : null;
-        } catch (e) {
-          return null;
-        }
+        const match = await findOnServer(this, item, server);
+        return match?.ratingKey ? { ratingKey: match.ratingKey, server } : null;
       })
     );
     const primary = primaryServer(this);
@@ -1565,22 +1440,10 @@ class PlexNetflixCard extends HTMLElement {
     const ownEntry = ownServer ? [{ server: ownServer, ratingKey: item.ratingKey, key: item.key }] : [];
     const others = activeServers(this).filter((s) => s.id !== ownServer?.id);
     if (!others.length) return ownEntry.length ? ownEntry : null;
-    const norm = this._normalizeTitle(item.title);
     const found = await Promise.all(
       others.map(async (server) => {
-        try {
-          const data = await this._plexFetch("/hubs/search", { query: item.title, limit: 10 }, server);
-          const results = (data?.MediaContainer?.Hub || [])
-            .filter((h) => h.type === item.type)
-            .flatMap((h) => h.Metadata || []);
-          const exact = results.find(
-            (m) => this._normalizeTitle(m.title) === norm && (!item.year || m.year === item.year)
-          );
-          const match = exact || results[0];
-          return match ? { server, ratingKey: match.ratingKey, key: match.key } : null;
-        } catch (e) {
-          return null;
-        }
+        const match = await findOnServer(this, item, server);
+        return match ? { server, ratingKey: match.ratingKey, key: match.key } : null;
       })
     );
     const extra = found.filter(Boolean);
@@ -1589,7 +1452,7 @@ class PlexNetflixCard extends HTMLElement {
   }
 
   async _onWatchlistMutated() {
-    this._watchlistRaw = await this._fetchWatchlistRaw();
+    this._watchlistRaw = await fetchWatchlistRaw(this);
     this._refreshWatchlistRow();
   }
 
@@ -1607,28 +1470,10 @@ class PlexNetflixCard extends HTMLElement {
     });
   }
 
-  _onSearchInput() {
-    onSearchInput(this);
-  }
 
-  _exitSearch() {
-    exitSearch(this);
-  }
 
-  _renderSearchPage(hubs, opts = {}) {
-    renderSearchPage(this, hubs, opts);
-  }
-
-  _escape(s) {
-    return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-  }
 }
 
 if (!customElements.get("plex-netflix-card")) {
   customElements.define("plex-netflix-card", PlexNetflixCard);
-  console.info(
-    "%c PLEX-NETFLIX-CARD %c v1.0.0-standalone ",
-    "color:white;background:#e5a00d;font-weight:bold;",
-    "color:#e5a00d;background:#222;font-weight:bold;"
-  );
 }

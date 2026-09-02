@@ -1,0 +1,99 @@
+/* Shared tokens and focus styling for the whole player chrome.
+
+   Unlike the browsing UI (src/card/styles/), this chrome lives in plain document.body, not
+   a shadow root - it has to render over a native video surface on Xbox, which a shadow tree
+   can't reach. So these are global rules, and every selector is prefixed accordingly. */
+
+:root {
+    --player-accent: #e5a00d;
+    --player-on-accent: #161619;
+    --player-font: "Roboto", sans-serif;
+    --player-fg: #fff;
+    --player-fg-dim: rgba(255, 255, 255, 0.7);
+    --player-fg-faint: rgba(255, 255, 255, 0.45);
+    --player-surface: rgba(255, 255, 255, 0.08);
+    --player-surface-hover: rgba(255, 255, 255, 0.16);
+    --player-hairline: rgba(255, 255, 255, 0.15);
+    /* Full-height right-side drawer, shared by the hamburger sheet and the Audio & Subtitles
+       panel - same fade-from-the-right look at different panel widths. */
+    --player-drawer-bg: linear-gradient(to left, rgba(0, 0, 0, 0.92) 0%, rgba(0, 0, 0, 0.88) 55%, rgba(0, 0, 0, 0.5) 85%, transparent 100%);
+    /* Bottom sheet, shared by the episode and chapter list overlays. */
+    --player-sheet-bg: linear-gradient(to top, rgba(0, 0, 0, 0.92) 0%, rgba(0, 0, 0, 0.88) 55%, rgba(0, 0, 0, 0.5) 85%, transparent 100%);
+}
+
+/* Every focusable element in the chrome shares one focus ring - the same 2px accent outline
+   the browsing UI uses (src/card/styles/shared-focus.css). border-radius is set here because,
+   unlike the elements that file covers (posters, pills, circular buttons), most rows here are
+   plain rectangles that would otherwise get a square-cornered ring. */
+.prism-player-focusable {
+    outline: 2px solid transparent;
+    outline-offset: 2px;
+    border-radius: 8px;
+    transition: 0.125s;
+}
+
+.prism-player-focusable:focus-visible {
+    outline-color: var(--player-accent);
+}
+
+/* focus-nav.js's wireLinearNav never gives a text <input> real DOM focus just for landing on
+   it - arriving there would pop Xbox/WebView2's on-screen keyboard for no reason - so it marks
+   the input "nav-text-highlight" instead and :focus-visible never fires for that state. */
+.prism-player-focusable.nav-text-highlight {
+    outline-color: var(--player-accent);
+}
+
+/* Menu rows and list cards take a full-width highlight instead of the ring: a thin outline
+   around a 240px card (thumb above stacked title/subtitle) read as far fainter than on the
+   plain buttons the ring was designed for. `outline: none` is unconditional rather than only
+   on :focus-visible - the base rule above still transitions outline, and animating
+   "transparent" to "none" is a non-interpolable flip that flashed black for a frame on every
+   move. */
+.prism-player-menu-row,
+.prism-player-card {
+    outline: none;
+}
+
+.prism-player-menu-row:focus-visible,
+.prism-player-card:focus-visible {
+    background: var(--player-surface);
+}
+
+/* Padding and negative margin (rather than just a background) give the highlight room to show
+   past the thumbnail's own opaque background instead of hiding behind it, while keeping the
+   card's layout width and gap unchanged. */
+.prism-player-card {
+    padding: 8px;
+    margin: -8px;
+}
+
+/* B/Escape already backs every overlay out for a controller user, so the "✕" is an
+   unreachable-by-D-pad dead end for them. Two gates, not one: [data-xbox-device] is injected
+   by the UWP shell itself, so it's true on real Xbox hardware from first paint regardless of
+   what the page's own input heuristics conclude (input-mode.js's UA/pointer sniffing turned
+   out not to reliably catch Xbox's WebView2). It is deliberately narrower than
+   [data-platform="uwp"], which is also true on the PC shell where a real mouse exists. The
+   input-mode gate covers Fire TV and any keyboard/gamepad-driven desktop-web session, which
+   platform.js has no marker for. */
+html[data-xbox-device="true"] .prism-player-overlay-close,
+html[data-input-mode="keyboard"] .prism-player-overlay-close {
+    display: none;
+}
+
+/* Hides the scrollbar on any flyout whose content overflows (subtitle results, a long
+   chapter or audio-track list) - the browser default clashes with the glass-panel look. */
+.prism-player-scroll {
+    scrollbar-width: none;
+}
+
+.prism-player-scroll::-webkit-scrollbar {
+    display: none;
+    width: 0;
+    height: 0;
+}
+
+@keyframes prism-player-spin {
+    to {
+        transform: rotate(360deg);
+    }
+}

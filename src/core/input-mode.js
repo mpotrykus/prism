@@ -16,7 +16,7 @@
    itself. */
 
 import { KEY_TO_COMMAND } from "./focus-nav.js";
-import { INPUT_MODE, APP_EVENT } from "./constants.js";
+import { INPUT_MODE, APP_EVENT } from "../constants.js";
 
 /* `any-pointer: coarse` (not `pointer: coarse`) so a hybrid device isn't missed just
    because a mouse happens to also be attached - `pointer` only reports the *primary*
@@ -31,7 +31,7 @@ export function hasTouch() {
    pointer at all. Matched by UA (Xbox, Fire TV's "AFT" / "Fire TV" model codes) plus
    `pointer: none`, the CSS spec's own signal for "no pointing device", which catches any
    other remote-driven browser that doesn't match either UA pattern. Shared with
-   plex-signin.js, which needs the same check to decide how Plex sign-in is presented. */
+   signin-modal.js, which needs the same check to decide how Plex sign-in is presented. */
 export function isRemoteDrivenDevice() {
   const ua = navigator.userAgent || "";
   if (/Xbox/i.test(ua)) return true;

@@ -35,20 +35,7 @@ export function updateStatsOverlayPipeline(controller) {
 export function ensureStatsOverlay(controller) {
     if (controller._statsOverlayEl) return true;
     const el = document.createElement("div");
-    el.className = "streaming-player-stats-overlay";
-    Object.assign(el.style, {
-        position: "fixed",
-        top: "24px",
-        left: "24px",
-        zIndex: "10001",
-        background: "rgba(0,0,0,0.55)",
-        color: "#fff",
-        font: "11px/1.6 'SFMono-Regular', Consolas, monospace",
-        padding: "8px 10px",
-        borderRadius: "6px",
-        pointerEvents: "none",
-        whiteSpace: "pre",
-    });
+    el.className = "prism-player-stats";
     document.body.appendChild(el);
     controller._statsOverlayEl = el;
     return true;
@@ -326,10 +313,3 @@ export function renderStatsOverlayFrame(controller) {
     el.textContent = lines.join("\n");
 }
 
-export function teardownStatsOverlay(controller) {
-    stopStatsOverlayLoop(controller);
-    if (controller._statsOverlayEl) {
-        controller._statsOverlayEl.remove();
-        controller._statsOverlayEl = null;
-    }
-}

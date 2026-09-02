@@ -1,14 +1,16 @@
-import { wireLinearNav, registerNavHandler, focusAfterPaint, isControllerActive } from "../../focus-nav.js";
-import { lockScroll, unlockScroll } from "../../scroll-lock.js";
+import { wireLinearNav, registerNavHandler, focusAfterPaint, isControllerActive } from "../core/focus-nav.js";
+import { primeYtEmbed, listenToYtEmbed } from "./youtube-embed.js";
+import { escapeHtml } from "../core/html.js";
+import { lockScroll, unlockScroll } from "../core/scroll-lock.js";
 import { paintWatchlistButton } from "./watchlist.js";
-import { WATCHED_ICON_SVG, DOWNLOAD_ICON_SVG, wireArrowVisibility } from "./rows.js";
+import { WATCHED_ICON_SVG, DOWNLOAD_ICON_SVG, wireArrowVisibility, buildScrollArrow } from "./rows.js";
 import { PROFILE_ICON_SVG } from "./profile.js";
 import { pickNextEpisode, extractLogoUrl } from "./logic/catalog.js";
 import { matchEpisodesAcrossServers, dedupeSourcesByServer } from "./logic/cross-server.js";
 import { createRowScroll } from "./row-scroll.js";
 import { resolveTrailerVideo } from "./logic/trailer.js";
 import { renderMediaBadge } from "./media-badges.js";
-import { APP_EVENT, WATCHLIST_ADDED_CLASS, MEDIA_TYPE } from "../../constants.js";
+import { APP_EVENT, WATCHLIST_ADDED_CLASS, MEDIA_TYPE } from "../constants.js";
 import { isXboxDevice } from "../player/core/platform.js";
 
 const THEME_AUDIO_FADE_MS = 900;
@@ -51,7 +53,7 @@ function waitForImageLoad(url) {
 /* Plex's Media[].Part[].Stream[] carries every stream on a version (video/audio/
    subtitle, distinguished by streamType - 2 is audio). Only surfaced for the player's
    Audio Track menu, which stays hidden entirely when there's nothing to switch between
-   (see plex-player.js's _openHamburgerMenu), so an item with only one audio stream (or
+   (see player.js's _openHamburgerMenu), so an item with only one audio stream (or
    no Stream data at all) just yields an empty list here rather than an error. */
 export function extractAudioStreams(media, mediaIndex) {
   const streams = media?.[mediaIndex]?.Part?.[0]?.Stream || [];
@@ -90,7 +92,7 @@ export function isHdrVideo(media, mediaIndex) {
    (in-container) subtitle stream has no `key` at all and can only be played back via a
    burn-in transcode Prism doesn't support yet, so listing it here would offer a menu
    item that silently can't be selected. A `key` means an external sidecar file Plex can
-   serve directly (one Prism itself downloaded via plex-subtitles.js's search, one
+   serve directly (one Prism itself downloaded via plex/subtitles.js's search, one
    manually uploaded via Plex Web, or one a tool like Bazarr wrote to disk and Plex
    picked up on its own library scan) - same fetch-and-attach path either way. */
 export function extractSubtitleTracks(media, mediaIndex) {
@@ -108,7 +110,7 @@ export function extractSubtitleTracks(media, mediaIndex) {
 
 /* Plex's Media[] describes every version this item has (e.g. a 4K remux alongside a
    1080p encode) - reduced here to {mediaIndex, label} for the player's in-session
-   Video Quality menu (see chrome.js's openVersionMenu), the same "resolve Plex's
+   Video Quality menu (see chrome-menu.js's openVersionMenu), the same "resolve Plex's
    protocol once, hand the player a plain list" split extractAudioStreams above
    follows. Resolution/codec/bitrate field names are unverified against a real
    multi-version item - see this feature's own open risks. */
@@ -207,18 +209,30 @@ export function extractPartInfo(media, mediaIndex) {
   return { partId: part?.id ?? null, partKey: part?.key ?? null };
 }
 
-/* Picks the first Media[] entry that isn't a known-broken duplicate, instead of always
-   assuming index 0 (every play path used to). Confirmed against a real server (the Bleach
-   investigation): a library moved to different storage left a stale Media entry pointing at
-   a file that no longer exists (Part.exists:false, Part.accessible:false) sitting at index 0,
-   while a second, actually-playable Media entry for the same episode sat at index 1 - Plex
-   still answered /decision and /start against the broken one without complaint, spun up a
-   transcode session, then that session's ffmpeg process died before producing a single
-   segment (every request for it 404s). Plex Web and Plezy both dodge this because they check
-   file existence themselves and land on the working entry. Those exists/accessible fields
-   only come back when the metadata fetch passes checkFiles:1 - without it (or on a server too
-   old to support the flag) both are undefined here and this returns 0, the previous
-   behavior. */
+/* The per-stream playback options every Play path hands to the player, all derived from the
+   same Media[] entry. Kept together so a new signal only has to be threaded through one
+   place - the three call sites (a movie/episode, a show's next episode, a collection or
+   playlist's first playable child) differ only in which metadata object they start from. */
+export function mediaPlaybackOptions(media, mediaIndex) {
+  return {
+    mediaIndex,
+    audioStreams: extractAudioStreams(media, mediaIndex),
+    isHdr: isHdrVideo(media, mediaIndex),
+    subtitleTracks: extractSubtitleTracks(media, mediaIndex),
+    bifIndexPath: bifIndexPath(media, mediaIndex),
+    ...extractPartInfo(media, mediaIndex),
+  };
+}
+
+/* Picks the first Media[] entry that isn't a known-broken duplicate rather than assuming
+   index 0. Confirmed against a real server: a library moved to different storage left a stale
+   Media entry pointing at a file that no longer exists (Part.exists:false,
+   Part.accessible:false) at index 0, with a genuinely playable entry for the same episode at
+   index 1. Plex answered /decision and /start against the broken one without complaint, spun
+   up a transcode session, and that session's ffmpeg died before producing a single segment
+   (every request for it 404s). Plex Web and Plezy dodge this by checking file existence
+   themselves. exists/accessible only come back when the metadata fetch passes checkFiles:1 -
+   without it, or on a server too old for the flag, both are undefined and this returns 0. */
 export function resolvePlayableMediaIndex(media) {
   const list = media || [];
   const index = list.findIndex((m) => {
@@ -352,55 +366,28 @@ function hasProgress(meta) {
   return (meta.viewOffset || 0) > 0;
 }
 
-/* Same shape as rows.js's own buildScrollArrow (also used by the player's
-   openEpisodeListOverlay for its own card row), but a distinct class name rather than
-   that one's hardcoded ".scroll-arrow" - rows-poster.css's own geometry for that class
-   (44px arrow inset at a fixed 45px top/bottom, tuned for the main page's poster-glow
-   bleed padding) doesn't match this row's differently-sized episode cards. Reuses
-   wireArrowVisibility as-is though, since that helper only ever toggles a "hidden"
-   class rather than assuming ".scroll-arrow" itself. */
-function buildEpisodeRowArrow(dir, scroller, rowScroll) {
-  const btn = document.createElement("button");
-  btn.type = "button";
-  btn.className = `title-info-row-arrow ${dir} hidden`;
-  btn.setAttribute("aria-label", dir === "left" ? "Scroll left" : "Scroll right");
-  btn.innerHTML =
-    dir === "left"
-      ? '<svg viewBox="0 0 24 24" width="24" height="24"><path fill="currentColor" d="M15.4 7.4 14 6l-6 6 6 6 1.4-1.4L10.8 12z"/></svg>'
-      : '<svg viewBox="0 0 24 24" width="24" height="24"><path fill="currentColor" d="M8.6 7.4 10 6l6 6-6 6-1.4-1.4L13.2 12z"/></svg>';
-  btn.addEventListener("click", (e) => {
-    e.stopPropagation();
-    const amount = scroller.clientWidth * 0.9 * (dir === "left" ? -1 : 1);
-    rowScroll.scrollBy(amount, { animate: true });
-  });
-  return btn;
-}
+/* One episode card - the same visual shape as the in-player episode list's buildEpisodeCard,
+   built as an HTML string here because this modal renders its lists that way. "current" (the
+   episode landed on via openForEpisode) is applied by the caller afterward via a
+   data-rating-key lookup.
 
-/* One episode card - same visual shape as the in-player episode list's own
-   buildEpisodeCard (src/player/ui/episode-list.js), just built as an HTML string here
-   since this modal already renders its lists that way rather than via DOM-factory calls.
-   "current" (the resumed/on-deck episode landed on via openForEpisode) is applied by the
-   caller afterward via a data-rating-key lookup, same as before this became a row.
-   title+summary are grouped under .title-info-episode-text (rather than sitting directly
-   in .title-info-episode, as they did before this became a card row) so mobile's own CSS
-   (see responsive.css) can revert this card to the old thumb-beside-text row layout by
-   just flipping .title-info-episode back to flex-row with that wrapper as its second
-   item - the same markup then serves both layouts, no separate mobile template needed.
+   title+summary are grouped under .title-info-episode-text so mobile's CSS (responsive.css)
+   can flip .title-info-episode back to a thumb-beside-text row with that wrapper as its second
+   item - one markup serving both layouts, no separate mobile template.
 
-   `downloadable` (see TitleInfoController's own _isEpisodeDownloadable) renders a second,
-   always-visible corner badge - a real <button>, not a hover-only reveal like
-   .title-info-episode-play's big center icon, since touch/D-pad/remote input can't rely on
-   hover to even discover it exists. Deliberately NOT wired to a click handler here - this
-   is a plain string template with no controller reference to call back into; the caller
-   (showSeason below) attaches the actual download handler once these strings become real
-   DOM nodes, the same split it already uses for the card's own play-on-click handler. */
+   `downloadable` (see _isEpisodeDownloadable) renders an always-visible corner badge as a real
+   <button>, not a hover-only reveal like .title-info-episode-play's center icon, since
+   touch/D-pad/remote input can't rely on hover to even discover it exists. Deliberately not
+   wired to a click handler here: this is a plain string template with no controller to call
+   back into, so showSeason attaches the download handler once these become real DOM nodes -
+   the same split it uses for the card's play-on-click handler. */
 function episodeCardHtml(ctx, ep, downloadable) {
   const progress = ep.duration ? Math.max(0, Math.min(1, (ep.viewOffset || 0) / ep.duration)) : 0;
   const watched = !!ep.viewCount && progress <= 0;
   return `
     <div class="title-info-episode" data-rating-key="${ep.ratingKey}" tabindex="0">
       <div class="title-info-episode-thumb">
-        <img loading="lazy" src="${ctx.escape(ctx.plexThumbUrl(ep.thumb, 320, 180))}" alt="" referrerpolicy="no-referrer" />
+        <img loading="lazy" src="${escapeHtml(ctx.plexThumbUrl(ep.thumb, 320, 180))}" alt="" referrerpolicy="no-referrer" />
         ${watched ? `<div class="title-info-episode-watched">${WATCHED_ICON_SVG}</div>` : ""}
         ${
           progress > 0
@@ -415,8 +402,8 @@ function episodeCardHtml(ctx, ep, downloadable) {
         }
       </div>
       <div class="title-info-episode-text">
-        <div class="title-info-episode-title">${ep.index}. ${ctx.escape(ep.title)}</div>
-        <div class="title-info-episode-summary">${ctx.escape(ep.summary || "")}</div>
+        <div class="title-info-episode-title">${ep.index}. ${escapeHtml(ep.title)}</div>
+        <div class="title-info-episode-summary">${escapeHtml(ep.summary || "")}</div>
       </div>
     </div>`;
 }
@@ -432,7 +419,7 @@ function flatItemCardHtml(ctx, mapped, rawSummary) {
   return `
     <div class="title-info-episode" data-rating-key="${mapped.ratingKey}" tabindex="0">
       <div class="title-info-episode-thumb">
-        <img loading="lazy" src="${ctx.escape(mapped.art || mapped.image)}" alt="" referrerpolicy="no-referrer" />
+        <img loading="lazy" src="${escapeHtml(mapped.art || mapped.image)}" alt="" referrerpolicy="no-referrer" />
         ${watched ? `<div class="title-info-episode-watched">${WATCHED_ICON_SVG}</div>` : ""}
         ${
           mapped.progress > 0
@@ -441,21 +428,21 @@ function flatItemCardHtml(ctx, mapped, rawSummary) {
         }
       </div>
       <div class="title-info-episode-text">
-        <div class="title-info-episode-title">${ctx.escape(mapped.title)}</div>
-        <div class="title-info-episode-summary">${ctx.escape(rawSummary || "")}</div>
+        <div class="title-info-episode-title">${escapeHtml(mapped.title)}</div>
+        <div class="title-info-episode-summary">${escapeHtml(rawSummary || "")}</div>
       </div>
     </div>`;
 }
 
-/* The title-info detail overlay: cast/seasons-episodes/collection-playlist items/
-   similar titles, plus the Play/Restart/watched-toggle/watchlist actions. Version and
-   quality-cap selection used to live in a picker nested inside this modal - that's now
-   an in-player "Video Quality" menu (see chrome.js's openVideoQualityMenu) fed by this
-   item's Media[] list, since it changes what's actually decoded, not what gets
+/* The title-info detail overlay: cast, seasons/episodes, collection or playlist items, similar
+   titles, plus the Play/Restart/watched-toggle/watchlist actions. Version and quality-cap
+   selection deliberately live in the player's own "Video Quality" menu (chrome-menu.js) fed by
+   this item's Media[] list, not here: they change what's actually decoded, not what gets
    requested before playback starts.
-   ctx: { escape, plexFetch, plexImageUrl, mapItem, isInWatchlist, onAddToWatchlist,
-   onRemoveFromWatchlist, onPlayItem, getConfig } - the card's own collaborators, passed
-   in explicitly rather than this reaching into card state. */
+
+   ctx: { plexFetch, plexImageUrl, mapItem, isInWatchlist, onAddToWatchlist,
+   onRemoveFromWatchlist, onPlayItem, getConfig } - the card's collaborators, passed in
+   explicitly rather than this reaching into card state. */
 export class TitleInfoController {
   constructor(shadowRoot, ctx) {
     this._shadowRoot = shadowRoot;
@@ -762,11 +749,6 @@ export class TitleInfoController {
       videoEl.addEventListener("ended", () => this._endTrailer());
       this._artImgEl.appendChild(videoEl);
     } else if (video.type === "youtube") {
-      /* Same raw-postMessage handshake/highres-quality retry as hero.js's own YouTube
-         branch - see that file's comments for why (age-restriction filtering already
-         happened in resolveTrailerVideo, the pauseVideo-too-early stuck-embed trap, the
-         setPlaybackQuality retry loop). referrerpolicy is required for the same reason
-         documented there. */
       const wrap = document.createElement("div");
       wrap.className = "hero-yt-wrap";
       wrap.style.setProperty("--yt-cover-scale", video.coverScale ?? 1);
@@ -774,21 +756,11 @@ export class TitleInfoController {
       this._artImgEl.appendChild(wrap);
       const ytIframe = wrap.querySelector("iframe");
       this._ytIframeEl = ytIframe;
-      /* Same title-overlay mask as hero.js's own YouTube branch - see that file's comment
-         for why (no URL param suppresses YouTube's own title/channel overlay anymore). */
       this._ytTitleMaskEl = wrap.querySelector(".hero-yt-title-mask");
       setTimeout(() => this._ytTitleMaskEl?.classList.add("hero-yt-title-mask--hidden"), 3000);
-      ytIframe.addEventListener("load", () => {
-        ytIframe.contentWindow?.postMessage(JSON.stringify({ event: "listening", id: "titleInfoTrailerPlayer" }), "*");
-        if (!this._trailerMuted) {
-          ytIframe.contentWindow?.postMessage(JSON.stringify({ event: "command", func: "unMute", args: [] }), "*");
-        }
-        for (let i = 0; i < 8; i++) {
-          setTimeout(() => {
-            ytIframe.contentWindow?.postMessage(JSON.stringify({ event: "command", func: "setPlaybackQuality", args: ["highres"] }), "*");
-          }, i * 250);
-        }
-      });
+      ytIframe.addEventListener("load", () =>
+        primeYtEmbed(ytIframe, { id: "titleInfoTrailerPlayer", unmute: !this._trailerMuted })
+      );
     }
   }
 
@@ -878,7 +850,7 @@ export class TitleInfoController {
       image: item.image,
       art: item.art,
       /* Without this, every ctx.plexFetch this modal makes for the redirected show falls
-         back to the primary/owned server (see plex-netflix-card.js's title-info binding),
+         back to the primary/owned server (see card.js's title-info binding),
          silently fetching the wrong server's metadata whenever the episode that led here
          (e.g. a Continue Watching row) lives on a shared, non-owned server. */
       server: item.server || null,
@@ -993,7 +965,7 @@ export class TitleInfoController {
     this._loadingOverlayEl.classList.remove("ready");
     const artReady = waitForImageLoad(art);
     this._titleEl.textContent = item.title || "";
-    this._metaEl.innerHTML = item.subtitle ? `<span>${this._ctx.escape(item.subtitle)}</span>` : "";
+    this._metaEl.innerHTML = item.subtitle ? `<span>${escapeHtml(item.subtitle)}</span>` : "";
     if (this._badgesEl) {
       this._badgesEl.innerHTML = "";
       this._badgesEl.hidden = true;
@@ -1069,18 +1041,17 @@ export class TitleInfoController {
       const resolved = await this._ctx.resolveLocalRatingKey(item);
       if (this._item !== item) return;
       ratingKey = resolved?.ratingKey || null;
-      /* Swap the item's Discover-scoped ratingKey (and key) for the resolved local ones
-         so downstream staleness checks (_loadSimilar/_loadSeasons compare against
-         this._item.ratingKey) and Play's native playback request both key off the ID
-         that actually exists on this server. item.key must move with ratingKey -
-         plex-player.js's _prepareSession prefers item.key over deriving the path from
-         ratingKey, so leaving the old Discover-scoped key in place here silently sends
-         playback requests at a path that doesn't exist on this server. */
+      /* Swap the item's Discover-scoped ratingKey and key for the resolved local ones, so
+         downstream staleness checks (_loadSimilar/_loadSeasons compare against
+         this._item.ratingKey) and Play's native request both key off an ID that exists on
+         this server. `key` must move with `ratingKey`: player.js's _prepareSession prefers
+         item.key over deriving the path from ratingKey, so a leftover Discover-scoped key
+         silently sends playback at a path this server doesn't have. */
       item.ratingKey = ratingKey;
       item.key = ratingKey ? `/library/metadata/${ratingKey}` : item.key;
       /* A watchlist item never carries its own __server stamp (see mapItem's comment) -
          resolveLocalRatingKey may have found this title on a non-primary server, and
-         every ctx.plexFetch call below (plus Play, via plex-netflix-card.js's
+         every ctx.plexFetch call below (plus Play, via card.js's
          _playItem) needs that server, not whatever the default falls back to. */
       if (resolved?.server) item.server = resolved.server;
       /* Fire-and-forget, same pattern as _resolveAndShowTrailer below - a watchlist item
@@ -1138,7 +1109,7 @@ export class TitleInfoController {
     }
     this._sourcesEl.hidden = false;
     this._sourcesEl.innerHTML = sources
-      .map((s) => `<span class="title-info-source-chip">${this._ctx.escape(s.server.name)}</span>`)
+      .map((s) => `<span class="title-info-source-chip">${escapeHtml(s.server.name)}</span>`)
       .join("");
   }
 
@@ -1239,7 +1210,7 @@ export class TitleInfoController {
     const logoUrl = extractLogoUrl(meta, this._ctx.plexImageUrl);
     const title = meta.title || this._item?.title || "";
     if (logoUrl) {
-      this._titleEl.innerHTML = `<img class="title-info-logo" src="${this._ctx.escape(logoUrl)}" alt="${this._ctx.escape(title)}" referrerpolicy="no-referrer" />`;
+      this._titleEl.innerHTML = `<img class="title-info-logo" src="${escapeHtml(logoUrl)}" alt="${escapeHtml(title)}" referrerpolicy="no-referrer" />`;
       /* Some Plex clearLogo assets are SVGs served with a Content-Type: image/jpeg
          header (a PMS quirk, not a Prism bug) - browsers refuse to render those through
          an <img>, unlike a mislabeled PNG/JPEG which they'll sniff and render fine. Fall
@@ -1254,7 +1225,7 @@ export class TitleInfoController {
     if (!this._watchedBtn.hidden) this._updateWatchedUI(isFullyWatched(meta));
     /* Refines the possibly-truncated Genre list mapItem saw at row-click time (Plex list
        endpoints cap it to ~2 tags) with this fetch's full, untruncated list, so shader
-       auto-detection (plex-player.js's detectShaderType) sees every genre tag, not just
+       auto-detection (player.js's detectShaderType) sees every genre tag, not just
        the first couple. studio isn't truncated the same way (it's a single string, not a
        capped list) but list endpoints may still omit it - refined here too so
        detectShaderType's CGI-vs-2D-animation check sees it whenever this fuller fetch has it. */
@@ -1274,7 +1245,7 @@ export class TitleInfoController {
     const rating = meta.audienceRating || meta.rating;
     if (rating) metaParts.push(`★ ${Number(rating).toFixed(1)}`);
     if (meta.Genre?.length) metaParts.push(meta.Genre.slice(0, 3).map((g) => g.tag).join(", "));
-    this._metaEl.innerHTML = metaParts.map((p) => `<span>${this._ctx.escape(p)}</span>`).join("");
+    this._metaEl.innerHTML = metaParts.map((p) => `<span>${escapeHtml(p)}</span>`).join("");
 
     /* Format badge row - resolution/HDR/codec/audio pulled from Media[0], same "first
        version" convention the meta line's old resolution field used, since this modal has
@@ -1289,11 +1260,11 @@ export class TitleInfoController {
       .map((r) => {
         const fallback = `<div class="title-info-cast-avatar-fallback">${PROFILE_ICON_SVG}</div>`;
         const avatar = r.thumb
-          ? `<img src="${this._ctx.escape(this._ctx.plexThumbUrl(r.thumb, 160, 160))}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.style.display='none';this.nextElementSibling.style.display='flex';" />
+          ? `<img src="${escapeHtml(this._ctx.plexThumbUrl(r.thumb, 160, 160))}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.style.display='none';this.nextElementSibling.style.display='flex';" />
              <div class="title-info-cast-avatar-fallback" style="display:none">${PROFILE_ICON_SVG}</div>`
           : fallback;
-        const role = r.role ? `<div class="title-info-cast-role">${this._ctx.escape(r.role)}</div>` : "";
-        return `<div class="title-info-cast-chip"><div class="title-info-cast-avatar">${avatar}</div><div class="title-info-cast-name">${this._ctx.escape(r.tag)}</div>${role}</div>`;
+        const role = r.role ? `<div class="title-info-cast-role">${escapeHtml(r.role)}</div>` : "";
+        return `<div class="title-info-cast-chip"><div class="title-info-cast-avatar">${avatar}</div><div class="title-info-cast-name">${escapeHtml(r.tag)}</div>${role}</div>`;
       })
       .join("");
 
@@ -1310,7 +1281,7 @@ export class TitleInfoController {
     this._seasonModalListEl.innerHTML = seasons
       .map(
         (s) =>
-          `<button type="button" class="title-info-season-modal-option${String(s.ratingKey) === String(currentSeasonKey) ? " selected" : ""}" data-rating-key="${s.ratingKey}">${this._ctx.escape(seasonLabel(s))}</button>`
+          `<button type="button" class="title-info-season-modal-option${String(s.ratingKey) === String(currentSeasonKey) ? " selected" : ""}" data-rating-key="${s.ratingKey}">${escapeHtml(seasonLabel(s))}</button>`
       )
       .join("");
     this._seasonModalListEl.querySelectorAll(".title-info-season-modal-option").forEach((opt) => {
@@ -1404,14 +1375,12 @@ export class TitleInfoController {
           episodes.map((ep) => episodeCardHtml(this._ctx, ep, this._isEpisodeDownloadable(ep.Media))).join("")
         );
         track.querySelectorAll(".title-info-episode").forEach((row) => {
-          /* Delegates to _playEpisodeByRatingKey (same as the show-level Play button
-             resuming into an episode) instead of building the play payload straight off
-             `ep` - `ep` is this row's entry from the season's /children listing, and
-             Plex list endpoints truncate/omit nested Media[].Part[].Stream[] data the
-             same way they truncate Genre (see this repo's CLAUDE.md) - audioStreams/
-             mediaVersions extracted from it here used to come back empty or partial for
-             many episodes. _playEpisodeByRatingKey does a full single-item fetch first,
-             which always carries complete Stream data. */
+          /* Delegates to _playEpisodeByRatingKey rather than building the play payload off
+             `ep` directly: `ep` comes from the season's /children listing, and Plex list
+             endpoints truncate or omit nested Media[].Part[].Stream[] the same way they
+             truncate Genre (see CLAUDE.md), so audioStreams/mediaVersions read off it come
+             back empty or partial for many episodes. _playEpisodeByRatingKey does a full
+             single-item fetch first, which always carries complete Stream data. */
           row.addEventListener("click", async () => {
             const ep = episodes.find((e) => String(e.ratingKey) === row.dataset.ratingKey);
             if (!ep) return;
@@ -1524,8 +1493,8 @@ export class TitleInfoController {
           const mapped = this._ctx.mapItem(m, false);
           return `
           <div class="title-info-similar-item" data-rating-key="${mapped.ratingKey}" tabindex="0">
-            <img loading="lazy" src="${this._ctx.escape(mapped.image)}" alt="" referrerpolicy="no-referrer" />
-            <div class="t">${this._ctx.escape(mapped.title)}</div>
+            <img loading="lazy" src="${escapeHtml(mapped.image)}" alt="" referrerpolicy="no-referrer" />
+            <div class="t">${escapeHtml(mapped.title)}</div>
           </div>`;
         })
         .join("");
@@ -1551,20 +1520,17 @@ export class TitleInfoController {
     if (item.type === MEDIA_TYPE.COLLECTION || item.type === MEDIA_TYPE.PLAYLIST) {
       return this._playFirstFlatItem();
     }
-    /* A show has no Media[] of its own either - this only runs when _resumeEpisodeKey
-       wasn't already set above, i.e. the modal was opened directly off the show's own
-       poster/row (browsing "TV Shows", search, etc.) rather than redirected here from an
-       on-deck/continue-watching episode (see openForEpisode). Previously this fell
-       straight through to onPlayItem(item, ...) with the show container itself as the
-       "item" - not a playable thing on this server, so playback silently failed for any
-       show whose modal wasn't opened via an episode. Plex has no per-show on-deck lookup
-       (confirmed empirically - /library/metadata/<ratingKey>/onDeck 404s), so this pulls
-       every episode via allLeaves and picks one with pickNextEpisode instead. */
+    /* A show has no Media[] of its own, so it isn't a playable item on this server - handing
+       the show container straight to onPlayItem silently fails. This runs when
+       _resumeEpisodeKey wasn't already set above, i.e. the modal was opened off the show's own
+       poster or row rather than redirected here from an on-deck episode (see openForEpisode).
+       Plex has no per-show on-deck lookup (confirmed: /library/metadata/<ratingKey>/onDeck
+       404s), so this pulls every episode via allLeaves and picks one with pickNextEpisode. */
     if (item.type === MEDIA_TYPE.SHOW) {
       return this._playShow(item.ratingKey, { restart });
     }
     /* Always starts on the first Media[] entry with no cap - Version/Quality Cap are
-       now an in-player "Video Quality" menu (see chrome.js's openVideoQualityMenu) fed
+       now an in-player "Video Quality" menu (see chrome-menu.js's openVideoQualityMenu) fed
        by mediaVersions below, not a pre-play choice made here. */
     const mediaIndex = resolvePlayableMediaIndex(this._media);
     /* Only attaches the flat playlist/collection queue captured on the row click that
@@ -1582,13 +1548,8 @@ export class TitleInfoController {
       source: this._source,
       markers: this._markers,
       chapters: this._chapters,
-      mediaIndex,
       mediaVersions: await buildCrossServerVersions(item, this._media),
-      audioStreams: extractAudioStreams(this._media, mediaIndex),
-      isHdr: isHdrVideo(this._media, mediaIndex),
-      subtitleTracks: extractSubtitleTracks(this._media, mediaIndex),
-      bifIndexPath: bifIndexPath(this._media, mediaIndex),
-      ...extractPartInfo(this._media, mediaIndex),
+      ...mediaPlaybackOptions(this._media, mediaIndex),
       ...queue,
     });
   }
@@ -1708,12 +1669,7 @@ export class TitleInfoController {
         markers: meta.Marker || [],
         chapters: meta.Chapter || [],
         mediaVersions: await buildCrossServerVersions(mappedEpisode, meta.Media),
-        mediaIndex,
-        audioStreams: extractAudioStreams(meta.Media, mediaIndex),
-        isHdr: isHdrVideo(meta.Media, mediaIndex),
-        subtitleTracks: extractSubtitleTracks(meta.Media, mediaIndex),
-        bifIndexPath: bifIndexPath(meta.Media, mediaIndex),
-        ...extractPartInfo(meta.Media, mediaIndex),
+        ...mediaPlaybackOptions(meta.Media, mediaIndex),
         ...(queueIndex >= 0 ? { queueRatingKeys, queueIndex } : {}),
       });
     } catch (e) {
@@ -1748,12 +1704,7 @@ export class TitleInfoController {
         markers: meta.Marker || [],
         chapters: meta.Chapter || [],
         mediaVersions: await buildCrossServerVersions(mappedFlatItem, meta.Media),
-        mediaIndex,
-        audioStreams: extractAudioStreams(meta.Media, mediaIndex),
-        isHdr: isHdrVideo(meta.Media, mediaIndex),
-        subtitleTracks: extractSubtitleTracks(meta.Media, mediaIndex),
-        bifIndexPath: bifIndexPath(meta.Media, mediaIndex),
-        ...extractPartInfo(meta.Media, mediaIndex),
+        ...mediaPlaybackOptions(meta.Media, mediaIndex),
         queueRatingKeys: rawItems.map((m) => m.ratingKey),
         queueIndex: index,
       });
@@ -1762,33 +1713,20 @@ export class TitleInfoController {
     }
   }
 
-  /* Plex's own "mark unwatched" action (/:/unscrobble) - the same GET-with-query-token
-     shape plexFetch already uses for reads, since Plex's scrobble endpoints take no body.
-     Targets the resumed episode's own ratingKey when this modal stands in for one (see
-     openForEpisode) rather than the show container's, since that's the item that
-     actually carries the watch history being cleared. */
-  async _markUnwatched() {
-    const item = this._item;
-    const ratingKey = this._resumeEpisodeKey || item?.ratingKey;
+  /* Runs one of Plex's scrobble actions behind the Watched button's busy/error states, so
+     both directions share the guard, the spinner and the transient error flash. `apply`
+     does whatever the specific direction needs once the request succeeds. */
+  async _runScrobbleAction(path, apply) {
+    const ratingKey = this._resumeEpisodeKey || this._item?.ratingKey;
     if (!ratingKey || this._watchedBtn.dataset.busy) return;
     this._watchedBtn.dataset.busy = "1";
     this._watchedBtn.classList.add("busy");
     try {
-      await this._ctx.plexFetch("/:/unscrobble", { key: ratingKey, identifier: "com.plexapp.plugins.library" });
+      await this._ctx.plexFetch(path, { key: ratingKey, identifier: "com.plexapp.plugins.library" });
       this._viewOffset = 0;
-      this._viewCount = 0;
       this._progressEl.hidden = true;
       this._progressBar.style.width = "0%";
-      this._updatePlayHistoryUI(false);
-      this._updateWatchedUI(false);
-      /* Clearing history here can drop this item out of Continue Watching, and - when
-         this modal stands in for a resumed episode - can flip its show's own poster
-         badge from "Watched" back off (unwatching any one episode makes "every episode
-         watched" false, so no extra fetch is needed to know the show's new state is
-         false). Both rows/posters live on the card, not this controller, so they're
-         refreshed via the same collaborator the card passes in rather than this
-         reaching into card state. */
-      this._ctx.onPlayHistoryMutated?.(item?.ratingKey, false);
+      await apply();
     } catch (e) {
       this._watchedBtn.classList.add("error");
       setTimeout(() => this._watchedBtn.classList.remove("error"), 1500);
@@ -1798,27 +1736,35 @@ export class TitleInfoController {
     }
   }
 
-  /* Plex's own "mark watched" action (/:/scrobble) - the mirror image of
-     _markUnwatched above, same endpoint shape and same resumed-episode ratingKey
-     targeting. Unlike unwatching (which always makes "the whole show watched" false),
-     watching one more episode might or might not newly complete the whole show - so the
-     show's own poster badge needs a real refetch of the show's viewedLeafCount/leafCount
-     rather than assuming true, same as _refreshAfterPlayback does. */
-  async _markWatched() {
+  /* Plex's scrobble endpoints take no body - the same GET-with-query-token shape plexFetch
+     already uses for reads. Both directions target the resumed episode's own ratingKey when
+     this modal stands in for one (see openForEpisode) rather than the show container's,
+     since that's the item actually carrying the watch history. */
+  _markUnwatched() {
+    const item = this._item;
+    return this._runScrobbleAction("/:/unscrobble", () => {
+      this._viewCount = 0;
+      this._updatePlayHistoryUI(false);
+      this._updateWatchedUI(false);
+      /* Clearing history can drop this item out of Continue Watching, and - when this modal
+         stands in for a resumed episode - can flip its show's own poster badge off, since
+         unwatching any one episode makes "every episode watched" false with no extra fetch
+         needed. Rows and posters live on the card, so they refresh through the collaborator
+         it passes in rather than this reaching into card state. */
+      this._ctx.onPlayHistoryMutated?.(item?.ratingKey, false);
+    });
+  }
+
+  /* Unlike unwatching, watching one more episode might or might not newly complete the whole
+     show, so the show's own poster badge needs a real refetch of viewedLeafCount/leafCount
+     rather than assuming true - same as _refreshAfterPlayback does. */
+  _markWatched() {
     const item = this._item;
     const showRatingKey = this._resumeEpisodeKey ? item?.ratingKey : null;
-    const ratingKey = this._resumeEpisodeKey || item?.ratingKey;
-    if (!ratingKey || this._watchedBtn.dataset.busy) return;
-    this._watchedBtn.dataset.busy = "1";
-    this._watchedBtn.classList.add("busy");
-    try {
-      await this._ctx.plexFetch("/:/scrobble", { key: ratingKey, identifier: "com.plexapp.plugins.library" });
-      this._viewOffset = 0;
-      this._progressEl.hidden = true;
-      this._progressBar.style.width = "0%";
-      /* Scrobbling clears the resume offset (this._viewOffset above) - Restart has
-         nothing left to discard, so hasProgress is explicitly false here even though
-         hasHistory is true (see hasProgress's own comment for why those differ). */
+    return this._runScrobbleAction("/:/scrobble", async () => {
+      /* Scrobbling clears the resume offset, so Restart has nothing left to discard:
+         hasProgress is explicitly false here even though hasHistory is true (see
+         hasProgress's own comment for why those differ). */
       this._updatePlayHistoryUI(true, null, false);
       this._updateWatchedUI(true);
       if (showRatingKey) {
@@ -1828,17 +1774,11 @@ export class TitleInfoController {
       } else {
         this._ctx.onPlayHistoryMutated?.(item?.ratingKey, true);
       }
-    } catch (e) {
-      this._watchedBtn.classList.add("error");
-      setTimeout(() => this._watchedBtn.classList.remove("error"), 1500);
-    } finally {
-      this._watchedBtn.classList.remove("busy");
-      delete this._watchedBtn.dataset.busy;
-    }
+    });
   }
 
   /* This modal stays open (behind the full-screen player) for as long as playback runs -
-     nothing closes it when Play/Resume/Restart hands off to plex-player.js. Without this,
+     nothing closes it when Play/Resume/Restart hands off to player.js. Without this,
      its own timeline/Play-Resume-Restart state stays frozen at whatever it was when
      playback started, stale until the modal is closed and reopened. Re-fetches whichever
      ratingKey this modal actually stands in for (the resumed episode, if any - see
@@ -1917,8 +1857,9 @@ export class TitleInfoController {
     const scroller = wrapEl.querySelector(".title-info-row-scroller");
     const track = wrapEl.querySelector(".title-info-row-track");
     const rowScroll = createRowScroll(scroller, track);
-    const leftArrow = buildEpisodeRowArrow("left", scroller, rowScroll);
-    const rightArrow = buildEpisodeRowArrow("right", scroller, rowScroll);
+    const arrowOpts = { className: "title-info-row-arrow", size: 24 };
+    const leftArrow = buildScrollArrow("left", scroller, rowScroll, arrowOpts);
+    const rightArrow = buildScrollArrow("right", scroller, rowScroll, arrowOpts);
     wrapEl.insertBefore(leftArrow, scroller);
     wrapEl.appendChild(rightArrow);
     wireArrowVisibility(rowScroll, leftArrow, rightArrow);
@@ -2025,32 +1966,9 @@ export class TitleInfoController {
         }
       }
     });
-    /* Mirrors hero.js's own YouTube "infoDelivery" end-of-video listener - see that
-       file's comment for why this raw postMessage protocol (no official iframe_api) is
-       the only way to detect trailer-end. The e.source check is required now that two
-       independent YouTube embeds can exist on the page at once (this modal sits on top
-       of, not instead of, the hero) - without it, either trailer ending would wrongly
-       end the other one too, since both listeners otherwise see every "message" event
-       on the window with no other way to tell the embeds apart. */
-    window.addEventListener("message", (e) => {
-      if (e.source !== this._ytIframeEl?.contentWindow) return;
-      if (typeof e.data !== "string") return;
-      let data;
-      try {
-        data = JSON.parse(e.data);
-      } catch (err) {
-        return;
-      }
-      if (data.event === "infoDelivery" && data.info && data.info.playerState === 0) {
-        this._endTrailer();
-      }
-      if (data.event === "infoDelivery" && data.info && data.info.playerState === 1) {
-        this._ytTitleMaskEl?.classList.add("hero-yt-title-mask--hidden");
-      }
-      const errorCode = data.event === "onError" ? data.info : data.info?.errorCode;
-      if (errorCode !== undefined) {
-        this._endTrailer();
-      }
+    listenToYtEmbed(() => this._ytIframeEl, {
+      onEnded: () => this._endTrailer(),
+      onPlaying: () => this._ytTitleMaskEl?.classList.add("hero-yt-title-mask--hidden"),
     });
     this._trailerPlayBtn.addEventListener("click", (e) => {
       e.stopPropagation();

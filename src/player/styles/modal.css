@@ -1,0 +1,53 @@
+/* The fatal-playback-error modal. Mounted and unmounted independently of the rest of the
+   chrome (which is already gone by the time this shows), at document.body level. */
+
+.prism-player-error-scrim {
+    position: fixed;
+    inset: 0;
+    z-index: 10010;
+    background: rgba(0, 0, 0, 0.75);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.prism-player-error-panel {
+    width: min(420px, 90vw);
+    /* Shared frosted-glass panel look - see src/styles/colors.css. */
+    background: var(--glass-panel-bg);
+    backdrop-filter: var(--glass-panel-blur);
+    -webkit-backdrop-filter: var(--glass-panel-blur);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 12px;
+    padding: 28px 24px 20px;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+    font-family: var(--player-font);
+    color: var(--player-fg);
+    text-align: center;
+    box-sizing: border-box;
+}
+
+.prism-player-error-heading {
+    font-size: 18px;
+    font-weight: 700;
+    margin-bottom: 12px;
+}
+
+.prism-player-error-body {
+    font-size: 14px;
+    color: rgba(255, 255, 255, 0.8);
+    line-height: 1.5;
+    margin-bottom: 22px;
+}
+
+.prism-player-error-ok {
+    min-width: 120px;
+    padding: 10px 24px;
+    border-radius: 6px;
+    border: none;
+    background: var(--player-accent);
+    color: #000;
+    font-size: 14px;
+    font-weight: 700;
+    cursor: pointer;
+}

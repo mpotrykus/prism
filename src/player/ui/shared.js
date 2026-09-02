@@ -1,5 +1,4 @@
 import PLAYER_SETTINGS_DEFAULTS from "../player-settings.defaults.json";
-import { INPUT_MODE } from "../../../constants.js";
 
 export const CONTROLS_HIDE_DELAY_MS = 1000;
 export const PLAYBACK_RATES = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 4, 8];
@@ -15,7 +14,7 @@ export const FIT_MODES = [
     { key: "stretch", label: "Stretch" },
 ];
 /* kbps: null means "no cap" (Original) - matched against the selected quality cap by
-   identity in chrome.js's openQualityCapMenu, so keep it null rather than 0 or a
+   identity in chrome-menu.js's openQualityCapMenu, so keep it null rather than 0 or a
    sentinel number. */
 export const QUALITY_CAP_PRESETS = [
     { label: "Original", kbps: null },
@@ -24,147 +23,6 @@ export const QUALITY_CAP_PRESETS = [
     { label: "480p (4 Mbps)", kbps: 4000 },
     { label: "360p (2 Mbps)", kbps: 2000 },
 ];
-/* Full-height right-side drawer gradient shared by both chrome-menu.js's hamburger sheet
-   and chrome-subtitles.js's Audio & Subtitles panel - same fade-from-the-right look, just
-   different panel widths. */
-export const SHEET_GRADIENT = "linear-gradient(to left, rgba(0,0,0,0.92) 0%, rgba(0,0,0,0.88) 55%, rgba(0,0,0,0.5) 85%, transparent 100%)";
-
-export const MENU_SCROLL_CLASS = "streaming-player-menu-scroll";
-
-/* Marks every player overlay's "✕" close button (the hamburger sheet, Audio & Subtitles,
-   Episode list, Chapter list) - each overlay's own wireLinearNav call excludes this class
-   from its selector, since B/Escape already closes the same overlay and a D-pad/keyboard
-   user reaching a redundant close button mid-list would be an odd, easy-to-hit dead end
-   between whatever's actually selectable on either side of it. Mouse/touch users still
-   click it directly; nothing here removes the button itself, only D-pad/keyboard's own
-   path to it. */
-export const OVERLAY_CLOSE_BTN_CLASS = "streaming-player-overlay-close-btn";
-
-/* Marks every focusable/selectable element in the player's own chrome (corner buttons, the
-   floating play button, every hamburger/Effects/Options/Audio & Subtitles/Episode/Chapter row
-   and card) so they all share one focus-ring look - the same 2px solid #e5a00d outline the
-   main browsing UI uses (see src/card/styles/shared-focus.css), rather than the player
-   inventing its own. This chrome lives in plain document.body, not a shadow root, so unlike
-   that file's own explicit per-component selector list, one shared class is what scopes this
-   rule to player elements only, applied at the point each button/card is built - see
-   ensurePlayerFocusStyle below. border-radius is new here (shared-focus.css doesn't need one:
-   every element it lists already has its own rounded shape - a poster, a pill, a circular
-   button); most of this chrome's rows/buttons are plain rectangles with no radius of their
-   own, so the ring would otherwise render square-cornered. Inline styles still win over this
-   class for anything that sets its own border-radius (the circular corner/play buttons), so
-   this only rounds elements that didn't already have an opinion. */
-export const PLAYER_FOCUSABLE_CLASS = "streaming-player-focusable";
-
-/* The hamburger "More" sheet's own rows (chrome-menu.js's buildAccordionRow/
-   renderPickerList/makeBackRow, also reused by chrome-menu-options.js/chrome-subtitles.js
-   for their nested screens) get a full-width highlighted background instead of the
-   shared outline above - each row is already a real width:100% button, so the
-   background naturally spans edge-to-edge without needing a separate bleed trick the
-   way the card's narrower nav items do. Layered on top of PLAYER_FOCUSABLE_CLASS
-   (kept for its border-radius/transition), not a replacement for it. */
-export const PLAYER_MENU_ROW_CLASS = "streaming-player-menu-row";
-
-/* Episode/chapter list cards (episode-list.js's buildEpisodeCard/buildChapterCard) - same
-   highlighted-background swap as PLAYER_MENU_ROW_CLASS above instead of the shared yellow
-   outline, since a thin ring around a 240px-wide card (thumb + title/subtitle stacked
-   below it) read as much fainter/harder to spot than on the plain buttons that class was
-   designed for. Layered on top of PLAYER_FOCUSABLE_CLASS, not a replacement for it. */
-export const PLAYER_CARD_CLASS = "streaming-player-card";
-
-/* Injected once, lazily, the same guarded pattern as ensureMenuScrollStyle below - nothing
-   needs this until the first focusable element actually mounts. */
-export function ensurePlayerFocusStyle() {
-    if (document.getElementById("streaming-player-focusable-style")) return;
-    const style = document.createElement("style");
-    style.id = "streaming-player-focusable-style";
-    style.textContent = `
-        .${PLAYER_FOCUSABLE_CLASS} {
-            outline: 2px solid #e5a00d00;
-            outline-offset: 2px;
-            border-radius: 8px;
-            transition: .125s;
-        }
-        .${PLAYER_FOCUSABLE_CLASS}:focus-visible {
-            outline: 2px solid #e5a00d;
-        }
-        /* focus-nav.js's wireLinearNav never gives a text <input> real DOM focus just for
-           landing on it (arriving there would otherwise pop Xbox/WebView2's on-screen
-           keyboard for no reason) - it marks it "nav-text-highlight" instead, so :focus-visible
-           above never fires for that state and this class needs its own matching outline. */
-        .${PLAYER_FOCUSABLE_CLASS}.nav-text-highlight {
-            outline: 2px solid #e5a00d;
-        }
-        /* outline: none unconditionally (not just on :focus-visible) - PLAYER_FOCUSABLE_CLASS's
-           base rule above still transitions outline every one of these rows inherits, and
-           animating "2px solid transparent" -> "none" (a non-interpolable style flip, unlike
-           the plain alpha fade the other outline-based elements do) is what was flashing black
-           for a frame on every move; removing outline here entirely means that transition never
-           has anything to animate. background is !important because every row this class is
-           applied to (buildAccordionRow/renderPickerList/makeBackRow) sets its own inline
-           style.background directly on the element, which otherwise always wins over any
-           stylesheet class selector regardless of specificity. */
-        .${PLAYER_MENU_ROW_CLASS} {
-            outline: none !important;
-        }
-        .${PLAYER_MENU_ROW_CLASS}:focus-visible {
-            background: rgba(255,255,255,0.08) !important;
-        }
-        /* outline: none unconditionally, same reasoning as PLAYER_MENU_ROW_CLASS above.
-           background !important because buildEpisodeCard/buildChapterCard set their own
-           inline style.background ("transparent") directly on the card - same inline-
-           always-wins trap. padding/margin here (rather than just a background color)
-           give the highlight room to show past the thumbnail's own opaque background
-           instead of being fully hidden behind it, with the negative margin keeping the
-           card's own layout width/gap unchanged. */
-        .${PLAYER_CARD_CLASS} {
-            outline: none !important;
-            padding: 8px !important;
-            margin: -8px !important;
-        }
-        .${PLAYER_CARD_CLASS}:focus-visible {
-            background: rgba(255,255,255,0.08) !important;
-        }
-        /* B/Escape already backs every one of these overlays out for a controller user - the
-           "X" is a redundant, unreachable-by-D-pad dead end for them. Two separate gates,
-           not one: [data-xbox-device="true"] (core/platform.js) is script-injected by the UWP
-           shell itself, so it's unconditionally true on real Xbox hardware from first paint
-           regardless of what the page's own input heuristics conclude - input-mode.js's
-           [data-input-mode="keyboard"] (UA/pointer-based sniffing) turned out not to
-           reliably catch Xbox's actual WebView2 UA/pointer capabilities on real hardware.
-           Deliberately narrower than [data-platform="uwp"], which is also true on the PC UWP
-           shell target where a real mouse exists and the "X" is not a dead end (see
-           platform.js's own isXboxDevice()/usesGamepadChrome() comments). The input-mode
-           gate stays alongside it for Fire TV and any keyboard/gamepad-driven desktop-web
-           session, which platform.js has no marker for. !important because both closeBtn
-           elements (chrome-menu.js/chrome-subtitles.js) set display:"flex" as an inline
-           style directly on the element - same trap as PLAYER_MENU_ROW_CLASS's background
-           above, an inline style always wins over any stylesheet selector here regardless
-           of specificity. */
-        html[data-xbox-device="true"] .${OVERLAY_CLOSE_BTN_CLASS},
-        html[data-input-mode="${INPUT_MODE.KEYBOARD}"] .${OVERLAY_CLOSE_BTN_CLASS} {
-            display: none !important;
-        }
-    `;
-    document.head.appendChild(style);
-}
-
-/* Hides the scrollbar for any flyout content that overflows (subtitle search results,
-   a long chapter/audio-track list) instead of the browser's default wide scrollbar
-   clashing with the glass-panel look above. Injected once, lazily, rather than at
-   module load - nothing needs it until a panel actually overflows. Shared by
-   chrome-menu.js and chrome-subtitles.js so both panels use the exact same scrollbar
-   styling instead of each carrying its own copy. */
-export function ensureMenuScrollStyle() {
-    if (document.getElementById("streaming-player-menu-scroll-style")) return;
-    const style = document.createElement("style");
-    style.id = "streaming-player-menu-scroll-style";
-    style.textContent = `
-        .${MENU_SCROLL_CLASS} { scrollbar-width: none; }
-        .${MENU_SCROLL_CLASS}::-webkit-scrollbar { display: none; width: 0; height: 0; }
-    `;
-    document.head.appendChild(style);
-}
-
 export const VOLUME_STORAGE_KEY = "prism_player_volume";
 export const AMBIENT_STORAGE_KEY = "prism_player_ambient_enabled";
 export const AMBIENT_OPACITY_STORAGE_KEY = "prism_player_ambient_opacity";
@@ -222,21 +80,16 @@ export function storedAmbientOpacity() {
    Shader Upscaling toggle was last set to (see shader-pipeline.js's setShaderEnabled),
    not a Settings-modal default reset every video. detectShaderType's own per-video genre
    detection is unrelated to this and still resolves fresh every time (see
-   plex-player.js's play()). */
+   player.js's play()). */
 export function storedShaderEnabled() {
     return storedBool(UPSCALE_ENABLED_STORAGE_KEY, PLAYER_SETTINGS_DEFAULTS.shaderEnabled);
 }
 
-/* Same immediate-persistence model as storedShaderEnabled above. 0.65 (not documented
-   anywhere else now) was "Medium"'s value back when this was a Settings-modal preset
-   dropdown (light/medium/strong) rather than a raw persisted slider position - kept as
-   the default for a first-ever session, same reasoning storedColorBoostSaturationStrength/
-   storedColorBoostContrastStrength's own 0.5 default follows. Same `stored !== null`
-   reasoning as storedAmbientOpacity above -
-   without it, a never-set key silently defaults to strength 0 instead of 0.65 (Number(null)
-   is 0, not NaN), which combined with setUpscaleAuto not re-resolving _shaderType made
-   Auto mode look permanently stuck at 0% for anyone who'd never touched the manual
-   slider. */
+/* 0.65 is the first-session default (it was "Medium" back when this was a preset dropdown).
+
+   The explicit `stored !== null` check matters: Number(null) is 0, not NaN, so a never-set key
+   would silently default to strength 0 rather than 0.65 - which made Auto mode look permanently
+   stuck at 0% for anyone who had never touched the manual slider. */
 export function storedShaderStrength() {
     return storedFloat01(UPSCALE_STRENGTH_STORAGE_KEY, PLAYER_SETTINGS_DEFAULTS.shaderStrength);
 }
@@ -248,10 +101,7 @@ export function storedUpscaleAuto() {
     return storedBool(UPSCALE_AUTO_STORAGE_KEY, PLAYER_SETTINGS_DEFAULTS.upscaleAuto);
 }
 
-/* Same immediate-persistence model as storedAmbientEnabled - Color Boost's Saturation and
-   Contrast have no per-video/genre concern to reconcile against either, and are fully
-   independent controls now (see shader-pipeline.js's setColorBoostSaturationMode/
-   setColorBoostContrastMode) - each gets its own enabled key rather than sharing one. */
+/* Saturation and Contrast are fully independent controls, so each gets its own key. */
 export function storedColorBoostSaturationEnabled() {
     return storedBool(COLOR_BOOST_SATURATION_ENABLED_STORAGE_KEY, PLAYER_SETTINGS_DEFAULTS.colorBoostSaturationEnabled);
 }
@@ -260,10 +110,7 @@ export function storedColorBoostContrastEnabled() {
     return storedBool(COLOR_BOOST_CONTRAST_ENABLED_STORAGE_KEY, PLAYER_SETTINGS_DEFAULTS.colorBoostContrastEnabled);
 }
 
-/* Same `stored !== null` reasoning as storedAmbientOpacity/storedShaderStrength above.
-   Saturation and contrast are independent sliders now (see shader-pipeline.js's
-   setColorBoostSaturationStrength/setColorBoostContrastStrength) - each gets its own
-   persisted key rather than sharing the one "strength" this used to be. */
+/* Same `stored !== null` reasoning as storedShaderStrength above; one key per slider. */
 export function storedColorBoostSaturationStrength() {
     return storedFloat01(COLOR_BOOST_SATURATION_STRENGTH_STORAGE_KEY, PLAYER_SETTINGS_DEFAULTS.colorBoostSaturationStrength);
 }
@@ -415,12 +262,12 @@ export function episodesIconMarkup() {
     </svg>`;
 }
 
-/* Icons for each row of the More menu (chrome.js's buildAccordionRow/renderPickerRows
+/* Icons for each row of the More menu (chrome-menu.js's buildAccordionRow/renderPickerRows
    callers) - one markup function per row, same currentColor-SVG-not-emoji reasoning as
    every icon above. A handful of rows deliberately reuse an existing markup above
    rather than getting their own (Auto-Play reuses skipIconMarkup's "next" glyph, Shader
    Upscaling reuses fullscreenIconMarkup's expand glyph) since those already draw the
-   right concept - see openHamburgerMenu/renderEffectsList/renderOptionsList in chrome.js
+   right concept - see openHamburgerMenu/renderEffectsList/renderOptionsList in src/player/ui/
    for where each one is actually wired up. Android's MenuIconView mirrors this same set
    of shapes so the two platforms read as one icon family. */
 export function chaptersIconMarkup() {

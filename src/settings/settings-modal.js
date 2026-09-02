@@ -1,51 +1,14 @@
-import { wireLinearNav, focusAfterPaint, isControllerActive, registerNavHandler } from "./focus-nav.js";
-import { NAV_COMMAND, APP_EVENT } from "./constants.js";
-import { hasSecrets, loadSecrets, saveSecrets } from "./vault.js";
-import { discoverLibraries } from "./plex-auth.js";
-import { isXboxDevice, platformTag, PLATFORM_TAG } from "./src/player/core/platform.js";
-import { getImageCacheTtlDays, setImageCacheTtlDays, clearImageCache } from "./image-cache.js";
-import { SECTION_TYPE } from "./constants.js";
-import MODAL_STYLE from "./src/styles/settings-modal.css?inline";
-import DEFAULT_PLAIN_CONFIG from "./app-settings.defaults.json";
-import { version as APP_VERSION } from "./package.json";
-
-/* Only non-sensitive fields live here in plain localStorage. plex_token,
-   openrouter_api_key, and plex_account_token go through vault.js instead - see there for
-   why (encrypted at rest, not plaintext). Trailer discovery uses a TMDB API key bundled
-   with the app itself (see src/card/logic/tmdb.js) rather than a user-supplied secret, so
-   there's no youtube/tmdb key stored here at all anymore.
-   plex_account_token is the Plex.tv account token from the Sign in with Plex flow
-   (plex-auth.js) - kept separately from plex_token (the per-server access token the
-   card actually uses) so "refresh servers" can re-run discovery later without a
-   full re-login. */
-const PLAIN_STORAGE_KEY = "prism.config";
-
-export function loadPlain() {
-    try {
-        const raw = JSON.parse(localStorage.getItem(PLAIN_STORAGE_KEY) || "null") || {};
-        return {...DEFAULT_PLAIN_CONFIG, ...raw };
-    } catch (e) {
-        return {...DEFAULT_PLAIN_CONFIG };
-    }
-}
-export function savePlain(config) {
-    localStorage.setItem(PLAIN_STORAGE_KEY, JSON.stringify(config));
-}
-/* Full config = plain fields + decrypted secrets, merged - what the card's
-   setConfig()/refreshConfig() actually expects. Per-server access tokens are secrets
-   (server_tokens, keyed by clientIdentifier) but the servers they belong to are plain
-   metadata (name/url/owned/...) - merged back onto each server here rather than via the
-   flat {...plain, ...secrets} spread below, which would otherwise let a `servers` key on
-   `secrets` blow away plain's non-secret server list instead of extending it. */
-export async function loadFull() {
-    const plain = loadPlain();
-    const secrets = hasSecrets() ? await loadSecrets() : {};
-    const servers = (plain.servers || []).map((s) => ({...s, token: secrets.server_tokens?.[s.id] || "" }));
-    return {...plain, ...secrets, servers };
-}
-export function isConfigured(fullConfig) {
-    return !!(fullConfig && fullConfig.plex_url && fullConfig.plex_token);
-}
+import { wireLinearNav, focusAfterPaint, registerNavHandler } from "../core/focus-nav.js";
+import { PrismModalElement } from "./modal-element.js";
+import { escapeHtml } from "../core/html.js";
+import { NAV_COMMAND, APP_EVENT, SECTION_TYPE } from "../constants.js";
+import { hasSecrets, loadSecrets, saveSecrets } from "../core/vault.js";
+import { loadPlain, savePlain, mergeServerTokens } from "../core/config.js";
+import { discoverLibraries } from "../plex/auth.js";
+import { isXboxDevice, platformTag, PLATFORM_TAG } from "../player/core/platform.js";
+import { getImageCacheTtlDays, setImageCacheTtlDays, clearImageCache } from "../core/image-cache.js";
+import MODAL_STYLE from "../styles/settings-modal.css?inline";
+import { version as APP_VERSION } from "../../package.json";
 
 /* "PC" vs "Xbox" both report platformTag() === PLATFORM_TAG.UWP (same shell/bridge - see
    platform.js's own comment on why identity doesn't imply routing); isXboxDevice() is the
@@ -120,7 +83,7 @@ function groupHead(icon, title, desc, switchHtml = "") {
     </div>`;
 }
 
-class StreamingSettingsModal extends HTMLElement {
+class StreamingSettingsModal extends PrismModalElement {
   connectedCallback() {
     if (this._built) return;
     this._built = true;
@@ -129,15 +92,7 @@ class StreamingSettingsModal extends HTMLElement {
     this._homeEnabled = true;
     this._moviesEnabled = true;
     this._tvEnabled = true;
-    /* Reflected onto this host element, not read via a :root selector inside the shadow
-       stylesheet below - see focus-nav.js's own comment on why :root never matches there. */
-    this.toggleAttribute("controller-active", isControllerActive());
-    document.addEventListener(APP_EVENT.CONTROLLER_ACTIVE_CHANGE, (e) => {
-      this.toggleAttribute("controller-active", e.detail.active);
-    });
-    this.attachShadow({ mode: "open" });
-    this.shadowRoot.innerHTML = `
-      <style>${MODAL_STYLE}</style>
+    this._buildShell(MODAL_STYLE, `
       <div class="overlay">
         <div class="modal">
           <div class="modal-header">
@@ -353,20 +308,11 @@ class StreamingSettingsModal extends HTMLElement {
           <div class="status save-status"></div>
         </div>
       </div>
-    `;
+    `);
     this._wire();
   }
 
-  _el(sel) {
-    return this.shadowRoot.querySelector(sel);
-  }
-
   _wire() {
-    this._overlay = this._el(".overlay");
-    this._el(".modal-close").addEventListener("click", () => this.close());
-    this._overlay.addEventListener("click", (e) => {
-      if (e.target === this._overlay) this.close();
-    });
     this._el(".btn-reauth").addEventListener("click", () => this._reauthenticate());
     this._el(".btn-fetch-libraries").addEventListener("click", () => this._fetchLibraries());
     this._el(".f-subtitle-provider").addEventListener("change", () => {
@@ -606,7 +552,7 @@ class StreamingSettingsModal extends HTMLElement {
        see/edit what's actually saved matters more, since a stale/wrong key otherwise
        only surfaces as an opaque failure later. */
     const secrets = await this._getEffectiveSecrets();
-    this._servers = this._servers.map((s) => ({ ...s, token: secrets.server_tokens?.[s.id] || "" }));
+    this._servers = mergeServerTokens(this._servers, secrets);
     this._el(".f-openrouter-key").value = secrets.openrouter_api_key || "";
     this._el(".f-opensubtitles-username").value = secrets.opensubtitles_username || "";
     this._el(".f-opensubtitles-password").value = secrets.opensubtitles_password || "";
@@ -636,14 +582,6 @@ class StreamingSettingsModal extends HTMLElement {
     return this._unlockedSecrets;
   }
 
-  close() {
-    this._overlay.classList.remove("open");
-  }
-
-  isOpen() {
-    return this._overlay.classList.contains("open");
-  }
-
   /* Delegates to <streaming-plex-signin-modal> (see app.js) rather than re-implementing
      the PIN flow here - Settings only needs to ask for it, not run it. */
   _reauthenticate() {
@@ -654,7 +592,7 @@ class StreamingSettingsModal extends HTMLElement {
   /* Discovers every server on the signed-in account - the owned one plus any a friend
      has shared - not just the single server the app originally connected to. Re-running
      this later re-probes connections and re-lists libraries but preserves every
-     existing enabled/label/all_enabled toggle (see plex-auth.js's discoverLibraries,
+     existing enabled/label/all_enabled toggle (see plex/auth.js's discoverLibraries,
      shared with the sign-in flow which now runs this same discovery automatically). */
   async _fetchLibraries() {
     const statusEl = this._el(".fetch-status");
@@ -709,7 +647,7 @@ class StreamingSettingsModal extends HTMLElement {
        "default-view" so the browser's own native radio-group behavior (checking one
        unchecks the rest) does the mutual-exclusion work - see nav.js's buildNavTabs for
        why these exact view-key strings ("home"/"server-<id>"/"section-<id>:<key>") are
-       what plex-netflix-card.js's _currentView expects. A disabled row's radio is
+       what card.js's _currentView expects. A disabled row's radio is
        disabled too (can't be the default if it won't even be a tab); _reconcileDefaultView
        below moves the selection off a row the instant its own toggle turns it off. */
     const homeHtml = `
@@ -760,7 +698,7 @@ class StreamingSettingsModal extends HTMLElement {
         const indices = sectionsByServer.get(sv.id) || [];
         const ownerHtml = sv.owned
           ? ""
-          : ` <span class="server-group-shared">shared by ${this._escape(sv.sourceTitle || "a friend")}</span>`;
+          : ` <span class="server-group-shared">shared by ${escapeHtml(sv.sourceTitle || "a friend")}</span>`;
         const rowsHtml = indices
           .map((i) => {
             const s = this._sections[i];
@@ -773,8 +711,8 @@ class StreamingSettingsModal extends HTMLElement {
               <span class="switch-track"></span>
             </label>
             <div class="section-row-main">
-              <input type="text" class="s-label" data-nav-group="section-row-${i}" value="${this._escape(s.label)}" />
-              <span class="section-row-server">${this._escape(sv.name)}</span>
+              <input type="text" class="s-label" data-nav-group="section-row-${i}" value="${escapeHtml(s.label)}" />
+              <span class="section-row-server">${escapeHtml(sv.name)}</span>
             </div>
             <span class="type-badge">${s.type === 1 ? "Movies" : "TV"}</span>
             <label class="tab-toggle">
@@ -782,7 +720,7 @@ class StreamingSettingsModal extends HTMLElement {
               <span>Tab</span>
             </label>
             <label class="default-radio">
-              <input type="radio" name="default-view" class="default-view-radio" value="${this._escape(view)}" data-nav-group="section-row-${i}" ${this._defaultView === view ? "checked" : ""} ${usableAsDefault ? "" : "disabled"} />
+              <input type="radio" name="default-view" class="default-view-radio" value="${escapeHtml(view)}" data-nav-group="section-row-${i}" ${this._defaultView === view ? "checked" : ""} ${usableAsDefault ? "" : "disabled"} />
               <span>Default</span>
             </label>
           </div>`;
@@ -793,23 +731,23 @@ class StreamingSettingsModal extends HTMLElement {
         return `
         <div class="server-group">
           <div class="server-group-header">
-            <span class="server-group-name">${this._escape(sv.name)}</span>${ownerHtml}
+            <span class="server-group-name">${escapeHtml(sv.name)}</span>${ownerHtml}
           </div>
-          <div class="section-row server-all-row" data-server="${this._escape(sv.id)}">
+          <div class="section-row server-all-row" data-server="${escapeHtml(sv.id)}">
             <label class="switch">
-              <input type="checkbox" class="sv-enabled" data-nav-group="server-row-${this._escape(sv.id)}" ${sv.all_enabled !== false ? "checked" : ""} />
+              <input type="checkbox" class="sv-enabled" data-nav-group="server-row-${escapeHtml(sv.id)}" ${sv.all_enabled !== false ? "checked" : ""} />
               <span class="switch-track"></span>
             </label>
             <div class="section-row-main">
-              <span class="section-row-title">${this._escape(sv.name)}</span>
+              <span class="section-row-title">${escapeHtml(sv.name)}</span>
               <span class="section-row-server">All libraries on this server</span>
             </div>
             <label class="tab-toggle">
-              <input type="checkbox" class="sv-show-tab" data-nav-group="server-row-${this._escape(sv.id)}" ${sv.show_tab ? "checked" : ""} ${sv.all_enabled === false ? "disabled" : ""} />
+              <input type="checkbox" class="sv-show-tab" data-nav-group="server-row-${escapeHtml(sv.id)}" ${sv.show_tab ? "checked" : ""} ${sv.all_enabled === false ? "disabled" : ""} />
               <span>Tab</span>
             </label>
             <label class="default-radio">
-              <input type="radio" name="default-view" class="default-view-radio" value="${this._escape(serverView)}" data-nav-group="server-row-${this._escape(sv.id)}" ${this._defaultView === serverView ? "checked" : ""} ${serverUsableAsDefault ? "" : "disabled"} />
+              <input type="radio" name="default-view" class="default-view-radio" value="${escapeHtml(serverView)}" data-nav-group="server-row-${escapeHtml(sv.id)}" ${this._defaultView === serverView ? "checked" : ""} ${serverUsableAsDefault ? "" : "disabled"} />
               <span>Default</span>
             </label>
           </div>
@@ -902,9 +840,6 @@ class StreamingSettingsModal extends HTMLElement {
     this._defaultView = fallback.value;
   }
 
-  _escape(s) {
-    return String(s || "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-  }
 
   _collectPlainConfig() {
     return {
@@ -972,17 +907,13 @@ class StreamingSettingsModal extends HTMLElement {
       await saveSecrets(secrets);
       savePlain(plain);
       await setImageCacheTtlDays(this._el(".f-image-cache-ttl-days").value);
-      /* Same server+token merge as loadFull() - plain.servers has no token field (see
-         _collectPlainConfig's comment) and secrets only carries the id-keyed
-         server_tokens map, so naively spreading both here would hand refreshConfig()
-         servers with no token at all. That undefined token was then round-tripping
-         through data.js's loadAll (which re-persists server_tokens keyed off whatever
-         card._config.servers already has) back into the vault as an empty string,
-         permanently wiping every server's real token on the very next save - each
-         later _playItem call then failed with a missing plexToken and silently fell
-         back to opening Plex's own web/app link instead of this app's player. */
-      const servers = (plain.servers || []).map((s) => ({ ...s, token: secrets.server_tokens?.[s.id] || "" }));
-      const fullConfig = { ...plain, ...secrets, servers };
+      /* Must go through mergeServerTokens, not a flat {...plain, ...secrets} spread:
+         plain.servers carries no token field and secrets only carries the id-keyed
+         server_tokens map, so a naive spread hands refreshConfig() servers with no token.
+         That undefined token used to round-trip through data.js's loadAll back into the
+         vault as an empty string, permanently wiping every server's real token on the very
+         next save - after which Play fell back to opening Plex's own web link. */
+      const fullConfig = { ...plain, ...secrets, servers: mergeServerTokens(plain.servers, secrets) };
       this.dispatchEvent(new CustomEvent(APP_EVENT.SETTINGS_SAVED, { bubbles: true, composed: true, detail: fullConfig }));
       statusEl.textContent = "Saved";
       statusEl.className = "status save-status ok";

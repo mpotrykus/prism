@@ -1,6 +1,6 @@
 import { extractTmdbId, extractLegacyAgentId, resolveTmdbIdFromImdb, resolveTmdbTrailer } from "./tmdb.js";
 import { getYoutubeAspectRatio, computeCoverScale } from "./youtube-oembed.js";
-import { MEDIA_TYPE } from "../../../constants.js";
+import { MEDIA_TYPE } from "../../constants.js";
 
 /* Trailer resolution shared by the home hero (hero.js) and the title-info modal
    (title-info.js): a Plex "extras" trailer first, falling back to a TMDB-discovered

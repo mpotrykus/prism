@@ -21,7 +21,7 @@
       navigating.
 */
 
-import { NAV_COMMAND, APP_EVENT } from "./constants.js";
+import { NAV_COMMAND, APP_EVENT } from "../constants.js";
 
 /* WebView2 (confirmed on the Xbox/UWP shell, reproduces on desktop too) won't accept
    .focus() on an element in the same synchronous tick its display:none is lifted (e.g.
@@ -122,6 +122,16 @@ document.addEventListener(
 );
 document.addEventListener("pointerdown", () => setControllerActive(false), true);
 
+/* Shadow-DOM components can't key CSS off documentElement's data-controller-active: a shadow
+   tree's root node is the ShadowRoot, not an Element, so :root never matches inside one. They
+   mirror the flag onto their own host element instead and use :host([controller-active]). */
+export function reflectControllerActive(hostEl) {
+  hostEl.toggleAttribute("controller-active", isControllerActive());
+  document.addEventListener(APP_EVENT.CONTROLLER_ACTIVE_CHANGE, (e) => {
+    hostEl.toggleAttribute("controller-active", e.detail.active);
+  });
+}
+
 const lastCommandAt = Object.create(null);
 
 /* Every component in the app registers its own handler (one per modal/overlay/screen),
@@ -178,7 +188,7 @@ function resolveDeepActiveElement(el) {
    `root` (a shadow root or plain container) - covers every simple linear list in the app
    (a modal's buttons, a settings form, an overlay's keypad). The card's home screen (sidenav
    + 2D grid of rows/posters) needs bespoke Up/Down-by-position logic and uses
-   registerNavHandler() directly instead - see plex-netflix-card.js.
+   registerNavHandler() directly instead - see card.js.
 
    Items sharing a `data-nav-group` value (e.g. chrome-menu-effects.js's Auto/On/Off mode
    buttons, or title-info.js dynamically row-grouping its wrapping "More Like This" grid -

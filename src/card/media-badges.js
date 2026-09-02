@@ -1,3 +1,4 @@
+import { escapeHtml } from "../core/html.js";
 /* Icon library for the media-format tags Plex/media items carry (resolution, HDR, audio
    format, channel layout, subtitle type, edition, playback method, ...). Icons are Material
    Design Icons (MDI, pictogrammers.com/library/mdi) - Apache-2.0, safe to embed as-is,
@@ -186,10 +187,6 @@ export const MEDIA_BADGES = {
   "Software Transcoding": { icon: ICON_COG },
   "Original Quality": { icon: ICON_VERIFIED },
 };
-
-function escapeHtml(s) {
-  return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-}
 
 /* Renders one badge chip for a label from (or not from) MEDIA_BADGES above - an unknown
    label just renders as a plain text chip, same as a mapped entry with `icon: null`. */

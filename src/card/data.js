@@ -1,13 +1,17 @@
 import { parseAiSectionIdeas } from "./logic/catalog.js";
 import { collapseByGuid } from "./logic/cross-server.js";
-import * as StreamingPlexAuth from "../../plex-auth.js";
-import { loadPlain, savePlain } from "../../settings.js";
-import { hasSecrets, loadSecrets, saveSecrets } from "../../vault.js";
-import { VIEW, SECTION_TYPE } from "../../constants.js";
+import { normalizeTitle } from "./logic/watchlist-match.js";
+import { shuffle } from "./logic/catalog.js";
+import { renderMessage, renderLoading, showLoadingMore, hideLoadingMore } from "./rows.js";
+import { fetchHomeProfiles } from "./profile.js";
+import * as StreamingPlexAuth from "../plex/auth.js";
+import { loadPlain, savePlain } from "../core/config.js";
+import { hasSecrets, loadSecrets, saveSecrets } from "../core/vault.js";
+import { VIEW, SECTION_TYPE } from "../constants.js";
 
 /* Plex fetch/data-loading orchestration - the card's single "go get everything Home
    needs" entry point plus every raw fetch it fans out to. Takes the PlexNetflixCard
-   instance as an explicit first argument (same pattern plex-player.js's native-bridge.js/
+   instance as an explicit first argument (same pattern player.js's native-bridge.js/
    web-fallback.js use) since these all read this._config and write the handful of
    `_xRaw`/`_xBySection` fields the row-building logic (logic/catalog.js) consumes. */
 
@@ -38,6 +42,20 @@ export function activeServers(card) {
   const servers = card._config.servers || [];
   const sections = card._config.sections || [];
   return servers.filter((sv) => sv.all_enabled || sections.some((s) => s.server_id === sv.id && s.enabled !== false));
+}
+
+/* GETs a prebuilt Plex URL and unwraps MediaContainer.Metadata, treating any failure -
+   network, non-2xx, malformed body - as an empty list. Used where a row simply not
+   appearing is the right outcome and there's nothing useful to tell the user. */
+export async function fetchMetadataList(url) {
+  try {
+    const res = await fetch(url, { headers: { Accept: "application/json" } });
+    if (!res.ok) return [];
+    const data = await res.json();
+    return data?.MediaContainer?.Metadata || [];
+  } catch (e) {
+    return [];
+  }
 }
 
 export async function plexFetch(card, path, params = {}, server = null) {
@@ -75,6 +93,30 @@ export async function plexFetch(card, path, params = {}, server = null) {
     (mc.Hub || []).forEach((h) => (h.Metadata || []).forEach((m) => { m.__server = s; }));
   }
   return data;
+}
+
+/* Finds one title on one specific server by name. A "My List" item's ratingKey belongs to
+   discover.provider.plex.tv, a different id space from any server's own /library/metadata
+   (using it there 404s), and an on-deck episode's cross-server identity can't be trusted
+   either - each server tracks its own progress, so two servers are rarely on the same
+   episode. A hub search by title is the only bridge. Prefers an exact normalized-title
+   (+year) match, since local and Discover titles can differ in punctuation alone, and falls
+   back to the hub's own first result. */
+export async function findOnServer(card, item, server) {
+  try {
+    const data = await plexFetch(card, "/hubs/search", { query: item.title, limit: 10 }, server);
+    const results = (data?.MediaContainer?.Hub || [])
+      .filter((h) => h.type === item.type)
+      .flatMap((h) => h.Metadata || []);
+    const norm = normalizeTitle(item.title);
+    return (
+      results.find((m) => normalizeTitle(m.title) === norm && (!item.year || m.year === item.year)) ||
+      results[0] ||
+      null
+    );
+  } catch (e) {
+    return null;
+  }
 }
 
 /* "home"/"server-<id>"/"search" (or any unrecognized view) fall through to null, meaning
@@ -115,7 +157,7 @@ export function sectionsForView(card, view) {
 
 /* Tags a raw item with the exact section it was fetched from (server_id+key) - stamped
    at every per-section fetch below (recentlyAdded/genre-by-section/AI rows) so later
-   per-library-tab filtering (plex-netflix-card.js's _serverFilterForView) can match
+   per-library-tab filtering (card.js's _serverFilterForView) can match
    against this instead of trusting Plex's own librarySectionID field on the item, which
    real-world testing against a multi-library server showed was NOT reliably present/
    correct on every endpoint this app calls - genre rows (mergeGenreRows, keyed off this
@@ -191,10 +233,7 @@ export async function fetchWatchlistRaw(card) {
        would need real pagination (repeat with an incrementing Start) to go further. */
     url.searchParams.set("X-Plex-Container-Start", 0);
     url.searchParams.set("X-Plex-Container-Size", 100);
-    const res = await fetch(url, { headers: { Accept: "application/json" } });
-    if (!res.ok) return [];
-    const data = await res.json();
-    return data?.MediaContainer?.Metadata || [];
+    return fetchMetadataList(url);
   } catch (e) {
     return [];
   }
@@ -366,7 +405,7 @@ async function loadGenreDataBySection(card) {
               /* This per-section/per-genre pool also backs buildRecommendedRaw/
                  buildPopularRaw (catalog.js), which flatten items across every section
                  into one deduped-by-ratingKey pool - stamping here is what lets
-                 plex-netflix-card.js's _serverFilterForView scope those two rows back
+                 card.js's _serverFilterForView scope those two rows back
                  down to a single library tab afterward (see stampSection's own comment). */
               items.forEach((m) => stampSection(m, s));
               return { title: g.title, key: g.key, items, totalSize: mc.totalSize ?? mc.size ?? 0 };
@@ -476,14 +515,14 @@ async function fetchAiRowsRaw(card, ideas) {
 
 export async function loadAll(card) {
   if (!card._config.plex_url || !card._config.plex_token) {
-    card._renderMessage("Open Settings to add your Plex server URL and token.");
+    renderMessage(card._rowsEl, "Open Settings to add your Plex server URL and token.");
     return;
   }
   if (!card._config.sections || !card._config.sections.length) {
-    card._renderMessage('Open Settings and click "Fetch Libraries" to choose what to show.');
+    renderMessage(card._rowsEl, 'Open Settings and click "Fetch Libraries" to choose what to show.');
     return;
   }
-  card._renderLoading();
+  renderLoading(card._rowsEl);
   try {
     /* Re-probes every known server the same way the old single-server version probed
        the one - a stale cached URL doesn't fail fast off-LAN (see ensureReachable's own
@@ -526,7 +565,7 @@ export async function loadAll(card) {
       await saveSecrets({ ...secrets, plex_token: primary.token });
     }
   } catch (e) {
-    card._renderMessage(`Couldn't reach your Plex server: ${e.message}`);
+    renderMessage(card._rowsEl, `Couldn't reach your Plex server: ${e.message}`);
     return;
   }
   /* First paint is gated on only the cheap, no-fan-out fetches (on deck/watchlist/
@@ -560,14 +599,14 @@ export async function loadAll(card) {
        search, since exitSearch() itself calls _renderCurrentView(). */
     if (card._currentView !== "search") card._renderCurrentView();
   } catch (err) {
-    card._renderMessage(`Couldn't load Plex: ${err.message}`);
+    renderMessage(card._rowsEl, `Couldn't load Plex: ${err.message}`);
     return;
   }
 
-  card._showLoadingMore();
+  showLoadingMore(card._rowsEl);
   loadBackgroundData(card)
     .catch((err) => console.warn("[data] background load failed:", err))
-    .finally(() => card._hideLoadingMore());
+    .finally(() => hideLoadingMore(card._rowsEl));
 }
 
 /* Everything _renderCurrentView() can do without: genre/AI/collection rows, "Recommended"/
@@ -583,7 +622,7 @@ async function loadBackgroundData(card) {
     fetchWatchHistoryRaw(card),
     fetchCollectionsRaw(card),
     fetchPlaylistsRaw(card),
-    card._fetchHomeProfiles(),
+    fetchHomeProfiles(card._config.plex_account_token),
   ]);
   card._genreBySection = genreBySection;
   card._studioFacets = searchFacets.studios;
@@ -594,7 +633,7 @@ async function loadBackgroundData(card) {
   card._activeUserId = homeProfiles.activeId;
   card._renderProfileNav();
   const rowCount = card._config.collection_row_count ?? 0;
-  card._collectionRowPicks = card._shuffle(card._collectionsRaw).slice(0, rowCount);
+  card._collectionRowPicks = shuffle(card._collectionsRaw).slice(0, rowCount);
   card._collectionRowsRaw = await fetchCollectionRowItems(card, card._collectionRowPicks);
   card._recommendedRaw = card._buildRecommendedRaw(historyRaw);
   card._popularRaw = card._buildPopularRaw();
