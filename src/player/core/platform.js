@@ -93,9 +93,9 @@ export function plexPlatformTag() {
 }
 
 /* Whether to ask Plex for progressive output (protocol=http, start.mp4) instead of HLS. Xbox must:
-   HLS is measurably broken there for two independent reasons, documented in core/stream-url.js and
-   docs/xbox-native-hdr-player/05-phase0-spike-results.md. Everything else keeps HLS, which hls.js
-   and ExoPlayer both handle well. Keyed off identity, not hasNativePlayer(). */
+   HLS is measurably broken there for two independent reasons, both documented in
+   core/stream-url.js. Everything else keeps HLS, which hls.js and ExoPlayer both handle well.
+   Keyed off identity, not hasNativePlayer(). */
 export function usesProgressiveStream() {
     return platformTag() === PLATFORM_TAG.UWP;
 }

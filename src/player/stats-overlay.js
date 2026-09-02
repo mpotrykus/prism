@@ -54,9 +54,9 @@ export function stopStatsOverlayLoop(controller) {
     }
 }
 
-/* Browsers give no reliable way to read a <video> element's real color-space/transfer
-   info without WebCodecs (see docs/plezy-player-comparison.md's HDR section) - shown as
-   "n/a" rather than guessed, unlike Android's real isHdrContent() check off Format.colorInfo. */
+/* Browsers give no reliable way to read a <video> element's real color-space/transfer info
+   without WebCodecs - shown as "n/a" rather than guessed, unlike Android's real isHdrContent()
+   check off Format.colorInfo. */
 /* Sharpening (the hand-written CAS/Anime4K unsharp-mask kernels) and AI Upscaling (the real
    Anime4K CNN / FSR 1 chains) are independent toggles now - split into their own status lines
    rather than one that used to silently swap shape depending on which was actually rendering. */

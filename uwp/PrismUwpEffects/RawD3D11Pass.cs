@@ -91,10 +91,9 @@ namespace PrismUwpEffects
                     context.Draw(3, 0);
 
                     // Explicit unbind - a resource still bound as an SRV can't later be written to
-                    // as an RTV without D3D11 forcing it to null anyway, same "hazard tracking"
-                    // note the NIS compute-shader integration doc
-                    // (docs/xbox-native-hdr-player/02-*.md) flags for UAV/SRV binding around a
-                    // dispatch; the same reasoning applies here.
+                    // as an RTV without D3D11 forcing it to null anyway - the same "hazard
+                    // tracking" concern that applies to UAV/SRV binding around a compute
+                    // dispatch.
                     context.PSSetShaderResources(0, new ID3D11ShaderResourceView[inputs.Length]);
                     context.OMSetRenderTargets((ID3D11RenderTargetView)null);
                     if (constantBuffer != null && constants != null)

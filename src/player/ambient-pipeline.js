@@ -14,8 +14,8 @@ function isXbox() {
 
 /* Ambient-lighting pipeline (web/Xbox only - Android's native ExoPlayer leg has its own
    equivalent built from AmbientLightSampler/AmbientGlowView in the android/ project,
-   since native playback renders in a separate Activity outside this WebView entirely,
-   the same wall documented for shader upscaling in docs/plezy-player-comparison.md).
+   since native playback renders in a separate Activity outside this WebView entirely - the
+   same wall shader upscaling hits).
    Takes the StreamingPlayerController instance as an explicit first argument, the same
    pattern as shader-pipeline.js/native-bridge.js/web-fallback.js.
 

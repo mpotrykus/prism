@@ -1,6 +1,6 @@
 {
-  "name": "Streaming",
-  "short_name": "Streaming",
+  "name": "Prism",
+  "short_name": "Prism",
   "start_url": "./index.html",
   "scope": "./",
   "display": "fullscreen",

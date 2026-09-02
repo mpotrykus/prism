@@ -15,9 +15,8 @@ namespace PrismUwp.Player
     /// that sits behind the transparent WebView2, playing Plex's progressive output.
     ///
     /// Progressive (<c>protocol=http</c>, <c>start.mp4</c>) rather than HLS, decided by measurement
-    /// on real hardware rather than preference - see
-    /// docs/xbox-native-hdr-player/05-phase0-spike-results.md. Plex serves empty single-packet TS
-    /// segments for a fresh HLS session regardless of token, and AdaptiveMediaSource additionally
+    /// on real hardware rather than preference. Plex serves empty single-packet TS segments for a
+    /// fresh HLS session regardless of token, and AdaptiveMediaSource additionally
     /// mis-seeks on Plex's <c>#EXT-X-START:TIME-OFFSET</c> by reading an absolute media position as an
     /// offset into a playlist that already begins there. Progressive plays and sustains, so this class
     /// deliberately has no AdaptiveMediaSource in it at all.

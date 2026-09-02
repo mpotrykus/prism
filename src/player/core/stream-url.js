@@ -78,8 +78,7 @@ function buildTranscodeUrl(endpoint, {
      Xbox uses progressive because HLS does not work there, measured on hardware: Plex serves empty
      single-packet TS segments for a fresh session regardless of token, and UWP's AdaptiveMediaSource
      additionally mis-seeks on Plex's #EXT-X-START:TIME-OFFSET (reading an absolute media position as
-     an offset into a playlist that already begins there). Progressive plays and sustains. Full
-     evidence in docs/xbox-native-hdr-player/05-phase0-spike-results.md. */
+     an offset into a playlist that already begins there). Progressive plays and sustains. */
   url.searchParams.set("protocol", progressive ? "http" : "hls");
   url.searchParams.set("fastSeek", "1");
   /* directPlay=0 is deliberate, not a missed optimization, on every URL this function

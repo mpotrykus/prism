@@ -5,8 +5,7 @@
    Takes the StreamingPlayerController as an explicit first argument, same as every other module in
    src/player/ - see native-bridge.js's header for why.
 
-   Two ways this differs from Android's leg, both consequences of the Phase 0 hardware spikes
-   (docs/xbox-native-hdr-player/05-phase0-spike-results.md):
+   Two ways this differs from Android's leg, both consequences of the Phase 0 hardware spikes:
 
    1. **The chrome stays in JS.** Android re-implemented the whole player UI natively because its
       player is a separate Activity. Here the native video surface is a sibling of the WebView2 in

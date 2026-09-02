@@ -59,3 +59,7 @@ uwp/PrismUwpEffects/obj/
 
 # Scratch diffs/notes kept out of the tree (one was committed by accident once).
 _scratch_*
+
+# Research/investigation notes - kept locally, not published with the repo. Nothing in the
+# source cites these by path: every finding they informed is inlined at its own call site.
+docs/research/

@@ -1517,12 +1517,11 @@ public class PlayerActivity extends AppCompatActivity {
     /* Automatic, not a user-facing toggle - real HDR-mastered sources (wide BT.2020 gamut or a
        PQ/HLG transfer function) skip this GL effects pass entirely rather than composing an
        SDR-tuned contrast/saturation/sharpen boost on top of it, the same reasoning Plezy's own
-       ShaderService._isHdrContent()/autoHdrSkip uses (see docs/plezy-player-comparison.md's HDR
-       notes) - our shadow-crush fix (see the shared sharpen shaders' shadowProtect) was tuned
-       against SDR luma assumptions, not PQ/HLG's own much wider range. This is NOT full HDR
-       passthrough (no Dolby Vision profile handling, no display HDR-mode switching à la Plezy's
-       matchDynamicRange on Windows) - that's tracked separately, deliberately scoped out here;
-       see docs/plezy-player-comparison.md's "Deferred features" for the full plan.
+       ShaderService._isHdrContent()/autoHdrSkip uses - our shadow-crush fix (see the shared
+       sharpen shaders' shadowProtect) was tuned against SDR luma assumptions, not PQ/HLG's own
+       much wider range. This is NOT full HDR passthrough (no Dolby Vision profile handling, no
+       display HDR-mode switching à la Plezy's matchDynamicRange on Windows) - that is tracked
+       separately and deliberately scoped out here.
 
        The exact colorSpace/colorTransfer values that drove this decision are surfaced in the
        Performance Overlay's "HDR" line (see PlayerUiHelper.updateStatsOverlay) rather than

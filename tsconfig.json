@@ -1,3 +1,10 @@
+/* Editor/IDE support only - this is NOT a working typecheck gate.
+
+   `checkJs` is deliberately absent, so `strict` below applies to zero files: every source
+   file here is .js, and without checkJs TypeScript parses them for inference and never
+   reports on them. `npx tsc --noEmit` therefore exits clean while checking nothing - don't
+   read that as passing. Turning checkJs on today surfaces ~38k errors, so adopting it is a
+   real project (JSDoc annotations, or a migration), not a config flip. */
 {
   "compilerOptions": {
     "target": "ES2022",

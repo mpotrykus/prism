@@ -4,7 +4,7 @@ A standalone rewrite of a Netflix-style Plex browsing dashboard, targeting **web
 
 ## Origin
 
-The UI (`src/card/card.js`) started life as `custom:plex-netflix-card`, a hand-written vanilla-JS Home Assistant Lovelace custom card running on a home server (`raspi-server`), browsing a personal Plex library with Netflix-style rows, a hero banner, search, Kids Mode, AI-generated genre rows, etc. That HA-hosted version is the **feature-complete reference implementation** — extensive build history (every feature, every bug, every fix) lives in this machine's memory for the `Desktop` project, not in this repo. If you need to know *how* an existing feature was originally built or why a specific decision was made, check there first — see `reference_dashboard_history` in this project's memory.
+The UI (`src/card/card.js`) started life as `custom:plex-netflix-card`, a hand-written vanilla-JS Home Assistant Lovelace custom card running on a home server (`raspi-server`), browsing a personal Plex library with Netflix-style rows, a hero banner, search, Kids Mode, AI-generated genre rows, etc. That HA-hosted version is the **feature-complete reference implementation** — extensive build history (every feature, every bug, every fix) lives in this machine's memory for the `Desktop` project, not in this repo. If you need to know *how* an existing feature was originally built or why a specific decision was made, check there first — see `reference_dashboard_history` in the `Desktop` project's memory (it is not in this project's).
 
 This repo is the rewrite: pull the card out of Home Assistant entirely so it can run as its own installable app on multiple platforms/input modes HA's Lovelace panel never had to support.
 
@@ -20,6 +20,8 @@ This repo is the rewrite: pull the card out of Home Assistant entirely so it can
   - **Microsoft Store submission (not needed for today's Xbox Dev Mode sideload path):** `Package.appxmanifest` declares the restricted `rescap:Capability Name="hevcPlayback"`. Xbox Dev Mode sideloading doesn't care, but the Microsoft Store certification pipeline does — restricted capabilities require a separate approval request in Partner Center before a submission using one will pass cert. Budget time for that request if/when this ever moves from sideload to an actual Store listing.
 - `index.html` — shell: mounts `<streaming-plex-signin-modal>` and `<streaming-settings-modal>`, then loads `src/app.js` as its single module entry. Everything else is reached through that import graph.
 - `public/` — copied verbatim into `dist/`: `sw.js`, `manifest.webmanifest`, icons, fonts, the Prism logo.
+  - `manifest.webmanifest` is still `orientation: landscape` / `display: fullscreen`, inherited from the TV-kiosk HA use case. **Revisit for phone/touch use** (portrait, standalone vs fullscreen) — the rest of the touch work has moved on, this hasn't.
+  - `sw.js` must only ever precache files that exist verbatim in `dist/`. It's a classic script, so it can't import `src/core/image-cache.js` — the cache names are duplicated in both and kept in sync by hand.
 
 ### Source layout (`src/`)
 
