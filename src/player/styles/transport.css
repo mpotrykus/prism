@@ -77,7 +77,6 @@
     gap: 10px;
     padding: 70px 40px 22px;
     background: linear-gradient(to top, rgba(0, 0, 0, 0.82) 0%, rgba(0, 0, 0, 0.55) 45%, transparent 100%);
-    opacity: 1;
     transition: opacity 0.25s ease;
     box-sizing: border-box;
 }
@@ -196,7 +195,10 @@
 
 /* With real per-chapter segments the DOM divs behind the input ARE the visible track, so the
    input's own native track paint has to get out of the way rather than show through. */
-.prism-player-seek--segmented::-webkit-slider-runnable-track,
+.prism-player-seek--segmented::-webkit-slider-runnable-track {
+    background: transparent;
+}
+
 .prism-player-seek--segmented::-moz-range-track {
     background: transparent;
 }
