@@ -29,14 +29,18 @@ const tag = `v${versionArg}`;
 // without going through a shell.
 const run = (cmd, args) =>
   execFileSync(cmd, args, { cwd: rootDir, stdio: "inherit", shell: true });
-const runCapture = (cmd, args) =>
-  execFileSync(cmd, args, { cwd: rootDir, shell: true }).toString().trim();
+// git/gh are real .exe's, not .cmd shims - run them without a shell so multi-word args (like
+// a commit message) reach them as single argv entries instead of being re-split on spaces by
+// cmd.exe (shell:true does not quote array args on Windows).
+const runGit = (args) => execFileSync("git", args, { cwd: rootDir, stdio: "inherit" });
+const runGh = (args) => execFileSync("gh", args, { cwd: rootDir, stdio: "inherit" });
+const runCaptureGit = (args) => execFileSync("git", args, { cwd: rootDir }).toString().trim();
 
 // version:set touches exactly these three files; bail before doing any build work if any of
 // them already has uncommitted changes, so the version-bump commit below doesn't sweep in
 // unrelated in-progress edits.
 const versionedFiles = ["package.json", "android/app/build.gradle", "uwp/PrismUwp/Package.appxmanifest"];
-const dirtyVersionedFiles = runCapture("git", ["status", "--porcelain", "--", ...versionedFiles]);
+const dirtyVersionedFiles = runCaptureGit(["status", "--porcelain", "--", ...versionedFiles]);
 if (dirtyVersionedFiles) {
   console.error(
     `release: uncommitted changes in files version:set needs to touch:\n${dirtyVersionedFiles}\nCommit or stash them first.`
@@ -45,7 +49,7 @@ if (dirtyVersionedFiles) {
 }
 
 // Fail fast if this version was already tagged, before spending time on a build we can't ship.
-const tagExists = runCapture("git", ["tag", "--list", tag]);
+const tagExists = runCaptureGit(["tag", "--list", tag]);
 if (tagExists) {
   console.error(`release: tag ${tag} already exists. Bump to a new version or delete the tag first.`);
   process.exit(1);
@@ -78,18 +82,18 @@ copyFileSync(aabPath, aabDest);
 copyFileSync(msixuploadPath, msixuploadDest);
 
 console.log("release: committing version bump...");
-run("git", ["add", "--", ...versionedFiles]);
-run("git", ["commit", "-m", `chore(app): version bump to ${versionArg}`]);
+runGit(["add", "--", ...versionedFiles]);
+runGit(["commit", "-m", `chore(app): version bump to ${versionArg}`]);
 
 console.log(`release: tagging ${tag}...`);
-run("git", ["tag", tag]);
+runGit(["tag", tag]);
 
 console.log("release: pushing commit and tag...");
-run("git", ["push"]);
-run("git", ["push", "origin", tag]);
+runGit(["push"]);
+runGit(["push", "origin", tag]);
 
 console.log(`release: creating GitHub release ${tag}...`);
-run("gh", ["release", "create", tag, "--title", tag, "--generate-notes"]);
+runGh(["release", "create", tag, "--title", tag, "--generate-notes"]);
 
 console.log(`release: done - collected in ${releaseDir}`);
 console.log(`  ${aabDest}`);
