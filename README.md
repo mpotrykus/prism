@@ -2,6 +2,8 @@
 
 **A Netflix-style front end for your own Plex library — on your TV, your phone, your Xbox, and your browser.**
 
+[![Sponsor](https://img.shields.io/badge/sponsor-%E2%9D%A4-db61a2?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/mpotrykus)
+
 ![Prism home screen](docs/media/home.jpg)
 
 ---
@@ -189,7 +191,7 @@ tested on real remote hardware yet.
 
 ## License
 
-[MIT](LICENSE)
+[GPL-3.0](LICENSE)
 
 <sub>Screenshots show a personal Plex library. Artwork, posters, and video frames belong to their
 respective rights holders and are shown here only to illustrate the interface.</sub>

@@ -1,6 +1,8 @@
 // One-shot release build: bumps the version everywhere (version:set), then builds the
 // Android App Bundle (android:bundle) and the Microsoft Store upload package (store:build),
-// and collects both into release/ at the repo root. Run via `npm run release -- X.Y.Z`.
+// collects both into release/ at the repo root, and commits/tags/pushes the version bump
+// and cuts a matching GitHub release - so the Play Console, Partner Center, and GitHub
+// version markers all land on the same X.Y.Z. Run via `npm run release -- X.Y.Z`.
 import { execFileSync } from "node:child_process";
 import { copyFileSync, existsSync, mkdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -21,11 +23,33 @@ const msixuploadPath = fileURLToPath(
   new URL(`../uwp/PrismUwp/AppPackages/PrismUwp_${versionArg}.0_x64_bundle.msixupload`, import.meta.url)
 );
 const releaseDir = fileURLToPath(new URL("../release/", import.meta.url));
+const tag = `v${versionArg}`;
 
 // shell: true because npm is a .cmd shim - execFileSync can't exec it directly on Windows
 // without going through a shell.
 const run = (cmd, args) =>
   execFileSync(cmd, args, { cwd: rootDir, stdio: "inherit", shell: true });
+const runCapture = (cmd, args) =>
+  execFileSync(cmd, args, { cwd: rootDir, shell: true }).toString().trim();
+
+// version:set touches exactly these three files; bail before doing any build work if any of
+// them already has uncommitted changes, so the version-bump commit below doesn't sweep in
+// unrelated in-progress edits.
+const versionedFiles = ["package.json", "android/app/build.gradle", "uwp/PrismUwp/Package.appxmanifest"];
+const dirtyVersionedFiles = runCapture("git", ["status", "--porcelain", "--", ...versionedFiles]);
+if (dirtyVersionedFiles) {
+  console.error(
+    `release: uncommitted changes in files version:set needs to touch:\n${dirtyVersionedFiles}\nCommit or stash them first.`
+  );
+  process.exit(1);
+}
+
+// Fail fast if this version was already tagged, before spending time on a build we can't ship.
+const tagExists = runCapture("git", ["tag", "--list", tag]);
+if (tagExists) {
+  console.error(`release: tag ${tag} already exists. Bump to a new version or delete the tag first.`);
+  process.exit(1);
+}
 
 console.log(`release: setting version to ${versionArg}...`);
 run("npm", ["run", "version:set", "--", versionArg]);
@@ -53,6 +77,22 @@ const msixuploadDest = fileURLToPath(
 copyFileSync(aabPath, aabDest);
 copyFileSync(msixuploadPath, msixuploadDest);
 
+console.log("release: committing version bump...");
+run("git", ["add", "--", ...versionedFiles]);
+run("git", ["commit", "-m", `chore(app): version bump to ${versionArg}`]);
+
+console.log(`release: tagging ${tag}...`);
+run("git", ["tag", tag]);
+
+console.log("release: pushing commit and tag...");
+run("git", ["push"]);
+run("git", ["push", "origin", tag]);
+
+console.log(`release: creating GitHub release ${tag}...`);
+run("gh", ["release", "create", tag, "--title", tag, "--generate-notes"]);
+
 console.log(`release: done - collected in ${releaseDir}`);
 console.log(`  ${aabDest}`);
 console.log(`  ${msixuploadDest}`);
+console.log(`  GitHub release: ${tag}`);
+console.log("release: upload the .aab to Play Console and the .msixupload to Partner Center to finish.");
