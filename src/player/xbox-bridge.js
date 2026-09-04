@@ -21,6 +21,7 @@
 import { media, setMediaFacade, NativeMediaFacade } from "./core/media-facade.js";
 import { showControls } from "./ui/chrome-controls.js";
 import { ensurePlayerStyles } from "./ui/styles.js";
+import { activeMarkerAt, updateSkipButton } from "./ui/chrome-skip.js";
 import { notifyStall, notifyReload, setStallDrivenAbr, updateAbrMonitor } from "./core/abr.js";
 import { reloadTranscodeSession, markAudioStreamSelected } from "./core/session-reload.js";
 import { mountPlayerChrome, unmountPlayerChrome } from "./ui/player-chrome.js";
@@ -365,7 +366,7 @@ function handleMessage(controller, message) {
                 controller._session.lastTimeMs = params.positionMs ?? controller._session.lastTimeMs;
                 if (params.durationMs) controller._session.durationMs = params.durationMs;
             }
-            controller._updateSkipButton?.(controller._activeMarkerAt?.(params.positionMs ?? 0));
+            updateSkipButton(controller, activeMarkerAt(controller, params.positionMs ?? 0));
             break;
         case "stateChanged":
             facade?.applyPaused(params.paused);
