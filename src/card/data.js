@@ -211,8 +211,12 @@ export async function fetchOnDeckRaw(card) {
   const merged = perServer.flat().sort((a, b) => (b.lastViewedAt || 0) - (a.lastViewedAt || 0));
   /* Collapsed before the enabled-section filter below - on deck genuinely spans every
      active server (unlike, say, playlists), so the same in-progress title on two servers
-     is a real case, not just a defensive no-op. */
-  return collapseByGuid(merged).filter((m) => isFromEnabledSection(card, m));
+     is a real case, not just a defensive no-op. Keyed on the SHOW's guid
+     (grandparentGuid), not the episode's own - on deck is per-show, and two servers
+     watching the same show at different points have different "next episode" guids, so
+     the default per-item key left the same show duplicated in Continue Watching (movies
+     have no grandparentGuid, so they still key off their own guid). */
+  return collapseByGuid(merged, (m) => m.grandparentGuid || m.guid).filter((m) => isFromEnabledSection(card, m));
 }
 
 export async function fetchWatchlistRaw(card) {

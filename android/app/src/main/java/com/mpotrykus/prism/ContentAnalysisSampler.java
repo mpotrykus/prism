@@ -4,7 +4,7 @@ import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.view.View;
 
-/* Backs "Auto strength" for Shader Upscaling/Color Boost Saturation/Color Boost Contrast
+/* Backs "Auto strength" for Sharpening/Color Boost Saturation/Color Boost Contrast
    (see PlayerActivity's upscaleAuto/colorBoostSaturationAuto/colorBoostContrastAuto and
    shaders.js's autoUpscaleStrength/autoColorBoostStrength/autoContrastBoostStrength on the
    web leg, which this mirrors). Shares FrameBitmapCapture's capture mechanics with

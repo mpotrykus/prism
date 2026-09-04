@@ -100,6 +100,18 @@ const AMBIENT_GLOW_REACH_PX = 240;
    linear-drop - continuously eases from full opacity to fully transparent with no kink
    where two different slopes met, which read as an unnaturally sudden cutoff. */
 const AMBIENT_FALLOFF_STEPS = 8;
+/* Fixes visible banding in the blurred gradient - most noticeable on Xbox's TV-out (an
+   8-bit-per-channel signal chain shows the gradient's continuous falloff as discrete
+   steps far more readily than a monitor does), but applied on both platforms since it's
+   the same makeGlowEdge DOM/CSS for both and the noise is imperceptible when there's no
+   banding to mask. feTurbulence noise, tiled and blended at low opacity via
+   mix-blend-mode - the classic fix for gradient banding, unrelated to AMBIENT_BLUR_PX's
+   own blur (this overlay is a sibling of `wrapper`, not a descendant, so it stays sharp
+   instead of being blurred away to nothing itself). */
+const AMBIENT_DITHER_SVG = "<svg xmlns='http://www.w3.org/2000/svg' width='64' height='64'>" +
+    "<filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/></filter>" +
+    "<rect width='100%' height='100%' filter='url(#n)'/></svg>";
+const AMBIENT_DITHER_DATA_URI = `data:image/svg+xml,${encodeURIComponent(AMBIENT_DITHER_SVG)}`;
 
 /* The "more" menu's inline toggle (see chrome-menu.js's openHamburgerMenu) - unlike shader
    upscaling's toggle, this one IS the persisted setting (see storedAmbientEnabled's own
@@ -220,6 +232,22 @@ function makeGlowEdge(edge) {
         zones.push(zone);
     }
     clip.appendChild(wrapper);
+
+    /* Sized to clip's own box (inset:0), not wrapper's overscanned one - clip's
+       overflow:hidden already confines it to exactly the true gap, same as the real
+       glow content. A sibling of wrapper, not a child, so wrapper's own blur filter
+       doesn't apply to it. */
+    const dither = document.createElement("div");
+    Object.assign(dither.style, {
+        position: "absolute",
+        inset: "0",
+        pointerEvents: "none",
+        mixBlendMode: "overlay",
+        opacity: "0.05",
+        backgroundImage: `url("${AMBIENT_DITHER_DATA_URI}")`,
+    });
+    clip.appendChild(dither);
+
     return { clip, wrapper, zones };
 }
 

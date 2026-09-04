@@ -58,30 +58,42 @@ export function dedupeSourcesByServer(sources) {
   return result;
 }
 
-/* Groups a raw item list by guid and collapses each group to its representative, with
-   `__sources` attached only when a group actually has more than one member - a lone item
-   (the common case) is returned untouched, not wrapped. Items missing a guid entirely
-   (unmatched library, or a type Plex doesn't agent-match - e.g. search's "People" hub)
-   pass through as-is rather than being dropped, so an unverified/missing guid fails open
-   instead of silently losing content. Preserves the input's relative order. */
-export function collapseByGuid(rawItems) {
+/* Groups a raw item list by guid (or by `keyFn(item)` when given) and collapses each
+   group to its representative, with `__sources` attached only when a group actually has
+   more than one member - a lone item (the common case) is returned untouched, not
+   wrapped. Items with no key (missing guid, or a type Plex doesn't agent-match - e.g.
+   search's "People" hub) pass through as-is rather than being dropped, so an unverified/
+   missing guid fails open instead of silently losing content. Preserves the input's
+   relative order.
+
+   `keyFn` defaults to the item's own `guid` - right for a row of movies/episodes shown
+   one-card-per-item. On-deck rows are per-SHOW cards backed by whichever episode is
+   currently "next" on each server, and two servers watching the same show at different
+   points have DIFFERENT current episodes - different episode guids - so the default
+   per-item key alone doesn't collapse them (confirmed live: the same show duplicated in
+   Continue Watching). data.js's fetchOnDeckRaw passes `(m) => m.grandparentGuid || m.guid`
+   instead, so episodes collapse by their show's identity while movies (no
+   grandparentGuid) still key off their own guid. */
+export function collapseByGuid(rawItems, keyFn = (m) => m.guid) {
   if (!rawItems?.length) return rawItems || [];
-  const byGuid = new Map();
+  const byKey = new Map();
   for (const m of rawItems) {
-    if (!m.guid) continue;
-    if (!byGuid.has(m.guid)) byGuid.set(m.guid, []);
-    byGuid.get(m.guid).push(m);
+    const key = keyFn(m);
+    if (!key) continue;
+    if (!byKey.has(key)) byKey.set(key, []);
+    byKey.get(key).push(m);
   }
   const seen = new Set();
   const result = [];
   for (const m of rawItems) {
-    if (!m.guid) {
+    const key = keyFn(m);
+    if (!key) {
       result.push(m);
       continue;
     }
-    if (seen.has(m.guid)) continue;
-    seen.add(m.guid);
-    const group = byGuid.get(m.guid);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const group = byKey.get(key);
     const rep = pickRepresentative(group);
     if (group.length > 1) rep.__sources = resolveSources(group);
     result.push(rep);

@@ -99,6 +99,28 @@ describe("collapseByGuid", () => {
     expect(collapseByGuid([])).toEqual([]);
     expect(collapseByGuid(undefined)).toEqual([]);
   });
+
+  it("collapses on a custom keyFn instead of the item's own guid", () => {
+    /* Mirrors fetchOnDeckRaw: two servers' on-deck EPISODE for the same show has a
+       different episode guid, but the same grandparentGuid (show identity). */
+    const items = [
+      { guid: "ep-s1e3", grandparentGuid: "show-1", ratingKey: "1", __server: srvA },
+      { guid: "ep-s2e1", grandparentGuid: "show-1", ratingKey: "9", __server: srvB },
+    ];
+    const result = collapseByGuid(items, (m) => m.grandparentGuid || m.guid);
+    expect(result).toHaveLength(1);
+    expect(result[0].ratingKey).toBe("1");
+    expect(result[0].__sources).toHaveLength(2);
+  });
+
+  it("falls back to the item's own guid under a custom keyFn when there's no grandparentGuid", () => {
+    const items = [
+      { guid: "movie-1", ratingKey: "1", __server: srvA },
+      { guid: "movie-2", ratingKey: "2", __server: srvA },
+    ];
+    const result = collapseByGuid(items, (m) => m.grandparentGuid || m.guid);
+    expect(result).toHaveLength(2);
+  });
 });
 
 describe("matchEpisodesAcrossServers", () => {

@@ -14,8 +14,9 @@ import {
     sourceWillUpscale,
     storedShaderFamilyOverride,
     setShaderFamilyOverride,
+    setAiUpscalingEnabled,
 } from "../shader-pipeline.js";
-import { setAmbientOpacity } from "../ambient-pipeline.js";
+import { setAmbientEnabled, setAmbientOpacity } from "../ambient-pipeline.js";
 import { fullscreenIconMarkup, colorBoostIconMarkup, ambientIconMarkup, aiUpscalingIconMarkup, versionIconMarkup } from "./shared.js";
 /* Circular with chrome-menu.js (which imports renderEffectsList from this file for its
    "Effects" row) - safe here because both sides only reference the other module's

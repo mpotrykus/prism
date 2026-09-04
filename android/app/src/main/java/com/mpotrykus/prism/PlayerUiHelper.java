@@ -322,7 +322,7 @@ final class PlayerUiHelper {
         }
 
         float shownUpscaleStrength = activity.upscaleAuto ? activity.autoUpscaleStrength : activity.upscaleStrength;
-        String shaderLine = "Shader Upscaling: " + (activity.shaderType == ShaderType.OFF
+        String shaderLine = "Sharpening: " + (activity.shaderType == ShaderType.OFF
             ? "off"
             : activity.shaderType.label + " @ " + Math.round(shownUpscaleStrength * 100) + "%"
                 + (activity.upscaleAuto ? " (auto)" : ""));
@@ -1138,7 +1138,7 @@ final class PlayerUiHelper {
         optionsSection.onTap = () -> renderOptionsList(activity, list);
         sections.add(optionsSection);
 
-        /* Navigates to a dedicated Shader Upscaling/Color Boost/Ambient Lighting list
+        /* Navigates to a dedicated Sharpening/Color Boost/Ambient Lighting list
            (see renderEffectsList) rather than expanding in place - three sub-controls
            read better as their own screen than squeezed inline under a fourth row. */
         MenuSection effectsSection = new MenuSection("Effects");
@@ -1148,7 +1148,7 @@ final class PlayerUiHelper {
         sections.add(effectsSection);
 
         MenuSection statsSection = new MenuSection("Performance Overlay");
-        /* No render - nothing to drill into, unlike Shader Upscaling/Color Boost/
+        /* No render - nothing to drill into, unlike Sharpening/Color Boost/
            Ambient Lighting above (each has a strength/opacity slider). Toggling this is
            just a View visibility flip (see setStatsOverlayEnabled), so it's a plain
            on/off row. */
@@ -1167,7 +1167,7 @@ final class PlayerUiHelper {
         clampMenuCardHeight(activity, list);
     }
 
-    /* The "Effects" sub-screen (Shader Upscaling/Color Boost/Ambient Lighting) - a
+    /* The "Effects" sub-screen (Sharpening/Color Boost/Ambient Lighting) - a
        whole separate list navigated to via the main list's "Effects" row (see
        renderMainList), not an inline expansion, since three sub-controls read better
        as their own screen than squeezed under a fourth row. Its own back row returns
@@ -1275,7 +1275,7 @@ final class PlayerUiHelper {
        (chrome-menu-effects.js's renderEffectsList) - this drives both rows below it. No caption
        here, same reasoning as that file's own buildContentTypeEffectRow: the three buttons
        themselves already say which family is in effect, so a "Detected: X"/"X (manual)"
-       subtitle underneath would be redundant (Shader Upscaling's own caption below still
+       subtitle underneath would be redundant (Sharpening's own caption below still
        carries that wording, since its row predates this one and the task only asked to add an
        override on top of it, not remove it). Reuses the VERSION icon (a three-layer stack) -
        same icon versionIconMarkup() draws for this exact row on the web leg. Rebuilds the whole
@@ -1364,7 +1364,7 @@ final class PlayerUiHelper {
         /* Names the chain Content Type's override (or auto-detection) actually picked, not a
            static "Anime4K CNN / FSR 1" that never changed regardless of family - this caption
            never updated when Content Type changed families, which is what actually prompted
-           this fix (Shader Upscaling's own caption below already did the right thing; this row
+           this fix (Sharpening's own caption below already did the right thing; this row
            just never mirrored it). Mirrors the web leg's own idleUpgradeLabel-driven caption
            (chrome-menu-effects.js's buildAiUpscalingEffectRow), which is likewise refreshed on
            every Content Type change via renderEffectsList's full rebuild here. */
@@ -1391,7 +1391,7 @@ final class PlayerUiHelper {
         String familyCaption = "auto".equals(activity.shaderFamilyOverride)
             ? "Detected: " + activity.detectedShaderType.label
             : activity.detectedShaderType.label + " (manual)";
-        EffectRowParts row = buildEffectRow(activity, list, density, MenuIconView.Icon.SHADER, "Shader Upscaling", familyCaption);
+        EffectRowParts row = buildEffectRow(activity, list, density, MenuIconView.Icon.SHADER, "Sharpening", familyCaption);
         int padH = Math.round(16 * density);
 
         TextView strengthLabel = new TextView(activity);
@@ -1604,7 +1604,7 @@ final class PlayerUiHelper {
         row.wrap.addView(opacitySeekBar);
 
         /* No effect running to tune while the toggle is off, same "disabled unless
-           there's something to adjust" reasoning as Shader Upscaling/Color Boost's own
+           there's something to adjust" reasoning as Sharpening/Color Boost's own
            strength SeekBar (see applyStrengthDisplay). */
         opacitySeekBar.setEnabled(activity.ambientEnabled);
         opacitySeekBar.setAlpha(activity.ambientEnabled ? 1f : 0.5f);
@@ -2044,7 +2044,7 @@ final class PlayerUiHelper {
     }
 
     /* "Auto (720p (10 Mbps))" while Auto Quality is actively adjusting the cap, else the
-       plain preset label - same "(Auto)" convention the Shader Upscaling row uses.
+       plain preset label - same "(Auto)" convention the Sharpening row uses.
        Android's player is always ExoPlayer, so unlike the web leg's menu there's no
        "unavailable" branch to account for here. */
     private static String qualityCapDisplayLabel(PlayerActivity activity) {
@@ -2144,7 +2144,7 @@ final class PlayerUiHelper {
     }
 
     /* Ticks `refresh` while `view` stays attached to the window, then stops itself -
-       used by the two Effects rows with an Auto mode (Shader Upscaling/Color Boost) to
+       used by the two Effects rows with an Auto mode (Sharpening/Color Boost) to
        reflect ContentAnalysisSampler's background strength recalculation (every
        ~750ms, see its own SAMPLE_INTERVAL_MS) instead of leaving a stale snapshot from
        whenever "Auto" was last tapped. Polls attachment state rather than requiring an

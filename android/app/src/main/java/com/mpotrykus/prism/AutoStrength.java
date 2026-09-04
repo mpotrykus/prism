@@ -1,6 +1,6 @@
 package com.mpotrykus.prism;
 
-/* Auto-strength math for Shader Upscaling/Color Boost Saturation/Color Boost Contrast -
+/* Auto-strength math for Sharpening/Color Boost Saturation/Color Boost Contrast -
    Java port of shaders.js's autoUpscaleStrength/autoColorBoostStrength/
    autoContrastBoostStrength on the web leg, kept as the exact same formula/constants on
    both platforms rather than each guessing its own calibration. See that file's own

@@ -36,14 +36,14 @@ const runGit = (args) => execFileSync("git", args, { cwd: rootDir, stdio: "inher
 const runGh = (args) => execFileSync("gh", args, { cwd: rootDir, stdio: "inherit" });
 const runCaptureGit = (args) => execFileSync("git", args, { cwd: rootDir }).toString().trim();
 
-// version:set touches exactly these three files; bail before doing any build work if any of
-// them already has uncommitted changes, so the version-bump commit below doesn't sweep in
-// unrelated in-progress edits.
+// version:set touches these three files as part of the version-bump commit, so a dirty
+// working tree (anything staged, unstaged, or untracked) would either get swept into that
+// commit or block it outright - push or stash everything first.
 const versionedFiles = ["package.json", "android/app/build.gradle", "uwp/PrismUwp/Package.appxmanifest"];
-const dirtyVersionedFiles = runCaptureGit(["status", "--porcelain", "--", ...versionedFiles]);
-if (dirtyVersionedFiles) {
+const dirtyFiles = runCaptureGit(["status", "--porcelain"]);
+if (dirtyFiles) {
   console.error(
-    `release: uncommitted changes in files version:set needs to touch:\n${dirtyVersionedFiles}\nCommit or stash them first.`
+    `release: working tree is not clean:\n${dirtyFiles}\nPush or stash your changes before running a release.`
   );
   process.exit(1);
 }

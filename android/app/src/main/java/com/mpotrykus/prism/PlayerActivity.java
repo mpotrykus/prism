@@ -1623,7 +1623,7 @@ public class PlayerActivity extends AppCompatActivity {
     }
 
     /* Same immediate-persistence model as setAmbientEnabled - whatever this is last set
-       to (see PlayerUiHelper's Shader Upscaling menu row) is what every subsequent video
+       to (see PlayerUiHelper's Sharpening menu row) is what every subsequent video
        starts from, not a Settings-modal default read from an Intent extra any more (see
        EXTRA_SHADER_TYPE's own comment). shaderType still needs re-resolving here since
        flipping this toggle doesn't touch upscaleStrength - restoring it just restores
@@ -1636,7 +1636,7 @@ public class PlayerActivity extends AppCompatActivity {
     }
 
     /* Same immediate-persistence model as setShaderEnabled above. Still gated to
-       onStopTrackingTouch by PlayerUiHelper's Shader Upscaling SeekBar rather than drag
+       onStopTrackingTouch by PlayerUiHelper's Sharpening SeekBar rather than drag
        frequency - applyVideoEffects() itself is cheap now (see its own header comment), so
        this is no longer load-bearing for correctness, just avoids a SharedPreferences write
        and a stats-overlay refresh per drag frame. */
