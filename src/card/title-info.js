@@ -1599,6 +1599,17 @@ export class TitleInfoController {
     const showRatingKey = meta.ratingKey;
     const episode = await this._getNextEpisode(showRatingKey);
     if (!episode || this._item?.ratingKey !== showRatingKey) return;
+    /* This runs off the show's own detail fetch inside open(), which openForEpisode
+       kicks off and awaits BEFORE setting _resumeEpisodeKey (see its own comment) - so
+       _resumeEpisodeKey is still unset at the moment this function is first called,
+       and only reliably set by the time the `await` above resolves (openForEpisode's
+       remaining work needs no network round trip of its own, unlike this function's
+       separate /allLeaves fetch). Bail out here rather than earlier: when this modal
+       stands in for a specific resumed episode, that episode - not this function's own
+       independent pickNextEpisode/allLeaves guess, which can and does disagree with
+       whatever produced the on-deck episode - is the only one Play will ever start, so
+       overwriting the label already painted for it just makes the two disagree. */
+    if (this._resumeEpisodeKey) return;
     const resumeEpisode = episode.parentIndex != null && episode.index != null ? { season: episode.parentIndex, episode: episode.index } : null;
     this._updatePlayHistoryUI(true, resumeEpisode, false, true);
   }
