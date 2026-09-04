@@ -1,6 +1,6 @@
 // One-shot release build: bumps the version everywhere (version:set), then builds the
 // Android App Bundle (android:bundle) and the Microsoft Store upload package (store:build),
-// collects both into release/ at the repo root, and commits/tags/pushes the version bump
+// collects both into release/X.Y.Z/ at the repo root, and commits/tags/pushes the version bump
 // and cuts a matching GitHub release - so the Play Console, Partner Center, and GitHub
 // version markers all land on the same X.Y.Z. Run via `npm run release -- X.Y.Z`.
 import { execFileSync } from "node:child_process";
@@ -22,7 +22,7 @@ const aabPath = fileURLToPath(
 const msixuploadPath = fileURLToPath(
   new URL(`../uwp/PrismUwp/AppPackages/PrismUwp_${versionArg}.0_x64_bundle.msixupload`, import.meta.url)
 );
-const releaseDir = fileURLToPath(new URL("../release/", import.meta.url));
+const releaseDir = fileURLToPath(new URL(`../release/${versionArg}/`, import.meta.url));
 const tag = `v${versionArg}`;
 
 // shell: true because npm is a .cmd shim - execFileSync can't exec it directly on Windows
@@ -74,9 +74,9 @@ if (!existsSync(msixuploadPath)) {
 }
 
 mkdirSync(releaseDir, { recursive: true });
-const aabDest = fileURLToPath(new URL(`../release/prism-${versionArg}.aab`, import.meta.url));
+const aabDest = fileURLToPath(new URL(`../release/${versionArg}/prism-${versionArg}.aab`, import.meta.url));
 const msixuploadDest = fileURLToPath(
-  new URL(`../release/prism-${versionArg}.msixupload`, import.meta.url)
+  new URL(`../release/${versionArg}/prism-${versionArg}.msixupload`, import.meta.url)
 );
 copyFileSync(aabPath, aabDest);
 copyFileSync(msixuploadPath, msixuploadDest);
