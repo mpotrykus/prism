@@ -27,6 +27,19 @@ function getClientId() {
   return id;
 }
 
+/* Carries the HTTP status and (when Plex sends one) the Retry-After seconds as real fields,
+   not just baked into the message string - callers that want to auto-recover from a 429
+   (see signin-modal.js) need to branch on status/retryAfter programmatically, not regex the
+   error text. */
+export class PlexApiError extends Error {
+  constructor(message, { status, retryAfter } = {}) {
+    super(message);
+    this.name = "PlexApiError";
+    this.status = status;
+    this.retryAfter = retryAfter;
+  }
+}
+
 /* Reads the body as text first rather than calling res.json() directly, so a
    non-JSON response (e.g. Plex falling back to its XML error format) surfaces which
    call and HTTP status produced it instead of an opaque "Unexpected token '<'". */
@@ -36,17 +49,28 @@ async function parseJson(res, label) {
   try {
     data = JSON.parse(text);
   } catch (e) {
-    throw new Error(`${label} returned non-JSON (HTTP ${res.status}, content-type: ${res.headers.get("content-type")}): ${text.slice(0, 200)}`);
+    throw new PlexApiError(`${label} returned non-JSON (HTTP ${res.status}, content-type: ${res.headers.get("content-type")}): ${text.slice(0, 200)}`, { status: res.status });
   }
-  if (!res.ok) throw new Error(`${label} failed (HTTP ${res.status}): ${data.errors?.[0]?.message || data.error || text.slice(0, 200)}`);
+  if (!res.ok) {
+    /* Plex sends a Retry-After header on its own 429s - surfacing it turns "still
+       rate-limited?" into an actual number instead of a guess. */
+    const retryAfterHeader = res.headers.get("Retry-After");
+    const retryAfter = retryAfterHeader && Number.isFinite(Number(retryAfterHeader)) ? Number(retryAfterHeader) : undefined;
+    const retrySuffix = retryAfter ? ` - retry after ${retryAfter}s` : "";
+    throw new PlexApiError(`${label} failed (HTTP ${res.status}): ${data.errors?.[0]?.message || data.error || text.slice(0, 200)}${retrySuffix}`, { status: res.status, retryAfter });
+  }
   return data;
 }
 
-/* `strong: true` gets a long, cryptographically-strong code meant to be embedded in the
-   app.plex.tv/auth URL (buildAuthUrl) for the popup-based flow. `strong: false` gets the
-   short, human-typeable 4-character code plex.tv/link expects - pass that for the
-   remote/gamepad "type this code on another device" flow instead. */
-export async function requestPin({ strong = true } = {}) {
+/* `strong: false` (the default) gets the short, human-typeable 4-character code
+   plex.tv/link expects. `strong: true` gets a separate, long, cryptographically-strong
+   code meant only for an OAuth app.plex.tv/auth URL - confirmed against Plex's own
+   reference client (python-plexapi's MyPlexPinLogin): the two are different pin modes, not
+   interchangeable, and its own PIN-for-manual-entry accessor explicitly raises if the pin
+   was requested in OAuth/strong mode. Plex's own native apps drive every affordance (typed
+   code, QR, deep link) off one `strong: false` pin - see buildLinkUrl - so there is no
+   reason for this codebase to request the OAuth kind at all. */
+export async function requestPin({ strong = false } = {}) {
   const res = await fetch("https://plex.tv/api/v2/pins", {
     method: "POST",
     headers: {
@@ -60,24 +84,31 @@ export async function requestPin({ strong = true } = {}) {
   return parseJson(res, "Couldn't start Plex sign-in");
 }
 
-export function buildAuthUrl(pin) {
-  const params = new URLSearchParams({
-    clientID: getClientId(),
-    code: pin.code,
-    "context[device][product]": PRODUCT,
-  });
-  return `https://app.plex.tv/auth#?${params.toString()}`;
+/* plex.tv/link with the code pre-filled via query param - what Plex's own apps encode into
+   their QR code and drive their "click to sign in" button with, rather than a separate
+   OAuth pin/URL. Same page a user lands on by visiting plex.tv/link and typing the code by
+   hand; this just skips the typing. */
+export function buildLinkUrl(pin) {
+  return `https://plex.tv/link/?pin=${encodeURIComponent(pin.code)}`;
 }
 
-export async function pollPin(pinId, { intervalMs = 1500, timeoutMs = 5 * 60 * 1000 } = {}) {
+export async function pollPin(pinId, { intervalMs = 1500, timeoutMs = 5 * 60 * 1000, signal } = {}) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
+    if (signal?.aborted) throw new DOMException("Sign-in cancelled", "AbortError");
     const res = await fetch(`https://plex.tv/api/v2/pins/${pinId}`, {
+      signal,
       headers: { Accept: "application/json", "X-Plex-Client-Identifier": getClientId() },
     });
     const data = await parseJson(res, "Couldn't check sign-in status");
     if (data.authToken) return data.authToken;
-    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+    await new Promise((resolve, reject) => {
+      const t = setTimeout(resolve, intervalMs);
+      signal?.addEventListener("abort", () => {
+        clearTimeout(t);
+        reject(new DOMException("Sign-in cancelled", "AbortError"));
+      });
+    });
   }
   throw new Error("Sign-in timed out - try again.");
 }

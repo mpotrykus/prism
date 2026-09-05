@@ -2,33 +2,52 @@
     position: fixed;
     inset: 0;
     z-index: 1500;
-    background: rgba(var(--color-shadow-rgb), 0.86);
-    backdrop-filter: blur(6px);
+    /* A soft two-tone blue glow (bright azure top-left, deeper indigo bottom-right) fading
+       into a near-black navy base - replaces the flat dim-scrim this used to need when the
+       modal floated as a small card over visible app content behind it. Now that it's always
+       fullscreen (see .modal's own comment), nothing behind it is visible anyway, so this is
+       purely about not looking like a blank black screen on someone's very first launch,
+       before there's any hero/library content mounted behind it to look at. .modal's own
+       glass-panel blur sits on top and picks this up via backdrop-filter (saturate(1.6)
+       there actually helps this look more vivid, not less), which is what turns it into a
+       soft frosted glow rather than a hard-edged gradient. */
+    background: radial-gradient(ellipse 90% 60% at 12% 8%, rgba(41, 121, 197, 0.2) 0%, transparent 60%), radial-gradient(ellipse 90% 60% at 88% 100%, rgba(24, 55, 130, 0.1) 0%, transparent 60%), #05070d;
     display: none;
-    align-items: center;
-    justify-content: center;
-    padding: calc(24px + var(--safe-top)) 24px calc(24px + var(--safe-bottom));
 }
 
+
+/* Always fullscreen, not a centered card - this is the app's mandatory first screen (see
+   the file-top comment) and the one place a floating box over blurred app content read as
+   "a dialog you could dismiss" rather than "the gate you have to get through". Filling the
+   viewport removes that ambiguity outright instead of styling around it.
+
+   The content itself doesn't also need to stretch full-bleed: .modal is a flex column with
+   align-items:center (not the flexbox default of stretch), so every direct child - the logo,
+   the subtitle, .signin-columns, .connecting-screen - sizes to its own content and stays
+   centered no matter how wide the viewport is, the same as it did inside the old fixed-width
+   card. Nothing about the children needed to change for that to keep holding. */
+
 .modal {
-    width: 420px;
-    max-width: 100%;
+    width: 100%;
+    height: 100%;
     /* Shared frosted-glass panel look - see colors.css's --glass-panel-bg/-blur. */
     background: var(--glass-panel-bg);
     backdrop-filter: var(--glass-panel-blur);
     -webkit-backdrop-filter: var(--glass-panel-blur);
-    border: 1px solid rgba(var(--color-fg-rgb), 0.06);
-    border-radius: 16px;
     color: var(--color-fg);
-    box-shadow: 0 24px 70px rgba(var(--color-shadow-rgb), 0.6);
-    padding: 30px 26px 26px;
+    padding: calc(30px + var(--safe-top)) 26px calc(26px + var(--safe-bottom));
     text-align: center;
     position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    overflow-y: auto;
 }
 
 .modal-close {
     position: absolute;
-    top: 12px;
+    top: calc(12px + var(--safe-top));
     right: 12px;
     border: none;
     background: transparent;
@@ -43,16 +62,67 @@
     display: none;
 }
 
-h2 {
-    font-size: 18px;
-    font-weight: 700;
-    margin: 0 0 8px;
+.signin-logo {
+    height: 32px;
+    width: auto;
+    margin: 0 0 16px;
 }
 
 .subtitle {
     font-size: 13px;
     color: rgba(var(--color-fg-rgb), 0.55);
-    margin: 0 0 20px;
+    margin: 20px 0 0;
+}
+
+
+/* Mobile swaps which of these two shows - see the mobile breakpoint below. Both live in the
+   same .subtitle so there's exactly one <button> in the DOM either way (no duplicated click
+   handling, no ambiguity for the _el(".btn-plex-signin") lookups that toggle its disabled
+   state), and switching between "inline sentence" and "standalone button" is just which
+   surrounding text is shown plus how the button itself is styled. */
+
+.subtitle-standalone {
+    display: none;
+}
+
+.subtitle-suffix {
+    display: inline;
+}
+
+
+/* Gated behind DEBUG_SIGNIN - see signin-modal.js's own comment. The [hidden] rules are
+   needed despite the "hidden" attribute already being set in markup: a bare class selector
+   ties in specificity with the UA stylesheet's own "[hidden] { display: none }" rule, and
+   ours would otherwise win that tie by coming later in the cascade - confirmed the hard way,
+   the link rendered fully visible despite .hidden reading true in the DOM. */
+
+.debug-reset-client {
+    display: inline-block;
+    font-size: 11px;
+    color: #ff6b6b;
+    margin: 0 0 16px;
+}
+
+.debug-reset-client[hidden],
+.debug-ua[hidden] {
+    display: none;
+}
+
+.debug-reset-client:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+}
+
+.debug-ua {
+    font-family: monospace;
+    font-size: 11px;
+    color: #ffd479;
+    background: rgba(0, 0, 0, 0.4);
+    border-radius: 6px;
+    padding: 8px;
+    margin: 0 0 16px;
+    text-align: left;
+    word-break: break-all;
 }
 
 .btn {
@@ -74,17 +144,127 @@ h2 {
     background: var(--color-accent-hover);
 }
 
+
+/* Deliberately not a big primary button on desktop - the desktop layout already has three
+   equally valid ways in (button, code, QR), and reads as one sentence with the subtitle
+   ("Sign in with Plex to load your library.") rather than a separate full-width CTA fighting
+   that layout. Still a <button>, not an <a> - shared with .retry-btn on the connecting
+   screen, which is never visible at the same time (see signin-modal.js's _showConnecting*
+   methods), so the two can never be confused for each other despite the shared class. */
+
+.signin-link-btn {
+    display: inline-block;
+    background: none;
+    border: none;
+    padding: 0;
+    margin: 15px 0 20px;
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--color-accent);
+    cursor: pointer;
+}
+
+.signin-link-btn:hover {
+    color: var(--color-accent-hover);
+}
+
 .btn:focus-visible,
-.modal-close:focus-visible {
+.modal-close:focus-visible,
+.pin-link:focus-visible,
+.signin-link-btn:focus-visible {
     outline: 2px solid var(--color-accent);
     outline-offset: 2px;
 }
 
+
+/* The two screens _showConnecting()/_showSigninScreen() toggle between - see
+   signin-modal.js's own comment on why there are exactly two. The [hidden] overrides are
+   required, not decorative: see the .debug-reset-client/.debug-ua comment above for why a
+   bare class selector's own `display` loses to the UA stylesheet's "[hidden]" rule only
+   sometimes (whichever comes later in the cascade wins a specificity tie) - this file
+   already got bitten by that once. */
+
+.connecting-screen,
+.signin-screen {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+
+.connecting-screen[hidden],
+.signin-screen[hidden] {
+    display: none;
+}
+
+.connecting-icon {
+    height: 120px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin: 24px 0;
+}
+
+.spinner {
+    width: 96px;
+    height: 96px;
+    border: 8px solid rgba(var(--color-fg-rgb), 0.15);
+    border-top-color: var(--color-accent);
+    border-radius: 50%;
+    animation: signin-spin 0.8s linear infinite;
+}
+
+@keyframes signin-spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+.checkmark,
+.error-icon {
+    width: 120px;
+    height: 120px;
+    border-radius: 50%;
+    color: var(--color-surface);
+    font-size: 64px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.checkmark {
+    background: var(--color-success);
+}
+
+.error-icon {
+    background: var(--color-danger);
+}
+
+.spinner[hidden],
+.checkmark[hidden],
+.error-icon[hidden] {
+    display: none;
+}
+
+.retry-btn[hidden] {
+    display: none;
+}
+
 .status {
     font-size: 12px;
-    font-weight: 600;
+    /* Muted instead of inheriting .modal's full-white color-fg - plain progress text
+       ("Connecting to X…") isn't a heading, and at full white it read as more urgent/jarring
+       than a routine in-progress caption should. .status.ok/.status.err (modal-shell.css)
+       still win over this on specificity (two classes vs one), so success/error color
+       untouched. */
+    color: rgba(var(--color-fg-rgb), 0.4);
     margin-top: 14px;
     min-height: 15px;
+    /* Without this, a long status line stretches edge-to-edge on the now-fullscreen modal
+       (see .modal's own comment) - it's a block element under .modal's align-items:center,
+       so a max-width alone (no margin:auto needed) keeps it centered and wrapping at a
+       readable line length instead of spanning the whole viewport. */
+    max-width: 240px;
 }
 
 .server-picker {
@@ -99,18 +279,180 @@ h2 {
     width: 100%;
 }
 
-.link-code {
+
+/* Two columns side by side (link+code / QR) with a vertical "OR" divider between them -
+   matches Plex's own native TV apps' sign-in screen layout. Collapses to a vertical stack
+   below, since there's no room for two columns on a phone-width viewport. */
+
+.signin-columns {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 50px;
+    margin: 36px 0 18px;
+}
+
+.signin-columns[hidden] {
+    display: none;
+}
+
+.signin-col {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+}
+
+.col-label {
+    font-size: 13px;
+    color: rgba(var(--color-fg-rgb), 0.6);
+    max-width: 220px;
+}
+
+.col-label-code {
+    margin-top: 6px;
+}
+
+.signin-divider {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    font-size: 12px;
+    font-weight: 700;
+    color: rgba(var(--color-fg-rgb), 0.5);
+    align-self: stretch;
+}
+
+.signin-divider::before,
+.signin-divider::after {
+    content: "";
+    flex: 1;
+    width: 1px;
+    min-height: 24px;
+    background: rgba(var(--color-fg-rgb), 0.15);
+}
+
+.qr-code {
+    /* No background here - the SVG itself already paints its own #2a2a2a quiet zone (see
+       signin-modal.js's _renderColumns), a white frame around it would clash. */
+    border-radius: 10px;
+    line-height: 0;
+    padding: 15px;
+    margin: 10px;
+    background-color: #0004;
+}
+
+.qr-code svg {
+    display: block;
+    width: 152px;
+    height: 152px;
+}
+
+.pin-code {
     font-family: "Roboto Mono", monospace;
     font-size: 40px;
     font-weight: 700;
-    letter-spacing: 6px;
-    color: var(--color-accent);
-    margin: 18px 0 4px;
-    padding: 14px 10px;
-    background: rgba(var(--color-fg-rgb), 0.06);
+    letter-spacing: 10px;
+    /* Boxed to match .qr-code's card treatment (background/padding/margin/radius) - without
+       this the QR side reads as a card and the code side as bare text, which threw off the
+       "evenly weighted, either option is equally valid" balance the "OR" divider needs
+       between them. The extra 10px on the left (30px vs 20px) nudges the visually-offset
+       text back to center: letter-spacing adds its gap after every character including the
+       last, which otherwise makes the text look left-shifted inside the box. */
+    padding: 15px 20px 15px 30px;
+    margin: 10px;
+    background-color: #0004;
     border-radius: 10px;
+    color: var(--color-accent);
 }
 
-.link-code[hidden] {
-    display: none;
+.pin-link {
+    color: var(--color-accent);
+    font-weight: 700;
+    font-size: 15px;
+}
+
+@media (max-width: 560px) {
+    .signin-columns {
+        flex-direction: column;
+        gap: 16px;
+    }
+    .signin-divider {
+        flex-direction: row;
+        align-self: stretch;
+        width: 100%;
+    }
+    .signin-divider::before,
+    .signin-divider::after {
+        width: auto;
+        height: 1px;
+        min-height: 0;
+        min-width: 24px;
+    }
+}
+
+
+/* On a phone/tablet-width viewport, "Sign in with Plex" already opens the same
+   plex.tv/link/?pin= URL directly in this same browser, with strictly less friction than
+   typing a code or scanning a QR would add - there's no realistic reason a phone user would
+   need either. Plain width, matching this app's one other mobile breakpoint
+   (responsive.css, settings-modal.css) - a real desktop window narrowed below this is an
+   accepted trade-off (it'll also hide there), traded for a simple, unconditional rule
+   instead of trying to also distinguish it from touch via pointer media features. Xbox is
+   the one case that must never be caught by this regardless of its own width, which is what
+   the override below is for. */
+
+@media (max-width: 700px) {
+    .signin-columns {
+        display: none;
+    }
+    /* The exact button (and separate subtitle line above it) this had before the desktop
+       redesign merged them into one sentence - restored here since the columns it was
+       designed to sit alongside are hidden on mobile anyway. */
+    .subtitle-standalone {
+        display: block;
+        margin-bottom: 20px;
+    }
+    .subtitle-suffix {
+        display: none;
+    }
+    .signin-link-btn.btn-plex-signin {
+        display: inline-block;
+        background: var(--color-accent);
+        color: var(--color-surface);
+        border-radius: 8px;
+        padding: 11px 20px;
+        font-size: 14px;
+        font-weight: 700;
+        white-space: nowrap;
+    }
+    .signin-link-btn.btn-plex-signin:hover {
+        background: var(--color-accent-hover);
+        color: var(--color-surface);
+    }
+}
+
+
+/* Xbox must always show the QR/code regardless of viewport width or any pointer media
+   feature - there is no in-app way to click through on that platform, unlike a phone where
+   the button already does the same job. Driven by platform.js's own data-xbox-device
+   attribute (the real native DeviceFamily signal, not a CSS heuristic) specifically because
+   Xbox's ~200% UI scale can report a viewport just as narrow as a phone's, and a future
+   WebView2/OS update could in principle start reporting a coarse/fine pointer instead of
+   `none` if it ever emulates a cursor from the gamepad - this override can't be defeated by
+   either.
+
+   :host-context(), not :root: this stylesheet is injected into the modal's own shadow root
+   (see modal-element.js's _buildShell), and .signin-columns lives inside that shadow tree -
+   a plain :root[...] selector can never reach the light-DOM <html> element from in here, it
+   just silently never matches. :host-context() is the one construct that can look at
+   ancestors outside the shadow boundary. Confirmed the hard way: the override compiled and
+   applied but had zero effect until this fix, computed style stayed "none". Chromium-only,
+   which is fine - every target here (Chrome/Edge, Android WebView, UWP WebView2) is Blink. */
+
+:host-context([data-xbox-device="true"]) .signin-columns {
+    display: flex;
 }
