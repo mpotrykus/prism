@@ -10,7 +10,7 @@
   <Identity
     Name="Anlagen.PrismStreaming"
     Publisher="CN=40EF70EC-D989-4D37-817C-C7E51E3BEBE6"
-    Version="1.1.4.0" />
+    Version="1.1.5.0" />
 
   <!--
     Empirically required, not just legacy cruft: a real MSBuild/APPX-packaging pass against
