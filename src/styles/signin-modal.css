@@ -1,10 +1,30 @@
+/* display stays flex always (position:fixed already takes it out of layout flow) so opacity
+   can actually animate - toggling display:none/flex the way modal-shell.css's shared
+   .overlay.open rule does would otherwise cut the transition off instantly. visibility rides
+   along on its own delayed transition so the hidden overlay still doesn't paint or accept
+   clicks between opens. */
 .overlay {
     position: fixed;
     inset: 0;
     z-index: 1500;
     overflow: hidden;
     background: #05070d;
-    display: none;
+    display: flex;
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.3s ease, visibility 0s linear 0.3s;
+}
+
+.overlay.open {
+    opacity: 1;
+    visibility: visible;
+    transition: opacity 0.3s ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .overlay {
+        transition: none;
+    }
 }
 
 /* Mockup background lives on ::before/::after (not .overlay itself) so the flicker
