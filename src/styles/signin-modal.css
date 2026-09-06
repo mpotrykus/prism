@@ -2,17 +2,76 @@
     position: fixed;
     inset: 0;
     z-index: 1500;
-    /* A soft two-tone blue glow (bright azure top-left, deeper indigo bottom-right) fading
-       into a near-black navy base - replaces the flat dim-scrim this used to need when the
-       modal floated as a small card over visible app content behind it. Now that it's always
-       fullscreen (see .modal's own comment), nothing behind it is visible anyway, so this is
-       purely about not looking like a blank black screen on someone's very first launch,
-       before there's any hero/library content mounted behind it to look at. .modal's own
-       glass-panel blur sits on top and picks this up via backdrop-filter (saturate(1.6)
-       there actually helps this look more vivid, not less), which is what turns it into a
-       soft frosted glow rather than a hard-edged gradient. */
-    background: radial-gradient(ellipse 90% 60% at 12% 8%, rgba(41, 121, 197, 0.2) 0%, transparent 60%), radial-gradient(ellipse 90% 60% at 88% 100%, rgba(24, 55, 130, 0.1) 0%, transparent 60%), #05070d;
+    overflow: hidden;
+    background: #05070d;
     display: none;
+}
+
+/* Mockup background lives on ::before/::after (not .overlay itself) so the flicker
+   animations only ever touch the image layers, never the .modal glass panel stacked above
+   them - filters/opacity on .overlay would otherwise wash out the logo/text too.
+
+   Two independently-timed animations (5s on the image's filter, 3.7s on the glow's
+   opacity - a deliberately non-round ratio) rather than one: layering two short irregular
+   loops of different length reads as an aperiodic candle flicker even though each one
+   individually just repeats on its own clock - they only re-align every ~18.5s, well past
+   the point a viewer is consciously tracking the cycle. A single smooth animation read as
+   "breathing", not flicker, however large the swing. */
+.overlay::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: url("./assets/signin-bg.png") center / cover no-repeat;
+    animation: signin-bg-flicker-image 8s ease-in-out infinite;
+    z-index: 0;
+}
+
+/* Warm amber glow, blended over the image, is what actually sells "candle-light" - flame
+   light is a pulsing warm source, not just the whole scene's contrast changing. Blended via
+   soft-light so it reads as light falling on the image rather than a flat tinted layer. */
+.overlay::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: radial-gradient(ellipse 70% 60% at 50% 42%, rgba(255, 170, 80, 0.55) 0%, rgba(255, 130, 40, 0.22) 45%, transparent 75%);
+    mix-blend-mode: soft-light;
+    animation: signin-bg-flicker-glow 6s ease-in-out infinite;
+    z-index: 0;
+}
+
+@keyframes signin-bg-flicker-image {
+    0%, 100% { filter: brightness(1) contrast(1) saturate(1.05); }
+    8%       { filter: brightness(0.98) contrast(1.015) saturate(1.065); }
+    17%      { filter: brightness(1.025) contrast(0.99) saturate(1.025); }
+    24%      { filter: brightness(0.985) contrast(1.02) saturate(1.075); }
+    33%      { filter: brightness(1.03) contrast(1.005) saturate(1.055); }
+    42%      { filter: brightness(0.975) contrast(1.025) saturate(1.05); }
+    55%      { filter: brightness(1.02) contrast(0.995) saturate(1.07); }
+    63%      { filter: brightness(0.985) contrast(1.015) saturate(1.025); }
+    74%      { filter: brightness(1.02) contrast(1.01) saturate(1.055); }
+    86%      { filter: brightness(0.98) contrast(1.02) saturate(1.065); }
+    94%      { filter: brightness(1.01) contrast(0.995) saturate(1.05); }
+}
+
+@keyframes signin-bg-flicker-glow {
+    0%, 100% { opacity: 0.5; }
+    6%       { opacity: 0.56; }
+    13%      { opacity: 0.46; }
+    21%      { opacity: 0.54; }
+    29%      { opacity: 0.59; }
+    37%      { opacity: 0.47; }
+    46%      { opacity: 0.55; }
+    58%      { opacity: 0.45; }
+    67%      { opacity: 0.57; }
+    78%      { opacity: 0.48; }
+    89%      { opacity: 0.525; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .overlay::before,
+    .overlay::after {
+        animation: none;
+    }
 }
 
 
@@ -38,6 +97,7 @@
     padding: calc(30px + var(--safe-top)) 26px calc(26px + var(--safe-bottom));
     text-align: center;
     position: relative;
+    z-index: 1;
     display: flex;
     flex-direction: column;
     align-items: center;

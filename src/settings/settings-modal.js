@@ -109,7 +109,10 @@ class StreamingSettingsModal extends PrismModalElement {
                 <div class="plex-server-card">
                   <div class="plex-server-info">
                     <span class="plex-server-dot"></span>
-                    <div class="status plex-server-status"></div>
+                    <div class="plex-server-text">
+                      <div class="plex-server-name"></div>
+                      <div class="plex-server-url"></div>
+                    </div>
                   </div>
                   <button type="button" class="btn btn-secondary btn-reauth">Reauthenticate</button>
                 </div>
@@ -505,8 +508,10 @@ class StreamingSettingsModal extends PrismModalElement {
   async open() {
     const config = loadPlain();
     this._plexUrl = config.plex_url || "";
-    this._el(".plex-server-status").textContent = this._plexUrl ? `Connected — ${this._plexUrl}` : "Not connected.";
-    this._el(".plex-server-status").className = this._plexUrl ? "status plex-server-status ok" : "status plex-server-status err";
+    const connectedServerName = (config.servers || []).find((sv) => sv.url === this._plexUrl)?.name || "";
+    this._el(".plex-server-name").textContent = this._plexUrl ? connectedServerName || "Connected" : "Not connected";
+    this._el(".plex-server-name").className = this._plexUrl ? "plex-server-name ok" : "plex-server-name err";
+    this._el(".plex-server-url").textContent = this._plexUrl;
     this._el(".f-ai-cadence").value = String(config.ai_rows_cadence_ms || 604800000);
     this._defaultView = config.default_view || "home";
     this._el(".f-max-genre-rows").value = config.max_genre_rows ?? 12;
@@ -660,10 +665,12 @@ class StreamingSettingsModal extends PrismModalElement {
           <span class="section-row-title">Home</span>
           <span class="section-row-server">Everything, across every server</span>
         </div>
-        <label class="default-radio">
-          <input type="radio" name="default-view" class="default-view-radio" value="home" data-nav-group="home-row" ${this._defaultView === "home" ? "checked" : ""} ${this._homeEnabled === false ? "disabled" : ""} />
-          <span>Default</span>
-        </label>
+        <div class="section-row-controls">
+          <label class="default-radio">
+            <input type="radio" name="default-view" class="default-view-radio" value="home" data-nav-group="home-row" ${this._defaultView === "home" ? "checked" : ""} ${this._homeEnabled === false ? "disabled" : ""} />
+            <span>Default</span>
+          </label>
+        </div>
       </div>
       <div class="section-row movies-row">
         <label class="switch">
@@ -674,10 +681,12 @@ class StreamingSettingsModal extends PrismModalElement {
           <span class="section-row-title">Movies</span>
           <span class="section-row-server">Every enabled movie library, across every server</span>
         </div>
-        <label class="default-radio">
-          <input type="radio" name="default-view" class="default-view-radio" value="movies" data-nav-group="movies-row" ${this._defaultView === "movies" ? "checked" : ""} ${this._moviesEnabled === false ? "disabled" : ""} />
-          <span>Default</span>
-        </label>
+        <div class="section-row-controls">
+          <label class="default-radio">
+            <input type="radio" name="default-view" class="default-view-radio" value="movies" data-nav-group="movies-row" ${this._defaultView === "movies" ? "checked" : ""} ${this._moviesEnabled === false ? "disabled" : ""} />
+            <span>Default</span>
+          </label>
+        </div>
       </div>
       <div class="section-row tv-row">
         <label class="switch">
@@ -688,10 +697,12 @@ class StreamingSettingsModal extends PrismModalElement {
           <span class="section-row-title">TV Shows</span>
           <span class="section-row-server">Every enabled TV library, across every server</span>
         </div>
-        <label class="default-radio">
-          <input type="radio" name="default-view" class="default-view-radio" value="tv" data-nav-group="tv-row" ${this._defaultView === "tv" ? "checked" : ""} ${this._tvEnabled === false ? "disabled" : ""} />
-          <span>Default</span>
-        </label>
+        <div class="section-row-controls">
+          <label class="default-radio">
+            <input type="radio" name="default-view" class="default-view-radio" value="tv" data-nav-group="tv-row" ${this._defaultView === "tv" ? "checked" : ""} ${this._tvEnabled === false ? "disabled" : ""} />
+            <span>Default</span>
+          </label>
+        </div>
       </div>`;
     const serverGroupsHtml = this._servers
       .map((sv) => {
@@ -714,15 +725,17 @@ class StreamingSettingsModal extends PrismModalElement {
               <input type="text" class="s-label" data-nav-group="section-row-${i}" value="${escapeHtml(s.label)}" />
               <span class="section-row-server">${escapeHtml(sv.name)}</span>
             </div>
-            <span class="type-badge">${s.type === 1 ? "Movies" : "TV"}</span>
-            <label class="tab-toggle">
-              <input type="checkbox" class="s-show-tab" data-nav-group="section-row-${i}" ${s.show_tab ? "checked" : ""} ${s.enabled === false ? "disabled" : ""} />
-              <span>Tab</span>
-            </label>
-            <label class="default-radio">
-              <input type="radio" name="default-view" class="default-view-radio" value="${escapeHtml(view)}" data-nav-group="section-row-${i}" ${this._defaultView === view ? "checked" : ""} ${usableAsDefault ? "" : "disabled"} />
-              <span>Default</span>
-            </label>
+            <div class="section-row-controls">
+              <span class="type-badge">${s.type === 1 ? "Movies" : "TV"}</span>
+              <label class="tab-toggle">
+                <input type="checkbox" class="s-show-tab" data-nav-group="section-row-${i}" ${s.show_tab ? "checked" : ""} ${s.enabled === false ? "disabled" : ""} />
+                <span>Tab</span>
+              </label>
+              <label class="default-radio">
+                <input type="radio" name="default-view" class="default-view-radio" value="${escapeHtml(view)}" data-nav-group="section-row-${i}" ${this._defaultView === view ? "checked" : ""} ${usableAsDefault ? "" : "disabled"} />
+                <span>Default</span>
+              </label>
+            </div>
           </div>`;
           })
           .join("");
@@ -742,14 +755,16 @@ class StreamingSettingsModal extends PrismModalElement {
               <span class="section-row-title">${escapeHtml(sv.name)}</span>
               <span class="section-row-server">All libraries on this server</span>
             </div>
-            <label class="tab-toggle">
-              <input type="checkbox" class="sv-show-tab" data-nav-group="server-row-${escapeHtml(sv.id)}" ${sv.show_tab ? "checked" : ""} ${sv.all_enabled === false ? "disabled" : ""} />
-              <span>Tab</span>
-            </label>
-            <label class="default-radio">
-              <input type="radio" name="default-view" class="default-view-radio" value="${escapeHtml(serverView)}" data-nav-group="server-row-${escapeHtml(sv.id)}" ${this._defaultView === serverView ? "checked" : ""} ${serverUsableAsDefault ? "" : "disabled"} />
-              <span>Default</span>
-            </label>
+            <div class="section-row-controls">
+              <label class="tab-toggle">
+                <input type="checkbox" class="sv-show-tab" data-nav-group="server-row-${escapeHtml(sv.id)}" ${sv.show_tab ? "checked" : ""} ${sv.all_enabled === false ? "disabled" : ""} />
+                <span>Tab</span>
+              </label>
+              <label class="default-radio">
+                <input type="radio" name="default-view" class="default-view-radio" value="${escapeHtml(serverView)}" data-nav-group="server-row-${escapeHtml(sv.id)}" ${this._defaultView === serverView ? "checked" : ""} ${serverUsableAsDefault ? "" : "disabled"} />
+                <span>Default</span>
+              </label>
+            </div>
           </div>
           ${rowsHtml}
         </div>`;

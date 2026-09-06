@@ -481,29 +481,41 @@ input.nav-text-highlight {
     box-shadow: 0 0 0 3px rgba(var(--color-fg-rgb), 0.06);
 }
 
-.plex-server-card:has(.plex-server-status.ok) .plex-server-dot {
+.plex-server-card:has(.plex-server-name.ok) .plex-server-dot {
     background: var(--color-success);
     box-shadow: 0 0 0 3px rgba(var(--color-success-rgb), 0.18);
 }
 
-.plex-server-card:has(.plex-server-status.err) .plex-server-dot {
+.plex-server-card:has(.plex-server-name.err) .plex-server-dot {
     background: var(--color-danger);
     box-shadow: 0 0 0 3px rgba(var(--color-danger-rgb), 0.18);
 }
 
-.plex-server-status {
-    margin-top: 0;
-    min-height: 0;
-    font-size: 12.5px;
-    font-family: "Roboto Mono", "Consolas", monospace;
-    font-weight: 500;
+.plex-server-text {
+    min-width: 0;
+}
+
+.plex-server-name {
+    font-size: 14px;
+    font-weight: 600;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
 }
 
-.plex-server-status.ok {
-    color: rgba(var(--color-fg-rgb), 0.8);
+.plex-server-name.err {
+    color: rgba(var(--color-fg-rgb), 0.6);
+    font-weight: 500;
+}
+
+.plex-server-url {
+    margin-top: 1px;
+    font-size: 11.5px;
+    font-family: "Roboto Mono", "Consolas", monospace;
+    color: rgba(var(--color-fg-rgb), 0.5);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .plex-server-card .btn-reauth {
@@ -514,7 +526,8 @@ input.nav-text-highlight {
     .plex-server-card {
         flex-wrap: wrap;
     }
-    .plex-server-status {
+    .plex-server-name,
+    .plex-server-url {
         white-space: normal;
         overflow-wrap: anywhere;
     }
@@ -654,6 +667,28 @@ input.nav-text-highlight {
     background: rgba(var(--color-fg-rgb), 0.08);
 }
 
+.section-row-controls {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex: none;
+}
+
+@media (max-width: 700px) {
+    .section-row {
+        flex-wrap: wrap;
+        row-gap: 8px;
+    }
+    .section-row-controls {
+        flex-basis: 100%;
+        justify-content: flex-end;
+        flex-wrap: wrap;
+    }
+    .section-row input[type="text"] {
+        min-width: 0;
+    }
+}
+
 .row-2col {
     display: grid;
     grid-template-columns: 1fr 1fr;
@@ -667,9 +702,17 @@ input.nav-text-highlight {
     padding: 0 28px;
     margin-bottom: 4px;
     border-bottom: 1px solid rgba(var(--color-fg-rgb), 0.08);
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;
+}
+
+.tabs::-webkit-scrollbar {
+    display: none;
 }
 
 .tab-btn {
+    flex: none;
     border: none;
     background: transparent;
     color: rgba(var(--color-fg-rgb), 0.55);
