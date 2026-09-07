@@ -549,8 +549,10 @@ input.nav-text-highlight {
     padding: 10px 12px;
 }
 
-.section-row input[type="text"] {
-    padding: 6px 10px;
+.section-row-title-line {
+    display: flex;
+    align-items: center;
+    gap: 8px;
 }
 
 .section-row .type-badge {
@@ -564,9 +566,8 @@ input.nav-text-highlight {
     padding: 2px 6px;
 }
 
-/* Shared by every row's label column, whether it's an editable library-name input (with
-   a server-name caption below it) or a plain title+caption pair (Home/a server's own
-   "All" row, neither of which is user-renamable). */
+/* Shared by every row's label column - a title (paired with a type badge for an
+   individual library, via .section-row-title-line) over a server-name caption. */
 
 .section-row-main {
     flex: 1;
@@ -588,46 +589,6 @@ input.nav-text-highlight {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-}
-
-.default-radio, .tab-toggle {
-    display: flex;
-    align-items: center;
-    gap: 5px;
-    flex: none;
-    margin: 0;
-    font-size: 10.5px;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.03em;
-    color: rgba(var(--color-fg-rgb), 0.4);
-    cursor: pointer;
-    white-space: nowrap;
-}
-
-.default-radio input[type="radio"], .tab-toggle input[type="checkbox"] {
-    margin: 0;
-    width: 14px;
-    height: 14px;
-    accent-color: var(--color-accent);
-    cursor: pointer;
-}
-
-.default-radio input[type="radio"]:disabled, .tab-toggle input[type="checkbox"]:disabled {
-    cursor: default;
-}
-
-.default-radio input[type="radio"]:disabled+span, .tab-toggle input[type="checkbox"]:disabled+span {
-    opacity: 0.4;
-}
-
-.section-row:has(.default-view-radio:checked) {
-    outline: 2px solid var(--color-accent);
-    outline-offset: -1px;
-}
-
-.section-row:has(.default-view-radio:checked) .default-radio {
-    color: var(--color-accent);
 }
 
 .home-row, .movies-row, .tv-row {
@@ -667,26 +628,83 @@ input.nav-text-highlight {
     background: rgba(var(--color-fg-rgb), 0.08);
 }
 
-.section-row-controls {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    flex: none;
+/* Wraps a section-row together with its (optional) section-drawer so the two read as
+   one grouped object - a border that only appears while the drawer's open, rather than
+   a row with a detached panel floating below it. Home/Movies/TV rows have no drawer and
+   so are never wrapped in one of these. */
+
+.section-item {
+    border-radius: 9px;
+    border: 1px solid transparent;
+    overflow: hidden;
+    transition: border-color 0.15s ease;
 }
 
-@media (max-width: 700px) {
-    .section-row {
-        flex-wrap: wrap;
-        row-gap: 8px;
-    }
-    .section-row-controls {
-        flex-basis: 100%;
-        justify-content: flex-end;
-        flex-wrap: wrap;
-    }
-    .section-row input[type="text"] {
-        min-width: 0;
-    }
+.section-item:has(.section-drawer:not([hidden])) {
+    border-color: rgba(var(--color-accent-rgb), 0.35);
+}
+
+/* The row keeps its own background/radius when standalone (Home/Movies/TV); once
+   wrapped in a .section-item, the wrapper owns the shape instead so an open drawer's
+   flat top edge doesn't fight the row's own rounded bottom corners. */
+
+.section-item .section-row {
+    border-radius: 0;
+}
+
+.section-expand-btn {
+    flex: none;
+    width: 28px;
+    height: 28px;
+    border-radius: 7px;
+    border: none;
+    background: transparent;
+    color: rgba(var(--color-fg-rgb), 0.55);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.section-expand-btn:hover {
+    background: rgba(var(--color-fg-rgb), 0.08);
+    color: var(--color-fg);
+}
+
+.section-expand-btn:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+}
+
+.section-expand-btn svg {
+    width: 14px;
+    height: 14px;
+    transition: transform 0.15s ease;
+}
+
+.section-expand-btn.is-open svg {
+    transform: rotate(180deg);
+}
+
+.section-drawer {
+    padding: 14px 12px 16px;
+    background: rgba(var(--color-shadow-rgb), 0.18);
+    border-top: 1px solid rgba(var(--color-fg-rgb), 0.08);
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+
+/* Author `display` on the same element always beats the UA [hidden] stylesheet rule
+   (cascade origin, not specificity) - without this, setting display:flex above silently
+   defeats the `hidden` attribute the expand button toggles, and the drawer never
+   actually closes. */
+.section-drawer[hidden] {
+    display: none;
+}
+
+.section-drawer .field {
+    margin-bottom: 0;
 }
 
 .row-2col {

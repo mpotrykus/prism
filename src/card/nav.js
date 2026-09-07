@@ -84,13 +84,15 @@ export function wireNavItem(card, el) {
    server" tab per server whose own show_tab is set, then that server's own libraries whose
    own show_tab is set (subtitled with the server's name so a library tab reads
    unambiguously once more than one server is in play) - repeated per server, in discovery
-   order. A server/library that's enabled (feeds Home/Movies/TV Shows via all_enabled/
-   enabled) but not show_tab still has no tab of its own - see sectionsForView (data.js),
-   which filters on `enabled`/`all_enabled`, not `show_tab`; this is what lets a user with
-   several servers collapse the nav down to just Home/Movies/TV Shows while every server
-   still feeds them. A section whose server was never (re-)discovered this session (a
-   config saved before this app tracked servers, or a server that's since vanished from
-   the account) still gets a tab, just without a subtitle. */
+   order. A library that's enabled (feeds Home/Movies/TV Shows) but not show_tab still has
+   no tab of its own - see sectionsForView (data.js), which filters on `enabled`, not
+   `show_tab`; this is what lets a user with several servers collapse the nav down to just
+   Home/Movies/TV Shows while every server still feeds them. There's no server-level
+   "enabled" flag gating a server's own tab - a server's own libraries are what feed Home/
+   Movies/TV Shows (see data.js's activeServers), independent of whether its combined
+   "All libraries" tab is shown. A section whose server was never (re-)discovered this
+   session (a config saved before this app tracked servers, or a server that's since
+   vanished from the account) still gets a tab, just without a subtitle. */
 function buildNavTabs(card) {
   const servers = card._config.servers || [];
   const sections = card._config.sections || [];
@@ -100,7 +102,7 @@ function buildNavTabs(card) {
   const seenServerIds = new Set();
   for (const sv of servers) {
     seenServerIds.add(sv.id);
-    if (sv.all_enabled !== false && sv.show_tab) tabs.push({ view: `server-${sv.id}`, label: sv.name, sublabel: "" });
+    if (sv.show_tab) tabs.push({ view: `server-${sv.id}`, label: sv.name, sublabel: "" });
     for (const s of sections.filter((x) => x.server_id === sv.id && x.show_tab)) {
       tabs.push({ view: `section-${sv.id}:${s.key}`, label: s.label, sublabel: sv.name });
     }

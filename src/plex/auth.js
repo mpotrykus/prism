@@ -228,7 +228,7 @@ export async function plexGetJson(url, token, path) {
    Shared by the sign-in flow (signin-modal.js - a fresh sign-in should land with
    everything already browsable, not require a manual trip to Settings) and Settings'
    own "refresh servers" flow, which passes prevServers/prevSections so a re-discovery
-   preserves whatever enabled/label/all_enabled toggles the user already set instead of
+   preserves whatever enabled/label/show_tab toggles the user already set instead of
    resetting them every time. */
 export async function discoverLibraries(accountToken, { prevServers = [], prevSections = [] } = {}) {
   const discovered = await discoverServers(accountToken);
@@ -265,14 +265,15 @@ export async function discoverLibraries(accountToken, { prevServers = [], prevSe
         sourceTitle: d.sourceTitle || "",
         url: uri,
         token: d.accessToken,
-        /* Defaults to fully on for a newly-discovered server (confirmed with the user:
-           a friend sharing a library should show up right away, not require an opt-in
-           per library first). */
-        all_enabled: prevServer ? prevServer.all_enabled !== false : true,
-        /* Unlike all_enabled above, a newly-discovered server defaults to NOT having its own
-           "All libraries on this server" tab - same show_tab convention as an individual
-           library (see below) - so a multi-server account starts collapsed to just Home/
-           Movies/TV Shows instead of one tab per server on top of those three. */
+        /* A newly-discovered server defaults to NOT having its own "All libraries on this
+           server" tab - same show_tab convention as an individual library (see below) - so
+           a multi-server account starts collapsed to just Home/Movies/TV Shows instead of
+           one tab per server on top of those three. There's no separate server-level
+           "enabled" flag: a server's own libraries default to fully on individually
+           (confirmed with the user - a friend sharing a library should show up right away,
+           not require an opt-in per library first), which is also what actually gates
+           whether the server contributes to Home/Movies/TV Shows - see data.js's
+           activeServers. */
         show_tab: prevServer ? prevServer.show_tab === true : false,
       };
       const sections = [];

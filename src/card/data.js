@@ -34,14 +34,16 @@ export function serverForSection(card, section) {
   return (section?.server_id && serverById(card, section.server_id)) || primaryServer(card);
 }
 
-/* A server contributes to Home/on-deck/history/playlists once the user has turned
-   anything on for it - its own "All" toggle, or at least one individual library. A
-   freshly-discovered, still-untouched server contributes nothing (though per the
-   default-on behavior in settings.js, that's a transient state, not the normal case). */
+/* A server contributes to Home/on-deck/history/playlists once at least one of its own
+   libraries is enabled - there's no separate server-level "enabled" flag (a server's own
+   "All libraries" tab is purely a show_tab convenience, see nav.js's buildNavTabs, and
+   never gated anything on its own). A freshly-discovered, still-untouched server
+   contributes nothing (though per the default-on behavior in settings.js, that's a
+   transient state, not the normal case). */
 export function activeServers(card) {
   const servers = card._config.servers || [];
   const sections = card._config.sections || [];
-  return servers.filter((sv) => sv.all_enabled || sections.some((s) => s.server_id === sv.id && s.enabled !== false));
+  return servers.filter((sv) => sections.some((s) => s.server_id === sv.id && s.enabled !== false));
 }
 
 /* GETs a prebuilt Plex URL and unwraps MediaContainer.Metadata, treating any failure -

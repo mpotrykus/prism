@@ -55,6 +55,7 @@ const ICONS = {
     hdr: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4.5" fill="none" stroke="currentColor" stroke-width="1.6"/><line x1="12" y1="2" x2="12" y2="5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><line x1="12" y1="19" x2="12" y2="22" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><line x1="2" y1="12" x2="5" y2="12" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><line x1="19" y1="12" x2="22" y2="12" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><line x1="4.9" y1="4.9" x2="7" y2="7" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><line x1="17" y1="17" x2="19.1" y2="19.1" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><line x1="4.9" y1="19.1" x2="7" y2="17" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><line x1="17" y1="7" x2="19.1" y2="4.9" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>',
     cache: '<svg viewBox="0 0 24 24"><path d="M20 8a8 8 0 10-1.5 9" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><path d="M20 3v5h-5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>',
     rows: '<svg viewBox="0 0 24 24"><rect x="3" y="4.5" width="18" height="4" rx="1.2" fill="none" stroke="currentColor" stroke-width="1.6"/><rect x="3" y="10" width="18" height="4" rx="1.2" fill="none" stroke="currentColor" stroke-width="1.6"/><rect x="3" y="15.5" width="18" height="4" rx="1.2" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>',
+    chevron: '<svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>',
 };
 
 /* Static (non-genre, non-AI) home rows a user can individually hide from Preferences ->
@@ -123,6 +124,11 @@ class StreamingSettingsModal extends PrismModalElement {
                 <button type="button" class="btn btn-secondary btn-fetch-libraries">Discover Libraries</button>
                 <div class="hint">Finds every server on your account, including ones friends have shared with you, and lists their libraries below.</div>
                 <div class="status fetch-status"></div>
+                <div class="field default-view-field">
+                  <label>Opens to</label>
+                  <select class="default-view-select"></select>
+                  <div class="hint">Only what's on and has its own tab shows up here.</div>
+                </div>
                 <div class="section-list"></div>
               </section>
             </div>
@@ -343,17 +349,32 @@ class StreamingSettingsModal extends PrismModalElement {
     [".f-openrouter-key", ".f-opensubtitles-username", ".f-opensubtitles-password", ".f-opensubtitles-key"].forEach((sel) =>
       this._el(sel).addEventListener("input", () => this._scheduleSave(true))
     );
-    /* Delegated on .section-list itself (not the individual radios/checkboxes) since
-       those are torn down and rebuilt by every _renderSectionList() call - the container
-       div is the one element in this area that survives across renders. Covers every
-       control in that list (home/movies/tv toggles, per-server, per-section, default-view
-       radios, label text) with one listener rather than rewiring on each render. */
+    /* Delegated on .section-list itself (not the individual checkboxes) since those are
+       torn down and rebuilt by every _renderSectionList() call - the container div is the
+       one element in this area that survives across renders. Covers every control in that
+       list (home/movies/tv toggles, per-server, per-section, tab toggles) with one
+       listener rather than rewiring on each render. Whatever changed, the "Opens to"
+       options are only ever built from this same enabled/show_tab state, so they're
+       rebuilt unconditionally rather than trying to enumerate which changes matter. */
     this._el(".section-list").addEventListener("change", (e) => {
-      if (e.target.classList.contains("default-view-radio")) this._defaultView = e.target.value;
+      this._renderDefaultViewOptions();
       this._scheduleSave();
     });
     this._el(".section-list").addEventListener("input", (e) => {
-      if (e.target.classList.contains("s-label")) this._scheduleSave(true);
+      if (e.target.classList.contains("s-label")) {
+        const row = e.target.closest(".section-item")?.querySelector(".section-row-title");
+        if (row) row.textContent = e.target.value;
+        /* The per-row listener wired in _renderSectionList (attached directly on this
+           input) already updated this._sections[i].label by the time this delegated
+           listener sees the bubbled event, so the option label rebuilt here reflects the
+           rename immediately instead of going stale until some other control changes. */
+        this._renderDefaultViewOptions();
+        this._scheduleSave(true);
+      }
+    });
+    this._el(".default-view-select").addEventListener("change", (e) => {
+      this._defaultView = e.target.value;
+      this._scheduleSave();
     });
     this.shadowRoot.querySelectorAll(".tab-btn").forEach((btn) => {
       btn.addEventListener("click", () => this._switchTab(btn.dataset.tab));
@@ -377,8 +398,8 @@ class StreamingSettingsModal extends PrismModalElement {
     wireLinearNav(
       this.shadowRoot,
       ".modal-close, .tab-btn, .btn-reauth, .btn-fetch-libraries, .home-enabled, .movies-enabled, .tv-enabled, " +
-        ".server-all-row .sv-enabled, .server-all-row .sv-show-tab, " +
-        ".section-row .s-enabled, .section-row .s-show-tab, .section-row .s-label, .section-row .default-view-radio, " +
+        ".default-view-select, .section-row .s-enabled, .section-row .section-expand-btn, " +
+        ".section-drawer .sv-show-tab, .section-drawer .s-show-tab, .section-drawer .s-label, " +
         ".f-trailers-enabled, .f-title-trailers-enabled, .f-ai-enabled, .f-openrouter-key, .f-subtitle-provider, " +
         ".f-opensubtitles-username, .f-opensubtitles-password, .f-opensubtitles-key, " +
         ".f-ai-cadence, .f-max-genre-rows, .f-row-size, " +
@@ -597,7 +618,7 @@ class StreamingSettingsModal extends PrismModalElement {
   /* Discovers every server on the signed-in account - the owned one plus any a friend
      has shared - not just the single server the app originally connected to. Re-running
      this later re-probes connections and re-lists libraries but preserves every
-     existing enabled/label/all_enabled toggle (see plex/auth.js's discoverLibraries,
+     existing enabled/label/show_tab toggle (see plex/auth.js's discoverLibraries,
      shared with the sign-in flow which now runs this same discovery automatically). */
   async _fetchLibraries() {
     const statusEl = this._el(".fetch-status");
@@ -633,14 +654,21 @@ class StreamingSettingsModal extends PrismModalElement {
 
   /* Renders, in order: a top "Home" toggle (everything, across every server - mirrors
      nav.js's static Home tab), then one group per discovered server, each with its own
-     "All" toggle (everything on just that server, tab titled with the server's own
-     name) followed by that server's individual libraries, each subtitled with the
-     server it's from. All three levels are independent checkboxes, not a single picker -
-     see nav.js's renderNavSections for how each one turns into an actual nav tab. */
+     "All" row (everything on just that server, combined into one tab titled with the
+     server's own name) followed by that server's individual libraries, each subtitled
+     with the server it's from. A server's own row has no separate enable toggle - unlike
+     a library, it never actually gated anything on its own (see data.js's activeServers/
+     nav.js's buildNavTabs), so it's just "combine into one tab", tucked behind the same
+     expand affordance as every library row for consistency. Rename and "show as its own
+     tab" live behind that same tap-to-expand .section-drawer, grouped with their row by
+     .section-item; the "Default" choice used to be a radio repeated on every row here but
+     is now the single top-level "Opens to" picker (see _renderDefaultViewOptions), built
+     from exactly the same enabled/show_tab state this method renders. */
   _renderSectionList() {
     const list = this._el(".section-list");
     if (!this._servers.length) {
       list.innerHTML = "";
+      this._renderDefaultViewOptions();
       return;
     }
     const sectionsByServer = new Map();
@@ -648,13 +676,6 @@ class StreamingSettingsModal extends PrismModalElement {
       if (!sectionsByServer.has(s.server_id)) sectionsByServer.set(s.server_id, []);
       sectionsByServer.get(s.server_id).push(i);
     });
-    /* Radio "Default" - one per row (Home/server-All/library), all sharing name=
-       "default-view" so the browser's own native radio-group behavior (checking one
-       unchecks the rest) does the mutual-exclusion work - see nav.js's buildNavTabs for
-       why these exact view-key strings ("home"/"server-<id>"/"section-<id>:<key>") are
-       what card.js's _currentView expects. A disabled row's radio is
-       disabled too (can't be the default if it won't even be a tab); _reconcileDefaultView
-       below moves the selection off a row the instant its own toggle turns it off. */
     const homeHtml = `
       <div class="section-row home-row">
         <label class="switch">
@@ -664,12 +685,6 @@ class StreamingSettingsModal extends PrismModalElement {
         <div class="section-row-main">
           <span class="section-row-title">Home</span>
           <span class="section-row-server">Everything, across every server</span>
-        </div>
-        <div class="section-row-controls">
-          <label class="default-radio">
-            <input type="radio" name="default-view" class="default-view-radio" value="home" data-nav-group="home-row" ${this._defaultView === "home" ? "checked" : ""} ${this._homeEnabled === false ? "disabled" : ""} />
-            <span>Default</span>
-          </label>
         </div>
       </div>
       <div class="section-row movies-row">
@@ -681,12 +696,6 @@ class StreamingSettingsModal extends PrismModalElement {
           <span class="section-row-title">Movies</span>
           <span class="section-row-server">Every enabled movie library, across every server</span>
         </div>
-        <div class="section-row-controls">
-          <label class="default-radio">
-            <input type="radio" name="default-view" class="default-view-radio" value="movies" data-nav-group="movies-row" ${this._defaultView === "movies" ? "checked" : ""} ${this._moviesEnabled === false ? "disabled" : ""} />
-            <span>Default</span>
-          </label>
-        </div>
       </div>
       <div class="section-row tv-row">
         <label class="switch">
@@ -696,12 +705,6 @@ class StreamingSettingsModal extends PrismModalElement {
         <div class="section-row-main">
           <span class="section-row-title">TV Shows</span>
           <span class="section-row-server">Every enabled TV library, across every server</span>
-        </div>
-        <div class="section-row-controls">
-          <label class="default-radio">
-            <input type="radio" name="default-view" class="default-view-radio" value="tv" data-nav-group="tv-row" ${this._defaultView === "tv" ? "checked" : ""} ${this._tvEnabled === false ? "disabled" : ""} />
-            <span>Default</span>
-          </label>
         </div>
       </div>`;
     const serverGroupsHtml = this._servers
@@ -713,57 +716,59 @@ class StreamingSettingsModal extends PrismModalElement {
         const rowsHtml = indices
           .map((i) => {
             const s = this._sections[i];
-            const view = `section-${sv.id}:${s.key}`;
-            const usableAsDefault = s.enabled !== false && s.show_tab === true;
             return `
-          <div class="section-row" data-index="${i}">
+        <div class="section-item" data-index="${i}">
+          <div class="section-row">
             <label class="switch">
               <input type="checkbox" class="s-enabled" data-nav-group="section-row-${i}" ${s.enabled !== false ? "checked" : ""} />
               <span class="switch-track"></span>
             </label>
             <div class="section-row-main">
-              <input type="text" class="s-label" data-nav-group="section-row-${i}" value="${escapeHtml(s.label)}" />
+              <div class="section-row-title-line">
+                <span class="section-row-title">${escapeHtml(s.label)}</span>
+                <span class="type-badge">${s.type === 1 ? "Movies" : "TV"}</span>
+              </div>
               <span class="section-row-server">${escapeHtml(sv.name)}</span>
             </div>
-            <div class="section-row-controls">
-              <span class="type-badge">${s.type === 1 ? "Movies" : "TV"}</span>
-              <label class="tab-toggle">
-                <input type="checkbox" class="s-show-tab" data-nav-group="section-row-${i}" ${s.show_tab ? "checked" : ""} ${s.enabled === false ? "disabled" : ""} />
-                <span>Tab</span>
-              </label>
-              <label class="default-radio">
-                <input type="radio" name="default-view" class="default-view-radio" value="${escapeHtml(view)}" data-nav-group="section-row-${i}" ${this._defaultView === view ? "checked" : ""} ${usableAsDefault ? "" : "disabled"} />
-                <span>Default</span>
+            <button type="button" class="section-expand-btn" data-nav-group="section-row-${i}" aria-expanded="false" aria-label="More options for ${escapeHtml(s.label)}">${ICONS.chevron}</button>
+          </div>
+          <div class="section-drawer" hidden>
+            <div class="field">
+              <label>Library name</label>
+              <input type="text" class="s-label" data-nav-group="section-drawer-${i}" value="${escapeHtml(s.label)}" />
+            </div>
+            <div class="subtoggle-row">
+              <span class="subtoggle-label">Show as its own tab</span>
+              <label class="switch">
+                <input type="checkbox" class="s-show-tab" data-nav-group="section-drawer-${i}" ${s.show_tab ? "checked" : ""} ${s.enabled === false ? "disabled" : ""} />
+                <span class="switch-track"></span>
               </label>
             </div>
-          </div>`;
+          </div>
+        </div>`;
           })
           .join("");
-        const serverView = `server-${sv.id}`;
-        const serverUsableAsDefault = sv.all_enabled !== false && sv.show_tab === true;
         return `
         <div class="server-group">
           <div class="server-group-header">
             <span class="server-group-name">${escapeHtml(sv.name)}</span>${ownerHtml}
           </div>
-          <div class="section-row server-all-row" data-server="${escapeHtml(sv.id)}">
-            <label class="switch">
-              <input type="checkbox" class="sv-enabled" data-nav-group="server-row-${escapeHtml(sv.id)}" ${sv.all_enabled !== false ? "checked" : ""} />
-              <span class="switch-track"></span>
-            </label>
-            <div class="section-row-main">
-              <span class="section-row-title">${escapeHtml(sv.name)}</span>
-              <span class="section-row-server">All libraries on this server</span>
+          <div class="section-item server-all-item" data-server="${escapeHtml(sv.id)}">
+            <div class="section-row server-all-row">
+              <div class="section-row-main">
+                <span class="section-row-title">${escapeHtml(sv.name)}</span>
+                <span class="section-row-server">All libraries, combined into one tab</span>
+              </div>
+              <button type="button" class="section-expand-btn" data-nav-group="server-row-${escapeHtml(sv.id)}" aria-expanded="false" aria-label="More options for ${escapeHtml(sv.name)}">${ICONS.chevron}</button>
             </div>
-            <div class="section-row-controls">
-              <label class="tab-toggle">
-                <input type="checkbox" class="sv-show-tab" data-nav-group="server-row-${escapeHtml(sv.id)}" ${sv.show_tab ? "checked" : ""} ${sv.all_enabled === false ? "disabled" : ""} />
-                <span>Tab</span>
-              </label>
-              <label class="default-radio">
-                <input type="radio" name="default-view" class="default-view-radio" value="${escapeHtml(serverView)}" data-nav-group="server-row-${escapeHtml(sv.id)}" ${this._defaultView === serverView ? "checked" : ""} ${serverUsableAsDefault ? "" : "disabled"} />
-                <span>Default</span>
-              </label>
+            <div class="section-drawer" hidden>
+              <div class="subtoggle-row">
+                <span class="subtoggle-label">Show as its own tab</span>
+                <label class="switch">
+                  <input type="checkbox" class="sv-show-tab" data-nav-group="server-drawer-${escapeHtml(sv.id)}" ${sv.show_tab ? "checked" : ""} />
+                  <span class="switch-track"></span>
+                </label>
+              </div>
             </div>
           </div>
           ${rowsHtml}
@@ -772,87 +777,75 @@ class StreamingSettingsModal extends PrismModalElement {
       .join("");
     list.innerHTML = homeHtml + serverGroupsHtml;
 
-    list.querySelector(".home-enabled").addEventListener("change", (e) => {
-      this._homeEnabled = e.target.checked;
-      list.querySelector(".home-row .default-view-radio").disabled = !e.target.checked;
-      this._reconcileDefaultView();
-    });
-    list.querySelector(".movies-enabled").addEventListener("change", (e) => {
-      this._moviesEnabled = e.target.checked;
-      list.querySelector(".movies-row .default-view-radio").disabled = !e.target.checked;
-      this._reconcileDefaultView();
-    });
-    list.querySelector(".tv-enabled").addEventListener("change", (e) => {
-      this._tvEnabled = e.target.checked;
-      list.querySelector(".tv-row .default-view-radio").disabled = !e.target.checked;
-      this._reconcileDefaultView();
-    });
-    /* A server's "All libraries" tab can only be the default view once it's both enabled
-       and actually shown as a tab - same two-flag pattern as syncDefaultRadio below for
-       individual libraries, kept as its own copy since it reads from this._servers, not
-       this._sections. */
-    const syncServerDefaultRadio = (row, sv) => {
-      row.querySelector(".default-view-radio").disabled = sv.all_enabled === false || sv.show_tab !== true;
-    };
-    list.querySelectorAll(".server-all-row").forEach((row) => {
-      const sv = this._servers.find((s) => s.id === row.dataset.server);
-      row.querySelector(".sv-enabled").addEventListener("change", (e) => {
-        if (sv) sv.all_enabled = e.target.checked;
-        row.querySelector(".sv-show-tab").disabled = !e.target.checked;
-        if (sv) syncServerDefaultRadio(row, sv);
-        this._reconcileDefaultView();
+    /* Every expand button (server-all or library) toggles the .section-drawer that
+       follows it inside their shared .section-item - one delegated listener rather than
+       one per row, same reasoning as the change/input listeners in _wire(). */
+    list.querySelectorAll(".section-expand-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const drawer = btn.closest(".section-item").querySelector(".section-drawer");
+        const open = drawer.hidden;
+        drawer.hidden = !open;
+        btn.classList.toggle("is-open", open);
+        btn.setAttribute("aria-expanded", String(open));
       });
-      row.querySelector(".sv-show-tab").addEventListener("change", (e) => {
+    });
+
+    list.querySelector(".home-enabled").addEventListener("change", (e) => { this._homeEnabled = e.target.checked; });
+    list.querySelector(".movies-enabled").addEventListener("change", (e) => { this._moviesEnabled = e.target.checked; });
+    list.querySelector(".tv-enabled").addEventListener("change", (e) => { this._tvEnabled = e.target.checked; });
+
+    list.querySelectorAll(".server-all-item").forEach((item) => {
+      const sv = this._servers.find((s) => s.id === item.dataset.server);
+      item.querySelector(".sv-show-tab").addEventListener("change", (e) => {
         if (sv) sv.show_tab = e.target.checked;
-        if (sv) syncServerDefaultRadio(row, sv);
-        this._reconcileDefaultView();
       });
     });
-    /* A library tab can only be the default view once it's both enabled and actually
-       shown as a tab - re-derived from current in-memory state on every change to either
-       checkbox rather than toggled independently by each handler, so the two can't drift
-       out of sync with each other. */
-    const syncDefaultRadio = (row, i) => {
-      const s = this._sections[i];
-      row.querySelector(".default-view-radio").disabled = s.enabled === false || s.show_tab !== true;
-    };
-    list.querySelectorAll(".section-row[data-index]").forEach((row) => {
-      const i = Number(row.dataset.index);
-      row.querySelector(".s-enabled").addEventListener("change", (e) => {
+
+    list.querySelectorAll(".section-item[data-index]").forEach((item) => {
+      const i = Number(item.dataset.index);
+      item.querySelector(".s-enabled").addEventListener("change", (e) => {
         this._sections[i].enabled = e.target.checked;
-        row.querySelector(".s-show-tab").disabled = !e.target.checked;
-        syncDefaultRadio(row, i);
-        this._reconcileDefaultView();
+        item.querySelector(".s-show-tab").disabled = !e.target.checked;
       });
-      row.querySelector(".s-show-tab").addEventListener("change", (e) => {
+      item.querySelector(".s-show-tab").addEventListener("change", (e) => {
         this._sections[i].show_tab = e.target.checked;
-        syncDefaultRadio(row, i);
-        this._reconcileDefaultView();
       });
-      row.querySelector(".s-label").addEventListener("input", (e) => {
+      item.querySelector(".s-label").addEventListener("input", (e) => {
         this._sections[i].label = e.target.value;
       });
     });
-    this._reconcileDefaultView();
+
+    this._renderDefaultViewOptions();
   }
 
-  /* Moves the Default selection off a row the moment that row's own enable toggle turns
-     it off - a disabled row's radio can't be interacted with (see the `disabled`
-     attributes set above/inline in the change handlers), but a browser doesn't
-     auto-uncheck a radio just because it becomes disabled, so without this the
-     previously-checked-but-now-disabled radio would stay "checked" and get read back
-     as the default at Save time despite being greyed out and unreachable in the UI.
-     Prefers Home, then falls back to the first remaining enabled row. */
-  _reconcileDefaultView() {
-    const list = this._el(".section-list");
-    const checked = list.querySelector(".default-view-radio:checked");
-    if (checked && !checked.disabled) return;
-    const fallback =
-      list.querySelector(".home-row .default-view-radio:not(:disabled)") ||
-      list.querySelector(".default-view-radio:not(:disabled)");
-    if (!fallback) return;
-    fallback.checked = true;
-    this._defaultView = fallback.value;
+  /* The single "Opens to" picker replacing what used to be a "Default" radio repeated on
+     every row (Home/server-All/library) - see nav.js's buildNavTabs for why these exact
+     view-key strings ("home"/"server-<id>"/"section-<id>:<key>") are what card.js's
+     _currentView expects. Rebuilt from scratch on every relevant change (called from
+     _renderSectionList and the delegated .section-list "change" listener in _wire)
+     rather than patched in place - cheap enough for a list this size, and it means the
+     option list can never drift out of sync with the enabled/show_tab state it's built
+     from. Prefers keeping the current selection if it's still valid, else Home, else
+     whatever's first - same fallback order the old per-row reconciliation used. */
+  _renderDefaultViewOptions() {
+    const select = this._el(".default-view-select");
+    const candidates = [];
+    if (this._homeEnabled !== false) candidates.push({ value: "home", label: "Home" });
+    if (this._moviesEnabled !== false) candidates.push({ value: "movies", label: "Movies" });
+    if (this._tvEnabled !== false) candidates.push({ value: "tv", label: "TV Shows" });
+    (this._servers || []).forEach((sv) => {
+      if (sv.show_tab) candidates.push({ value: `server-${sv.id}`, label: `${sv.name} — All libraries` });
+    });
+    (this._sections || []).forEach((s) => {
+      if (s.enabled === false || !s.show_tab) return;
+      const sv = (this._servers || []).find((x) => x.id === s.server_id);
+      candidates.push({ value: `section-${s.server_id}:${s.key}`, label: sv ? `${sv.name} — ${s.label}` : s.label });
+    });
+    select.innerHTML = candidates.map((c) => `<option value="${escapeHtml(c.value)}">${escapeHtml(c.label)}</option>`).join("");
+    if (!candidates.some((c) => c.value === this._defaultView)) {
+      this._defaultView = candidates.some((c) => c.value === "home") ? "home" : candidates[0]?.value || "home";
+    }
+    select.value = this._defaultView;
   }
 
 
@@ -868,7 +861,7 @@ class StreamingSettingsModal extends PrismModalElement {
       sections: (this._sections || [])
         .filter((s) => s.enabled !== false)
         .map((s) => ({ key: s.key, type: s.type, label: s.label, server_id: s.server_id, show_tab: s.show_tab === true })),
-      default_view: this.shadowRoot.querySelector(".default-view-radio:checked")?.value || "home",
+      default_view: this._defaultView || "home",
       ai_rows_cadence_ms: Number(this._el(".f-ai-cadence").value),
       max_genre_rows: Number(this._el(".f-max-genre-rows").value) || 12,
       row_size: Number(this._el(".f-row-size").value) || 20,
