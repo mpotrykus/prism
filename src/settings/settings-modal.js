@@ -96,13 +96,16 @@ class StreamingSettingsModal extends PrismModalElement {
     this._buildShell(MODAL_STYLE, `
       <div class="overlay">
         <div class="modal">
-          <div class="modal-header">
-            <h2>Settings</h2>
-            <button type="button" class="modal-close" aria-label="Close">✕</button>
-          </div>
-          <div class="tabs">
-            ${TABS.map((t) => `<button type="button" class="tab-btn" data-tab="${t.key}" data-nav-group="tabs">${t.label}</button>`).join("")}
-          </div>
+          <aside class="sidebar">
+            <div class="sidebar-header">
+              <h2>Settings</h2>
+              <button type="button" class="modal-close" aria-label="Close">✕</button>
+            </div>
+            <nav class="sidebar-nav">
+              ${TABS.map((t) => `<button type="button" class="tab-btn" data-tab="${t.key}" data-nav-group="tabs">${t.label}</button>`).join("")}
+            </nav>
+          </aside>
+          <div class="content">
           <div class="modal-body">
             <div class="tab-panel" data-tab="plex">
               <section class="group">
@@ -315,6 +318,7 @@ class StreamingSettingsModal extends PrismModalElement {
             </div>
           </div>
           <div class="status save-status"></div>
+          </div>
         </div>
       </div>
     `);
