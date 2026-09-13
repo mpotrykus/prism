@@ -168,7 +168,7 @@ namespace PrismUwp.Player
             // constructor's `emit` parameter itself is already built to satisfy (see MainPage.xaml.cs's
             // Dispatcher.RunAsync wrapper around it), so simply forwarding through `emit` here is
             // enough; this class does not need its own dispatcher call.
-            EffectSettings.ContentAnalysis += (avgSaturation, edgeEnergy, lumaStdDev) =>
+            EffectSettings.ContentAnalysis += (avgSaturation, edgeEnergy, lumaStdDev, minLuma, maxLuma) =>
             {
                 // Real bug found and fixed 2026-08-20: this used to interpolate each value
                 // inline (`{lumaStdDev:R}`) directly inside the JSON template. The hole for
@@ -187,10 +187,18 @@ namespace PrismUwp.Player
                 // never hit this because it formats via a plain `.ToString("R")` method call,
                 // never inline interpolation - same fix applied here: format to a string
                 // first, then interpolate a bare variable with no `:format` in the hole at all.
+                // minLuma/maxLuma added on top of the original three fields - same "format to a
+                // string first, bare variable in the hole" fix, with maxLuma (now the actual
+                // last field against the closing braces) getting the exact same treatment
+                // lumaStdDev needed above.
                 string avgSaturationStr = avgSaturation.ToString("R", CultureInfo.InvariantCulture);
                 string edgeEnergyStr = edgeEnergy.ToString("R", CultureInfo.InvariantCulture);
                 string lumaStdDevStr = lumaStdDev.ToString("R", CultureInfo.InvariantCulture);
-                emit("contentAnalysis", $"{{\"avgSaturation\":{avgSaturationStr},\"edgeEnergy\":{edgeEnergyStr},\"lumaStdDev\":{lumaStdDevStr}}}");
+                string minLumaStr = minLuma.ToString("R", CultureInfo.InvariantCulture);
+                string maxLumaStr = maxLuma.ToString("R", CultureInfo.InvariantCulture);
+                emit("contentAnalysis",
+                    $"{{\"avgSaturation\":{avgSaturationStr},\"edgeEnergy\":{edgeEnergyStr},\"lumaStdDev\":{lumaStdDevStr}," +
+                    $"\"minLuma\":{minLumaStr},\"maxLuma\":{maxLumaStr}}}");
             };
             EffectSettings.AmbientColors += (top, bottom, left, right) =>
                 emit("ambientColors",
@@ -229,6 +237,19 @@ namespace PrismUwp.Player
             bool saturationAuto, bool contrastAuto)
         {
             EffectSettings.SetColorBoost(saturationEnabled, contrastEnabled, saturationStrength, contrastStrength, saturationAuto, contrastAuto);
+            SyncEffectAttachment();
+        }
+
+        /// <summary>Levels (Black Level/White Level/Gamma) - see shader-pipeline.js's
+        /// postXboxLevelsSettings. Black Level/White Level are independently auto-able (own
+        /// enabled/auto pair, same shape as SetColorBoost's saturation/contrast); Gamma has no
+        /// Auto, just its own enabled flag.</summary>
+        public void SetLevels(
+            bool blackEnabled, bool whiteEnabled, bool gammaEnabled,
+            double blackStrength, double whiteStrength, double gammaStrength,
+            bool blackAuto, bool whiteAuto)
+        {
+            EffectSettings.SetLevels(blackEnabled, whiteEnabled, gammaEnabled, blackStrength, whiteStrength, gammaStrength, blackAuto, whiteAuto);
             SyncEffectAttachment();
         }
 

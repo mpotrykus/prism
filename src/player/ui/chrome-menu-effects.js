@@ -15,9 +15,24 @@ import {
     storedShaderFamilyOverride,
     setShaderFamilyOverride,
     setAiUpscalingEnabled,
+    levelsBlackModeOf,
+    setLevelsBlackMode,
+    levelsWhiteModeOf,
+    setLevelsWhiteMode,
+    setLevelsBlack,
+    setLevelsWhite,
+    setLevelsGammaEnabled,
+    setLevelsGamma,
 } from "../shader-pipeline.js";
 import { setAmbientEnabled, setAmbientOpacity } from "../ambient-pipeline.js";
-import { fullscreenIconMarkup, colorBoostIconMarkup, ambientIconMarkup, aiUpscalingIconMarkup, versionIconMarkup } from "./shared.js";
+import {
+    fullscreenIconMarkup,
+    colorBoostIconMarkup,
+    levelsIconMarkup,
+    ambientIconMarkup,
+    aiUpscalingIconMarkup,
+    versionIconMarkup,
+} from "./shared.js";
 /* Circular with chrome-menu.js (which imports renderEffectsList from this file for its
    "Effects" row) - safe here because both sides only reference the other module's
    export from inside a function body (makeBackRow/makeToggleSwitch are only called once
@@ -63,6 +78,7 @@ export function renderEffectsList(controller, list, onBack) {
     refreshAiUpscalingCaption = buildAiUpscalingEffectRow(controller, list);
     buildShaderEffectRow(controller, list);
     buildColorBoostEffectRow(controller, list);
+    buildLevelsEffectRow(controller, list);
     buildAmbientEffectRow(controller, list);
 }
 
@@ -85,11 +101,14 @@ const MODE_OPTIONS = [
    content-analysis.js only updates every ~750ms and the panel is normally only glanced
    at, not watched.
 
-   `strips` is a list of {strengthInput, strengthLabel, getAutoValue, getManualValue, label}
-   rather than one flat set of those params - Color Boost's Saturation and Contrast are two
-   independent sliders sharing this one mode row (there's only one avgSaturation-driven auto
+   `strips` is a list of {strengthInput, strengthLabel, getAutoValue, getManualValue, label,
+   signed} rather than one flat set of those params - Color Boost's Saturation and Contrast are
+   two independent sliders sharing this one mode row (there's only one avgSaturation-driven auto
    signal, so both strips read the same getAutoValue in "auto"), while Sharpening still just
-   passes a single-entry array. */
+   passes a single-entry array. `signed` (default false) is for Levels' Black/White Level strips
+   below - their sliders are bidirectional (see buildCenteredStrengthSlider), so the auto-resolved
+   value needs the same explicit "+N%"/"-N%" formatting their own manual `input` handler uses,
+   not Sharpening/Color Boost's plain "N%". */
 function buildModeRow({ groupId, mode, onModeChange, strips }) {
     const row = document.createElement("div");
     row.className = "prism-player-segmented";
@@ -101,11 +120,13 @@ function buildModeRow({ groupId, mode, onModeChange, strips }) {
            user-driven, and "off" because there's no effect running for it to tune, same
            reasoning "off" already gets a dimmed/disabled mode button of its own. */
         const enabled = m === "on";
-        strips.forEach(({ strengthInput, strengthLabel, getAutoValue, getManualValue, label }) => {
+        strips.forEach(({ strengthInput, strengthLabel, getAutoValue, getManualValue, label, signed }) => {
             strengthInput.disabled = !enabled;
             const value = auto ? (getAutoValue() ?? 0) : getManualValue();
-            strengthInput.value = String(Math.round(value * 100));
-            strengthLabel.textContent = `${label}: ${Math.round(value * 100)}%${auto ? " (auto)" : ""}`;
+            const percent = Math.round(value * 100);
+            strengthInput.value = String(percent);
+            const formatted = signed ? (percent > 0 ? `+${percent}%` : `${percent}%`) : `${percent}%`;
+            strengthLabel.textContent = `${label}: ${formatted}${auto ? " (auto)" : ""}`;
         });
     };
 
@@ -326,6 +347,29 @@ function buildStrengthSlider(label, onChange) {
     return { strengthLabel, strengthInput };
 }
 
+/* Same shape as buildStrengthSlider above, for a bidirectional control whose 0% sits at the
+   MIDDLE of the track rather than its left edge - Levels' three sliders (see
+   buildLevelsEffectRow), where 0 is each knob's own neutral value and either direction is a
+   real, different adjustment (see shaders.js's LEVELS_TUNING). `onChange` receives -1..1. The
+   sign is written out explicitly ("+20%"/"-20%") rather than left to the number itself so 0%
+   doesn't read as bare "0%" while a positive value is the only one with no visible sign. */
+function buildCenteredStrengthSlider(label, onChange) {
+    const strengthLabel = document.createElement("div");
+    strengthLabel.className = "prism-player-slider-label";
+
+    const strengthInput = document.createElement("input");
+    strengthInput.type = "range";
+    strengthInput.min = "-100";
+    strengthInput.max = "100";
+    strengthInput.classList.add("prism-player-focusable", "prism-player-slider");
+    const formatSigned = (value) => (value > 0 ? `+${value}%` : `${value}%`);
+    strengthInput.addEventListener("input", () => {
+        strengthLabel.textContent = `${label}: ${formatSigned(Number(strengthInput.value))}`;
+        onChange(Number(strengthInput.value) / 100);
+    });
+    return { strengthLabel, strengthInput, formatSigned };
+}
+
 /* Reuses fullscreenIconMarkup's expand-corners glyph - a sharpen kernel is, visually, the same
    "stretch the picture outward" idea. The mode row + slider are the only strength-side
    controls, and dragging strength to 0% in "on" mode is what a plain "Off" used to be.
@@ -491,13 +535,22 @@ function buildAiUpscalingEffectRow(controller, list) {
 }
 
 /* One sub-control (its own title, its own Auto/On/Off mode row, its own slider) - shared by
-   buildColorBoostEffectRow's Saturation and Contrast sections below. Fully independent now:
-   each has its own enabled/auto pair and auto-derives from its own signal (avgSaturation for
-   Saturation, lumaStdDev for Contrast - see shaders.js's autoColorBoostStrength/
-   autoContrastBoostStrength), so unlike the shared-mode-row this replaced, there's nothing left
-   to couple the two through. Own groupId per section so focus-nav.js's Left/Right cycling
-   between mode buttons stays scoped to one section's own three buttons, not both. */
-function buildColorBoostComponentSection(controller, { title, groupId, modeOf, setMode, getManualValue, setStrength, getAutoValue }) {
+   buildColorBoostEffectRow's Saturation/Contrast sections and buildLevelsEffectRow's Black/White
+   Level sections below. Fully independent per section: each has its own enabled/auto pair and
+   auto-derives from its own signal (avgSaturation for Saturation, lumaStdDev for Contrast/Black
+   Level/White Level - see shaders.js's autoColorBoostStrength/autoContrastBoostStrength/
+   autoLevelsBlackStrength/autoLevelsWhiteStrength), so there's nothing left to couple sections
+   through. Own groupId per section so focus-nav.js's Left/Right cycling between mode buttons
+   stays scoped to one section's own three buttons, not both.
+
+   `signed`/`sliderBuilder` are for Levels' Black/White Level sections - bidirectional sliders
+   (see buildCenteredStrengthSlider), unlike Color Boost's plain 0-100% (buildStrengthSlider,
+   the default) - both default to Color Boost's original shape so its two call sites below are
+   unchanged. */
+function buildAutoStrengthSection(
+    controller,
+    { title, groupId, modeOf, setMode, getManualValue, setStrength, getAutoValue, signed = false, sliderBuilder = buildStrengthSlider }
+) {
     const section = document.createElement("div");
     section.className = "prism-player-effect-section";
 
@@ -508,13 +561,13 @@ function buildColorBoostComponentSection(controller, { title, groupId, modeOf, s
     titleEl.textContent = title;
     header.appendChild(titleEl);
 
-    const { strengthLabel, strengthInput } = buildStrengthSlider(title, (value) => setStrength(controller, value));
+    const { strengthLabel, strengthInput } = sliderBuilder(title, (value) => setStrength(controller, value));
 
     const { row: modeRow, refreshIfAuto } = buildModeRow({
         groupId,
         mode: modeOf(controller),
         onModeChange: (mode) => setMode(controller, mode),
-        strips: [{ strengthInput, strengthLabel, label: title, getAutoValue, getManualValue }],
+        strips: [{ strengthInput, strengthLabel, label: title, getAutoValue, getManualValue, signed }],
     });
     header.appendChild(modeRow);
 
@@ -528,14 +581,15 @@ function buildColorBoostComponentSection(controller, { title, groupId, modeOf, s
 /* Two fully independent controls now (Saturation, Contrast - each its own Auto/On/Off mode,
    previously one combined "Strength" knob under one shared mode row) rather than one shared
    Color Boost toggle - a viewer may want one boosted and not the other, or one on Auto while
-   manually dialing in the other. Unlike Android's equivalent panel, both apply live on every
-   `input` event rather than gating to release: both compiled GL programs stay resident (see
-   ensureShaderPipeline), so a strength change here is only a uniform update on the next frame,
-   not a program rebuild. */
+   manually dialing in the other. Both bidirectional (see COLOR_BOOST_TUNING's own min/mid/max
+   comment) - negative reduces saturation/contrast, positive boosts it, 0% is a true no-op.
+   Unlike Android's equivalent panel, both apply live on every `input` event rather than gating
+   to release: both compiled GL programs stay resident (see ensureShaderPipeline), so a strength
+   change here is only a uniform update on the next frame, not a program rebuild. */
 function buildColorBoostEffectRow(controller, list) {
     const { wrap } = buildEffectRow(list, { icon: colorBoostIconMarkup(), label: "Color Boost" });
 
-    wrap.appendChild(buildColorBoostComponentSection(controller, {
+    wrap.appendChild(buildAutoStrengthSection(controller, {
         title: "Saturation",
         groupId: "colorboost-saturation-mode",
         modeOf: colorBoostSaturationModeOf,
@@ -543,8 +597,10 @@ function buildColorBoostEffectRow(controller, list) {
         getManualValue: () => controller._colorBoostSaturationStrength,
         setStrength: setColorBoostSaturationStrength,
         getAutoValue: () => controller._autoColorBoostSaturationStrength,
+        signed: true,
+        sliderBuilder: buildCenteredStrengthSlider,
     }));
-    wrap.appendChild(buildColorBoostComponentSection(controller, {
+    wrap.appendChild(buildAutoStrengthSection(controller, {
         title: "Contrast",
         groupId: "colorboost-contrast-mode",
         modeOf: colorBoostContrastModeOf,
@@ -552,7 +608,82 @@ function buildColorBoostEffectRow(controller, list) {
         getManualValue: () => controller._colorBoostContrastStrength,
         setStrength: setColorBoostContrastStrength,
         getAutoValue: () => controller._autoColorBoostContrastStrength,
+        signed: true,
+        sliderBuilder: buildCenteredStrengthSlider,
     }));
+}
+
+/* Levels (Black Level/White Level/Gamma) - Black Level and White Level get the same
+   Auto|On|Off mode row Color Boost's own components use (auto-deriving from the same
+   lumaStdDev signal Contrast already samples - a flat/low-contrast frame warrants crushing
+   blacks/whites back down just as much as it warrants a contrast boost, so this reuses that
+   signal rather than inventing and calibrating a new one from scratch). Gamma gets no Auto:
+   "this frame is dark, brighten it" fights directly with intentional dark grading (night
+   scenes, horror, moody cinematography) in a way lumaStdDev-driven contrast/black-white
+   correction doesn't, so it's a plain On/Off toggle instead (see buildLevelsGammaSection). */
+function buildLevelsEffectRow(controller, list) {
+    const { wrap } = buildEffectRow(list, { icon: levelsIconMarkup(), label: "Levels" });
+
+    wrap.appendChild(buildAutoStrengthSection(controller, {
+        title: "Black Level",
+        groupId: "levels-black-mode",
+        modeOf: levelsBlackModeOf,
+        setMode: setLevelsBlackMode,
+        getManualValue: () => controller._levelsBlackStrength,
+        setStrength: setLevelsBlack,
+        getAutoValue: () => controller._autoLevelsBlackStrength,
+        signed: true,
+        sliderBuilder: buildCenteredStrengthSlider,
+    }));
+    wrap.appendChild(buildAutoStrengthSection(controller, {
+        title: "White Level",
+        groupId: "levels-white-mode",
+        modeOf: levelsWhiteModeOf,
+        setMode: setLevelsWhiteMode,
+        getManualValue: () => controller._levelsWhiteStrength,
+        setStrength: setLevelsWhite,
+        getAutoValue: () => controller._autoLevelsWhiteStrength,
+        signed: true,
+        sliderBuilder: buildCenteredStrengthSlider,
+    }));
+    wrap.appendChild(buildLevelsGammaSection(controller));
+}
+
+/* Gamma's own section - same "own title, own slider" shell as buildAutoStrengthSection, but a
+   plain toggle switch instead of a 3-way mode row (see buildLevelsEffectRow's own comment for
+   why Gamma has no Auto). Reuses buildEffectRow's own "prism-player-effect-header is-interactive"
+   button-reset styling (rather than the plain-div .prism-player-effect-section-header Color
+   Boost/Black/White Level use) since, unlike their real mode-row `<button>`s, a bare toggle
+   switch (see makeToggleSwitch) is never a focus target itself - same D-pad-reachability fix
+   buildEffectRow's own `toggleReachable` documents for Ambient Lighting/AI Upscaling. */
+function buildLevelsGammaSection(controller) {
+    const section = document.createElement("div");
+    section.className = "prism-player-effect-section";
+
+    const header = document.createElement("button");
+    header.type = "button";
+    header.className = "prism-player-effect-header is-interactive";
+    const titleEl = document.createElement("span");
+    titleEl.className = "prism-player-effect-section-title";
+    titleEl.textContent = "Gamma";
+    header.appendChild(titleEl);
+
+    const { strengthLabel, strengthInput, formatSigned } = buildCenteredStrengthSlider("Gamma", (value) => setLevelsGamma(controller, value));
+    strengthInput.value = String(Math.round(controller._levelsGammaStrength * 100));
+    strengthLabel.textContent = `Gamma: ${formatSigned(Number(strengthInput.value))}`;
+    strengthInput.disabled = !controller._levelsGammaEnabled;
+
+    const toggleEl = makeToggleSwitch(controller._levelsGammaEnabled, (checked) => {
+        setLevelsGammaEnabled(controller, checked);
+        strengthInput.disabled = !checked;
+    });
+    header.appendChild(toggleEl);
+    header.addEventListener("click", () => toggleEl.click());
+
+    section.appendChild(header);
+    section.appendChild(strengthLabel);
+    section.appendChild(strengthInput);
+    return section;
 }
 
 /* Same pattern as buildShaderEffectRow above (a continuous slider can't be expressed as

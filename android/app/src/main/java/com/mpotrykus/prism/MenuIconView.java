@@ -25,7 +25,7 @@ class MenuIconView extends View {
 
     enum Icon {
         CHAPTERS, AUDIO_TRACK, SUBTITLES, VERSION, QUALITY_CAP, OPTIONS, AUTO_PLAY, AUTO_SKIP, EFFECTS,
-        PERFORMANCE, SHADER, COLOR_BOOST, AMBIENT, AUDIO_LEVELING, SPEED, ASPECT, SLEEP, LOCK, PICTURE_IN_PICTURE,
+        PERFORMANCE, SHADER, COLOR_BOOST, LEVELS, AMBIENT, AUDIO_LEVELING, SPEED, ASPECT, SLEEP, LOCK, PICTURE_IN_PICTURE,
         EPISODES,
     }
 
@@ -86,6 +86,7 @@ class MenuIconView extends View {
             case PERFORMANCE: drawPerformance(canvas); break;
             case SHADER: drawShader(canvas); break;
             case COLOR_BOOST: drawColorBoost(canvas); break;
+            case LEVELS: drawLevels(canvas); break;
             case AMBIENT: drawAmbient(canvas); break;
             case AUDIO_LEVELING: drawAudioLeveling(canvas); break;
             case SPEED: drawSpeed(canvas); break;
@@ -267,6 +268,17 @@ class MenuIconView extends View {
         rect.set(3, 3, 21, 21);
         canvas.drawOval(rect, strokePaint);
         canvas.drawArc(rect, -90, 180, true, fillPaint);
+    }
+
+    /* Mirrors levelsIconMarkup's three vertical sliders at different heights - the standard
+       "levels/tone controls" glyph, distinct from Color Boost's half-filled circle. */
+    private void drawLevels(Canvas canvas) {
+        canvas.drawLine(5, 3, 5, 21, strokePaint);
+        canvas.drawLine(12, 3, 12, 21, strokePaint);
+        canvas.drawLine(19, 3, 19, 21, strokePaint);
+        canvas.drawCircle(5, 16, 2.2f, fillPaint);
+        canvas.drawCircle(12, 8, 2.2f, fillPaint);
+        canvas.drawCircle(19, 12, 2.2f, fillPaint);
     }
 
     /* Mirrors ambientIconMarkup's sun-with-rays glyph. */

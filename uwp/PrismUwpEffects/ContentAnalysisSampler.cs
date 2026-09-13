@@ -75,5 +75,33 @@ namespace PrismUwpEffects
             }
             return Math.Sqrt(variance / pixels.Length) / 255.0;
         }
+
+        /// <summary>Darkest/brightest luma across the sampled frame, normalized to 0..1 - backs
+        /// Auto Black Level/Auto White Level (see content-analysis.js's autoLevelsBlackStrength/
+        /// autoLevelsWhiteStrength, which this feeds via EffectSettings.RaiseContentAnalysis -
+        /// same "raw pixel access here, math stays in JS" split as the other methods in this
+        /// class). Deliberately the sample's real min/max, not a percentile - this already runs
+        /// over a tiny downsampled grid (each sample pixel an area-average of a much larger block
+        /// of source pixels), which already smooths away genuine single-source-pixel outliers a
+        /// literal min/max would otherwise be too sensitive to.</summary>
+        internal struct LumaRange
+        {
+            public double Min;
+            public double Max;
+        }
+
+        internal static LumaRange AverageMinMaxLuma(Color[] pixels)
+        {
+            if (pixels.Length == 0) return new LumaRange { Min = 0, Max = 0 };
+            double min = 255;
+            double max = 0;
+            foreach (Color p in pixels)
+            {
+                double l = Luma(p);
+                if (l < min) min = l;
+                if (l > max) max = l;
+            }
+            return new LumaRange { Min = min / 255.0, Max = max / 255.0 };
+        }
     }
 }

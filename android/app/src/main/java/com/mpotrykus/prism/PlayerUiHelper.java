@@ -1189,6 +1189,7 @@ final class PlayerUiHelper {
         buildAiUpscaleEffectRow(activity, list, density);
         buildShaderEffectRow(activity, list, density);
         buildColorBoostEffectRow(activity, list, density);
+        buildLevelsEffectRow(activity, list, density);
         buildAmbientEffectRow(activity, list, density);
         clampMenuCardHeight(activity, list);
     }
@@ -1445,47 +1446,17 @@ final class PlayerUiHelper {
         });
     }
 
-    /* One labeled TextView+SeekBar pair, shared by buildColorBoostEffectRow's Saturation
-       and Contrast rows below - same "commit on release" gating buildShaderEffectRow's
-       own SeekBar uses (PlayerActivity.setColorBoostSaturationStrength/
-       setColorBoostContrastStrength both go through applyVideoEffects(), the same
-       GL-program-rebuild-per-call hazard). */
-    private static SeekBar makeStrengthSeekBar(PlayerActivity activity, float density, String label, TextView strengthLabel, Consumer<Float> onCommit) {
-        int padH = Math.round(16 * density);
-        SeekBar strengthSeekBar = new SeekBar(activity);
-        styleMenuSeekBar(strengthSeekBar, density);
-        strengthSeekBar.setMax(100);
-        LinearLayout.LayoutParams strengthParams =
-            new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        strengthParams.topMargin = Math.round(4 * density);
-        strengthParams.leftMargin = padH;
-        strengthParams.rightMargin = padH;
-        strengthParams.bottomMargin = Math.round(12 * density);
-        strengthSeekBar.setLayoutParams(strengthParams);
-        strengthSeekBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
-            @Override
-            public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
-                strengthLabel.setText(label + ": " + progress + "%");
-            }
-
-            @Override
-            public void onStartTrackingTouch(SeekBar seekBar) {}
-
-            @Override
-            public void onStopTrackingTouch(SeekBar seekBar) {
-                onCommit.accept(seekBar.getProgress() / 100f);
-            }
-        });
-        return strengthSeekBar;
-    }
-
-    /* One sub-control (its own title, its own Auto|On|Off mode row, its own SeekBar) - shared
-       by buildColorBoostEffectRow's Saturation and Contrast sections below. Fully independent
-       now: each has its own enabled/auto pair and auto-derives from its own signal
-       (avgSaturation for Saturation, lumaStdDev for Contrast - see
-       AutoStrength.colorBoost/colorBoostContrast), so unlike the shared-mode-row this
-       replaced, there's nothing left to couple the two through. */
-    private static void buildColorBoostComponentSection(
+    /* One sub-control (its own title, its own Auto|On|Off mode row, its own bidirectional
+       SeekBar) - shared by buildColorBoostEffectRow's Saturation/Contrast sections and
+       buildLevelsEffectRow's Black Level/White Level sections below. Fully independent per
+       section: each has its own enabled/auto pair and auto-derives from its own signal
+       (avgSaturation for Saturation, lumaStdDev for Contrast, minLuma/maxLuma for Black Level/
+       White Level - see AutoStrength.colorBoost/colorBoostContrast/levelsBlack/levelsWhite), so
+       there's nothing left to couple sections through. All four are bidirectional (see
+       ColorBoostTuning's and LevelsTuning's own min/mid/max comments) - unlike Sharpening's own
+       plain 0-100% strength row above, which has no Auto/reduce direction and builds its SeekBar
+       inline rather than through this helper. */
+    private static void buildAutoStrengthSection(
             PlayerActivity activity, LinearLayout container, float density, String title,
             Supplier<String> modeOf, Consumer<String> setMode,
             Supplier<Float> getManualValue, Consumer<Float> setStrength, Supplier<Float> getAutoValue) {
@@ -1515,10 +1486,11 @@ final class PlayerUiHelper {
         strengthLabel.setTextColor(SUBTLE_TEXT);
         strengthLabel.setTextSize(12);
         strengthLabel.setPadding(padH, Math.round(6 * density), padH, 0);
-        SeekBar strengthSeekBar = makeStrengthSeekBar(activity, density, title, strengthLabel, setStrength);
+        SeekBar strengthSeekBar = makeCenteredStrengthSeekBar(activity, density, title, strengthLabel, setStrength);
 
         String[] currentMode = { modeOf.get() };
-        Runnable refresh = () -> applyStrengthDisplay(strengthSeekBar, strengthLabel, title, currentMode[0], getAutoValue.get(), getManualValue.get());
+        Runnable refresh = () ->
+            applyStrengthDisplay(strengthSeekBar, strengthLabel, title, currentMode[0], getAutoValue.get(), getManualValue.get(), true);
         addModeRow(activity, header, density, currentMode[0], (mode) -> {
             currentMode[0] = mode;
             setMode.accept(mode);
@@ -1542,14 +1514,137 @@ final class PlayerUiHelper {
     private static void buildColorBoostEffectRow(PlayerActivity activity, LinearLayout list, float density) {
         EffectRowParts row = buildEffectRow(activity, list, density, MenuIconView.Icon.COLOR_BOOST, "Color Boost", null);
 
-        buildColorBoostComponentSection(activity, row.wrap, density, "Saturation",
+        buildAutoStrengthSection(activity, row.wrap, density, "Saturation",
             () -> activity.colorBoostSaturationMode(), (mode) -> activity.setColorBoostSaturationMode(mode),
             () -> activity.colorBoostSaturationStrength, (v) -> activity.setColorBoostSaturationStrength(v),
             () -> activity.autoColorBoostSaturationStrength);
-        buildColorBoostComponentSection(activity, row.wrap, density, "Contrast",
+        buildAutoStrengthSection(activity, row.wrap, density, "Contrast",
             () -> activity.colorBoostContrastMode(), (mode) -> activity.setColorBoostContrastMode(mode),
             () -> activity.colorBoostContrastStrength, (v) -> activity.setColorBoostContrastStrength(v),
             () -> activity.autoColorBoostContrastStrength);
+    }
+
+    /* The bidirectional SeekBar shared by buildAutoStrengthSection (Color Boost's Saturation/
+       Contrast, Levels' Black Level/White Level) and buildLevelsGammaSection (Gamma) below - 0%
+       sits at the MIDDLE of the track, not a one-directional 0-100% floor (see ColorBoostTuning's/
+       LevelsTuning's own header comments: either direction is a real, different adjustment).
+       SeekBar has no negative-progress support below API 26 (minSdkVersion here is 24 - see
+       variables.gradle), so the bar's own progress runs 0..200 and is shifted by -100 at every
+       read/write rather than relying on SeekBar.setMin(). Commit-on-release gating: every one of
+       this SeekBar's callers goes through applyVideoEffects(), a GL-program-rebuild-per-call
+       hazard that live per-drag-tick commits would trigger constantly. */
+    private static SeekBar makeCenteredStrengthSeekBar(PlayerActivity activity, float density, String label, TextView strengthLabel, Consumer<Float> onCommit) {
+        int padH = Math.round(16 * density);
+        SeekBar strengthSeekBar = new SeekBar(activity);
+        styleMenuSeekBar(strengthSeekBar, density);
+        strengthSeekBar.setMax(200);
+        LinearLayout.LayoutParams strengthParams =
+            new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        strengthParams.topMargin = Math.round(4 * density);
+        strengthParams.leftMargin = padH;
+        strengthParams.rightMargin = padH;
+        strengthParams.bottomMargin = Math.round(12 * density);
+        strengthSeekBar.setLayoutParams(strengthParams);
+        strengthSeekBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override
+            public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+                strengthLabel.setText(label + ": " + formatSignedPercent(progress - 100));
+            }
+
+            @Override
+            public void onStartTrackingTouch(SeekBar seekBar) {}
+
+            @Override
+            public void onStopTrackingTouch(SeekBar seekBar) {
+                onCommit.accept((seekBar.getProgress() - 100) / 100f);
+            }
+        });
+        return strengthSeekBar;
+    }
+
+    /* "+20%"/"-20%"/"0%" - the sign is written out explicitly rather than left to the number
+       itself, so 0% doesn't read as bare "0%" while a positive value is the only one with no
+       visible sign (mirrors chrome-menu-effects.js's buildCenteredStrengthSlider). */
+    private static String formatSignedPercent(int percent) {
+        return percent > 0 ? "+" + percent + "%" : percent + "%";
+    }
+
+    /* Levels (Black Level/White Level/Gamma) - Black Level and White Level get the same
+       Auto|On|Off mode row Color Boost's own components use (auto-deriving from the same
+       lumaStdDev signal Contrast already samples - see AutoStrength.levelsBlack/levelsWhite).
+       Gamma gets no Auto: "this frame is dark, brighten it" fights directly with intentional
+       dark grading in a way lumaStdDev-driven contrast/black-white correction doesn't, so it's
+       a plain On/Off toggle instead (see buildLevelsGammaSection). */
+    private static void buildLevelsEffectRow(PlayerActivity activity, LinearLayout list, float density) {
+        EffectRowParts row = buildEffectRow(activity, list, density, MenuIconView.Icon.LEVELS, "Levels", null);
+
+        buildAutoStrengthSection(activity, row.wrap, density, "Black Level",
+            () -> activity.levelsBlackMode(), (mode) -> activity.setLevelsBlackMode(mode),
+            () -> activity.levelsBlack, (v) -> activity.setLevelsBlack(v),
+            () -> activity.autoLevelsBlackStrength);
+        buildAutoStrengthSection(activity, row.wrap, density, "White Level",
+            () -> activity.levelsWhiteMode(), (mode) -> activity.setLevelsWhiteMode(mode),
+            () -> activity.levelsWhite, (v) -> activity.setLevelsWhite(v),
+            () -> activity.autoLevelsWhiteStrength);
+        buildLevelsGammaSection(activity, row.wrap, density);
+    }
+
+    /* Gamma's own section - same "own title, own slider" shell as buildAutoStrengthSection, but
+       a plain SwitchCompat instead of a 3-way mode row (see buildLevelsEffectRow's own comment
+       for why Gamma has no Auto). Unlike the web leg's equivalent, no special D-pad-reachability
+       trick is needed for the toggle itself - SwitchCompat is a real, natively focusable Android
+       View, not a bare styled div the way makeToggleSwitch is in the web chrome. */
+    private static void buildLevelsGammaSection(PlayerActivity activity, LinearLayout container, float density) {
+        int padH = Math.round(16 * density);
+
+        LinearLayout section = new LinearLayout(activity);
+        section.setOrientation(LinearLayout.VERTICAL);
+        LinearLayout.LayoutParams sectionParams = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        sectionParams.topMargin = Math.round(8 * density);
+        section.setLayoutParams(sectionParams);
+
+        LinearLayout header = new LinearLayout(activity);
+        header.setOrientation(LinearLayout.HORIZONTAL);
+        header.setGravity(Gravity.CENTER_VERTICAL);
+        header.setPadding(padH, 0, padH, 0);
+        header.setLayoutParams(new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        TextView titleEl = new TextView(activity);
+        titleEl.setText("Gamma");
+        titleEl.setTextColor(Color.WHITE);
+        titleEl.setTextSize(13);
+        titleEl.setTypeface(titleEl.getTypeface(), android.graphics.Typeface.BOLD);
+        titleEl.setLayoutParams(new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        header.addView(titleEl);
+
+        SwitchCompat toggle = new SwitchCompat(activity);
+        toggle.setChecked(activity.levelsGammaEnabled);
+        toggle.setTrackTintList(toggleTrackTint());
+        toggle.setThumbTintList(toggleThumbTint());
+        header.addView(toggle);
+
+        TextView strengthLabel = new TextView(activity);
+        int initialPercent = Math.round(activity.levelsGamma * 100);
+        strengthLabel.setText("Gamma: " + formatSignedPercent(initialPercent));
+        strengthLabel.setTextColor(SUBTLE_TEXT);
+        strengthLabel.setTextSize(12);
+        strengthLabel.setPadding(padH, Math.round(6 * density), padH, 0);
+
+        SeekBar strengthSeekBar = makeCenteredStrengthSeekBar(activity, density, "Gamma", strengthLabel, activity::setLevelsGamma);
+        strengthSeekBar.setProgress(initialPercent + 100);
+        strengthSeekBar.setEnabled(activity.levelsGammaEnabled);
+        strengthSeekBar.setAlpha(activity.levelsGammaEnabled ? 1f : 0.5f);
+
+        toggle.setOnCheckedChangeListener((buttonView, checked) -> {
+            activity.setLevelsGammaEnabled(checked);
+            strengthSeekBar.setEnabled(checked);
+            strengthSeekBar.setAlpha(checked ? 1f : 0.5f);
+        });
+
+        section.addView(header);
+        section.addView(strengthLabel);
+        section.addView(strengthSeekBar);
+        container.addView(section);
     }
 
     /* Same pattern as buildShaderEffectRow above, simpler since there's no auto-detected
@@ -2132,15 +2227,26 @@ final class PlayerUiHelper {
     /* Same as the 5-arg overload above, but with a caller-chosen label prefix - Color
        Boost's Saturation/Contrast rows share one mode row driving two independent
        SeekBars (see buildColorBoostEffectRow), so each needs its own label rather than
-       both reading "Strength". */
+       both reading "Strength". Delegates to the 7-arg overload below with centered=false. */
     private static void applyStrengthDisplay(SeekBar strengthSeekBar, TextView strengthLabel, String label, String mode, float autoValue, float manualValue) {
+        applyStrengthDisplay(strengthSeekBar, strengthLabel, label, mode, autoValue, manualValue, false);
+    }
+
+    /* Same as the 6-arg overload above, but for Levels' Black Level/White Level sections
+       (buildAutoStrengthSection's own `centered` param) - their SeekBar runs a shifted 0..200
+       progress representing -100..100 (see makeCenteredStrengthSeekBar), and their label uses
+       the explicit "+N%"/"-N%" signed format their own manual onProgressChanged listener uses,
+       not Color Boost's plain "N%". */
+    private static void applyStrengthDisplay(
+            SeekBar strengthSeekBar, TextView strengthLabel, String label, String mode, float autoValue, float manualValue, boolean centered) {
         boolean auto = "auto".equals(mode);
         boolean enabled = "on".equals(mode);
         strengthSeekBar.setEnabled(enabled);
         strengthSeekBar.setAlpha(enabled ? 1f : 0.5f);
-        int shown = Math.round((auto ? autoValue : manualValue) * 100);
-        strengthSeekBar.setProgress(shown);
-        strengthLabel.setText(label + ": " + shown + "%" + (auto ? " (auto)" : ""));
+        int percent = Math.round((auto ? autoValue : manualValue) * 100);
+        strengthSeekBar.setProgress(centered ? percent + 100 : percent);
+        String formatted = centered ? formatSignedPercent(percent) : (percent + "%");
+        strengthLabel.setText(label + ": " + formatted + (auto ? " (auto)" : ""));
     }
 
     /* Ticks `refresh` while `view` stays attached to the window, then stops itself -

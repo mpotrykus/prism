@@ -153,10 +153,14 @@ namespace PrismUwpEffects
                     // trailing-sharpen step already reapplies the same sharpen/color-boost math on
                     // the frame-server surface that's actually shown, so drawing it here too would
                     // just be duplicate GPU work on a surface nobody sees.
-                    bool visualOn = (resolvedShaderType != "off" || colorBoostOn)
+                    // Levels joins the same "keeps this visual pass alive" list as Sharpening/
+                    // Color Boost - see shader-pipeline.js's identical updateShaderPipeline gate.
+                    bool levelsOn = settings.LevelsBlackEnabled || settings.LevelsWhiteEnabled || settings.LevelsGammaEnabled;
+                    bool visualOn = (resolvedShaderType != "off" || colorBoostOn || levelsOn)
                         && !settings.IsHdrActive && !settings.IsAiUpscaleActive;
                     ShaderTuning.SharpenTuning sharpen = new ShaderTuning.SharpenTuning { Scale = 1, Sharpen = 0, Kernel = 1 };
                     ShaderTuning.ColorTuning color = new ShaderTuning.ColorTuning { Saturation = 1, Contrast = 1 };
+                    ShaderTuning.LevelsTuning levels = new ShaderTuning.LevelsTuning { Black = 0, White = 1, Gamma = 1 };
                     string programType = settings.ShaderType;
 
                     using (CanvasDrawingSession ds = renderTarget.CreateDrawingSession())
@@ -181,6 +185,14 @@ namespace PrismUwpEffects
                             color = ShaderTuning.ColorBoostAt(
                                 settings.ColorBoostSaturationEnabled ? settings.ColorBoostSaturationStrength : 0,
                                 settings.ColorBoostContrastEnabled ? settings.ColorBoostContrastStrength : 0);
+                            // Levels - Black Level/White Level each resolve from their own enabled
+                            // flag (already auto-resolved by the JS sender when applicable - see
+                            // xbox-bridge.js's postLevels), same convention as Color Boost's own
+                            // per-component enabled gates above; Gamma has no auto.
+                            levels = ShaderTuning.LevelsAt(
+                                settings.LevelsBlackEnabled ? settings.LevelsBlackStrength : 0,
+                                settings.LevelsWhiteEnabled ? settings.LevelsWhiteStrength : 0,
+                                settings.LevelsGammaEnabled ? settings.LevelsGammaStrength : 0);
 
                             PixelShaderEffect effect = GetOrCreateEffect(programType);
                             effect.Source1 = inputBitmap;
@@ -188,6 +200,9 @@ namespace PrismUwpEffects
                             effect.Properties["sharpenStrength"] = (float)sharpen.Sharpen;
                             effect.Properties["saturationBoost"] = (float)color.Saturation;
                             effect.Properties["contrastBoost"] = (float)color.Contrast;
+                            effect.Properties["blackLevel"] = (float)levels.Black;
+                            effect.Properties["whiteLevel"] = (float)levels.White;
+                            effect.Properties["gamma"] = (float)levels.Gamma;
 
                             ds.DrawImage(effect);
                         }
@@ -328,7 +343,8 @@ namespace PrismUwpEffects
         /// </summary>
         private void MaybeSampleFrame(EffectSettings.Snapshot settings, CanvasBitmap inputBitmap)
         {
-            bool wantsContent = settings.ShaderAuto || settings.ColorBoostSaturationAuto || settings.ColorBoostContrastAuto;
+            bool wantsContent = settings.ShaderAuto || settings.ColorBoostSaturationAuto || settings.ColorBoostContrastAuto
+                || settings.LevelsBlackAuto || settings.LevelsWhiteAuto;
             bool wantsAmbient = settings.AmbientEnabled;
             if (!wantsContent && !wantsAmbient) return;
 
@@ -353,7 +369,8 @@ namespace PrismUwpEffects
                 double avgSaturation = ContentAnalysisSampler.AverageSaturation(pixels);
                 double edgeEnergy = ContentAnalysisSampler.AverageEdgeEnergy(pixels, SampleW, SampleH);
                 double lumaStdDev = ContentAnalysisSampler.AverageLumaStdDev(pixels);
-                EffectSettings.RaiseContentAnalysis(avgSaturation, edgeEnergy, lumaStdDev);
+                ContentAnalysisSampler.LumaRange lumaRange = ContentAnalysisSampler.AverageMinMaxLuma(pixels);
+                EffectSettings.RaiseContentAnalysis(avgSaturation, edgeEnergy, lumaStdDev, lumaRange.Min, lumaRange.Max);
             }
             if (ambientDue)
             {

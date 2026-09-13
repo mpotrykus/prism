@@ -2,12 +2,16 @@ import { describe, it, expect } from "vitest";
 import {
   shaderTuningAt,
   colorBoostAt,
+  levelsAt,
   detectShaderType,
   autoUpscaleStrength,
   autoColorBoostStrength,
   autoContrastBoostStrength,
+  autoLevelsBlackStrength,
+  autoLevelsWhiteStrength,
   SHADER_TYPES,
   COLOR_BOOST_TUNING,
+  LEVELS_TUNING,
 } from "./shaders.js";
 
 describe("detectShaderType", () => {
@@ -68,8 +72,8 @@ describe("shaderTuningAt", () => {
 describe("colorBoostAt", () => {
   it("is neutral (no boost) at strength 0/0", () => {
     expect(colorBoostAt(0, 0)).toEqual({
-      saturation: COLOR_BOOST_TUNING.saturation.min,
-      contrast: COLOR_BOOST_TUNING.contrast.min,
+      saturation: COLOR_BOOST_TUNING.saturation.mid,
+      contrast: COLOR_BOOST_TUNING.contrast.mid,
     });
   });
 
@@ -80,19 +84,26 @@ describe("colorBoostAt", () => {
     });
   });
 
-  it("clamps each strength outside 0-1 independently", () => {
-    expect(colorBoostAt(-1, 2)).toEqual({
+  it("reaches min (reduce) at strength -1/-1", () => {
+    expect(colorBoostAt(-1, -1)).toEqual({
+      saturation: COLOR_BOOST_TUNING.saturation.min,
+      contrast: COLOR_BOOST_TUNING.contrast.min,
+    });
+  });
+
+  it("clamps each strength outside -1..1 independently", () => {
+    expect(colorBoostAt(-2, 2)).toEqual({
       saturation: COLOR_BOOST_TUNING.saturation.min,
       contrast: COLOR_BOOST_TUNING.contrast.max,
     });
   });
 
   it("resolves saturation and contrast independently of one another", () => {
-    expect(colorBoostAt(1, 0)).toEqual({
+    expect(colorBoostAt(1, -1)).toEqual({
       saturation: COLOR_BOOST_TUNING.saturation.max,
       contrast: COLOR_BOOST_TUNING.contrast.min,
     });
-    expect(colorBoostAt(0, 1)).toEqual({
+    expect(colorBoostAt(-1, 1)).toEqual({
       saturation: COLOR_BOOST_TUNING.saturation.min,
       contrast: COLOR_BOOST_TUNING.contrast.max,
     });
@@ -100,6 +111,48 @@ describe("colorBoostAt", () => {
 
   it("is independent of shader-upscale type/strength", () => {
     expect(colorBoostAt(0.5, 0.5)).toEqual(colorBoostAt(0.5, 0.5));
+  });
+});
+
+describe("levelsAt", () => {
+  it("is neutral (exact passthrough) at strength 0/0/0", () => {
+    expect(levelsAt(0, 0, 0)).toEqual({
+      black: LEVELS_TUNING.black.mid,
+      white: LEVELS_TUNING.white.mid,
+      gamma: LEVELS_TUNING.gamma.mid,
+    });
+  });
+
+  it("reaches max at strength 1/1/1", () => {
+    expect(levelsAt(1, 1, 1)).toEqual({
+      black: LEVELS_TUNING.black.max,
+      white: LEVELS_TUNING.white.max,
+      gamma: LEVELS_TUNING.gamma.max,
+    });
+  });
+
+  it("reaches min at strength -1/-1/-1", () => {
+    expect(levelsAt(-1, -1, -1)).toEqual({
+      black: LEVELS_TUNING.black.min,
+      white: LEVELS_TUNING.white.min,
+      gamma: LEVELS_TUNING.gamma.min,
+    });
+  });
+
+  it("clamps each strength outside -1..1 independently", () => {
+    expect(levelsAt(-2, 2, -5)).toEqual({
+      black: LEVELS_TUNING.black.min,
+      white: LEVELS_TUNING.white.max,
+      gamma: LEVELS_TUNING.gamma.min,
+    });
+  });
+
+  it("resolves black/white/gamma independently of one another", () => {
+    expect(levelsAt(1, 0, -1)).toEqual({
+      black: LEVELS_TUNING.black.max,
+      white: LEVELS_TUNING.white.mid,
+      gamma: LEVELS_TUNING.gamma.min,
+    });
   });
 });
 
@@ -168,5 +221,35 @@ describe("autoContrastBoostStrength", () => {
     expect(autoContrastBoostStrength({ lumaStdDev: sameInput })).not.toBe(
       autoColorBoostStrength({ avgSaturation: sameInput })
     );
+  });
+});
+
+describe("autoLevelsBlackStrength / autoLevelsWhiteStrength", () => {
+  it("resolves to a black point exactly at the frame's own darkest sampled luma - never clips", () => {
+    const strength = autoLevelsBlackStrength({ minLuma: 0.1 });
+    expect(levelsAt(strength, 0, 0).black).toBeCloseTo(0.1);
+  });
+
+  it("resolves to a white point exactly at the frame's own brightest sampled luma - never clips", () => {
+    const strength = autoLevelsWhiteStrength({ maxLuma: 0.85 });
+    expect(levelsAt(0, strength, 0).white).toBeCloseTo(0.85);
+  });
+
+  it("is a true no-op once the frame already reaches true black/white", () => {
+    expect(autoLevelsBlackStrength({ minLuma: 0 })).toBe(0);
+    expect(autoLevelsWhiteStrength({ maxLuma: 1 })).toBe(0);
+  });
+
+  it("clamps at LEVELS_TUNING's own configured ceiling rather than overshooting it", () => {
+    // A frame with no real shadows/highlights at all (minLuma past black.max, maxLuma short of
+    // white.max) would otherwise ask for a black/white point beyond what's configured - clamped
+    // to the same 1 (full strength) every other Auto/manual slider caps at.
+    expect(autoLevelsBlackStrength({ minLuma: 0.9 })).toBe(1);
+    expect(autoLevelsWhiteStrength({ maxLuma: 0.1 })).toBe(1);
+  });
+
+  it("never goes negative - only ever pushes toward the crush half of levelsAt's -1..1 range", () => {
+    expect(autoLevelsBlackStrength({ minLuma: 0 })).toBeGreaterThanOrEqual(0);
+    expect(autoLevelsWhiteStrength({ maxLuma: 1 })).toBeGreaterThanOrEqual(0);
   });
 });

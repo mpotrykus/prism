@@ -17,14 +17,29 @@ package com.mpotrykus.prism;
    Saturation and contrast are themselves independent sliders now (see PlayerUiHelper's
    two SeekBars), not one combined "strength" - `at` takes each one's own resolved
    strength (manual or auto-resolved, same single avgSaturation-driven auto signal
-   applied to both - see PlayerActivity.applyVideoEffects) and lerps them independently. */
+   applied to both - see PlayerActivity.applyVideoEffects) and lerps them independently.
+
+   Each is bidirectional and centered on 0 (MID, true neutral - a 1.0 multiplier), not a
+   one-directional 0-1 strength - PlayerUiHelper's two SeekBars run -100..100 (see
+   makeCenteredStrengthSeekBar), not 0..100. MIN is the "reduce" endpoint: 0 for both -
+   saturation:0 is the trailing sharpen shader's own full-grayscale mix factor
+   (`mix(gray, color, saturationBoost)`), contrast:0 is its own flat-mid-gray point
+   (`(luma-0.5)*contrastBoost+0.5` with contrastBoost=0 collapses every pixel's luma to exactly
+   0.5) - so -100% actually reaches "no color"/"no contrast", matching what the displayed
+   percentage implies (an earlier version mirrored each knob's own +0.3/+0.15 boost delta
+   instead - 0.7/0.85 - which left -100% too mild a reduction to read as "fully removed").
+   MAX itself is unchanged, so the boost half of the range (and the stored default strength,
+   0.5 - "medium boost") behaves exactly as it did before this became bidirectional. Mirrors
+   shaders.js's COLOR_BOOST_TUNING/colorBoostAt exactly. */
 final class ColorBoostTuning {
-    private static final float MIN_SATURATION = 1f;
+    private static final float MIN_SATURATION = 0f;
+    private static final float MID_SATURATION = 1f;
     private static final float MAX_SATURATION = 1.3f;
-    private static final float MIN_CONTRAST = 1f;
+    private static final float MIN_CONTRAST = 0f;
+    private static final float MID_CONTRAST = 1f;
     private static final float MAX_CONTRAST = 1.15f;
 
-    static final ColorBoostTuning NEUTRAL = new ColorBoostTuning(1f, 1f);
+    static final ColorBoostTuning NEUTRAL = new ColorBoostTuning(MID_SATURATION, MID_CONTRAST);
 
     final float saturationBoost;
     final float contrastBoost;
@@ -34,11 +49,14 @@ final class ColorBoostTuning {
         this.contrastBoost = contrastBoost;
     }
 
+    private static float lerpAround(float min, float mid, float max, float strength) {
+        float t = Math.max(-1f, Math.min(1f, strength));
+        return t >= 0f ? mid + (max - mid) * t : mid + (mid - min) * t;
+    }
+
     static ColorBoostTuning at(float saturationStrength, float contrastStrength) {
-        float satT = Math.max(0f, Math.min(1f, saturationStrength));
-        float conT = Math.max(0f, Math.min(1f, contrastStrength));
         return new ColorBoostTuning(
-            MIN_SATURATION + (MAX_SATURATION - MIN_SATURATION) * satT,
-            MIN_CONTRAST + (MAX_CONTRAST - MIN_CONTRAST) * conT);
+            lerpAround(MIN_SATURATION, MID_SATURATION, MAX_SATURATION, saturationStrength),
+            lerpAround(MIN_CONTRAST, MID_CONTRAST, MAX_CONTRAST, contrastStrength));
     }
 }

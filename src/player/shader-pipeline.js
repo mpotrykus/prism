@@ -1,4 +1,11 @@
-import { shaderTuningAt, colorBoostAt, SHADER_TYPES, DEBAND_TUNING, detectShaderType } from "./shader/shaders.js";
+import {
+    shaderTuningAt,
+    colorBoostAt,
+    levelsAt,
+    SHADER_TYPES,
+    DEBAND_TUNING,
+    detectShaderType,
+} from "./shader/shaders.js";
 import { createPassChain } from "./shader/pass-chain.js";
 import { createPerfWatchdog } from "./shader/perf-watchdog.js";
 import {
@@ -12,6 +19,14 @@ import {
     COLOR_BOOST_SATURATION_AUTO_STORAGE_KEY,
     COLOR_BOOST_CONTRAST_AUTO_STORAGE_KEY,
     AI_UPSCALING_STORAGE_KEY,
+    LEVELS_BLACK_ENABLED_STORAGE_KEY,
+    LEVELS_WHITE_ENABLED_STORAGE_KEY,
+    LEVELS_GAMMA_ENABLED_STORAGE_KEY,
+    LEVELS_BLACK_STORAGE_KEY,
+    LEVELS_WHITE_STORAGE_KEY,
+    LEVELS_GAMMA_STORAGE_KEY,
+    LEVELS_BLACK_AUTO_STORAGE_KEY,
+    LEVELS_WHITE_AUTO_STORAGE_KEY,
 } from "./ui/shared.js";
 import { updateContentAnalysis } from "./content-analysis.js";
 import { applyFitMode } from "./ui/chrome-menu-options.js";
@@ -23,7 +38,7 @@ import { SHADER_OFF, TRIPLE_MODE } from "../constants.js";
    the other cycles in src/player/ui/ are: postShaderEffect/postColorBoost are only referenced
    inside function bodies below (updateShaderPipeline, postXboxShaderSettings), never at
    top-level module-evaluation time. */
-import { postShaderEffect, postColorBoost, postAiUpscaling } from "./xbox-bridge.js";
+import { postShaderEffect, postColorBoost, postAiUpscaling, postLevels } from "./xbox-bridge.js";
 
 function isXbox() {
     return hasNativePlayer() && platformTag() === PLATFORM_TAG.UWP;
@@ -75,6 +90,25 @@ export function postXboxColorBoostSettings(controller) {
             : controller._colorBoostContrastStrength,
         saturationAuto: !!controller._colorBoostSaturationAuto,
         contrastAuto: !!controller._colorBoostContrastAuto,
+    });
+}
+
+/* Levels' native counterpart. Black Level and White Level are independently auto-able (same
+   lumaStdDev-derived signal as Color Boost's own Contrast - see
+   autoLevelsBlackStrength/autoLevelsWhiteStrength in shaders.js and content-analysis.js's
+   applySample), so their strengths are resolved here exactly like postXboxColorBoostSettings
+   resolves Saturation/Contrast. Gamma has no Auto (see shader-pipeline.js's own
+   setLevelsGammaEnabled), so it only ever sends its plain enabled flag/strength. */
+export function postXboxLevelsSettings(controller) {
+    postLevels({
+        blackEnabled: !!controller._levelsBlackEnabled,
+        whiteEnabled: !!controller._levelsWhiteEnabled,
+        gammaEnabled: !!controller._levelsGammaEnabled,
+        blackStrength: controller._levelsBlackAuto ? (controller._autoLevelsBlackStrength ?? 0) : controller._levelsBlackStrength,
+        whiteStrength: controller._levelsWhiteAuto ? (controller._autoLevelsWhiteStrength ?? 0) : controller._levelsWhiteStrength,
+        gammaStrength: controller._levelsGammaStrength,
+        blackAuto: !!controller._levelsBlackAuto,
+        whiteAuto: !!controller._levelsWhiteAuto,
     });
 }
 
@@ -224,6 +258,87 @@ export function setColorBoostContrastStrength(controller, strength) {
     updateShaderPipeline(controller);
 }
 
+/* Levels (Black Level/White Level/Gamma). Black Level and White Level get Color Boost's own
+   per-component Auto|On|Off shape (each its own enabled/auto pair, both auto-deriving from
+   the same lumaStdDev signal Contrast already samples - see content-analysis.js's applySample
+   and shaders.js's autoLevelsBlackStrength/autoLevelsWhiteStrength). Gamma gets no Auto -
+   "this frame is dark, brighten it" fights directly with intentional dark grading in a way
+   lumaStdDev-driven contrast/black-white correction doesn't - so it's a plain enabled flag,
+   same immediate-persistence model as everything else here. */
+export function setLevelsBlackEnabled(controller, enabled) {
+    controller._levelsBlackEnabled = enabled;
+    localStorage.setItem(LEVELS_BLACK_ENABLED_STORAGE_KEY, enabled ? "1" : "0");
+    updateShaderPipeline(controller);
+}
+
+export function setLevelsWhiteEnabled(controller, enabled) {
+    controller._levelsWhiteEnabled = enabled;
+    localStorage.setItem(LEVELS_WHITE_ENABLED_STORAGE_KEY, enabled ? "1" : "0");
+    updateShaderPipeline(controller);
+}
+
+export function setLevelsGammaEnabled(controller, enabled) {
+    controller._levelsGammaEnabled = enabled;
+    localStorage.setItem(LEVELS_GAMMA_ENABLED_STORAGE_KEY, enabled ? "1" : "0");
+    updateShaderPipeline(controller);
+}
+
+export function setLevelsBlack(controller, strength) {
+    controller._levelsBlackStrength = strength;
+    localStorage.setItem(LEVELS_BLACK_STORAGE_KEY, String(strength));
+    updateShaderPipeline(controller);
+}
+
+export function setLevelsWhite(controller, strength) {
+    controller._levelsWhiteStrength = strength;
+    localStorage.setItem(LEVELS_WHITE_STORAGE_KEY, String(strength));
+    updateShaderPipeline(controller);
+}
+
+export function setLevelsGamma(controller, strength) {
+    controller._levelsGammaStrength = strength;
+    localStorage.setItem(LEVELS_GAMMA_STORAGE_KEY, String(strength));
+    updateShaderPipeline(controller);
+}
+
+/* Only this on/off flag is persisted, never the live-computed strength - unchecking falls back
+   to whatever _levelsBlackStrength/_levelsWhiteStrength the slider was last left at. Independent
+   of one another: each derives from the same lumaStdDev signal, but there's no shared auto
+   state left to couple them through (same reasoning as setColorBoostContrastAuto below). */
+export function setLevelsBlackAuto(controller, enabled) {
+    controller._levelsBlackAuto = enabled;
+    localStorage.setItem(LEVELS_BLACK_AUTO_STORAGE_KEY, enabled ? "1" : "0");
+    updateContentAnalysis(controller);
+}
+
+export function setLevelsWhiteAuto(controller, enabled) {
+    controller._levelsWhiteAuto = enabled;
+    localStorage.setItem(LEVELS_WHITE_AUTO_STORAGE_KEY, enabled ? "1" : "0");
+    updateContentAnalysis(controller);
+}
+
+/* Same collapsing as colorBoostSaturationModeOf/setColorBoostSaturationMode below, one
+   independent triple per component. */
+export function levelsBlackModeOf(controller) {
+    if (!controller._levelsBlackEnabled) return TRIPLE_MODE.OFF;
+    return controller._levelsBlackAuto ? TRIPLE_MODE.AUTO : TRIPLE_MODE.ON;
+}
+
+export function setLevelsBlackMode(controller, mode) {
+    setLevelsBlackEnabled(controller, mode !== TRIPLE_MODE.OFF);
+    setLevelsBlackAuto(controller, mode === TRIPLE_MODE.AUTO);
+}
+
+export function levelsWhiteModeOf(controller) {
+    if (!controller._levelsWhiteEnabled) return TRIPLE_MODE.OFF;
+    return controller._levelsWhiteAuto ? TRIPLE_MODE.AUTO : TRIPLE_MODE.ON;
+}
+
+export function setLevelsWhiteMode(controller, mode) {
+    setLevelsWhiteEnabled(controller, mode !== TRIPLE_MODE.OFF);
+    setLevelsWhiteAuto(controller, mode === TRIPLE_MODE.AUTO);
+}
+
 /* Only this on/off flag is persisted, never the live-computed strength (see
    content-analysis.js's sampleContentFrame): switching auto off falls back to whatever
    _shaderStrength the slider was last left at. */
@@ -304,16 +419,21 @@ export function updateShaderPipeline(controller) {
         postXboxShaderSettings(controller);
         postXboxColorBoostSettings(controller);
         postXboxAiUpscalingSettings(controller);
+        postXboxLevelsSettings(controller);
         return;
     }
     /* Any of these keeps this GL pass alive - Color Boost's Saturation/Contrast alone (either
        or both) still needs the canvas rendering (with sharpenStrength forced to 0 in
-       renderShaderFrame below), same as Sharpening or AI Upscaling alone. */
+       renderShaderFrame below), same as Sharpening or AI Upscaling alone. Levels joins the
+       same list for the same reason. */
     if (
         controller._shaderType === SHADER_OFF &&
         !controller._aiUpscalingEnabled &&
         !controller._colorBoostSaturationEnabled &&
-        !controller._colorBoostContrastEnabled
+        !controller._colorBoostContrastEnabled &&
+        !controller._levelsBlackEnabled &&
+        !controller._levelsWhiteEnabled &&
+        !controller._levelsGammaEnabled
     ) {
         stopShaderLoop(controller);
         if (controller._shaderCanvas) controller._shaderCanvas.style.display = "none";
@@ -325,6 +445,9 @@ export function updateShaderPipeline(controller) {
         controller._aiUpscalingEnabled = false;
         controller._colorBoostSaturationEnabled = false;
         controller._colorBoostContrastEnabled = false;
+        controller._levelsBlackEnabled = false;
+        controller._levelsWhiteEnabled = false;
+        controller._levelsGammaEnabled = false;
         return;
     }
     controller._shaderCanvas.style.display = "block";
@@ -714,6 +837,19 @@ export function renderShaderFrame(controller, timestamp = 0, mediaTimeSec = null
         ? (controller._colorBoostContrastAuto ? (controller._autoColorBoostContrastStrength ?? 0) : controller._colorBoostContrastStrength)
         : 0;
     const colorTuning = colorBoostAt(boostSaturationStrength, boostContrastStrength);
+    /* Levels - Black Level and White Level each have their own Auto|On|Off mode (same shape as
+       Color Boost's Saturation/Contrast above, auto-deriving from the same lumaStdDev signal -
+       see shaders.js's autoLevelsBlackStrength/autoLevelsWhiteStrength); Gamma has no Auto, just
+       a plain enabled gate. A disabled component's strength is forced to 0, which levelsAt's
+       lerp resolves to that knob's own no-op midpoint (black 0, white 1, gamma 1). */
+    const levelsBlackStrength = controller._levelsBlackEnabled
+        ? (controller._levelsBlackAuto ? (controller._autoLevelsBlackStrength ?? 0) : controller._levelsBlackStrength)
+        : 0;
+    const levelsWhiteStrength = controller._levelsWhiteEnabled
+        ? (controller._levelsWhiteAuto ? (controller._autoLevelsWhiteStrength ?? 0) : controller._levelsWhiteStrength)
+        : 0;
+    const levelsGammaStrength = controller._levelsGammaEnabled ? controller._levelsGammaStrength : 0;
+    const levelsTuning = levelsAt(levelsBlackStrength, levelsWhiteStrength, levelsGammaStrength);
 
     const chosen = chooseRenderPreset(controller, video, programType, displayW, displayH, upscaleStrength);
     if (!chosen) return;
@@ -777,6 +913,9 @@ export function renderShaderFrame(controller, timestamp = 0, mediaTimeSec = null
             uSharpenStrength: chosen.preset.strengthless ? sharpeningTuning.sharpen : sharpenTuning.sharpen,
             uSaturationBoost: colorTuning.saturation,
             uContrastBoost: colorTuning.contrast,
+            uBlackLevel: levelsTuning.black,
+            uWhiteLevel: levelsTuning.white,
+            uGamma: levelsTuning.gamma,
             uDebandThreshold: DEBAND_TUNING.threshold,
             uDebandRange: DEBAND_TUNING.range,
             uDebandGrain: DEBAND_TUNING.grain,

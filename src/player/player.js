@@ -53,6 +53,14 @@ import {
     storedColorBoostSaturationAuto,
     storedColorBoostContrastAuto,
     storedAiUpscalingEnabled,
+    storedLevelsBlackEnabled,
+    storedLevelsWhiteEnabled,
+    storedLevelsGammaEnabled,
+    storedLevelsBlack,
+    storedLevelsWhite,
+    storedLevelsGamma,
+    storedLevelsBlackAuto,
+    storedLevelsWhiteAuto,
     storedStatsOverlayEnabled,
     storedAutoPlayEnabled,
     storedAutoQualityEnabled,
@@ -174,9 +182,19 @@ class StreamingPlayerController {
         this._colorBoostSaturationAuto = false;
         this._colorBoostContrastAuto = false;
         this._aiUpscalingEnabled = false;
+        this._levelsBlackEnabled = false;
+        this._levelsWhiteEnabled = false;
+        this._levelsGammaEnabled = false;
+        this._levelsBlackStrength = 0;
+        this._levelsWhiteStrength = 0;
+        this._levelsGammaStrength = 0;
+        this._levelsBlackAuto = false;
+        this._levelsWhiteAuto = false;
         this._autoUpscaleStrength = null;
         this._autoColorBoostSaturationStrength = null;
         this._autoColorBoostContrastStrength = null;
+        this._autoLevelsBlackStrength = null;
+        this._autoLevelsWhiteStrength = null;
         this._contentSampleCanvas = null;
         this._contentSampleCtx = null;
         this._contentLastSampleAt = 0;
@@ -551,6 +569,20 @@ class StreamingPlayerController {
         this._colorBoostContrastAuto = storedColorBoostContrastAuto();
         this._autoColorBoostSaturationStrength = null;
         this._autoColorBoostContrastStrength = null;
+        /* Levels - no per-video/genre concern either, same immediate-persistence model as
+           ambient/color boost above. Black Level/White Level are independently auto-able
+           (own enabled/auto pair, same Auto|On|Off shape as Color Boost's own components -
+           see shader-pipeline.js's setLevelsBlackMode/setLevelsWhiteMode); Gamma has no auto. */
+        this._levelsBlackEnabled = storedLevelsBlackEnabled();
+        this._levelsWhiteEnabled = storedLevelsWhiteEnabled();
+        this._levelsGammaEnabled = storedLevelsGammaEnabled();
+        this._levelsBlackStrength = storedLevelsBlack();
+        this._levelsWhiteStrength = storedLevelsWhite();
+        this._levelsGammaStrength = storedLevelsGamma();
+        this._levelsBlackAuto = storedLevelsBlackAuto();
+        this._levelsWhiteAuto = storedLevelsWhiteAuto();
+        this._autoLevelsBlackStrength = null;
+        this._autoLevelsWhiteStrength = null;
         this._statsOverlayEnabled = storedStatsOverlayEnabled();
         /* No per-video/genre concern to resolve either - same immediate-persistence model
            as ambient/color boost/stats overlay above (see audio-leveling.js). */

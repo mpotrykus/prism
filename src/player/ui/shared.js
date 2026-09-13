@@ -36,6 +36,14 @@ export const COLOR_BOOST_CONTRAST_STRENGTH_STORAGE_KEY = "prism_player_color_boo
 export const COLOR_BOOST_SATURATION_AUTO_STORAGE_KEY = "prism_player_color_boost_saturation_auto";
 export const COLOR_BOOST_CONTRAST_AUTO_STORAGE_KEY = "prism_player_color_boost_contrast_auto";
 export const AI_UPSCALING_STORAGE_KEY = "prism_player_ai_upscaling_enabled";
+export const LEVELS_BLACK_ENABLED_STORAGE_KEY = "prism_player_levels_black_enabled";
+export const LEVELS_WHITE_ENABLED_STORAGE_KEY = "prism_player_levels_white_enabled";
+export const LEVELS_GAMMA_ENABLED_STORAGE_KEY = "prism_player_levels_gamma_enabled";
+export const LEVELS_BLACK_STORAGE_KEY = "prism_player_levels_black";
+export const LEVELS_WHITE_STORAGE_KEY = "prism_player_levels_white";
+export const LEVELS_GAMMA_STORAGE_KEY = "prism_player_levels_gamma";
+export const LEVELS_BLACK_AUTO_STORAGE_KEY = "prism_player_levels_black_auto";
+export const LEVELS_WHITE_AUTO_STORAGE_KEY = "prism_player_levels_white_auto";
 export const STATS_OVERLAY_STORAGE_KEY = "prism_player_stats_overlay_enabled";
 export const AUTO_PLAY_STORAGE_KEY = "prism_player_auto_play_enabled";
 export const AUTO_QUALITY_STORAGE_KEY = "prism_player_auto_quality_enabled";
@@ -52,6 +60,14 @@ function storedFloat01(key, defaultValue) {
     const stored = localStorage.getItem(key);
     const raw = Number(stored);
     return stored !== null && Number.isFinite(raw) && raw >= 0 && raw <= 1 ? raw : defaultValue;
+}
+
+/* Same shape as storedFloat01 above, widened to -1..1 for Levels' bidirectional sliders (see
+   shaders.js's LEVELS_TUNING) - 0 is their neutral midpoint, not their floor. */
+function storedFloatSigned01(key, defaultValue) {
+    const stored = localStorage.getItem(key);
+    const raw = Number(stored);
+    return stored !== null && Number.isFinite(raw) && raw >= -1 && raw <= 1 ? raw : defaultValue;
 }
 
 export function storedVolume() {
@@ -110,13 +126,16 @@ export function storedColorBoostContrastEnabled() {
     return storedBool(COLOR_BOOST_CONTRAST_ENABLED_STORAGE_KEY, PLAYER_SETTINGS_DEFAULTS.colorBoostContrastEnabled);
 }
 
-/* Same `stored !== null` reasoning as storedShaderStrength above; one key per slider. */
+/* Same `stored !== null` reasoning as storedShaderStrength above; one key per slider.
+   Bidirectional (-1..1, see COLOR_BOOST_TUNING's own min/mid/max comment) - storedFloatSigned01,
+   not storedFloat01, so a stored negative "reduce" value survives a reload instead of being
+   discarded as out-of-range and silently reset to the default. */
 export function storedColorBoostSaturationStrength() {
-    return storedFloat01(COLOR_BOOST_SATURATION_STRENGTH_STORAGE_KEY, PLAYER_SETTINGS_DEFAULTS.colorBoostSaturationStrength);
+    return storedFloatSigned01(COLOR_BOOST_SATURATION_STRENGTH_STORAGE_KEY, PLAYER_SETTINGS_DEFAULTS.colorBoostSaturationStrength);
 }
 
 export function storedColorBoostContrastStrength() {
-    return storedFloat01(COLOR_BOOST_CONTRAST_STRENGTH_STORAGE_KEY, PLAYER_SETTINGS_DEFAULTS.colorBoostContrastStrength);
+    return storedFloatSigned01(COLOR_BOOST_CONTRAST_STRENGTH_STORAGE_KEY, PLAYER_SETTINGS_DEFAULTS.colorBoostContrastStrength);
 }
 
 /* Same immediate-persistence model as storedColorBoostSaturationEnabled/storedUpscaleAuto
@@ -136,6 +155,49 @@ export function storedColorBoostContrastAuto() {
    default-off siblings) - AI Upscaling is opt-in for a never-touched user. */
 export function storedAiUpscalingEnabled() {
     return storedBool(AI_UPSCALING_STORAGE_KEY, PLAYER_SETTINGS_DEFAULTS.aiUpscalingEnabled);
+}
+
+/* Levels (Black Level/White Level/Gamma). Black Level and White Level get Color Boost's own
+   per-component enabled/auto pair (each independently auto-able off the same lumaStdDev signal
+   Contrast samples - see shaders.js's autoLevelsBlackStrength/autoLevelsWhiteStrength); Gamma
+   gets a plain enabled flag, no auto - see shaders.js's own module header for why. */
+export function storedLevelsBlackEnabled() {
+    return storedBool(LEVELS_BLACK_ENABLED_STORAGE_KEY, PLAYER_SETTINGS_DEFAULTS.levelsBlackEnabled);
+}
+
+export function storedLevelsWhiteEnabled() {
+    return storedBool(LEVELS_WHITE_ENABLED_STORAGE_KEY, PLAYER_SETTINGS_DEFAULTS.levelsWhiteEnabled);
+}
+
+export function storedLevelsGammaEnabled() {
+    return storedBool(LEVELS_GAMMA_ENABLED_STORAGE_KEY, PLAYER_SETTINGS_DEFAULTS.levelsGammaEnabled);
+}
+
+/* Same immediate-persistence model as storedColorBoostSaturationAuto/storedColorBoostContrastAuto
+   above - the resolved auto strength itself is never persisted, only this flag. */
+export function storedLevelsBlackAuto() {
+    return storedBool(LEVELS_BLACK_AUTO_STORAGE_KEY, PLAYER_SETTINGS_DEFAULTS.levelsBlackAuto);
+}
+
+export function storedLevelsWhiteAuto() {
+    return storedBool(LEVELS_WHITE_AUTO_STORAGE_KEY, PLAYER_SETTINGS_DEFAULTS.levelsWhiteAuto);
+}
+
+/* 0 is each slider's own neutral MIDPOINT (see shaders.js's LEVELS_TUNING), not its floor -
+   unlike Color Boost's sliders (which default to a "medium" 0.5 that only reads as neutral
+   because the enabled-gate forces the input to 0 first), these are bidirectional and default
+   to 0 so a freshly-enabled component starts as a true no-op until the viewer actually drags
+   its slider either way. */
+export function storedLevelsBlack() {
+    return storedFloatSigned01(LEVELS_BLACK_STORAGE_KEY, PLAYER_SETTINGS_DEFAULTS.levelsBlack);
+}
+
+export function storedLevelsWhite() {
+    return storedFloatSigned01(LEVELS_WHITE_STORAGE_KEY, PLAYER_SETTINGS_DEFAULTS.levelsWhite);
+}
+
+export function storedLevelsGamma() {
+    return storedFloatSigned01(LEVELS_GAMMA_STORAGE_KEY, PLAYER_SETTINGS_DEFAULTS.levelsGamma);
 }
 
 /* Same immediate-persistence model as storedAmbientEnabled - a debug readout has no
@@ -320,6 +382,20 @@ export function colorBoostIconMarkup() {
     return `<svg viewBox="0 0 24 24" width="18" height="18" xmlns="http://www.w3.org/2000/svg">
         <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.8"/>
         <path d="M12 3a9 9 0 010 18z" fill="currentColor"/>
+    </svg>`;
+}
+
+/* Three vertical sliders at different heights - the standard "levels/tone controls" glyph,
+   distinct from Color Boost's half-filled circle (a "look"/vividness concept) since Levels is
+   about the tonal curve (black point/white point/gamma) rather than saturation/contrast. */
+export function levelsIconMarkup() {
+    return `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <line x1="5" y1="3" x2="5" y2="21" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+        <line x1="12" y1="3" x2="12" y2="21" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+        <line x1="19" y1="3" x2="19" y2="21" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+        <circle cx="5" cy="16" r="2.2" fill="currentColor"/>
+        <circle cx="12" cy="8" r="2.2" fill="currentColor"/>
+        <circle cx="19" cy="12" r="2.2" fill="currentColor"/>
     </svg>`;
 }
 

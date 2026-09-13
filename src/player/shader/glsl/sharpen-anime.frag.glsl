@@ -5,6 +5,9 @@ uniform float uKernelScale;
 uniform float uSharpenStrength;
 uniform float uSaturationBoost;
 uniform float uContrastBoost;
+uniform float uBlackLevel;
+uniform float uWhiteLevel;
+uniform float uGamma;
 varying vec2 vUv;
 float luma(vec3 c) { return dot(c, vec3(0.299, 0.587, 0.114)); }
 void main() {
@@ -59,5 +62,10 @@ void main() {
   float lc = (l0 - 0.5) * contrast + 0.5;
   vec3 contrastedColor = outColor + (lc - l0);
   outColor = mix(vec3(lc), contrastedColor, saturation);
+  /* Levels: black/white point remap then gamma - at defaults (0.0/1.0/1.0) this is an exact
+     passthrough (see shader-pipeline.js's renderShaderFrame for how a disabled Levels toggle
+     forces those three defaults through). */
+  outColor = clamp((outColor - uBlackLevel) / max(uWhiteLevel - uBlackLevel, 0.0001), 0.0, 1.0);
+  outColor = pow(outColor, vec3(1.0 / uGamma));
   gl_FragColor = vec4(clamp(outColor, 0.0, 1.0), 1.0);
 }

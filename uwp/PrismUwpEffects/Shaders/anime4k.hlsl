@@ -26,6 +26,9 @@ cbuffer constants : register(b0)
     float sharpenStrength;
     float saturationBoost;
     float contrastBoost;
+    float blackLevel;
+    float whiteLevel;
+    float gamma;
 };
 
 float luma(float3 c)
@@ -92,6 +95,11 @@ D2D_PS_ENTRY(main)
     float3 contrastedColor = outColor + (lc - l0);
     outColor = lerp(float3(lc, lc, lc), contrastedColor, saturationAmt);
     outColor = saturate(outColor);
+
+    // Levels: black/white point remap then gamma - at defaults (0.0/1.0/1.0) this is an exact
+    // passthrough, same as sharpen-anime.frag.glsl's identical trailing step.
+    outColor = saturate((outColor - blackLevel) / max(whiteLevel - blackLevel, 0.0001));
+    outColor = pow(outColor, float3(1.0 / gamma, 1.0 / gamma, 1.0 / gamma));
 
     return float4(outColor, center4.a);
 }

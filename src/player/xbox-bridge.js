@@ -228,6 +228,17 @@ export function postAmbientLighting(enabled) {
     post("setAmbientLighting", { enabled });
 }
 
+/* Levels (Black Level/White Level/Gamma) - see shader-pipeline.js's postXboxLevelsSettings.
+   Black Level/White Level are independently auto-able (own enabled/auto pair, same shape as
+   postColorBoost's saturation/contrast); Gamma has no Auto, just its own enabled flag - so this
+   sends three enabled flags, three already-resolved -1..1 strengths (auto substituted in when
+   applicable, same as postColorBoost), and the two auto flags (kept for parity with
+   postColorBoost's own saturationAuto/contrastAuto, even though native's rendering only reads
+   the resolved strengths - see NativePlayerHost.SetLevels). */
+export function postLevels({ blackEnabled, whiteEnabled, gammaEnabled, blackStrength, whiteStrength, gammaStrength, blackAuto, whiteAuto }) {
+    post("setLevels", { blackEnabled, whiteEnabled, gammaEnabled, blackStrength, whiteStrength, gammaStrength, blackAuto, whiteAuto });
+}
+
 /* "HDR - Stay On During Playback" (settings.js, Xbox-only) - makes NativePlayerHost.Play and
    SwitchTitle switch the display to (or keep it in) HDR10 for every title in a playback session,
    not just genuinely HDR ones, so SDR video also gets Microsoft's documented SDR-in-HDR-mode
@@ -414,7 +425,7 @@ function handleMessage(controller, message) {
             controller._xboxEffectLoadStatus = params;
             break;
         case "contentAnalysis":
-            applyXboxContentAnalysis(controller, params.avgSaturation, params.edgeEnergy, params.lumaStdDev);
+            applyXboxContentAnalysis(controller, params.avgSaturation, params.edgeEnergy, params.lumaStdDev, params.minLuma, params.maxLuma);
             break;
         case "autoCropInsets":
             /* From AutoCropDetector.cs (uwp/PrismUwp/Player) - AiUpscaleFrameServer's Present

@@ -145,6 +145,17 @@ namespace PrismUwp.Player
                         p.GetNamedBoolean("saturationAuto", false),
                         p.GetNamedBoolean("contrastAuto", false));
                     break;
+                case "setLevels":
+                    host.SetLevels(
+                        p.GetNamedBoolean("blackEnabled", false),
+                        p.GetNamedBoolean("whiteEnabled", false),
+                        p.GetNamedBoolean("gammaEnabled", false),
+                        p.GetNamedNumber("blackStrength", 0),
+                        p.GetNamedNumber("whiteStrength", 0),
+                        p.GetNamedNumber("gammaStrength", 0),
+                        p.GetNamedBoolean("blackAuto", false),
+                        p.GetNamedBoolean("whiteAuto", false));
+                    break;
                 case "setAmbientLighting":
                     host.SetAmbientLighting(p.GetNamedBoolean("enabled", false));
                     break;

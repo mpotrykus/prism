@@ -275,19 +275,74 @@ export function shaderTuningAt(shaderKey, strength) {
    Auto|On|Off mode - they're different "look" adjustments a viewer may want at different
    amounts (e.g. more punch without crushing shadow detail further), and now even different
    auto-derived signals (see autoColorBoostStrength/autoContrastBoostStrength below). */
+/* Bidirectional and centered on 0% (`mid`, true neutral - a 1.0 multiplier), not a
+   one-directional 0-100% strength - mirrors LEVELS_TUNING's own min/mid/max shape below (see
+   that constant's own comment for the full reasoning). `min` is the "reduce" endpoint: 0 for
+   both - saturation:0 is the shader's own full-grayscale mix factor (`mix(gray, color,
+   saturation)`), contrast:0 is its own flat-mid-gray point (`(luma-0.5)*contrast+0.5` with
+   contrast=0 collapses every pixel's luma to exactly 0.5) - so -100% on the slider actually
+   reaches "no color"/"no contrast", matching what the displayed percentage implies, rather than
+   an earlier version's 0.7/0.85 (a mirror of each knob's own +0.3/+0.15 boost delta) which left
+   -100% only a mild reduction - confirmed too subtle in practice, the shown -100% didn't read as
+   "fully removed". `max` values are unchanged (already tuned/confirmed against real playback -
+   see the shadow-protection comment on SHADER_FRAGMENT_ANIME et al.), so the boost half of the
+   range - and the stored default strength (0.5, "medium boost") - behave exactly as they did
+   before this became bidirectional. */
 export const COLOR_BOOST_TUNING = {
-    saturation: { min: 1, max: 1.3 },
-    contrast: { min: 1, max: 1.15 },
+    saturation: { min: 0, mid: 1.0, max: 1.3 },
+    contrast: { min: 0, mid: 1.0, max: 1.15 },
 };
 
 export function colorBoostAt(saturationStrength, contrastStrength) {
-    const lerp = (range, strength) => {
-        const t = Math.max(0, Math.min(1, strength));
-        return range.min + (range.max - range.min) * t;
+    const lerpAround = (range, strength) => {
+        const t = Math.max(-1, Math.min(1, strength));
+        return t >= 0 ? range.mid + (range.max - range.mid) * t : range.mid + (range.mid - range.min) * t;
     };
     return {
-        saturation: lerp(COLOR_BOOST_TUNING.saturation, saturationStrength),
-        contrast: lerp(COLOR_BOOST_TUNING.contrast, contrastStrength),
+        saturation: lerpAround(COLOR_BOOST_TUNING.saturation, saturationStrength),
+        contrast: lerpAround(COLOR_BOOST_TUNING.contrast, contrastStrength),
+    };
+}
+
+/* Levels (black point/white point/gamma) - shares the sharpen shaders' trailing GL pass with
+   Color Boost above (one frame, one GPU pass), but is otherwise unrelated: a "look"/tonal-curve
+   adjustment rather than saturation/contrast. Black Level and White Level get the same
+   Auto|On|Off shape Color Boost's Saturation/Contrast use (see shader-pipeline.js's
+   setLevelsBlackMode/setLevelsWhiteMode), auto-deriving from the same lumaStdDev signal Contrast
+   already samples (autoLevelsBlackStrength/autoLevelsWhiteStrength below) rather than a new
+   signal of its own - a flat/low-contrast frame warrants crushing blacks/whites back down just
+   as much as it warrants a contrast boost. Gamma gets no Auto: "this frame is dark, brighten it"
+   fights directly with intentional dark grading (night scenes, horror, moody cinematography) in
+   a way lumaStdDev-driven contrast/black-white correction doesn't, so it's a plain enabled flag
+   (see setLevelsGammaEnabled).
+
+   Each slider is bidirectional and centered on 0% (`mid`, that knob's true no-op: black point 0,
+   white point 1, gamma 1), not a one-directional 0-100% strength - a disabled row (whose
+   strengths are forced to 0, same convention as a disabled Color Boost component) still renders
+   as an exact passthrough. Strength ranges -1..1: 0 resolves to `mid`, -1 to `min`, 1 to `max`.
+   `mid` is not necessarily the arithmetic midpoint of `min`/`max` (gamma's isn't - see below),
+   so this lerps each side of 0 separately rather than a single min-to-max lerp the way the old
+   one-directional 0..1 strength did.
+
+   Black/white are symmetric around their own neutral point: negative lifts blacks/dims whites
+   (lower contrast, a washed-out look), positive crushes blacks/clips whites (higher contrast) -
+   effectively two independent halves of a "contrast" control. Gamma is the familiar brighten/
+   darken direction: negative darkens midtones, positive brightens them. */
+export const LEVELS_TUNING = {
+    black: { min: -0.3, mid: 0.0, max: 0.3 },
+    white: { min: 1.3, mid: 1.0, max: 0.7 },
+    gamma: { min: 0.5, mid: 1.0, max: 1.8 },
+};
+
+export function levelsAt(blackStrength, whiteStrength, gammaStrength) {
+    const lerpAround = (range, strength) => {
+        const t = Math.max(-1, Math.min(1, strength));
+        return t >= 0 ? range.mid + (range.max - range.mid) * t : range.mid + (range.mid - range.min) * t;
+    };
+    return {
+        black: lerpAround(LEVELS_TUNING.black, blackStrength),
+        white: lerpAround(LEVELS_TUNING.white, whiteStrength),
+        gamma: lerpAround(LEVELS_TUNING.gamma, gammaStrength),
     };
 }
 
@@ -368,6 +423,32 @@ const COLOR_BOOST_AUTO_CONTRAST_HIGH = 0.28;
 
 export function autoContrastBoostStrength({ lumaStdDev }) {
     return clamp((COLOR_BOOST_AUTO_CONTRAST_HIGH - lumaStdDev) / (COLOR_BOOST_AUTO_CONTRAST_HIGH - COLOR_BOOST_AUTO_CONTRAST_LOW), 0, 1);
+}
+
+/* Auto-strength math for Levels' Black Level/White Level. Deliberately NOT lumaStdDev-based
+   (an earlier version reused autoContrastBoostStrength's signal directly) - lumaStdDev measures
+   how spread out the frame's tones are, which has no relationship to where the frame's actual
+   black/white points already sit, so it could push the black/white point past real image data
+   and clip/crush detail that was never actually redundant. Confirmed in practice: far too
+   aggressive, clipping a lot.
+
+   The correct "never clip" behavior is a true levels stretch: read the frame's own darkest/
+   brightest sampled luma (minLuma/maxLuma, both 0..1 - see content-analysis.js's
+   averageLumaMinMax) and move the black/white point to EXACTLY that value, never past it. Every
+   pixel already at or above minLuma (resp. at or below maxLuma) keeps a distinct, non-clipped
+   value - by construction, nothing in the frame is darker than minLuma or brighter than maxLuma,
+   so nothing gets crushed/clipped that wasn't already at the new endpoint. A frame that already
+   reaches true black/white (minLuma near 0 / maxLuma near 1) resolves to ~0 strength - a
+   correct no-op, not a floor. Solved by inverting levelsAt's own lerp for the knob's `max` tier
+   (its most extreme still-defined tuning point) and clamping to 0..1: strength values beyond 1
+   would ask for a black/white point past what LEVELS_TUNING's own max allows, which the clamp
+   caps at that configured ceiling rather than overshooting it. */
+export function autoLevelsBlackStrength({ minLuma }) {
+    return clamp(minLuma / LEVELS_TUNING.black.max, 0, 1);
+}
+
+export function autoLevelsWhiteStrength({ maxLuma }) {
+    return clamp((LEVELS_TUNING.white.mid - maxLuma) / (LEVELS_TUNING.white.mid - LEVELS_TUNING.white.max), 0, 1);
 }
 
 /* Studios whose animated output is (as far as this list's author could confirm) CGI, not

@@ -25,6 +25,7 @@ final class AiUpscaleEffect implements GlEffect {
     private final ShaderType family;
     private final ShaderTuning sharpeningTuning;
     private final ColorBoostTuning colorTuning;
+    private final LevelsTuning levelsTuning;
     private final boolean aiUpscalingEnabled;
     private final int maxOutputWidth;
     private final int maxOutputHeight;
@@ -39,11 +40,12 @@ final class AiUpscaleEffect implements GlEffect {
     private final String aspectMode;
 
     AiUpscaleEffect(Context context, ShaderType family, ShaderTuning sharpeningTuning, ColorBoostTuning colorTuning,
-        boolean aiUpscalingEnabled, AutoCropSampler.Insets cropInsets, String aspectMode) {
+        LevelsTuning levelsTuning, boolean aiUpscalingEnabled, AutoCropSampler.Insets cropInsets, String aspectMode) {
         this.context = context;
         this.family = family;
         this.sharpeningTuning = sharpeningTuning;
         this.colorTuning = colorTuning;
+        this.levelsTuning = levelsTuning;
         this.aiUpscalingEnabled = aiUpscalingEnabled;
         this.cropInsets = cropInsets;
         this.aspectMode = aspectMode;
@@ -59,7 +61,8 @@ final class AiUpscaleEffect implements GlEffect {
         // pipeline was set up with, not guaranteed to be the PlayerActivity instance the
         // instanceof check below (and getAssets()) needs.
         AiUpscaleShaderProgram program = new AiUpscaleShaderProgram(
-            context, useHdr, family, sharpeningTuning, colorTuning, aiUpscalingEnabled, maxOutputWidth, maxOutputHeight, cropInsets, aspectMode);
+            context, useHdr, family, sharpeningTuning, colorTuning, levelsTuning, aiUpscalingEnabled, maxOutputWidth, maxOutputHeight,
+            cropInsets, aspectMode);
         // PlayerActivity also implements Context here (see applyVideoEffects's `new
         // AiUpscaleEffect(this, ...)`) - stashed so the stats overlay AND applyVideoEffects's own
         // later toggle calls can reach this instance without a separate listener interface. See

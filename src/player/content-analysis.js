@@ -1,11 +1,17 @@
-import { autoUpscaleStrength, autoColorBoostStrength, autoContrastBoostStrength } from "./shader/shaders.js";
+import {
+    autoUpscaleStrength,
+    autoColorBoostStrength,
+    autoContrastBoostStrength,
+    autoLevelsBlackStrength,
+    autoLevelsWhiteStrength,
+} from "./shader/shaders.js";
 import { hasNativePlayer, platformTag, PLATFORM_TAG } from "./core/platform.js";
 import { media } from "./core/media-facade.js";
 /* Circular with shader-pipeline.js (which imports updateContentAnalysis from this file, while
-   this file imports postXboxShaderSettings/postXboxColorBoostSettings from it) - safe for the
-   same "only referenced inside function bodies, never at module-evaluation time" reason as the
-   other cycles in this directory. */
-import { postXboxShaderSettings, postXboxColorBoostSettings } from "./shader-pipeline.js";
+   this file imports postXboxShaderSettings/postXboxColorBoostSettings/postXboxLevelsSettings
+   from it) - safe for the same "only referenced inside function bodies, never at
+   module-evaluation time" reason as the other cycles in this directory. */
+import { postXboxShaderSettings, postXboxColorBoostSettings, postXboxLevelsSettings } from "./shader-pipeline.js";
 
 /* Content-analysis pipeline backing "Auto strength" for Shader Upscaling and Color
    Boost (web/Xbox - Android's native ExoPlayer leg has its own equivalent built from
@@ -33,16 +39,23 @@ export function updateContentAnalysis(controller) {
     /* Xbox: no canvas to sample a <video> into - ShaderVideoEffect's ContentAnalysisSampler reads
        real decoded frames instead and reports avgSaturation/edgeEnergy/lumaStdDev back over the
        bridge (see applyXboxContentAnalysis below). setUpscaleAuto/setColorBoostSaturationAuto/
-       setColorBoostContrastAuto (shader-pipeline.js) all call this function on every change, and
-       native's own "auto" flags live in the same setShaderEffect/setColorBoost message
-       shader-pipeline.js already owns building - re-posting here keeps them in sync without a
-       third copy of the payload-building logic. */
+       setColorBoostContrastAuto/setLevelsBlackAuto/setLevelsWhiteAuto (shader-pipeline.js) all
+       call this function on every change, and native's own "auto" flags live in the same
+       setShaderEffect/setColorBoost/setLevels message shader-pipeline.js already owns building -
+       re-posting here keeps them in sync without a third copy of the payload-building logic. */
     if (hasNativePlayer() && platformTag() === PLATFORM_TAG.UWP) {
         postXboxShaderSettings(controller);
         postXboxColorBoostSettings(controller);
+        postXboxLevelsSettings(controller);
         return;
     }
-    if (!controller._upscaleAuto && !controller._colorBoostSaturationAuto && !controller._colorBoostContrastAuto) {
+    if (
+        !controller._upscaleAuto &&
+        !controller._colorBoostSaturationAuto &&
+        !controller._colorBoostContrastAuto &&
+        !controller._levelsBlackAuto &&
+        !controller._levelsWhiteAuto
+    ) {
         stopContentAnalysisLoop(controller);
         return;
     }
@@ -51,22 +64,25 @@ export function updateContentAnalysis(controller) {
 }
 
 /* Fed by ShaderVideoEffect's native sampler via xbox-bridge.js's "contentAnalysis" event -
-   avgSaturation/edgeEnergy/lumaStdDev are the three numbers a browser canvas can compute itself
-   on web, but only native pixel access can produce on Xbox (see ShaderVideoEffect.ProcessFrame).
-   Runs through the exact same smoothing + autoUpscaleStrength/autoColorBoostStrength/
-   autoContrastBoostStrength math sampleContentFrame below already uses, so there is one tuning
+   avgSaturation/edgeEnergy/lumaStdDev/minLuma/maxLuma are the five numbers a browser canvas can
+   compute itself on web, but only native pixel access can produce on Xbox (see
+   ShaderVideoEffect.ProcessFrame). Runs through the exact same smoothing +
+   autoUpscaleStrength/autoColorBoostStrength/autoContrastBoostStrength/autoLevelsBlackStrength/
+   autoLevelsWhiteStrength math sampleContentFrame below already uses, so there is one tuning
    implementation shared by both platforms - see this module's own header for why that math stays
    in JS rather than being duplicated natively. */
-export function applyXboxContentAnalysis(controller, avgSaturation, edgeEnergy, lumaStdDev) {
-    applySample(controller, avgSaturation, edgeEnergy, lumaStdDev);
+export function applyXboxContentAnalysis(controller, avgSaturation, edgeEnergy, lumaStdDev, minLuma, maxLuma) {
+    applySample(controller, avgSaturation, edgeEnergy, lumaStdDev, minLuma, maxLuma);
     /* applySample only updates controller._autoUpscaleStrength/_autoColorBoostSaturationStrength/
-       _autoColorBoostContrastStrength in memory - native has no way to see those without this.
-       Re-posts through the exact same helpers shader-pipeline.js's updateShaderPipeline already
-       uses, so native's ShaderVideoEffect picks up the freshly-resolved auto strength on (roughly)
-       the same ~750ms cadence this event itself arrives on, rather than only ever seeing whatever
-       strength was in effect at the moment Auto mode was first switched on. */
+       _autoColorBoostContrastStrength/_autoLevelsBlackStrength/_autoLevelsWhiteStrength in memory
+       - native has no way to see those without this. Re-posts through the exact same helpers
+       shader-pipeline.js's updateShaderPipeline already uses, so native's ShaderVideoEffect picks
+       up the freshly-resolved auto strength on (roughly) the same ~750ms cadence this event itself
+       arrives on, rather than only ever seeing whatever strength was in effect at the moment Auto
+       mode was first switched on. */
     if (controller._upscaleAuto) postXboxShaderSettings(controller);
     if (controller._colorBoostSaturationAuto || controller._colorBoostContrastAuto) postXboxColorBoostSettings(controller);
+    if (controller._levelsBlackAuto || controller._levelsWhiteAuto) postXboxLevelsSettings(controller);
 }
 
 function ensureContentAnalysis(controller) {
@@ -87,6 +103,8 @@ function ensureContentAnalysis(controller) {
     controller._contentSmoothedSaturation = null;
     controller._contentSmoothedEdgeEnergy = null;
     controller._contentSmoothedLumaStdDev = null;
+    controller._contentSmoothedMinLuma = null;
+    controller._contentSmoothedMaxLuma = null;
     return true;
 }
 
@@ -117,6 +135,8 @@ export function teardownContentAnalysis(controller) {
     controller._contentSmoothedSaturation = null;
     controller._contentSmoothedEdgeEnergy = null;
     controller._contentSmoothedLumaStdDev = null;
+    controller._contentSmoothedMinLuma = null;
+    controller._contentSmoothedMaxLuma = null;
 }
 
 function sampleContentFrame(controller, timestamp) {
@@ -138,6 +158,8 @@ function sampleContentFrame(controller, timestamp) {
         controller._upscaleAuto = false;
         controller._colorBoostSaturationAuto = false;
         controller._colorBoostContrastAuto = false;
+        controller._levelsBlackAuto = false;
+        controller._levelsWhiteAuto = false;
         stopContentAnalysisLoop(controller);
         return;
     }
@@ -145,25 +167,37 @@ function sampleContentFrame(controller, timestamp) {
     const rawSaturation = averageSaturation(data);
     const rawEdgeEnergy = averageEdgeEnergy(data, CONTENT_SAMPLE_W, CONTENT_SAMPLE_H);
     const rawLumaStdDev = averageLumaStdDev(data);
-    applySample(controller, rawSaturation, rawEdgeEnergy, rawLumaStdDev);
+    const { min: rawMinLuma, max: rawMaxLuma } = averageLumaMinMax(data);
+    applySample(controller, rawSaturation, rawEdgeEnergy, rawLumaStdDev, rawMinLuma, rawMaxLuma);
 }
 
 /* Shared tail of sampleContentFrame (web) and applyXboxContentAnalysis (Xbox) - everything past
-   "raw avgSaturation/edgeEnergy/lumaStdDev numbers exist", which is the only part that differs by
-   platform (a canvas sample here, a bridge event there). Saturation and Contrast are
-   independently auto-able now (see shader-pipeline.js's setColorBoostSaturationMode/
-   setColorBoostContrastMode) - each is gated (and smoothed) on its own auto flag rather than
-   sharing one, though the smoothed inputs themselves are cheap enough to just always update. */
-function applySample(controller, rawSaturation, rawEdgeEnergy, rawLumaStdDev) {
+   "raw avgSaturation/edgeEnergy/lumaStdDev/minLuma/maxLuma numbers exist", which is the only part
+   that differs by platform (a canvas sample here, a bridge event there). Saturation/Contrast/
+   Black Level/White Level are all independently auto-able now (see shader-pipeline.js's
+   setColorBoostSaturationMode/setColorBoostContrastMode/setLevelsBlackMode/setLevelsWhiteMode) -
+   each is gated (and smoothed) on its own auto flag rather than sharing one, though the smoothed
+   inputs themselves are cheap enough to just always update. Black Level/White Level read
+   minLuma/maxLuma (see autoLevelsBlackStrength/autoLevelsWhiteStrength's own comment in
+   shaders.js for why NOT lumaStdDev), not Contrast's own signal. */
+function applySample(controller, rawSaturation, rawEdgeEnergy, rawLumaStdDev, rawMinLuma, rawMaxLuma) {
     controller._contentSmoothedSaturation = smooth(controller._contentSmoothedSaturation, rawSaturation);
     controller._contentSmoothedEdgeEnergy = smooth(controller._contentSmoothedEdgeEnergy, rawEdgeEnergy);
     controller._contentSmoothedLumaStdDev = smooth(controller._contentSmoothedLumaStdDev, rawLumaStdDev);
+    controller._contentSmoothedMinLuma = smooth(controller._contentSmoothedMinLuma, rawMinLuma);
+    controller._contentSmoothedMaxLuma = smooth(controller._contentSmoothedMaxLuma, rawMaxLuma);
 
     if (controller._colorBoostSaturationAuto) {
         controller._autoColorBoostSaturationStrength = autoColorBoostStrength({ avgSaturation: controller._contentSmoothedSaturation });
     }
     if (controller._colorBoostContrastAuto) {
         controller._autoColorBoostContrastStrength = autoContrastBoostStrength({ lumaStdDev: controller._contentSmoothedLumaStdDev });
+    }
+    if (controller._levelsBlackAuto) {
+        controller._autoLevelsBlackStrength = autoLevelsBlackStrength({ minLuma: controller._contentSmoothedMinLuma });
+    }
+    if (controller._levelsWhiteAuto) {
+        controller._autoLevelsWhiteStrength = autoLevelsWhiteStrength({ maxLuma: controller._contentSmoothedMaxLuma });
     }
     if (controller._upscaleAuto) {
         controller._autoUpscaleStrength = autoUpscaleStrength({
@@ -229,6 +263,25 @@ function averageLumaStdDev(data) {
         variance += (luma - mean) * (luma - mean);
     }
     return Math.sqrt(variance / count) / 255;
+}
+
+/* Darkest/brightest luma across the sampled frame, normalized to 0..1 - backs Auto Black
+   Level/Auto White Level (see shaders.js's autoLevelsBlackStrength/autoLevelsWhiteStrength).
+   Deliberately the sample's real min/max, not a percentile - this already runs over a tiny
+   32x18 downsample (each sample pixel an area-average of a much larger block of source
+   pixels, via the canvas drawImage scale in sampleContentFrame), which already smooths away
+   genuine single-source-pixel outliers a literal min/max would otherwise be too sensitive to,
+   so no separate percentile trim is needed on top of that. One pass, not two like
+   averageLumaStdDev above - there's no mean to compute first here. */
+function averageLumaMinMax(data) {
+    let min = 255;
+    let max = 0;
+    for (let i = 0; i < data.length; i += 4) {
+        const luma = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+        if (luma < min) min = luma;
+        if (luma > max) max = luma;
+    }
+    return { min: min / 255, max: max / 255 };
 }
 
 /* Mean Sobel-style gradient magnitude across the sampled grid - same gx/gy math as

@@ -141,6 +141,14 @@ public class PlayerActivity extends AppCompatActivity {
     private static final String PREF_COLOR_BOOST_CONTRAST_STRENGTH = "color_boost_contrast_strength";
     private static final String PREF_COLOR_BOOST_SATURATION_AUTO = "color_boost_saturation_auto";
     private static final String PREF_COLOR_BOOST_CONTRAST_AUTO = "color_boost_contrast_auto";
+    private static final String PREF_LEVELS_BLACK_ENABLED = "levels_black_enabled";
+    private static final String PREF_LEVELS_WHITE_ENABLED = "levels_white_enabled";
+    private static final String PREF_LEVELS_GAMMA_ENABLED = "levels_gamma_enabled";
+    private static final String PREF_LEVELS_BLACK = "levels_black";
+    private static final String PREF_LEVELS_WHITE = "levels_white";
+    private static final String PREF_LEVELS_GAMMA = "levels_gamma";
+    private static final String PREF_LEVELS_BLACK_AUTO = "levels_black_auto";
+    private static final String PREF_LEVELS_WHITE_AUTO = "levels_white_auto";
     private static final String PREF_STATS_OVERLAY_ENABLED = "stats_overlay_enabled";
     private static final String PREF_AUTO_PLAY_ENABLED = "auto_play_enabled";
     private static final String PREF_AUTO_QUALITY_ENABLED = "auto_quality_enabled";
@@ -329,6 +337,25 @@ public class PlayerActivity extends AppCompatActivity {
     boolean colorBoostContrastAuto = false;
     float autoColorBoostSaturationStrength = 0.5f;
     float autoColorBoostContrastStrength = 0.5f;
+    /* Levels (black point/white point/gamma). Black Level and White Level get Color Boost's own
+       per-component Auto|On|Off shape above - each independently auto-able, both deriving from
+       the same lumaStdDev signal Contrast already samples (see AutoStrength.levelsBlack/
+       levelsWhite) rather than a new signal of its own. Gamma gets no Auto: "this frame is dark,
+       brighten it" fights directly with intentional dark grading in a way lumaStdDev-driven
+       contrast/black-white correction doesn't - see LevelsTuning's own header comment. 0f is each
+       slider's own no-op endpoint (see LevelsTuning.at), unlike colorBoostSaturationStrength/
+       colorBoostContrastStrength's "medium at 0.5" default, since there's no per-component
+       enabled gate here to fall back on. */
+    boolean levelsBlackEnabled = false;
+    boolean levelsWhiteEnabled = false;
+    boolean levelsGammaEnabled = false;
+    float levelsBlack = 0f;
+    float levelsWhite = 0f;
+    float levelsGamma = 0f;
+    boolean levelsBlackAuto = false;
+    boolean levelsWhiteAuto = false;
+    float autoLevelsBlackStrength = 0f;
+    float autoLevelsWhiteStrength = 0f;
     /* Same immediate-persistence model as ambientEnabled/colorBoostSaturationEnabled above -
        a debug readout has no per-video/genre concern to reconcile either. Read view, not
        player state - see PlayerUiHelper.buildStatsOverlay/updateStatsOverlay. */
@@ -622,6 +649,14 @@ public class PlayerActivity extends AppCompatActivity {
         colorBoostContrastStrength = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getFloat(PREF_COLOR_BOOST_CONTRAST_STRENGTH, 0.5f);
         colorBoostSaturationAuto = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(PREF_COLOR_BOOST_SATURATION_AUTO, false);
         colorBoostContrastAuto = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(PREF_COLOR_BOOST_CONTRAST_AUTO, false);
+        levelsBlackEnabled = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(PREF_LEVELS_BLACK_ENABLED, false);
+        levelsWhiteEnabled = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(PREF_LEVELS_WHITE_ENABLED, false);
+        levelsGammaEnabled = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(PREF_LEVELS_GAMMA_ENABLED, false);
+        levelsBlack = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getFloat(PREF_LEVELS_BLACK, 0f);
+        levelsWhite = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getFloat(PREF_LEVELS_WHITE, 0f);
+        levelsGamma = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getFloat(PREF_LEVELS_GAMMA, 0f);
+        levelsBlackAuto = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(PREF_LEVELS_BLACK_AUTO, false);
+        levelsWhiteAuto = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(PREF_LEVELS_WHITE_AUTO, false);
         statsOverlayEnabled = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(PREF_STATS_OVERLAY_ENABLED, false);
         /* Defaults to off - see shared.js's storedAudioLevelingEnabled for why. */
         audioLevelingEnabled = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(PREF_AUDIO_LEVELING_ENABLED, false);
@@ -827,12 +862,18 @@ public class PlayerActivity extends AppCompatActivity {
         /* Same "built unconditionally, started only if already needed from a previous
            session" reasoning as ambientSampler above. */
         contentSampler = new ContentAnalysisSampler(playerView.getVideoSurfaceView(),
-            (avgSaturation, edgeEnergy, lumaStdDev) -> {
+            (avgSaturation, edgeEnergy, lumaStdDev, minLuma, maxLuma) -> {
                 if (colorBoostSaturationAuto) {
                     autoColorBoostSaturationStrength = AutoStrength.colorBoost(avgSaturation);
                 }
                 if (colorBoostContrastAuto) {
                     autoColorBoostContrastStrength = AutoStrength.colorBoostContrast(lumaStdDev);
+                }
+                if (levelsBlackAuto) {
+                    autoLevelsBlackStrength = AutoStrength.levelsBlack(minLuma);
+                }
+                if (levelsWhiteAuto) {
+                    autoLevelsWhiteStrength = AutoStrength.levelsWhite(maxLuma);
                 }
                 if (upscaleAuto) {
                     autoUpscaleStrength = AutoStrength.upscale(resolveScaleFactor(), edgeEnergy);
@@ -1264,6 +1305,7 @@ public class PlayerActivity extends AppCompatActivity {
         boolean hasTrackInfo = selectedVideoFormat() != null;
         ShaderTuning sharpenTuning = resolveSharpenTuning();
         ColorBoostTuning colorTuning = resolveColorBoostTuning();
+        LevelsTuning levelsTuning = resolveLevelsTuning();
 
         if (!effectsInstalled) {
             // Pre-prepare bootstrap: no track is selected yet, so isHdrContent() above is
@@ -1272,7 +1314,7 @@ public class PlayerActivity extends AppCompatActivity {
             effectsInstalled = true;
             Log.d(SHADER_TAG, "applyVideoEffects: installing persistent effect (bootstrap)");
             player.setVideoEffects(Collections.singletonList(
-                new AiUpscaleEffect(this, detectedShaderType, sharpenTuning, colorTuning, aiUpscalingEnabled, null, aspectMode)));
+                new AiUpscaleEffect(this, detectedShaderType, sharpenTuning, colorTuning, levelsTuning, aiUpscalingEnabled, null, aspectMode)));
         } else if (hasTrackInfo && !hdrDecided) {
             hdrDecided = true;
             if (hdr) {
@@ -1284,7 +1326,7 @@ public class PlayerActivity extends AppCompatActivity {
         }
 
         if (activeAiUpscaleProgram != null) {
-            activeAiUpscaleProgram.updateState(detectedShaderType, aiUpscalingEnabled, sharpenTuning, colorTuning);
+            activeAiUpscaleProgram.updateState(detectedShaderType, aiUpscalingEnabled, sharpenTuning, colorTuning, levelsTuning);
         }
         PlayerUiHelper.updateStatsOverlay(this);
     }
@@ -1329,9 +1371,10 @@ public class PlayerActivity extends AppCompatActivity {
         if (player == null || isHdrContent()) return;
         ShaderTuning sharpenTuning = resolveSharpenTuning();
         ColorBoostTuning colorTuning = resolveColorBoostTuning();
+        LevelsTuning levelsTuning = resolveLevelsTuning();
         Log.d(SHADER_TAG, "reinstallVideoEffectsForCrop: reinstalling effects, insets=" + insets + " aspectMode=" + aspectMode);
         player.setVideoEffects(Collections.singletonList(
-            new AiUpscaleEffect(this, detectedShaderType, sharpenTuning, colorTuning, aiUpscalingEnabled, insets, aspectMode)));
+            new AiUpscaleEffect(this, detectedShaderType, sharpenTuning, colorTuning, levelsTuning, aiUpscalingEnabled, insets, aspectMode)));
         cropAppliedViaReinstall = insets != null;
         // contentFrame/ambient lighting's own gap sizing (layoutGlow) both need to pick up the
         // new cropAdjustedAspectRatio right away, not wait for whatever next triggers a relayout -
@@ -1483,6 +1526,18 @@ public class PlayerActivity extends AppCompatActivity {
         return colorBoostOn
             ? ColorBoostTuning.at(resolvedColorBoostSaturationStrength, resolvedColorBoostContrastStrength)
             : ColorBoostTuning.NEUTRAL;
+    }
+
+    /* Levels - Black Level and White Level each resolve from their own enabled/auto pair, same
+       "disabled means force the strength input to 0" convention as resolveColorBoostTuning's own
+       per-component enabled gates above; Gamma has no auto, just a plain enabled gate.
+       LevelsTuning.at's lerp resolves a forced-0 input to that knob's own no-op midpoint
+       (black 0, white 1, gamma 1). */
+    private LevelsTuning resolveLevelsTuning() {
+        float resolvedLevelsBlack = !levelsBlackEnabled ? 0f : (levelsBlackAuto ? autoLevelsBlackStrength : levelsBlack);
+        float resolvedLevelsWhite = !levelsWhiteEnabled ? 0f : (levelsWhiteAuto ? autoLevelsWhiteStrength : levelsWhite);
+        float resolvedLevelsGamma = levelsGammaEnabled ? levelsGamma : 0f;
+        return LevelsTuning.at(resolvedLevelsBlack, resolvedLevelsWhite, resolvedLevelsGamma);
     }
 
     /* Shared by isHdrContent() and resolveVideoAR() below (and PlayerUiHelper's stats
@@ -1728,6 +1783,86 @@ public class PlayerActivity extends AppCompatActivity {
         applyVideoEffects();
     }
 
+    /* Levels (black point/white point/gamma). Black Level and White Level get Color Boost's own
+       per-component enabled/auto pair; Gamma gets a plain enabled flag, no auto (see
+       LevelsTuning's own header comment for why). Same immediate-persistence model as
+       everything else here. */
+    void setLevelsBlackEnabled(boolean enabled) {
+        levelsBlackEnabled = enabled;
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().putBoolean(PREF_LEVELS_BLACK_ENABLED, enabled).apply();
+        applyVideoEffects();
+    }
+
+    void setLevelsWhiteEnabled(boolean enabled) {
+        levelsWhiteEnabled = enabled;
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().putBoolean(PREF_LEVELS_WHITE_ENABLED, enabled).apply();
+        applyVideoEffects();
+    }
+
+    void setLevelsGammaEnabled(boolean enabled) {
+        levelsGammaEnabled = enabled;
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().putBoolean(PREF_LEVELS_GAMMA_ENABLED, enabled).apply();
+        applyVideoEffects();
+    }
+
+    void setLevelsBlack(float strength) {
+        levelsBlack = strength;
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().putFloat(PREF_LEVELS_BLACK, strength).apply();
+        applyVideoEffects();
+    }
+
+    void setLevelsWhite(float strength) {
+        levelsWhite = strength;
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().putFloat(PREF_LEVELS_WHITE, strength).apply();
+        applyVideoEffects();
+    }
+
+    void setLevelsGamma(float strength) {
+        levelsGamma = strength;
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().putFloat(PREF_LEVELS_GAMMA, strength).apply();
+        applyVideoEffects();
+    }
+
+    /* Only this on/off flag is persisted, never the live-computed strength - unchecking falls
+       back to whatever levelsBlack/levelsWhite the slider was last left at. Independent of one
+       another: each derives from the same lumaStdDev signal, but there's no shared auto state
+       left to couple them through (same reasoning as setColorBoostContrastAuto above). */
+    void setLevelsBlackAuto(boolean enabled) {
+        levelsBlackAuto = enabled;
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().putBoolean(PREF_LEVELS_BLACK_AUTO, enabled).apply();
+        updateContentAnalysis();
+        applyVideoEffects();
+    }
+
+    void setLevelsWhiteAuto(boolean enabled) {
+        levelsWhiteAuto = enabled;
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().putBoolean(PREF_LEVELS_WHITE_AUTO, enabled).apply();
+        updateContentAnalysis();
+        applyVideoEffects();
+    }
+
+    /* Same collapsing reasoning as colorBoostSaturationMode/setColorBoostSaturationMode above,
+       one independent triple per component. */
+    String levelsBlackMode() {
+        if (!levelsBlackEnabled) return "off";
+        return levelsBlackAuto ? "auto" : "on";
+    }
+
+    void setLevelsBlackMode(String mode) {
+        setLevelsBlackEnabled(!"off".equals(mode));
+        setLevelsBlackAuto("auto".equals(mode));
+    }
+
+    String levelsWhiteMode() {
+        if (!levelsWhiteEnabled) return "off";
+        return levelsWhiteAuto ? "auto" : "on";
+    }
+
+    void setLevelsWhiteMode(String mode) {
+        setLevelsWhiteEnabled(!"off".equals(mode));
+        setLevelsWhiteAuto("auto".equals(mode));
+    }
+
     /* "auto"/"on"/"off" - the three-way state PlayerUiHelper's mode row presents in place
        of the old separate enabled-toggle + Auto-checkbox pair, same collapsing reasoning
        as shader-pipeline.js's upscaleModeOf on the web leg. shaderEnabled/upscaleAuto
@@ -1773,7 +1908,7 @@ public class PlayerActivity extends AppCompatActivity {
        above. */
     void updateContentAnalysis() {
         if (contentSampler == null) return;
-        if (upscaleAuto || colorBoostSaturationAuto || colorBoostContrastAuto) {
+        if (upscaleAuto || colorBoostSaturationAuto || colorBoostContrastAuto || levelsBlackAuto || levelsWhiteAuto) {
             contentSampler.start();
         } else {
             contentSampler.stop();

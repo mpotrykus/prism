@@ -125,6 +125,7 @@ final class AiUpscaleShaderProgram extends BaseGlShaderProgram {
     private volatile boolean aiUpscalingEnabled;
     private volatile ShaderTuning sharpeningTuning;
     private volatile ColorBoostTuning colorTuning;
+    private volatile LevelsTuning levelsTuning;
     private volatile ShaderType family;
 
     // GL-thread-only (configure()/drawFrame()/release() all run on Media3's own single video-
@@ -163,11 +164,13 @@ final class AiUpscaleShaderProgram extends BaseGlShaderProgram {
      * player.setVideoEffects() round-trip. Deliberately no GL work here: drawFrame() picks up
      * these fields fresh every frame on the GL thread, so this can be called from whatever
      * thread a UI toggle fires on (see the fields' own volatile comment). */
-    void updateState(ShaderType family, boolean aiUpscalingEnabled, ShaderTuning sharpeningTuning, ColorBoostTuning colorTuning) {
+    void updateState(ShaderType family, boolean aiUpscalingEnabled, ShaderTuning sharpeningTuning, ColorBoostTuning colorTuning,
+        LevelsTuning levelsTuning) {
         this.family = family;
         this.aiUpscalingEnabled = aiUpscalingEnabled;
         this.sharpeningTuning = sharpeningTuning;
         this.colorTuning = colorTuning;
+        this.levelsTuning = levelsTuning;
     }
 
     private static int[] scaledOutputSize(float presetScale, int maxOutputWidth, int maxOutputHeight, int inputWidth, int inputHeight) {
@@ -177,13 +180,14 @@ final class AiUpscaleShaderProgram extends BaseGlShaderProgram {
     }
 
     AiUpscaleShaderProgram(Context context, boolean useHdr, ShaderType family, ShaderTuning sharpeningTuning,
-        ColorBoostTuning colorTuning, boolean aiUpscalingEnabled, int maxOutputWidth, int maxOutputHeight,
+        ColorBoostTuning colorTuning, LevelsTuning levelsTuning, boolean aiUpscalingEnabled, int maxOutputWidth, int maxOutputHeight,
         AutoCropSampler.Insets cropInsets, String aspectMode) {
         super(/* useHighPrecisionColorComponents= */ useHdr, /* texturePoolCapacity= */ 1);
         this.context = context;
         this.family = family;
         this.sharpeningTuning = sharpeningTuning;
         this.colorTuning = colorTuning;
+        this.levelsTuning = levelsTuning;
         this.aiUpscalingEnabled = aiUpscalingEnabled;
         this.maxOutputWidth = maxOutputWidth;
         this.maxOutputHeight = maxOutputHeight;
@@ -313,6 +317,9 @@ final class AiUpscaleShaderProgram extends BaseGlShaderProgram {
             uniforms.put("uSharpenStrength", sharpeningTuning.sharpenStrength);
             uniforms.put("uSaturationBoost", colorTuning.saturationBoost);
             uniforms.put("uContrastBoost", colorTuning.contrastBoost);
+            uniforms.put("uBlackLevel", levelsTuning.black);
+            uniforms.put("uWhiteLevel", levelsTuning.white);
+            uniforms.put("uGamma", levelsTuning.gamma);
             uniforms.put("uDebandThreshold", DEBAND_THRESHOLD);
             uniforms.put("uDebandRange", DEBAND_RANGE);
             uniforms.put("uDebandGrain", DEBAND_GRAIN);

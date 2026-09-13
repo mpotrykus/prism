@@ -46,6 +46,33 @@ final class AutoStrength {
         return clamp((COLOR_BOOST_CONTRAST_HIGH - lumaStdDev) / (COLOR_BOOST_CONTRAST_HIGH - COLOR_BOOST_CONTRAST_LOW), 0f, 1f);
     }
 
+    /* Auto-strength math for Levels' Black Level/White Level. Deliberately NOT lumaStdDev-based
+       (an earlier version reused colorBoostContrast's signal directly) - lumaStdDev measures how
+       spread out the frame's tones are, which has no relationship to where the frame's actual
+       black/white points already sit, so it could push the black/white point past real image
+       data and clip/crush detail that was never actually redundant. Confirmed in practice: far
+       too aggressive, clipping a lot.
+
+       The correct "never clip" behavior is a true levels stretch: read the frame's own darkest/
+       brightest sampled luma (minLuma/maxLuma, both 0..1 - see
+       ContentAnalysisSampler.averageMinMaxLuma) and move the black/white point to EXACTLY that
+       value, never past it. Every pixel already at or above minLuma (resp. at or below maxLuma)
+       keeps a distinct, non-clipped value - by construction, nothing in the frame is darker than
+       minLuma or brighter than maxLuma, so nothing gets crushed/clipped that wasn't already at
+       the new endpoint. A frame that already reaches true black/white (minLuma near 0/maxLuma
+       near 1) resolves to ~0 strength - a correct no-op, not a floor. Solved by inverting
+       LevelsTuning.at's own lerp for the knob's MAX tier (its most extreme still-defined tuning
+       point) and clamping to 0..1 - reads LevelsTuning.MAX_BLACK/MID_WHITE/MAX_WHITE directly
+       rather than duplicating those literals. Mirrors shaders.js's
+       autoLevelsBlackStrength/autoLevelsWhiteStrength exactly. */
+    static float levelsBlack(float minLuma) {
+        return clamp(minLuma / LevelsTuning.MAX_BLACK, 0f, 1f);
+    }
+
+    static float levelsWhite(float maxLuma) {
+        return clamp((LevelsTuning.MID_WHITE - maxLuma) / (LevelsTuning.MID_WHITE - LevelsTuning.MAX_WHITE), 0f, 1f);
+    }
+
     private static float clamp(float v, float lo, float hi) {
         return Math.max(lo, Math.min(hi, v));
     }

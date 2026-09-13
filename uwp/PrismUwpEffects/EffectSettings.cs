@@ -4,15 +4,20 @@ using System.Runtime.InteropServices.WindowsRuntime;
 namespace PrismUwpEffects
 {
     /// <summary>
-    /// (avgSaturation, edgeEnergy, lumaStdDev) - a plain <c>Action&lt;double,double,double&gt;</c>
-    /// is not usable here: this assembly compiles as a Windows Runtime Component
-    /// (<c>OutputType=winmdobj</c>), and every public member is projected into Windows Metadata,
-    /// which does not support open generic delegates like <c>System.Action&lt;T&gt;</c> - only a
-    /// real (non-generic) delegate type. lumaStdDev backs Auto Contrast (see
-    /// ContentAnalysisSampler.AverageLumaStdDev) - added alongside avgSaturation/edgeEnergy once
-    /// Saturation and Contrast became independently auto-able rather than sharing one signal.
+    /// (avgSaturation, edgeEnergy, lumaStdDev, minLuma, maxLuma) - a plain
+    /// <c>Action&lt;double,double,double,double,double&gt;</c> is not usable here: this assembly
+    /// compiles as a Windows Runtime Component (<c>OutputType=winmdobj</c>), and every public
+    /// member is projected into Windows Metadata, which does not support open generic delegates
+    /// like <c>System.Action&lt;T&gt;</c> - only a real (non-generic) delegate type. lumaStdDev
+    /// backs Auto Contrast (see ContentAnalysisSampler.AverageLumaStdDev) - added alongside
+    /// avgSaturation/edgeEnergy once Saturation and Contrast became independently auto-able
+    /// rather than sharing one signal. minLuma/maxLuma back Auto Black Level/Auto White Level
+    /// (see ContentAnalysisSampler.AverageMinMaxLuma) - NOT lumaStdDev-based, unlike Contrast's
+    /// own Auto: lumaStdDev has no relationship to where the frame's actual black/white points
+    /// already sit, which made an earlier lumaStdDev-based version clip real image data instead
+    /// of stopping exactly at it.
     /// </summary>
-    public delegate void ContentAnalysisHandler(double avgSaturation, double edgeEnergy, double lumaStdDev);
+    public delegate void ContentAnalysisHandler(double avgSaturation, double edgeEnergy, double lumaStdDev, double minLuma, double maxLuma);
 
     /// <summary>
     /// Four raw per-zone RGB-average arrays (top/bottom/left/right, 24 doubles each - 8 zones * 3
@@ -86,6 +91,22 @@ namespace PrismUwpEffects
         private static double _colorBoostContrastStrength;
         private static bool _colorBoostSaturationAuto;
         private static bool _colorBoostContrastAuto;
+        /* Levels (black point/white point/gamma). Black Level and White Level get Color Boost's
+           own per-component enabled/auto pair above (each independently auto-able off the same
+           lumaStdDev signal Contrast samples); Gamma gets a plain enabled flag, no auto - see
+           ShaderTuning.LevelsAt's own comment. Auto flags are stored (not just the already-
+           resolved strengths JS sends - see xbox-bridge.js's postLevels) for the same reason
+           ColorBoostSaturationAuto/ColorBoostContrastAuto are: MaybeSampleFrame's own
+           wantsContent gate below needs to know whether native's ContentAnalysisSampler should
+           keep sampling at all, independent of what ProcessFrame's rendering reads. */
+        private static bool _levelsBlackEnabled;
+        private static bool _levelsWhiteEnabled;
+        private static bool _levelsGammaEnabled;
+        private static double _levelsBlackStrength;
+        private static double _levelsWhiteStrength;
+        private static double _levelsGammaStrength;
+        private static bool _levelsBlackAuto;
+        private static bool _levelsWhiteAuto;
         private static bool _ambientEnabled;
         // Set by NativePlayerHost right after hdr.EnableAsync()/RestoreAsync() settles (the real,
         // re-read display state, not the raw request) - lets ShaderVideoEffect skip its SDR-tuned
@@ -113,6 +134,14 @@ namespace PrismUwpEffects
             public double ColorBoostContrastStrength;
             public bool ColorBoostSaturationAuto;
             public bool ColorBoostContrastAuto;
+            public bool LevelsBlackEnabled;
+            public bool LevelsWhiteEnabled;
+            public bool LevelsGammaEnabled;
+            public double LevelsBlackStrength;
+            public double LevelsWhiteStrength;
+            public double LevelsGammaStrength;
+            public bool LevelsBlackAuto;
+            public bool LevelsWhiteAuto;
             public bool AmbientEnabled;
             public bool IsHdrActive;
             public bool IsAiUpscaleActive;
@@ -130,7 +159,8 @@ namespace PrismUwpEffects
             {
                 lock (Gate)
                 {
-                    return _shaderEnabled || _colorBoostSaturationEnabled || _colorBoostContrastEnabled || _ambientEnabled;
+                    return _shaderEnabled || _colorBoostSaturationEnabled || _colorBoostContrastEnabled
+                        || _levelsBlackEnabled || _levelsWhiteEnabled || _levelsGammaEnabled || _ambientEnabled;
                 }
             }
         }
@@ -159,6 +189,30 @@ namespace PrismUwpEffects
                 _colorBoostContrastStrength = contrastStrength;
                 _colorBoostSaturationAuto = saturationAuto;
                 _colorBoostContrastAuto = contrastAuto;
+            }
+        }
+
+        /// <summary>Levels' native counterpart - see PrismUwp.Player.NativePlayerHost.SetLevels.
+        /// Black Level/White Level are independently auto-able (own enabled/auto pair, same
+        /// shape as SetColorBoost's saturation/contrast); Gamma has no Auto, just its own
+        /// enabled flag. The three strengths JS sends are already auto-resolved (see
+        /// xbox-bridge.js's postLevels) - ShaderVideoEffect/AiUpscalePixelEffect read them
+        /// directly, gated only by each component's own Enabled flag.</summary>
+        public static void SetLevels(
+            bool blackEnabled, bool whiteEnabled, bool gammaEnabled,
+            double blackStrength, double whiteStrength, double gammaStrength,
+            bool blackAuto, bool whiteAuto)
+        {
+            lock (Gate)
+            {
+                _levelsBlackEnabled = blackEnabled;
+                _levelsWhiteEnabled = whiteEnabled;
+                _levelsGammaEnabled = gammaEnabled;
+                _levelsBlackStrength = blackStrength;
+                _levelsWhiteStrength = whiteStrength;
+                _levelsGammaStrength = gammaStrength;
+                _levelsBlackAuto = blackAuto;
+                _levelsWhiteAuto = whiteAuto;
             }
         }
 
@@ -204,6 +258,14 @@ namespace PrismUwpEffects
                         ColorBoostContrastStrength = _colorBoostContrastStrength,
                         ColorBoostSaturationAuto = _colorBoostSaturationAuto,
                         ColorBoostContrastAuto = _colorBoostContrastAuto,
+                        LevelsBlackEnabled = _levelsBlackEnabled,
+                        LevelsWhiteEnabled = _levelsWhiteEnabled,
+                        LevelsGammaEnabled = _levelsGammaEnabled,
+                        LevelsBlackStrength = _levelsBlackStrength,
+                        LevelsWhiteStrength = _levelsWhiteStrength,
+                        LevelsGammaStrength = _levelsGammaStrength,
+                        LevelsBlackAuto = _levelsBlackAuto,
+                        LevelsWhiteAuto = _levelsWhiteAuto,
                         AmbientEnabled = _ambientEnabled,
                         IsHdrActive = _isHdrActive,
                         IsAiUpscaleActive = _isAiUpscaleActive,
@@ -220,9 +282,9 @@ namespace PrismUwpEffects
 
         public static event AmbientColorsHandler AmbientColors;
 
-        internal static void RaiseContentAnalysis(double avgSaturation, double edgeEnergy, double lumaStdDev)
+        internal static void RaiseContentAnalysis(double avgSaturation, double edgeEnergy, double lumaStdDev, double minLuma, double maxLuma)
         {
-            ContentAnalysis?.Invoke(avgSaturation, edgeEnergy, lumaStdDev);
+            ContentAnalysis?.Invoke(avgSaturation, edgeEnergy, lumaStdDev, minLuma, maxLuma);
         }
 
         internal static void RaiseAmbientColors(AmbientZoneColors colors)

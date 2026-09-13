@@ -26,7 +26,7 @@ final class ContentAnalysisSampler {
     private static final float SMOOTHING_FACTOR = 0.3f;
 
     interface StatsListener {
-        void onStats(float avgSaturation, float edgeEnergy, float lumaStdDev);
+        void onStats(float avgSaturation, float edgeEnergy, float lumaStdDev, float minLuma, float maxLuma);
     }
 
     private final StatsListener listener;
@@ -35,6 +35,8 @@ final class ContentAnalysisSampler {
     private Float smoothedSaturation = null;
     private Float smoothedEdgeEnergy = null;
     private Float smoothedLumaStdDev = null;
+    private Float smoothedMinLuma = null;
+    private Float smoothedMaxLuma = null;
 
     ContentAnalysisSampler(View videoSurfaceView, StatsListener listener) {
         this.listener = listener;
@@ -58,10 +60,13 @@ final class ContentAnalysisSampler {
         float rawSaturation = averageSaturation();
         float rawEdgeEnergy = averageEdgeEnergy();
         float rawLumaStdDev = averageLumaStdDev();
+        float[] rawMinMaxLuma = averageMinMaxLuma();
         smoothedSaturation = smooth(smoothedSaturation, rawSaturation);
         smoothedEdgeEnergy = smooth(smoothedEdgeEnergy, rawEdgeEnergy);
         smoothedLumaStdDev = smooth(smoothedLumaStdDev, rawLumaStdDev);
-        listener.onStats(smoothedSaturation, smoothedEdgeEnergy, smoothedLumaStdDev);
+        smoothedMinLuma = smooth(smoothedMinLuma, rawMinMaxLuma[0]);
+        smoothedMaxLuma = smooth(smoothedMaxLuma, rawMinMaxLuma[1]);
+        listener.onStats(smoothedSaturation, smoothedEdgeEnergy, smoothedLumaStdDev, smoothedMinLuma, smoothedMaxLuma);
     }
 
     private static float smooth(Float prev, float raw) {
@@ -134,5 +139,25 @@ final class ContentAnalysisSampler {
             variance += diff * diff;
         }
         return (float) (Math.sqrt(variance / count) / 255.0);
+    }
+
+    /* Darkest/brightest luma across the sampled frame, normalized to 0..1 - backs Auto Black
+       Level/Auto White Level (see AutoStrength.levelsBlack/levelsWhite). Deliberately the
+       sample's real min/max, not a percentile - this already runs over a tiny 32x18 downsample
+       (each sample pixel an area-average of a much larger block of source pixels, via
+       FrameBitmapCapture's own scaled capture), which already smooths away genuine
+       single-source-pixel outliers a literal min/max would otherwise be too sensitive to. One
+       pass, not two like averageLumaStdDev above - there's no mean to compute first here.
+       Returns {min, max} as a 2-element array rather than two out-params - Java has no tuple
+       type, and a tiny throwaway class for two floats isn't worth it here. */
+    private float[] averageMinMaxLuma() {
+        float min = 255f;
+        float max = 0f;
+        for (int pixel : pixels) {
+            float l = luma(pixel);
+            if (l < min) min = l;
+            if (l > max) max = l;
+        }
+        return new float[] { min / 255f, max / 255f };
     }
 }

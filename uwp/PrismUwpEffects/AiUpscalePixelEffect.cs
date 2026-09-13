@@ -234,7 +234,10 @@ namespace PrismUwpEffects
             bool hasStrength = settings.ShaderAuto || settings.ShaderStrength > 0;
             string resolvedShaderType = settings.ShaderEnabled && hasStrength ? settings.ShaderType : "off";
             bool colorBoostOn = settings.ColorBoostSaturationEnabled || settings.ColorBoostContrastEnabled;
-            bool visualOn = resolvedShaderType != "off" || colorBoostOn;
+            // Levels joins the same "keeps the trailing pass alive" list as Sharpening/Color
+            // Boost - see ShaderVideoEffect.cs's identical visualOn gate.
+            bool levelsOn = settings.LevelsBlackEnabled || settings.LevelsWhiteEnabled || settings.LevelsGammaEnabled;
+            bool visualOn = resolvedShaderType != "off" || colorBoostOn || levelsOn;
             if (!visualOn) return input;
 
             string programType = resolvedShaderType != "off" ? resolvedShaderType : settings.ShaderType;
@@ -251,6 +254,12 @@ namespace PrismUwpEffects
             ShaderTuning.ColorTuning color = ShaderTuning.ColorBoostAt(
                 settings.ColorBoostSaturationEnabled ? settings.ColorBoostSaturationStrength : 0,
                 settings.ColorBoostContrastEnabled ? settings.ColorBoostContrastStrength : 0);
+            // Levels - each component resolves from its own enabled flag, same convention as
+            // Color Boost above; the strengths JS sends are already auto-resolved.
+            ShaderTuning.LevelsTuning levels = ShaderTuning.LevelsAt(
+                settings.LevelsBlackEnabled ? settings.LevelsBlackStrength : 0,
+                settings.LevelsWhiteEnabled ? settings.LevelsWhiteStrength : 0,
+                settings.LevelsGammaEnabled ? settings.LevelsGammaStrength : 0);
 
             // The kernel's tap offsets are in real pixels of THIS pass's own input - for the
             // chain paths that's the 2x-upscaled image, not the source resolution ShaderTuning's
@@ -267,6 +276,9 @@ namespace PrismUwpEffects
             sharpenEffect.Properties["sharpenStrength"] = (float)sharpen.Sharpen;
             sharpenEffect.Properties["saturationBoost"] = (float)color.Saturation;
             sharpenEffect.Properties["contrastBoost"] = (float)color.Contrast;
+            sharpenEffect.Properties["blackLevel"] = (float)levels.Black;
+            sharpenEffect.Properties["whiteLevel"] = (float)levels.White;
+            sharpenEffect.Properties["gamma"] = (float)levels.Gamma;
 
             using (CanvasDrawingSession ds = outputTarget.CreateDrawingSession())
             {
