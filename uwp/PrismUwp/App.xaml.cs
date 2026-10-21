@@ -83,7 +83,36 @@ namespace PrismUwp
                     rootFrame.Navigate(typeof(MainPage), e.Arguments);
                 }
                 Window.Current.Activate();
+                if (HasFullscreenArg(e.Arguments)) EnterFullScreen();
             }
+        }
+
+        protected override void OnActivated(IActivatedEventArgs args)
+        {
+            if (args is CommandLineActivatedEventArgs cmd)
+            {
+                Frame rootFrame = Window.Current.Content as Frame;
+                if (rootFrame == null)
+                {
+                    rootFrame = new Frame();
+                    rootFrame.NavigationFailed += OnNavigationFailed;
+                    Window.Current.Content = rootFrame;
+                }
+                if (rootFrame.Content == null) rootFrame.Navigate(typeof(MainPage));
+                Window.Current.Activate();
+                if (HasFullscreenArg(cmd.Operation.Arguments)) EnterFullScreen();
+            }
+        }
+
+        private static bool HasFullscreenArg(string arguments)
+        {
+            return !string.IsNullOrEmpty(arguments)
+                && arguments.IndexOf("fullscreen", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        private static void EnterFullScreen()
+        {
+            Windows.UI.ViewManagement.ApplicationView.GetForCurrentView().TryEnterFullScreenMode();
         }
 
         void OnNavigationFailed(object sender, NavigationFailedEventArgs e)
