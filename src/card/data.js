@@ -547,9 +547,11 @@ export async function loadAll(card) {
             plex_token: sv.token,
             plex_account_token: card._config.plex_account_token,
             machine_id: sv.id,
+            connections: sv.connections,
           });
           sv.url = r.plex_url;
           sv.token = r.plex_token;
+          if (r.connections) sv.connections = r.connections;
         } catch (e) {
           if (sv.owned) throw e;
         }

@@ -12,6 +12,7 @@
     "version:set": "node scripts/set-version.mjs",
     "android": "vite build && node scripts/android-sync-shaders.mjs && npx cap sync android && cd android && .\\gradlew.bat assembleDebug",
     "android:deploy": "node scripts/android-deploy.mjs",
+    "lowend": "node scripts/lowend/lowend.mjs",
     "android:bundle": "vite build && node scripts/android-sync-shaders.mjs && npx cap sync android && cd android && .\\gradlew.bat bundleRelease",
     "uwp:sync": "vite build && node scripts/uwp-sync.mjs",
     "xbox:build": "npm run uwp:sync && node scripts/xbox-build.mjs",

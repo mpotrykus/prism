@@ -1,3 +1,4 @@
+import { App } from "@capacitor/app";
 import { wireLinearNav, focusAfterPaint, registerNavHandler } from "../core/focus-nav.js";
 import { PrismModalElement } from "./modal-element.js";
 import { escapeHtml } from "../core/html.js";
@@ -18,6 +19,19 @@ function platformLabel() {
     if (tag === PLATFORM_TAG.ANDROID) return "Android";
     if (tag === PLATFORM_TAG.UWP) return isXboxDevice() ? "Xbox" : "PC";
     return "Web";
+}
+
+/* A plain browser tab can't be closed by script, so the button is hidden there. */
+function canCloseApp() {
+  return platformTag() !== PLATFORM_TAG.WEB;
+}
+
+function closeApp() {
+  if (platformTag() === PLATFORM_TAG.ANDROID) {
+    App.exitApp();
+    return;
+  }
+  window.chrome?.webview?.postMessage(JSON.stringify({ type: "exitApp" }));
 }
 
 /* Cheap /library/sections/<key>/all probe with container size 0 - Plex still returns
@@ -312,6 +326,10 @@ class StreamingSettingsModal extends PrismModalElement {
                   <a class="about-privacy-link" href="https://www.themoviedb.org/" target="_blank" rel="noopener noreferrer">TMDB</a>
                 </div>
               </section>
+
+              <section class="group close-app-group">
+                <button type="button" class="btn btn-secondary btn-close-app">Close App</button>
+              </section>
             </div>
           </div>
           <div class="status save-status"></div>
@@ -323,6 +341,7 @@ class StreamingSettingsModal extends PrismModalElement {
 
   _wire() {
     this._el(".btn-reauth").addEventListener("click", () => this._reauthenticate());
+    this._el(".btn-close-app").addEventListener("click", () => closeApp());
     this._el(".btn-fetch-libraries").addEventListener("click", () => this._fetchLibraries());
     this._el(".f-subtitle-provider").addEventListener("change", () => {
       this._syncSubtitleProviderFields();
@@ -406,7 +425,7 @@ class StreamingSettingsModal extends PrismModalElement {
         STATIC_ROW_TOGGLES.map((r) => `.f-row-${r.key}-enabled`).join(", ") +
         ", .f-image-cache-ttl-days, .btn-clear-image-cache, " +
         ".f-title-audio-enabled, .f-title-audio-volume, .f-xbox-hdr-always-on, " +
-        ".about-privacy-link",
+        ".about-privacy-link, .btn-close-app",
       { orientation: "vertical", onBack: () => this.close() }
     );
     /* LB/RB (see focus-nav.js's chapterPrev/chapterNext) switch tabs directly regardless of
@@ -567,6 +586,7 @@ class StreamingSettingsModal extends PrismModalElement {
     this.shadowRoot.querySelectorAll(".xbox-only-group").forEach((el) => {
       el.style.display = showXboxHdr ? "" : "none";
     });
+    this._el(".close-app-group").style.display = canCloseApp() ? "" : "none";
     /* Reset per-open so a stale in-memory copy from a previous session never lingers -
        fields re-read from the vault rather than silently reusing whatever was decrypted
        last time this modal was open. */

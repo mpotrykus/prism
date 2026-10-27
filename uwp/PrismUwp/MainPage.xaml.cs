@@ -406,6 +406,9 @@ namespace PrismUwp
                 case "jsConsole":
                     Log($"JS {root.GetNamedString("message", "(none)")}");
                     break;
+                case "exitApp":
+                    _ = Dispatcher.RunAsync(CoreDispatcherPriority.Normal, () => Windows.UI.Xaml.Application.Current.Exit());
+                    break;
                 default:
                     break;
             }

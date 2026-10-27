@@ -184,23 +184,25 @@ async function probeConnection(uri, token, timeoutMs = 2500) {
   }
 }
 
-async function raceFirstReachable(conns, token) {
-  try {
-    return await Promise.any(
-      conns.map(async (c) => {
-        if (await probeConnection(c.uri, token)) return c.uri;
-        throw new Error("unreachable");
-      })
-    );
-  } catch {
-    return null;
-  }
+/* Hand-rolled instead of Promise.any: Chrome < 85 (older Fire OS WebViews) doesn't have it,
+   and the missing function surfaced as "server unreachable" with every probe actually succeeding. */
+function raceFirstReachable(conns, token) {
+  if (!conns.length) return Promise.resolve(null);
+  return new Promise((resolve) => {
+    let pending = conns.length;
+    for (const c of conns) {
+      probeConnection(c.uri, token).then((ok) => {
+        if (ok) resolve(c.uri);
+        else if (--pending === 0) resolve(null);
+      });
+    }
+  });
 }
 
 /* Local (LAN) connections are raced against each other before relay/remote ones are
    even tried - a relay hop through plex.tv adds real latency when the server is right
    there on the home network. Within a group, all connections are probed concurrently
-   (Promise.any) rather than one at a time, so one dead LAN candidate's 2.5s timeout
+   (see raceFirstReachable) rather than one at a time, so one dead LAN candidate's 2.5s timeout
    doesn't block trying the next candidate. */
 export async function resolveBestConnection(server) {
   const local = server.connections.filter((c) => c.local);
@@ -265,6 +267,7 @@ export async function discoverLibraries(accountToken, { prevServers = [], prevSe
         sourceTitle: d.sourceTitle || "",
         url: uri,
         token: d.accessToken,
+        connections: d.connections,
         /* A newly-discovered server defaults to NOT having its own "All libraries on this
            server" tab - same show_tab convention as an individual library (see below) - so
            a multi-server account starts collapsed to just Home/Movies/TV Shows instead of
@@ -322,8 +325,15 @@ export async function discoverLibraries(accountToken, { prevServers = [], prevSe
    that's no longer reachable (a private LAN IP gives no fast refusal from outside the
    LAN). Re-probes that cached address first and, only if it's gone dark, re-runs
    discovery to find whichever connection - relay or remote - actually works from here. */
-export async function ensureReachable({ plex_url, plex_token, plex_account_token, machine_id }) {
+export async function ensureReachable({ plex_url, plex_token, plex_account_token, machine_id, connections = [] }) {
   if (await probeConnection(plex_url, plex_token)) return { plex_url, plex_token };
+  /* plex.tv discovery needs internet, but the LAN address doesn't - with no internet the
+     discovery call below throws before any connection is tried, so the cached connection
+     list from the last successful discovery is raced first. */
+  if (connections.length) {
+    const cachedUri = await resolveBestConnection({ connections, accessToken: plex_token });
+    if (cachedUri) return { plex_url: cachedUri, plex_token };
+  }
   if (!plex_account_token || !machine_id) {
     throw new Error(`Can't reach your Plex server at ${plex_url}.`);
   }
@@ -332,7 +342,7 @@ export async function ensureReachable({ plex_url, plex_token, plex_account_token
   if (!server) throw new Error("Can't reach your Plex server, and it's no longer listed on this account.");
   const uri = await resolveBestConnection(server);
   if (!uri) throw new Error(`Can't reach ${server.name} from this network.`);
-  return { plex_url: uri, plex_token: server.accessToken };
+  return { plex_url: uri, plex_token: server.accessToken, connections: server.connections };
 }
 
 /* Plex Home ("managed users"/profiles) - a family group sharing one Plex account and

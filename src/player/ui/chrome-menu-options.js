@@ -1,6 +1,6 @@
 import { media } from "../core/media-facade.js";
 import { postAspectMode, postAutoCrop } from "../xbox-bridge.js";
-import { applyAutoCropGeometry } from "../auto-crop.js";
+import { applyAutoCropGeometry, setAutoCropEnabled } from "../auto-crop.js";
 import { setAudioLevelingEnabled } from "../audio-leveling.js";
 import {
     skipIconMarkup,

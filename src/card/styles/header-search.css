@@ -177,6 +177,9 @@
 
 .search-page {
     padding: calc(var(--header-h) + 24px) 0 20px;
+    width: 100%;
+    min-width: 0;
+    overflow-x: clip;
 }
 
 .search-page-group {
@@ -222,7 +225,8 @@
     padding: 4px 0;
 }
 
-.search-page-see-all:hover {
+.search-page-see-all:hover,
+.search-page-see-all:focus-visible {
     color: var(--color-accent);
 }
 

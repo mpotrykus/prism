@@ -728,8 +728,10 @@ export function wireSearchNav(card) {
        following move to interrupt it) centered correctly. An instant jump can't be
        interrupted mid-animation, so every step - however fast they arrive - lands
        exactly centered. */
-    el?.scrollIntoView({ block: "center", inline: "center" });
+    el?.scrollIntoView({ block: "center", inline: "nearest" });
   };
+
+  const seeAllOf = (poster) => poster.closest(".search-page-group")?.querySelector(".search-page-see-all");
 
   /* Column count varies with viewport width and each hub's grid wraps independently, so
      rows can't be derived from index math the way pin.js's fixed 3-column keypad can be -
@@ -767,6 +769,25 @@ export function wireSearchNav(card) {
       return true;
     }
 
+    if (active?.classList?.contains("search-page-see-all")) {
+      if (command === NAV_COMMAND.ACTIVATE) {
+        active.click();
+        return true;
+      }
+      if (command === NAV_COMMAND.DOWN) {
+        focusPoster(active.closest(".search-page-group")?.querySelector(".search-page-grid .poster"));
+        return true;
+      }
+      if (command === NAV_COMMAND.UP) {
+        const groupPosters = Array.from(active.closest(".search-page-group").querySelectorAll(".search-page-grid .poster"));
+        const prev = allPosters()[allPosters().indexOf(groupPosters[0]) - 1];
+        if (prev) focusPoster(prev);
+        else (sidenavItems().find((n) => n.classList.contains("active")) || sidenavItems()[0])?.focus();
+        return true;
+      }
+      return true;
+    }
+
     if (!active?.classList?.contains("poster") || !active.closest(".search-page-grid")) return false;
 
     if (command === NAV_COMMAND.ACTIVATE) {
@@ -787,6 +808,14 @@ export function wireSearchNav(card) {
       return true; // first poster on the page - nothing further left, swallow
     }
     if (command === NAV_COMMAND.UP || command === NAV_COMMAND.DOWN) {
+      const seeAll = seeAllOf(active);
+      if (command === NAV_COMMAND.UP && seeAll) {
+        const groupRows = rowsOf(Array.from(active.closest(".search-page-grid").querySelectorAll(".poster")));
+        if (groupRows[0].items.includes(active)) {
+          seeAll.focus();
+          return true;
+        }
+      }
       const rows = rowsOf(posters);
       const rowIdx = rows.findIndex((r) => r.items.includes(active));
       const targetRowIdx = rowIdx + (command === NAV_COMMAND.DOWN ? 1 : -1);
