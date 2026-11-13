@@ -165,7 +165,7 @@ Microsoft Store and Google Play listings aren't public yet, so for now you sidel
 
 | Platform | Download | How |
 |---|---|---|
-| **Android** | `prism-<version>-android.apk` (older releases: `app-debug.apk`) | Open it on the device and allow installs from your browser or file manager when prompted, or `adb install -r <file>.apk`. |
+| **Android** | `prism-<version>-android.apk` | Open it on the device and allow installs from your browser or file manager when prompted, or `adb install -r <file>.apk`. |
 | **Windows PC** | `prism-pc-sideload.zip` | Extract it and run the `Add-AppDevPackage.ps1` script inside. Windows will ask you to enable sideloading and trust the package's certificate the first time. |
 | **Xbox** | `prism-xbox-sideload.zip` | Put the console in Dev Mode, then install the package through the Device Portal — upload the `.msixbundle` together with everything in its `Dependencies` folder in a single request. The console must also trust the signing certificate first. |
 | **Web** | — | No hosted build yet; run it yourself with `npm run build` (see [Development](#development)). |
