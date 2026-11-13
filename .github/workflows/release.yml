@@ -59,7 +59,10 @@ jobs:
         run: |
           apk=$(find android/app/build/outputs/apk -name "*.apk" | head -n1)
           if [ -z "$apk" ]; then echo "no APK found" >&2; exit 1; fi
-          echo "path=$apk" >> "$GITHUB_OUTPUT"
+          version=$(node -p "require('./package.json').version")
+          named="android/app/build/outputs/prism-${version}-android.apk"
+          cp "$apk" "$named"
+          echo "path=$named" >> "$GITHUB_OUTPUT"
 
       - uses: actions/upload-artifact@v4
         with:

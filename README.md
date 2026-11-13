@@ -160,14 +160,76 @@ tested on real remote hardware yet.
 
 ## How to install it
 
-> **⏳ Not yet.** There are no downloads or releases published yet — no APK, no Xbox package, no
-> hosted web build. This section will be filled in once the first builds are out.
->
-> If you're a developer and want to build it yourself in the meantime, the short version is
-> `npm install` then `npm run dev` for the browser, `npm run android` for Android, and
-> `npm run xbox:build` for Xbox. Copy `.env.example` to `.env` and fill in a free TMDB API key
-> (from https://www.themoviedb.org/settings/api) if you want the TMDB trailer fallback working
-> in your own build — everything else works without it. Everything else lives in `CLAUDE.md`.
+Builds are attached to every [GitHub release](https://github.com/mpotrykus/prism/releases). The
+Microsoft Store and Google Play listings aren't public yet, so for now you sideload.
+
+| Platform | Download | How |
+|---|---|---|
+| **Android** | `prism-<version>-android.apk` (older releases: `app-debug.apk`) | Open it on the device and allow installs from your browser or file manager when prompted, or `adb install -r <file>.apk`. |
+| **Windows PC** | `prism-pc-sideload.zip` | Extract it and run the `Add-AppDevPackage.ps1` script inside. Windows will ask you to enable sideloading and trust the package's certificate the first time. |
+| **Xbox** | `prism-xbox-sideload.zip` | Put the console in Dev Mode, then install the package through the Device Portal — upload the `.msixbundle` together with everything in its `Dependencies` folder in a single request. The console must also trust the signing certificate first. |
+| **Web** | — | No hosted build yet; run it yourself with `npm run build` (see [Development](#development)). |
+
+The Android APK is a debug-signed build, so Android may show an "unknown source" warning.
+
+---
+
+## Development
+
+Prism is plain HTML/CSS/JS custom elements (no UI framework), built with [Vite](https://vitejs.dev/)
+and wrapped natively per platform: [Capacitor](https://capacitorjs.com/) for Android and a
+UWP + WebView2 shell (`uwp/PrismUwp/`) shared by Xbox and PC. `CLAUDE.md` has the architecture
+notes and hardware-verified gotchas.
+
+### Setup
+
+```sh
+npm install
+cp .env.example .env   # optional
+```
+
+Put a free [TMDB API key](https://www.themoviedb.org/settings/api) in `.env` as `VITE_TMDB_API_KEY`
+to enable the trailer fallback. Everything else works without it.
+
+### Web
+
+| Command | What it does |
+|---|---|
+| `npm run dev` | Vite dev server (`--host`, so reachable from other devices on your LAN) |
+| `npm run build` | Production build into `dist/` — servable as a plain PWA |
+| `npm run preview` | Serve the production build locally |
+| `npm test` / `npm run test:watch` | Vitest unit tests |
+
+Test on a phone with `adb reverse` rather than the LAN IP: the app needs a secure context
+(`crypto.subtle`), and `localhost` counts as one while a LAN address doesn't.
+
+### Android
+
+Requires Android Studio / the Android SDK and JDK 21.
+
+| Command | What it does |
+|---|---|
+| `npm run android` | Build web, sync Capacitor, assemble a debug APK |
+| `npm run android:deploy -- <ip>[:port]` | Build and install over wireless adb (run `adb tcpip 5555` once over USB first) |
+| `npm run android:bundle` | Build a release `.aab` for Play Console |
+| `npm run lowend -- create <profile>` | Fire Stick–style low-end emulator harness (see `scripts/lowend/lowend.mjs` for subcommands) |
+
+### Xbox / PC
+
+Requires Windows, Visual Studio with the UWP workload, and the Windows SDK.
+
+| Command | What it does |
+|---|---|
+| `npm run uwp:sync` | Build web and copy it into the UWP shell's `www/` |
+| `npm run xbox:build` | Sync, then build a sideloadable `.msixbundle` under `uwp/PrismUwp/AppPackages/` |
+| `npm run xbox:deploy` | Rebuild and sideload to a paired console via `WinAppDeployCmd` |
+| `npm run xbox:deploy:debug` | Same, and stream the WebView2 console back to your terminal |
+| `npm run store:build` | Build the Microsoft Store `.msixupload` |
+
+The console must be in Dev Mode and trust `PrismUwp_TemporaryKey.cer` (install it via the Device
+Portal once). For day-to-day work, opening `uwp/PrismUwp/PrismUwp.sln` in Visual Studio and
+deploying to the console as a **Remote Machine** is the most reliable route; for PC, use the
+local-machine target.
 
 ---
 
