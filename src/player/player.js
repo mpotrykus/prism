@@ -76,6 +76,7 @@ import { openHamburgerMenu } from "./ui/chrome-menu.js";
 import { applyRememberedSubtitle } from "./ui/chrome-subtitles.js";
 import { updateSkipButton, isSkipButtonShowing, shouldAutoSkip } from "./ui/chrome-skip.js";
 import { fetchQueuedTitle } from "./core/title-fetch.js";
+import { ensurePlayerStyles } from "./ui/styles.js";
 
 /* native-bridge.js keeps its own local copy of this value (NATIVE_TIMELINE_PING_MS) for
    its "progress"-listener piggyback ping rather than importing it from here - see that
@@ -268,6 +269,29 @@ class StreamingPlayerController {
         if (!ratingKey || !plexUrl || !plexToken) {
             throw new Error("StreamingPlayer.play requires ratingKey, plexUrl, and plexToken");
         }
+        if (this._starting || this._switching) return;
+        this._starting = true;
+        const loading = this._mountStartingOverlay();
+        try {
+            await this._playInternal(item);
+        } finally {
+            this._starting = false;
+            loading.remove();
+        }
+    }
+
+    _mountStartingOverlay() {
+        ensurePlayerStyles();
+        const overlay = document.createElement("div");
+        Object.assign(overlay.style, { position: "fixed", inset: "0", background: "#000", zIndex: "10000" });
+        const spinner = document.createElement("div");
+        spinner.className = "prism-player-spinner is-visible";
+        overlay.appendChild(spinner);
+        document.body.appendChild(overlay);
+        return overlay;
+    }
+
+    async _playInternal(item) {
         await this.stop();
 
         this._pushedHistoryState = true;
@@ -303,6 +327,16 @@ class StreamingPlayerController {
        the next title, a visible swipe-out/in Activity transition for what should read as
        one continuous player staying on screen. */
     async _switchTitle(item) {
+        if (this._switching || this._starting) return;
+        this._switching = true;
+        try {
+            await this._switchTitleInternal(item);
+        } finally {
+            this._switching = false;
+        }
+    }
+
+    async _switchTitleInternal(item) {
         if (hasNativePlayer()) {
             await this._switchTitleNative(item);
             return;

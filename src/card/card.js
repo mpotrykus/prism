@@ -1,6 +1,7 @@
 import { wireLinearNav, focusAfterPaint, reflectControllerActive } from "../core/focus-nav.js";
 import { APP_EVENT, VIEW, SECTION_TYPE } from "../constants.js";
 import { App } from "@capacitor/app";
+import { exitApp } from "../core/app-exit.js";
 import { player } from "../player/player.js";
 import { tapUrl } from "./logic/deep-link.js";
 import { isInWatchlist, findLocalMatch } from "./logic/watchlist-match.js";
@@ -47,6 +48,7 @@ import {
   wireStartButton,
   wireProfileButton,
   wireProfileMenu,
+  wireExitPrompt,
   restoreFocusAfterSearch,
   dismissSearchKeyboard,
 } from "./nav.js";
@@ -193,6 +195,16 @@ class PlexNetflixCard extends HTMLElement {
             <div class="more-sheet-title">Libraries</div>
             <div class="libraries-sheet-list more-sheet-list"></div>
             <button type="button" class="libraries-sheet-cancel more-sheet-cancel">Cancel</button>
+          </div>
+        </div>
+        <div class="exit-overlay" tabindex="-1">
+          <div class="exit-dialog" role="dialog" aria-modal="true" aria-label="Close Prism?">
+            <div class="exit-dialog-title">Close Prism?</div>
+            <div class="exit-dialog-text">The app will exit.</div>
+            <div class="exit-dialog-actions">
+              <button type="button" class="exit-dialog-btn exit-dialog-confirm">Close App</button>
+              <button type="button" class="exit-dialog-btn exit-dialog-cancel">Cancel</button>
+            </div>
           </div>
         </div>
         <div class="content">
@@ -428,6 +440,7 @@ class PlexNetflixCard extends HTMLElement {
     this._librariesOverlay = this.shadowRoot.querySelector(".libraries-overlay");
     this._librariesListEl = this.shadowRoot.querySelector(".libraries-sheet-list");
     this._librariesCancelBtn = this.shadowRoot.querySelector(".libraries-sheet-cancel");
+    this._exitOverlay = this.shadowRoot.querySelector(".exit-overlay");
     this._pin = new PinEntry(this.shadowRoot);
     this._titleInfo = new TitleInfoController(this.shadowRoot, {
       /* Bound to whichever item the title-info overlay currently has open, not a
@@ -543,6 +556,15 @@ class PlexNetflixCard extends HTMLElement {
     this._librariesOverlay.addEventListener("click", (e) => {
       if (e.target === this._librariesOverlay) this._closeLibrariesSheet();
     });
+    this._exitNav = wireLinearNav(this.shadowRoot, ".exit-overlay .exit-dialog-btn", {
+      orientation: "horizontal",
+      onBack: () => this._closeExitDialog(),
+    });
+    this.shadowRoot.querySelector(".exit-dialog-cancel").addEventListener("click", () => this._closeExitDialog());
+    this.shadowRoot.querySelector(".exit-dialog-confirm").addEventListener("click", () => exitApp());
+    this._exitOverlay.addEventListener("click", (e) => {
+      if (e.target === this._exitOverlay) this._closeExitDialog();
+    });
     this._librariesNav = wireLinearNav(
       this.shadowRoot,
       ".libraries-overlay .more-sheet-item, .libraries-overlay .more-sheet-cancel",
@@ -569,7 +591,8 @@ class PlexNetflixCard extends HTMLElement {
         this._searchWrap.classList.remove("expanded");
         this._searchInput.blur();
         restoreFocusAfterSearch(this);
-      } else App.exitApp();
+      } else if (this._exitOverlay.classList.contains("open")) this._closeExitDialog();
+      else this._openExitDialog();
     });
 
     this._wireHomeNav();
@@ -623,6 +646,16 @@ class PlexNetflixCard extends HTMLElement {
     wireStartButton(this);
     wireProfileButton(this);
     wireProfileMenu(this);
+    wireExitPrompt(this);
+  }
+
+  _openExitDialog() {
+    this._exitOverlay.classList.add("open");
+    requestAnimationFrame(() => this.shadowRoot.querySelector(".exit-dialog-cancel").focus());
+  }
+
+  _closeExitDialog() {
+    this._exitOverlay.classList.remove("open");
   }
 
   _toggleProfileDropdown() {

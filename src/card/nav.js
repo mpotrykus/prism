@@ -1,5 +1,6 @@
 import { focusAfterPaint, registerNavHandler } from "../core/focus-nav.js";
 import { escapeHtml } from "../core/html.js";
+import { canExitApp } from "../core/app-exit.js";
 import { NAV_COMMAND, APP_EVENT, VIEW } from "../constants.js";
 import { player } from "../player/player.js";
 import { createRowScroll } from "./row-scroll.js";
@@ -292,6 +293,8 @@ function inMainApp(card) {
     !card._pin.isOpen() &&
     !card._profileOverlay.classList.contains("open") &&
     !card._moreOverlay.classList.contains("open") &&
+    !card._librariesOverlay.classList.contains("open") &&
+    !card._exitOverlay.classList.contains("open") &&
     card._profileDropdown.hidden &&
     !document.querySelector("streaming-settings-modal")?.isOpen() &&
     !document.querySelector("streaming-plex-signin-modal")?.isOpen() &&
@@ -475,6 +478,20 @@ export function wireProfileMenu(card) {
     if (card._profileDropdown.hidden) return false;
     card._closeProfileDropdown();
     focusAfterPaint(card._profileNavItem);
+    return true;
+  });
+}
+
+/* Registered last so every other back handler has already had its chance: they all call
+   preventDefault when they consume the key, and each is its own document listener, so
+   defaultPrevented is the only way to tell "nothing else wanted this Back". */
+export function wireExitPrompt(card) {
+  registerNavHandler((command, e) => {
+    if (command !== NAV_COMMAND.BACK || e?.defaultPrevented) return false;
+    if (e?.key === "Backspace") return false;
+    if (!canExitApp() || !inMainApp(card) || card._currentView === VIEW.SEARCH) return false;
+    if (card.shadowRoot.activeElement === card._searchInput) return false;
+    card._openExitDialog();
     return true;
   });
 }
